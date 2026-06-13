@@ -140,12 +140,12 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupCha
   };
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0 min-w-0">
       {/* Messages */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3 space-y-0.5"
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-2 py-3 space-y-0.5"
       >
         {isLoading ? (
           <div className="space-y-3 p-2">
