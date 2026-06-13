@@ -1,5 +1,7 @@
 import { createContext } from "react";
 
+import { APP_RELAYS } from "@/lib/platform";
+
 export type Theme = "light" | "dark" | "system";
 
 /**
@@ -14,6 +16,13 @@ export interface AppConfig {
   theme: Theme;
   /** Relay (server) URLs the user added on top of the pinned platform relays. */
   addedRelays: string[];
+  /**
+   * App relays for non-NIP-29 traffic (kind 0 profiles, kind 10009 lists,
+   * etc.) — Ditto's "app relays" concept. Seeded from VITE_APP_RELAYS
+   * (default: relay.ditto.pub + relay.dreamith.to); user-editable.
+   * Group-scoped events never route here.
+   */
+  appRelays: string[];
 }
 
 export interface AppContextType {
@@ -25,6 +34,7 @@ export interface AppContextType {
 export const defaultConfig: AppConfig = {
   theme: "dark",
   addedRelays: [],
+  appRelays: [...APP_RELAYS],
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);

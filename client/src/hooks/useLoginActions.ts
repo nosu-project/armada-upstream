@@ -49,13 +49,17 @@ export function useLoginActions() {
       const login = await NLogin.fromNostrConnect(params, nostr, { signal, onStatus });
       addAndActivate(login);
     },
-    // Relay URLs used for NIP-46 nostrconnect communication. On an internal
-    // deployment the platform relays are the rendezvous point.
+    // Relay URLs used for NIP-46 nostrconnect communication. App relays come
+    // first (remote signers are usually reachable through public relays),
+    // then the internal platform/user servers as fallback rendezvous points.
     getRelayUrls(): string[] {
+      const appRelays = config.appRelays
+        .map(normalizeRelayUrl)
+        .filter((url): url is string => Boolean(url));
       const added = config.addedRelays
         .map(normalizeRelayUrl)
         .filter((url): url is string => Boolean(url));
-      return [...new Set([...PLATFORM_RELAYS, ...added])];
+      return [...new Set([...appRelays, ...PLATFORM_RELAYS, ...added])];
     },
     // Log out the current user
     async logout(): Promise<void> {

@@ -6,8 +6,10 @@ RUN npm install --silent
 COPY . .
 ARG VITE_APP_NAME=Armada
 ARG VITE_PLATFORM_RELAYS=ws://localhost:5577
+ARG VITE_APP_RELAYS=wss://relay.ditto.pub,wss://relay.dreamith.to
 ENV VITE_APP_NAME=$VITE_APP_NAME
 ENV VITE_PLATFORM_RELAYS=$VITE_PLATFORM_RELAYS
+ENV VITE_APP_RELAYS=$VITE_APP_RELAYS
 RUN npm run build
 
 # Runtime stage

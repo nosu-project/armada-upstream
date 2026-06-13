@@ -7,6 +7,7 @@ import { useLocalStorage } from "@/hooks/useLocalStorage";
 const AppConfigSchema = z.object({
   theme: z.enum(["light", "dark", "system"]).catch("dark"),
   addedRelays: z.array(z.string()).catch([]),
+  appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
 });
 
 function deserializeConfig(raw: string): AppConfig {

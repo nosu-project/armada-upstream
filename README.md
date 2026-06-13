@@ -20,6 +20,10 @@ from [Flotilla](https://gitea.coracle.social/coracle/flotilla).
   moderation, 9021/9022 join/leave, kind 10009 personal group list).
 - **Auth** = NIP-42 relay auth (kind 22242), signed by nsec, NIP-07 extension,
   or NIP-46 bunker/nostrconnect logins.
+- **App relays** = configurable general-purpose relays (Ditto-style) for
+  everything that isn't channel traffic — profiles, group lists. Defaults to
+  `relay.ditto.pub` + `relay.dreamith.to`; editable in Settings and at build
+  time (`APP_RELAYS`). Channel events never route to app relays.
 - **Voice** = NIP-29 AV spaces: the relay issues LiveKit JWTs at
   `/.well-known/nip29/livekit/<group-id>` (NIP-98 authorization) and publishes
   kind 39004 room presence from LiveKit webhooks.
@@ -67,6 +71,10 @@ npm run test       # tsc + eslint + vitest + production build
 Configuration (build-time env):
 
 - `VITE_PLATFORM_RELAYS` — comma-separated pinned relay URLs (default `ws://localhost:5577`)
+- `VITE_APP_RELAYS` — default app relays for non-NIP-29 traffic — profiles
+  (kind 0), group lists (kind 10009) — in the style of Ditto's app relays
+  (default `wss://relay.ditto.pub,wss://relay.dreamith.to`); users can edit
+  the list in Settings, including removing all of them for air-gapped use
 - `VITE_APP_NAME` — display name
 
 ## Server development
@@ -103,4 +111,7 @@ chat-only and voice is hidden in the client.
 - The LiveKit token endpoint checks NIP-98 signatures (fresh timestamp, exact
   URL match) and group membership for private/closed groups before minting a
   JWT whose identity starts with the user's pubkey (per NIP-29).
-- Everything is designed to run on an internal network; nothing phones home.
+- Group/channel events are only ever published to their host server. App
+  relays (public by default) only see profiles and NIP-51 lists; set
+  `APP_RELAYS` to internal hosts (or remove them in Settings) for a fully
+  air-gapped deployment.

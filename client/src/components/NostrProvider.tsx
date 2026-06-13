@@ -23,8 +23,10 @@ interface NostrProviderProps {
  *   login's signer.
  * - Queries are batched (NostrBatcher) and cached in IndexedDB.
  *
- * Routing is Armada-specific: all configured servers (platform + user-added)
- * are queried for reads and writes. Group-scoped traffic should use
+ * Routing is Armada-specific: generic pool traffic (kind 0 profiles, kind
+ * 10009 lists, anything not group-scoped) goes to the configurable app
+ * relays (Ditto-style, default relay.ditto.pub + relay.dreamith.to) plus all
+ * configured servers. Group-scoped traffic should use
  * `nostr.relay(serverUrl)` directly so it stays on that server.
  */
 const NostrProvider: React.FC<NostrProviderProps> = (props) => {
@@ -38,20 +40,27 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   const eventStore = useRef<Promise<NIndexedDBStore> | undefined>(undefined);
   eventStore.current ??= NIndexedDBStore.open();
 
-  // All servers: pinned platform relays + user-added ones.
-  const servers = useMemo(() => {
-    const urls = new Set<string>(PLATFORM_RELAYS);
+  // Pool routes: app relays (non-NIP-29 traffic) + all servers
+  // (platform-pinned + user-added). The internal servers stay in the set so
+  // a fully air-gapped deployment keeps working with zero app relays.
+  const poolRelays = useMemo(() => {
+    const urls = new Set<string>();
+    for (const url of config.appRelays) {
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) urls.add(normalized);
+    }
+    for (const url of PLATFORM_RELAYS) urls.add(url);
     for (const url of config.addedRelays) {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
     }
     return [...urls];
-  }, [config.addedRelays]);
+  }, [config.appRelays, config.addedRelays]);
 
-  const serversRef = useRef(servers);
+  const poolRelaysRef = useRef(poolRelays);
   useEffect(() => {
-    serversRef.current = servers;
-  }, [servers]);
+    poolRelaysRef.current = poolRelays;
+  }, [poolRelays]);
 
   // Stable ref to the current user's signer for NIP-42 AUTH. The `open()`
   // callback reads from this ref when a relay sends an AUTH challenge, so it
@@ -104,10 +113,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         });
       },
       reqRouter(filters: NostrFilter[]): Map<string, NostrFilter[]> {
-        return new Map(serversRef.current.map((url) => [url, filters]));
+        return new Map(poolRelaysRef.current.map((url) => [url, filters]));
       },
       eventRouter(_event: NostrEvent) {
-        return [...serversRef.current];
+        return [...poolRelaysRef.current];
       },
       // Resolve queries quickly once any relay sends EOSE.
       eoseTimeout: 300,

@@ -3,6 +3,8 @@
  *
  * - `VITE_PLATFORM_RELAYS` — comma-separated relay websocket URLs. These are
  *   always part of the server list and cannot be removed by the user.
+ * - `VITE_APP_RELAYS` — comma-separated default app relays used for
+ *   non-NIP-29 traffic (profiles, lists). User-overridable in Settings.
  * - `VITE_APP_NAME` — display name of the deployment.
  */
 
@@ -50,6 +52,19 @@ export const APP_NAME: string = import.meta.env.VITE_APP_NAME || "Armada";
 
 /** Pinned platform relays. Always present; not user-removable. */
 export const PLATFORM_RELAYS: string[] = (import.meta.env.VITE_PLATFORM_RELAYS || "ws://localhost:5577")
+  .split(",")
+  .map((url: string) => normalizeRelayUrl(url))
+  .filter((url: string | undefined): url is string => Boolean(url));
+
+/**
+ * Default app relays (Ditto's "app relays" concept): general-purpose relays
+ * used for non-NIP-29 events — kind 0 profiles, kind 10009 group lists, and
+ * any other plain Nostr traffic. Group-scoped events never go here; they are
+ * published directly to their host server via `nostr.relay(url)`.
+ *
+ * These seed `AppConfig.appRelays`, which the user can edit in Settings.
+ */
+export const APP_RELAYS: string[] = (import.meta.env.VITE_APP_RELAYS || "wss://relay.ditto.pub,wss://relay.dreamith.to")
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));

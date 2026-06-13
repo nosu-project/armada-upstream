@@ -1,9 +1,11 @@
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -13,14 +15,30 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAppContext } from "@/hooks/useAppContext";
-import { APP_NAME, PLATFORM_RELAYS } from "@/lib/platform";
+import { toast } from "@/hooks/useToast";
+import { APP_NAME, APP_RELAYS, normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 
 import type { Theme } from "@/contexts/AppContext";
 
-/** App settings: account, theme, and the server list. */
+/** App settings: account, theme, the server list, and app relays. */
 export function SettingsPage() {
   const navigate = useNavigate();
   const { config, updateConfig } = useAppContext();
+  const [newAppRelay, setNewAppRelay] = useState("");
+
+  const handleAddAppRelay = () => {
+    const normalized = normalizeRelayUrl(newAppRelay);
+    if (!normalized) {
+      toast({ title: "Invalid relay URL", description: "Enter a ws:// or wss:// URL.", variant: "destructive" });
+      return;
+    }
+    if (config.appRelays.includes(normalized)) {
+      toast({ title: "Already in the list", description: normalized });
+      return;
+    }
+    updateConfig((current) => ({ ...current, appRelays: [...current.appRelays, normalized] }));
+    setNewAppRelay("");
+  };
 
   return (
     <main className="flex-1 min-w-0 overflow-y-auto">
@@ -105,6 +123,73 @@ export function SettingsPage() {
                 No extra servers added. Use the + button in the server rail to add one.
               </p>
             )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>App relays</CardTitle>
+            <CardDescription>
+              General-purpose relays for everything that isn't channel traffic — profiles
+              (kind 0), your group list (kind 10009), and other plain Nostr events. Channel
+              messages always stay on their host server. Remove all of these for a fully
+              internal deployment.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {config.appRelays.map((url) => (
+              <div key={url} className="flex items-center gap-2 rounded-lg border p-3">
+                <span className="text-sm font-mono break-all flex-1">{url}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Remove ${url}`}
+                  className="size-7 text-muted-foreground hover:text-destructive shrink-0"
+                  onClick={() =>
+                    updateConfig((current) => ({
+                      ...current,
+                      appRelays: current.appRelays.filter((u) => u !== url),
+                    }))}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
+            ))}
+            {config.appRelays.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No app relays — profiles and lists are stored on your internal servers only.
+              </p>
+            )}
+
+            <form
+              className="flex gap-2 pt-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleAddAppRelay();
+              }}
+            >
+              <Input
+                value={newAppRelay}
+                onChange={(e) => setNewAppRelay(e.target.value)}
+                placeholder="wss://relay.example.com"
+                aria-label="Add app relay"
+                autoComplete="off"
+              />
+              <Button type="submit" variant="outline" disabled={!newAppRelay.trim()}>
+                <Plus className="size-4 mr-1.5" /> Add
+              </Button>
+            </form>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              onClick={() =>
+                updateConfig((current) => ({ ...current, appRelays: [...APP_RELAYS] }))}
+            >
+              <RotateCcw className="size-3.5 mr-1.5" /> Reset to defaults
+            </Button>
           </CardContent>
         </Card>
       </div>
