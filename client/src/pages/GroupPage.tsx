@@ -87,7 +87,11 @@ export function GroupPage() {
   }
 
   const group = details?.group;
-  const isMember = Boolean(membership?.isMember) || Boolean(user && details?.members.includes(user.pubkey));
+  // Admins may only appear in the kind 39001 admins list (e.g. the group
+  // creator), not in 39002 members or via 9000 put-user events, so treat
+  // admin status as membership too.
+  const isMember =
+    isAdmin || Boolean(membership?.isMember) || Boolean(user && details?.members.includes(user.pubkey));
   // NIP-29 relays generally only accept writes from members (relay29 always
   // does), so gate the composer on membership.
   const canWrite = Boolean(user) && isMember;
