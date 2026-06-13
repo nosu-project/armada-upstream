@@ -91,7 +91,7 @@ export function ServerRail() {
   return (
     <nav
       aria-label="Servers"
-      className="flex flex-col items-center gap-3 w-[72px] shrink-0 py-3 bg-background border-r overflow-y-auto"
+      className="flex flex-col items-center gap-3 w-[72px] shrink-0 pt-1 pb-3 bg-background border-r overflow-y-auto"
     >
       {servers.map((url) => <ServerButton key={url} url={url} />)}
 

@@ -105,7 +105,7 @@ export function ChannelSidebar({ relayUrl }: ChannelSidebarProps) {
       </div>
 
       {/* Account area */}
-      <div className="border-t p-2">
+      <div className="px-1 shrink-0 bg-background/40">
         <LoginArea className="w-full flex" />
       </div>
 
