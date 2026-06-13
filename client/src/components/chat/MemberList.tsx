@@ -24,7 +24,7 @@ function MemberRow({ pubkey, roles, canModerate, onRemove }: MemberRowProps) {
   const displayName = getDisplayName(metadata, pubkey);
 
   return (
-    <div className="group flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-accent transition-colors">
+    <div className="gutter-tick group flex items-center gap-2 pl-3 pr-2 py-1.5 transition-colors hover:text-foreground">
       <Avatar shape={getAvatarShape(metadata)} className="size-7 shrink-0">
         <AvatarImage src={metadata?.picture} alt={displayName} />
         <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
@@ -77,7 +77,15 @@ export function MemberList({ admins, members, canModerate, onRemove, className }
   const regulars = members.filter((pubkey) => !adminPubkeys.has(pubkey));
 
   return (
-    <aside className={cn("w-56 shrink-0 border-l bg-card/50 overflow-y-auto p-2 hidden lg:block", className)}>
+    <aside
+      className={cn(
+        // Floating roster: detached by a margin, cut-corner card, same recessed
+        // chrome shade as the rail/console/header. No border.
+        "hidden lg:flex flex-col w-56 shrink-0 overflow-y-auto",
+        "my-2 mr-2 p-1.5 clip-corner-lg bg-black/30",
+        className,
+      )}
+    >
       {admins.length > 0 && (
         <>
           <h3 className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">

@@ -166,6 +166,10 @@ export function deriveTokensFromCore(
   const success = dark ? "142 60% 35%" : "142 72% 29%";
   const successFg = "138 60% 94%";
 
+  // Second neon: a phosphor-cyan counter-accent (the virtual sea's wake),
+  // fixed so it stays cold against any warm primary.
+  const accent2 = dark ? "180 90% 55%" : "190 85% 40%";
+
   return {
     background,
     foreground: text,
@@ -181,6 +185,7 @@ export function deriveTokensFromCore(
     mutedForeground: mutedFg,
     accent: secondarySurface,
     accentForeground: text,
+    accent2,
     destructive,
     destructiveForeground: destructiveFg,
     success,

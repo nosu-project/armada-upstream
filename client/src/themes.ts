@@ -52,6 +52,8 @@ export interface ThemeTokens {
   mutedForeground: string;
   accent: string;
   accentForeground: string;
+  /** Second neon — phosphor-cyan counter-accent (the virtual "wake"). */
+  accent2: string;
   destructive: string;
   destructiveForeground: string;
   success: string;
@@ -73,9 +75,14 @@ export const builtinThemes: Record<"light" | "dark", CoreThemeColors> = {
     primary: "235 70% 58%",
   },
   dark: {
-    background: "222 18% 9%",
-    text: "220 14% 92%",
-    primary: "235 80% 68%",
+    // Armada "Corsair": a hacker-privateer on the virtual sea. The sea is a
+    // deep, cold, near-black violet bruise — the void you sail, not rust. The
+    // light is electric: a hot rose-magenta blade (primary) answered by a
+    // phosphor-cyan wake (--accent-2) and warm gilt-cream text for the regal,
+    // gentleman authority. Three lights on black water.
+    background: "260 22% 9%",
+    text: "42 38% 90%",
+    primary: "330 90% 62%",
   },
 };
 
@@ -96,6 +103,20 @@ export interface ThemePreset {
  * the preset's core colors to `customTheme`.
  */
 export const themePresets: Record<string, ThemePreset> = {
+  armada: {
+    label: "Armada",
+    emoji: "⚔️",
+    featured: true,
+    // The default. Hacker-privateer on the virtual sea — cold violet-black water, electric rose blade, phosphor-cyan wake.
+    colors: { background: "260 22% 9%", text: "42 38% 90%", primary: "330 90% 62%" },
+  },
+  lantern: {
+    label: "Lantern",
+    emoji: "🏮",
+    featured: true,
+    // Deep-sea hull, sailcloth text, brass lantern glow. A ship at night.
+    colors: { background: "205 38% 8%", text: "38 18% 88%", primary: "38 85% 58%" },
+  },
   midnight: {
     label: "Midnight",
     emoji: "🌃",

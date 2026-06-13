@@ -41,24 +41,38 @@ function ServerButton({ url, onNavigate }: { url: string; onNavigate?: () => voi
         >
           {({ isActive }) => (
             <>
-              {/* Active pill indicator */}
+              {/* Active marker: a thin neon blade in the gutter. */}
               <span
                 className={cn(
-                  "absolute -left-2 w-1 rounded-r-full bg-foreground transition-all",
-                  isActive ? "h-8" : "h-2 opacity-0 group-hover:opacity-100 group-hover:h-4",
+                  "absolute -left-2 w-[3px] bg-primary transition-all",
+                  isActive ? "h-9 opacity-100" : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-4",
                 )}
               />
-              <Avatar
+              {/*
+                Angular crest. Glow lives on the wrapper as a drop-shadow so it
+                traces the fin silhouette (a box-shadow would be clipped away
+                by the child's clip-path). Restrained: one soft shadow.
+              */}
+              <span
                 className={cn(
-                  "size-12 transition-all rounded-3xl group-hover:rounded-2xl",
-                  isActive && "rounded-2xl ring-2 ring-primary",
+                  "transition-all duration-150",
+                  isActive
+                    ? "[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]"
+                    : "opacity-50 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
                 )}
               >
-                <AvatarImage src={info?.icon} alt={name} />
-                <AvatarFallback className="bg-secondary text-secondary-foreground font-semibold">
-                  {initial}
-                </AvatarFallback>
-              </Avatar>
+                <Avatar className="size-12 clip-corner-lg">
+                  <AvatarImage src={info?.icon} alt={name} />
+                  <AvatarFallback
+                    className={cn(
+                      "bg-secondary font-semibold",
+                      isActive ? "text-primary" : "text-secondary-foreground",
+                    )}
+                  >
+                    {initial}
+                  </AvatarFallback>
+                </Avatar>
+              </span>
             </>
           )}
         </NavLink>
@@ -93,13 +107,14 @@ export function ServerRail({ onNavigate, className }: { onNavigate?: () => void;
     <nav
       aria-label="Servers"
       className={cn(
-        "flex flex-col items-center gap-3 w-[72px] shrink-0 pt-1 pb-3 bg-background border-r overflow-y-auto",
+        // Chrome plane — deepest part of the recessed frame.
+        "flex flex-col items-center gap-3 w-[72px] shrink-0 pt-2 pb-3 overflow-y-auto bg-black/40",
         className,
       )}
     >
       {servers.map((url) => <ServerButton key={url} url={url} onNavigate={onNavigate} />)}
 
-      <div className="w-8 border-t" />
+      <div className="w-7 h-px bg-white/10" />
 
       <Tooltip>
         <TooltipTrigger asChild>
@@ -107,7 +122,7 @@ export function ServerRail({ onNavigate, className }: { onNavigate?: () => void;
             variant="secondary"
             size="icon"
             aria-label="Add server"
-            className="size-12 rounded-3xl hover:rounded-2xl transition-all text-success hover:bg-success hover:text-success-foreground"
+            className="size-12 clip-corner-lg transition-all text-success hover:bg-success hover:text-success-foreground"
             onClick={() => setAddOpen(true)}
           >
             <Plus className="size-5" />
@@ -124,7 +139,7 @@ export function ServerRail({ onNavigate, className }: { onNavigate?: () => void;
             variant="secondary"
             size="icon"
             aria-label="Settings"
-            className="size-12 rounded-3xl hover:rounded-2xl transition-all"
+            className="size-12 clip-corner-lg transition-all"
             onClick={() => {
               onNavigate?.();
               navigate("/settings");

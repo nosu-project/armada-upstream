@@ -65,6 +65,7 @@ export default {
 					DEFAULT: 'hsl(var(--accent))',
 					foreground: 'hsl(var(--accent-foreground))'
 				},
+				accent2: 'hsl(var(--accent2))',
 				popover: {
 					DEFAULT: 'hsl(var(--popover))',
 					foreground: 'hsl(var(--popover-foreground))'
@@ -78,7 +79,8 @@ export default {
 				lg: 'var(--radius)',
 				md: 'calc(var(--radius) - 2px)',
 				sm: 'calc(var(--radius) - 4px)',
-				xs: 'calc(var(--radius) - 8px)'
+				xs: 'calc(var(--radius) - 8px)',
+				chrome: 'var(--radius-chrome)'
 			},
 			keyframes: {
 				'accordion-down': {

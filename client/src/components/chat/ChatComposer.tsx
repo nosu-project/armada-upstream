@@ -1,12 +1,12 @@
 import { encode as blurhashEncode } from "blurhash";
 import {
+  ArrowUpRight,
   BarChart3,
   Loader2,
   Mic,
   Paperclip,
   Plus,
   Reply,
-  Send,
   Smile,
   Square,
   Sticker,
@@ -652,7 +652,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             />
 
             {/* ── Input pill: + | textarea | emoji | mic/send ──── */}
-            <div className="flex items-end gap-0.5 rounded-2xl bg-secondary/60 px-1.5 py-1">
+            <div className="flex items-end gap-0.5 clip-corner-lg bg-secondary/60 px-1.5 py-1">
               {/* Plus menu: attach + poll (Discord-style) */}
               <Popover open={plusOpen} onOpenChange={setPlusOpen}>
                 <PopoverTrigger asChild>
@@ -774,11 +774,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   onClick={mode === "poll" ? handlePollSubmit : handleSend}
                   disabled={mode === "poll" ? !isPollValid || isSending : !content.trim() || isSending}
                   aria-label={mode === "poll" ? "Publish poll" : "Send message"}
-                  className="p-2 shrink-0 rounded-full bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9"
+                  className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9"
                 >
                   {isSending
-                    ? <Loader2 className="size-5 animate-spin" />
-                    : <Send className="size-5" />}
+                    ? <Loader2 className="size-4 animate-spin" />
+                    : <ArrowUpRight className="size-5" strokeWidth={2.5} />}
                 </button>
               )}
             </div>

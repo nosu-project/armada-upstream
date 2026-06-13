@@ -123,7 +123,7 @@ export function VoiceBar({ relayUrl, groupId, active, onLeave }: VoiceBarProps) 
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center gap-2 px-3 py-2 border-b bg-muted/30 min-h-12">
+      <div className="flex items-center justify-center gap-2 mx-2 mt-2 px-3 py-2 clip-corner-lg bg-black/30 min-h-12">
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
         <span className="text-sm text-muted-foreground">Requesting voice access…</span>
       </div>
@@ -132,7 +132,7 @@ export function VoiceBar({ relayUrl, groupId, active, onLeave }: VoiceBarProps) 
 
   if (tokenError || !tokenData) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 min-h-12">
+      <div className="flex items-center gap-2 mx-2 mt-2 px-3 py-2 clip-corner-lg bg-black/30 min-h-12">
         <span className="text-sm text-destructive flex-1">
           Could not join voice{tokenError instanceof Error ? `: ${tokenError.message}` : "."}
         </span>
@@ -144,7 +144,7 @@ export function VoiceBar({ relayUrl, groupId, active, onLeave }: VoiceBarProps) 
   }
 
   return (
-    <div className="border-b bg-muted/30">
+    <div className="mx-2 mt-2 clip-corner-lg bg-black/30">
       <LiveKitRoom
         serverUrl={tokenData.url}
         token={tokenData.token}

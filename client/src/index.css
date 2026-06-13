@@ -18,7 +18,16 @@
  */
 @layer base {
   :root {
+    /*
+     * Two-radii system (Armada). Shape carries meaning:
+     *   --radius        — soft, for human/content surfaces (avatars, composer,
+     *                     message bubbles, cards). "the people."
+     *   --radius-chrome — near-sharp, for structural chrome (rails, sidebars,
+     *                     headers, panels, the top bar). "the hull."
+     * The tension between a framed hull and round content is the posture.
+     */
     --radius: 0.75rem;
+    --radius-chrome: 0.1875rem; /* 3px */
     --top-bar-height: 3rem;
     --bottom-nav-height: 3.25rem;
   }
@@ -74,5 +83,95 @@
   }
   .nav-hidden-down {
     transform: translateY(calc(var(--bottom-nav-height) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))));
+  }
+}
+
+/*
+ * ── Armada "Corsair" — angular neon HUD primitives ───────────────────────
+ * A duelist's deck under neon. These build on the runtime --primary token so
+ * the glow / accents retint automatically with any selected theme.
+ *
+ *   .neon-glow / .neon-glow-strong  — rose-magenta halo for active/focus.
+ *   .clip-corner / .clip-corner-lg  — cut-corner (beveled) dueling-HUD panels.
+ *   .gutter-tick                    — glowing left tick for chart-rule nav,
+ *                                     hidden until .is-active or :hover.
+ */
+@layer utilities {
+  .neon-glow {
+    box-shadow:
+      0 0 0 1px hsl(var(--primary) / 0.5),
+      0 0 12px -2px hsl(var(--primary) / 0.45);
+  }
+  .neon-glow-strong {
+    box-shadow:
+      0 0 0 1px hsl(var(--primary) / 0.7),
+      0 0 8px -1px hsl(var(--primary) / 0.55),
+      0 0 22px -3px hsl(var(--primary) / 0.4);
+  }
+  /* Neon text/icon for crests and active labels. */
+  .neon-text {
+    color: hsl(var(--primary));
+    text-shadow: 0 0 8px hsl(var(--primary) / 0.55);
+  }
+  /* Phosphor-cyan wake — the cold counter-accent glow. */
+  .wake-glow {
+    box-shadow: 0 0 0 1px hsl(var(--accent2) / 0.5), 0 0 12px -2px hsl(var(--accent2) / 0.5);
+  }
+  .wake-text {
+    color: hsl(var(--accent2));
+    text-shadow: 0 0 8px hsl(var(--accent2) / 0.5);
+  }
+
+  /*
+   * Cut-corner panel — the single consistent "vessel" shape. The body is
+   * rounded (border-radius on the rounded corners) while two opposite corners
+   * are sliced into a flat diagonal chamfer. Achieved by rounding the whole
+   * element and then clipping the two cut corners with a polygon; the rounded
+   * corners survive because the polygon leaves them at full extent. Used for
+   * ALL chrome: server icons, the floating top bar, and the roster card.
+   * People (avatars) stay round; vessels and chrome are cut-square.
+   */
+  .clip-corner-lg {
+    --cut: 0.7rem;
+    border-radius: 0.55rem;
+    clip-path: polygon(
+      var(--cut) 0,
+      100% 0,
+      100% calc(100% - var(--cut)),
+      calc(100% - var(--cut)) 100%,
+      0 100%,
+      0 var(--cut)
+    );
+  }
+
+  /*
+   * Chart-rule gutter tick. Apply to a relatively-positioned row; the ::before
+   * is a thin vertical bar in the left gutter that lights up on hover and
+   * glows when the row also has .is-active. Replaces full-bleed hover blocks.
+   */
+  .gutter-tick {
+    position: relative;
+  }
+  .gutter-tick::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 0;
+    width: 2px;
+    border-radius: 2px;
+    background: hsl(var(--primary));
+    opacity: 0;
+    transition: height 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+  }
+  .gutter-tick:hover::before {
+    height: 45%;
+    opacity: 0.6;
+  }
+  .gutter-tick.is-active::before {
+    height: 70%;
+    opacity: 1;
+    box-shadow: 0 0 8px hsl(var(--primary) / 0.7);
   }
 }

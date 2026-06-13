@@ -23,9 +23,12 @@ function ChannelLink({ group, onNavigate }: { group: Nip29Group; onNavigate?: ()
       onClick={onNavigate}
       className={({ isActive }) =>
         cn(
-          "flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors",
-          "text-muted-foreground hover:text-foreground hover:bg-accent",
-          isActive && "bg-accent text-foreground font-medium",
+          // Chart-rule HUD entry: a glowing left gutter-tick marks state
+          // instead of a full-bleed grey hover block. Raked left padding
+          // echoes the console's diagonal.
+          "gutter-tick flex items-center gap-2 pl-4 pr-2 py-1.5 text-sm transition-colors",
+          "text-muted-foreground hover:text-foreground",
+          isActive && "is-active text-foreground font-medium",
         )}
     >
       <Icon className="size-4 shrink-0" />
@@ -51,22 +54,31 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const [createOpen, setCreateOpen] = useState(false);
 
   return (
-    <aside className={cn("flex flex-col w-60 shrink-0 border-r bg-card/50", className)}>
-      {/* Server header */}
-      <div className="px-4 h-14 flex items-center border-b shadow-sm">
-        <div className="min-w-0">
-          <h2 className="font-semibold truncate leading-tight">
-            {relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "")}
-          </h2>
-          {relayInfo?.limitation?.auth_required && (
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">AUTH required</Badge>
-          )}
-        </div>
+    <aside
+      className={cn(
+        // Chrome plane — recessed, darker than the deck, identical to the rail,
+        // header, and roster so they read as one frame around the bright chat.
+        "relative flex flex-col w-60 shrink-0 bg-black/30",
+        className,
+      )}
+    >
+      {/* Server header — aligned with the channel rows' text gutter below
+          (container px-1 + row pl-4 = pl-5 here) so the grid lines up. */}
+      <div className="pl-5 pr-3 pt-4 pb-2 flex flex-col justify-center">
+        <h2 className="font-semibold truncate leading-tight tracking-wide text-sm">
+          {relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "")}
+        </h2>
+        <span className="text-[11px] text-muted-foreground truncate leading-tight">
+          {relayUrl.replace(/^wss?:\/\//, "").replace(/\/$/, "")}
+        </span>
+        {relayInfo?.limitation?.auth_required && (
+          <Badge variant="secondary" className="mt-0.5 w-fit text-[10px] px-1.5 py-0">AUTH required</Badge>
+        )}
       </div>
 
       {/* Channels */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        <div className="flex items-center justify-between px-2 py-1">
+      <div className="flex-1 overflow-y-auto px-1 pb-2 space-y-0.5">
+        <div className="flex items-center justify-between pl-4 pr-2 py-1">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Channels
           </span>

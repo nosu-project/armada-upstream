@@ -10,7 +10,8 @@
 
   var builtins = {
     light: { background: "220 18% 97%", text: "224 25% 12%", primary: "235 70% 58%" },
-    dark: { background: "222 18% 9%", text: "220 14% 92%", primary: "235 80% 68%" },
+    // Armada "Corsair": cold violet-black sea, gilt-cream text, rose-magenta blade.
+    dark: { background: "260 22% 9%", text: "42 38% 90%", primary: "330 90% 62%" },
   };
 
   function parseHsl(hsl) {
@@ -69,6 +70,7 @@
       "--muted-foreground": mutedFg,
       "--accent": sec,
       "--accent-foreground": text,
+      "--accent2": dark ? "180 90% 55%" : "190 85% 40%",
       "--destructive": dark ? "0 72% 51%" : "0 84.2% 60.2%",
       "--destructive-foreground": dark ? "0 0% 95%" : "210 40% 98%",
       "--success": dark ? "142 60% 35%" : "142 72% 29%",

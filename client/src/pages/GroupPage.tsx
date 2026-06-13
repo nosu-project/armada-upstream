@@ -47,7 +47,7 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b bg-primary/5">
+    <div className="flex flex-wrap items-center gap-2 mx-2 mt-2 px-4 py-2.5 clip-corner-lg bg-black/30">
       <DoorOpen className="size-4 text-primary shrink-0" />
       <span className="text-sm flex-1 min-w-40">
         You're not a member of this channel{isClosed ? " — it's invite-only" : ""}.
@@ -130,9 +130,10 @@ export function GroupPage() {
       <ServerRail className="hidden sidebar:flex" />
       <ChannelSidebar relayUrl={relayUrl} className="hidden sidebar:flex" />
 
-      <main className="flex-1 min-w-0 flex flex-col">
-        {/* Channel header */}
-        <header className="h-14 px-2 sidebar:px-4 flex items-center gap-1.5 border-b shadow-sm shrink-0 safe-area-top">
+      <main className="flex-1 min-w-0 flex flex-col safe-area-top">
+        {/* Channel header — detached floating command bar, matching the right
+            roster: same margin, cut-corner card, and recessed chrome shade. */}
+        <header className="relative h-11 mx-2 mt-2 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-black/30">
           {/* Mobile menu → reveals the channel list as a left drawer. */}
           <Button
             variant="ghost"
