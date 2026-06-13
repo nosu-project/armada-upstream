@@ -35,15 +35,20 @@ from [Flotilla](https://gitea.coracle.social/coracle/flotilla).
 ## Quick start (full stack)
 
 ```sh
-cd infra
-cp .env.example .env
-# fill in RELAY_PRIVKEY and LIVEKIT_API_SECRET (openssl rand -hex 32)
-docker compose up -d --build
+./start.sh
 ```
 
-- Client: http://localhost:8080
+That's it. On first run it generates secrets into `infra/.env` (relay key,
+LiveKit API secret), picks a free client port if 8080 is taken, builds the
+three containers, starts them, and health-checks every endpoint.
+
+- Client: http://localhost:8080 (or the port `start.sh` prints)
 - Relay:  ws://localhost:5577 (NIP-11 at http://localhost:5577)
 - LiveKit: ws://localhost:7880
+
+`./start.sh down` stops the stack; `./start.sh clean` stops it and deletes
+all data. Prefer manual control? The script is a thin wrapper around
+`docker compose` in `infra/` — see `infra/.env.example` for every knob.
 
 Sign up in the client (generates an nsec), create a channel, talk. Voice
 requires a secure context for microphone access: `localhost` works out of the
