@@ -1,22 +1,25 @@
-import { Hash, Send, Trash2 } from "lucide-react";
+import { Hash, Reply, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
+import { PollCard } from "@/components/chat/PollCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEvent } from "@/hooks/useEvent";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
-import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
-import { buildPreviousRefs, KIND_GROUP_CHAT } from "@/lib/nip29";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+
+/** NIP-88 poll kind. */
+const KIND_POLL = 1068;
 
 /** Format seconds-ago into a short time string. */
 function shortTimeAgo(timestamp: number): string {
@@ -27,16 +30,48 @@ function shortTimeAgo(timestamp: number): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
-interface ChatMessageProps {
-  event: NostrEvent;
-  canModerate: boolean;
-  onDelete: (eventId: string) => void;
+/** Extract the id of the message this event replies to (NIP-10 marked e tags). */
+function getReplyToId(event: NostrEvent): string | undefined {
+  const replyTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "reply");
+  if (replyTag) return replyTag[1];
+  const rootTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "root");
+  return rootTag?.[1];
 }
 
-function ChatMessage({ event, canModerate, onDelete }: ChatMessageProps) {
+/** Compact "replying to" context line shown above a reply message. */
+function ReplyContext({ eventId, relayUrl }: { eventId: string; relayUrl: string }) {
+  const { data: event } = useEvent(eventId, [relayUrl]);
+  const author = useAuthor(event?.pubkey);
+
+  if (!event) return null;
+
+  const displayName = getDisplayName(author.data?.metadata, event.pubkey);
+  const preview = event.content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
+
+  return (
+    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80 mb-0.5 min-w-0">
+      <Reply className="size-3 shrink-0" />
+      <span className="font-semibold shrink-0">{displayName}</span>
+      <span className="truncate">{preview}</span>
+    </div>
+  );
+}
+
+interface ChatMessageProps {
+  event: NostrEvent;
+  relayUrl: string;
+  groupId: string;
+  canWrite: boolean;
+  canModerate: boolean;
+  onDelete: (eventId: string) => void;
+  onReply: (event: NostrEvent) => void;
+}
+
+function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, onDelete, onReply }: ChatMessageProps) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);
+  const replyToId = getReplyToId(event);
 
   return (
     <div className="group flex items-start gap-2.5 py-1 px-2 rounded hover:bg-secondary/40 transition-colors">
@@ -53,24 +88,50 @@ function ChatMessage({ event, canModerate, onDelete }: ChatMessageProps) {
             {shortTimeAgo(event.created_at)}
           </span>
         </div>
-        <ChatContent event={event} className="text-sm" />
+        {replyToId && <ReplyContext eventId={replyToId} relayUrl={relayUrl} />}
+        {event.kind === KIND_POLL
+          ? (
+            <>
+              <ChatContent event={event} className="text-sm" />
+              <PollCard event={event} relayUrl={relayUrl} groupId={groupId} canVote={canWrite} />
+            </>
+          )
+          : <ChatContent event={event} className="text-sm" />}
       </div>
-      {canModerate && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Delete message"
-              className="size-7 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
-              onClick={() => onDelete(event.id)}
-            >
-              <Trash2 className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Delete message</TooltipContent>
-        </Tooltip>
-      )}
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0">
+        {canWrite && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Reply"
+                className="size-7 text-muted-foreground hover:text-primary"
+                onClick={() => onReply(event)}
+              >
+                <Reply className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Reply</TooltipContent>
+          </Tooltip>
+        )}
+        {canModerate && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Delete message"
+                className="size-7 text-muted-foreground hover:text-destructive"
+                onClick={() => onDelete(event.id)}
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Delete message</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
     </div>
   );
 }
@@ -86,15 +147,14 @@ interface GroupChatProps {
 
 /**
  * The message timeline + composer for a NIP-29 group. Messages are kind 9
- * with the `h` tag and NIP-29 `previous` timeline references, published only
- * to the group's host relay.
+ * (and kind 1068 polls) with the `h` tag and NIP-29 `previous` timeline
+ * references, published only to the group's host relay.
  */
 export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupChatProps) {
   const { user } = useCurrentUser();
   const { data: messages = [], isLoading } = useGroupMessages(relayUrl, groupId);
-  const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { deleteEvent } = useGroupModeration(relayUrl, groupId);
-  const [message, setMessage] = useState("");
+  const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
 
@@ -111,33 +171,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupCha
     isAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
   }, []);
 
-  const handleSend = async () => {
-    const text = message.trim();
-    if (!text || !user || isSending) return;
-
-    try {
-      await createEvent({
-        kind: KIND_GROUP_CHAT,
-        content: text,
-        tags: [
-          ["h", groupId],
-          ...buildPreviousRefs(messages, user.pubkey).map((ref) => ["previous", ref]),
-        ],
-        relay: relayUrl,
-      });
-      setMessage("");
-    } catch {
-      // Error surfaced by the mutation's onError logging; relay may have
-      // rejected the write (not a member, restricted group, etc).
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
+  const handleSent = useCallback(() => {
+    setReplyTo(undefined);
+    isAutoScrollRef.current = true;
+  }, []);
 
   return (
     <div className="flex flex-col flex-1 min-h-0 min-w-0">
@@ -170,41 +207,34 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupCha
             <ChatMessage
               key={msg.id}
               event={msg}
+              relayUrl={relayUrl}
+              groupId={groupId}
+              canWrite={Boolean(user && canWrite)}
               canModerate={canModerate}
               onDelete={(eventId) => deleteEvent.mutate({ eventId })}
+              onReply={setReplyTo}
             />
           ))
         )}
       </div>
 
       {/* Composer */}
-      <div className="border-t p-3 shrink-0">
-        {user && canWrite ? (
-          <div className="flex gap-2">
-            <Input
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Message the channel…"
-              className="flex-1 h-10 text-base md:text-sm"
-              disabled={isSending}
-              maxLength={2000}
-            />
-            <Button
-              onClick={handleSend}
-              disabled={!message.trim() || isSending}
-              aria-label="Send message"
-              className="h-10 px-3"
-            >
-              <Send className="size-4" />
-            </Button>
-          </div>
-        ) : (
+      {user && canWrite ? (
+        <ChatComposer
+          relayUrl={relayUrl}
+          groupId={groupId}
+          messages={messages}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(undefined)}
+          onSent={handleSent}
+        />
+      ) : (
+        <div className="border-t p-3 shrink-0">
           <p className="text-xs text-muted-foreground text-center py-1">
             {user ? "Join this channel to send messages." : "Log in to participate in the chat."}
           </p>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

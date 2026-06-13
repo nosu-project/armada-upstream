@@ -108,11 +108,16 @@ func main() {
 
 	relay.RejectEvent = append(relay.RejectEvent,
 		policies.PreventLargeTags(64),
-		policies.PreventTooManyIndexableTags(6, []int{9005}, nil),
+		// Rich chat messages legitimately stack indexable tags: `h` + NIP-10
+		// reply `e` tags + mention `p` tags + hashtag `t` tags + quote `q`
+		// tags. 12 leaves headroom without allowing tag-spam.
+		policies.PreventTooManyIndexableTags(12, []int{9005}, nil),
 		policies.RestrictToSpecifiedKinds(true,
 			// group content
 			9, 10, 11, 12, 1111,
 			30023, 31922, 31923, 9802,
+			// NIP-88 polls (1068) + votes (1018), scoped to the group via `h`
+			1068, 1018,
 			// moderation + membership
 			9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009,
 			9021, 9022,

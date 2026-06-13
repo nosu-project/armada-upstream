@@ -1,0 +1,303 @@
+import { nip19 } from "nostr-tools";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { usePortalDropdown } from "@/hooks/usePortalDropdown";
+import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
+import { getAvatarShape } from "@/lib/avatarShape";
+import { cn } from "@/lib/utils";
+
+interface MentionAutocompleteProps {
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  content: string;
+  onInsertMention: (params: { start: number; end: number; replacement: string }) => void;
+}
+
+/** CSS properties that affect text layout and must be copied to the mirror element. */
+const MIRROR_PROPS = [
+  "direction", "boxSizing", "width", "height", "overflowX", "overflowY",
+  "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+  "borderStyle", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+  "fontStyle", "fontVariant", "fontWeight", "fontStretch", "fontSize",
+  "fontSizeAdjust", "lineHeight", "fontFamily", "textAlign", "textTransform",
+  "textIndent", "textDecoration", "letterSpacing", "wordSpacing",
+  "tabSize", "MozTabSize", "whiteSpace", "wordWrap", "wordBreak",
+] as const;
+
+/**
+ * Returns the pixel {top, left} of a character position within a textarea,
+ * relative to the textarea element's top-left corner. Uses a hidden mirror
+ * element that clones the textarea's layout-affecting styles.
+ */
+export function getCaretCoordinates(textarea: HTMLTextAreaElement, position: number): { top: number; left: number } {
+  const mirror = document.createElement("div");
+
+  const style = window.getComputedStyle(textarea);
+
+  for (const prop of MIRROR_PROPS) {
+    mirror.style[prop as string] = style.getPropertyValue(
+      prop.replace(/([A-Z])/g, "-$1").toLowerCase(),
+    );
+  }
+
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.wordWrap = "break-word";
+  mirror.style.overflow = "hidden";
+
+  document.body.appendChild(mirror);
+
+  mirror.textContent = textarea.value.substring(0, position);
+
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b"; // zero-width space
+  mirror.appendChild(marker);
+
+  const mirrorRect = mirror.getBoundingClientRect();
+  const markerRect = marker.getBoundingClientRect();
+
+  const coords = {
+    top: markerRect.top - mirrorRect.top - textarea.scrollTop,
+    left: markerRect.left - mirrorRect.left - textarea.scrollLeft,
+  };
+
+  document.body.removeChild(mirror);
+  return coords;
+}
+
+/**
+ * Detects `@query` at the cursor position in a textarea and shows
+ * a profile autocomplete dropdown. On selection, replaces `@query`
+ * with `nostr:npub1...` in the content (NIP-27).
+ */
+export function MentionAutocomplete({
+  textareaRef,
+  content,
+  onInsertMention,
+}: MentionAutocompleteProps) {
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionStart, setMentionStart] = useState(-1);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [isOpen, setIsOpen] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const handleClose = useCallback(() => setIsOpen(false), []);
+  const { computePosition, renderPortal } = usePortalDropdown({
+    textareaRef,
+    isOpen,
+    onClose: handleClose,
+    dropdownHeight: 240, // must match max-h-[240px] below
+  });
+
+  const { data: profiles } = useSearchProfiles(isOpen ? mentionQuery : "");
+
+  // Detect @mention query at cursor.
+  const detectMention = useCallback((text?: string, cursorPos?: number) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const cursor = cursorPos ?? textarea.selectionStart;
+    const value = text ?? textarea.value;
+
+    // Walk back from cursor to find an @ that starts a mention
+    let atPos = -1;
+    for (let i = cursor - 1; i >= 0; i--) {
+      const ch = value[i];
+      if (ch === " " || ch === "\n" || ch === "\t") break;
+      if (ch === "@") {
+        if (i === 0 || /\s/.test(value[i - 1])) {
+          atPos = i;
+        }
+        break;
+      }
+    }
+
+    if (atPos === -1) {
+      setIsOpen(false);
+      setMentionQuery("");
+      setMentionStart(-1);
+      return;
+    }
+
+    const query = value.slice(atPos + 1, cursor);
+
+    if (query.length === 0 || query.length > 50) {
+      setIsOpen(false);
+      setMentionQuery("");
+      setMentionStart(-1);
+      return;
+    }
+
+    setMentionQuery(query);
+    setMentionStart(atPos);
+    setIsOpen(true);
+    setSelectedIndex(0);
+
+    const coords = getCaretCoordinates(textarea, atPos);
+    setDropdownPos(computePosition(coords));
+  }, [textareaRef, computePosition]);
+
+  // Listen for input/cursor changes on the textarea element.
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const handleInput = () => {
+      detectMention(textarea.value, textarea.selectionStart);
+    };
+    const handleClick = () => detectMention();
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+        detectMention();
+      }
+    };
+
+    textarea.addEventListener("input", handleInput);
+    textarea.addEventListener("click", handleClick);
+    textarea.addEventListener("keyup", handleKeyUp);
+
+    return () => {
+      textarea.removeEventListener("input", handleInput);
+      textarea.removeEventListener("click", handleClick);
+      textarea.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [textareaRef, detectMention, content]);
+
+  // Re-detect when content changes externally (e.g. emoji insertion).
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    detectMention(content, textarea.selectionStart);
+  }, [content, detectMention, textareaRef]);
+
+  const selectProfile = useCallback((profile: SearchProfile) => {
+    const npub = nip19.npubEncode(profile.pubkey);
+    const replacement = `nostr:${npub} `;
+    const cursor = textareaRef.current?.selectionStart ?? mentionStart + mentionQuery.length + 1;
+
+    onInsertMention({
+      start: mentionStart,
+      end: cursor,
+      replacement,
+    });
+
+    setIsOpen(false);
+    setMentionQuery("");
+    setMentionStart(-1);
+  }, [mentionStart, mentionQuery, textareaRef, onInsertMention]);
+
+  // Handle keyboard navigation within the dropdown
+  useEffect(() => {
+    if (!isOpen || !profiles || profiles.length === 0) return;
+
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          setSelectedIndex((prev) => (prev < (profiles?.length ?? 1) - 1 ? prev + 1 : 0));
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setSelectedIndex((prev) => (prev > 0 ? prev - 1 : (profiles?.length ?? 1) - 1));
+          break;
+        case "Enter":
+        case "Tab":
+          if (profiles && profiles.length > 0) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            selectProfile(profiles[selectedIndex]);
+          }
+          break;
+        case "Escape":
+          e.preventDefault();
+          setIsOpen(false);
+          break;
+      }
+    };
+
+    textarea.addEventListener("keydown", handleKeyDown);
+    return () => textarea.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, profiles, selectedIndex, textareaRef, selectProfile]);
+
+  // Scroll selected item into view
+  useEffect(() => {
+    if (selectedIndex >= 0 && listRef.current) {
+      const items = listRef.current.querySelectorAll("[data-mention-item]");
+      items[selectedIndex]?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedIndex]);
+
+  if (!isOpen || !dropdownPos || !profiles || profiles.length === 0) {
+    return null;
+  }
+
+  const dropdown = (
+    <div
+      data-autocomplete-dropdown
+      className="fixed z-[300] w-[280px] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150 pointer-events-auto"
+      style={{ top: dropdownPos.top, left: dropdownPos.left }}
+    >
+      <div ref={listRef} className="max-h-[240px] overflow-y-auto py-1">
+        {profiles.map((profile, index) => (
+          <MentionItem
+            key={profile.pubkey}
+            profile={profile}
+            isSelected={index === selectedIndex}
+            onClick={() => selectProfile(profile)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+
+  // Portal to document.body so the dropdown escapes overflow clipping.
+  return renderPortal(dropdown, document.body);
+}
+
+function MentionItem({
+  profile,
+  isSelected,
+  onClick,
+}: {
+  profile: SearchProfile;
+  isSelected: boolean;
+  onClick: () => void;
+}) {
+  const { metadata, pubkey } = profile;
+  const displayName = metadata.name || metadata.display_name || "Anonymous";
+  const identifier = metadata.nip05 || nip19.npubEncode(pubkey);
+
+  return (
+    <button
+      data-mention-item
+      className={cn(
+        "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
+        isSelected ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
+      )}
+      onClick={onClick}
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      <Avatar shape={getAvatarShape(metadata)} className="size-8 shrink-0">
+        <AvatarImage src={metadata.picture} alt={displayName} />
+        <AvatarFallback className="bg-primary/20 text-primary text-xs">
+          {displayName[0]?.toUpperCase() || "?"}
+        </AvatarFallback>
+      </Avatar>
+
+      <div className="flex-1 min-w-0">
+        <div className="font-semibold text-sm truncate">
+          <EmojifiedText tags={profile.event.tags}>{displayName}</EmojifiedText>
+        </div>
+        <div className="text-xs text-muted-foreground truncate font-mono text-[11px]">
+          {identifier}
+        </div>
+      </div>
+    </button>
+  );
+}
