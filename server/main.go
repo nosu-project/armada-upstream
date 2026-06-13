@@ -1,0 +1,142 @@
+package main
+
+import (
+	"context"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/fiatjaf/eventstore/badger"
+	"github.com/fiatjaf/khatru"
+	"github.com/fiatjaf/khatru/policies"
+	"github.com/fiatjaf/relay29"
+	"github.com/fiatjaf/relay29/khatru29"
+	"github.com/kelseyhightower/envconfig"
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip29"
+	"github.com/rs/zerolog"
+)
+
+// Settings are provided through environment variables (see ../infra/.env.example).
+type Settings struct {
+	Port             string `envconfig:"PORT" default:"5577"`
+	Domain           string `envconfig:"DOMAIN" default:"localhost:5577"`
+	PublicBaseURL    string `envconfig:"PUBLIC_BASE_URL" default:"http://localhost:5577"`
+	RelayName        string `envconfig:"RELAY_NAME" default:"Armada Relay"`
+	RelayPrivkey     string `envconfig:"RELAY_PRIVKEY" required:"true"`
+	RelayDescription string `envconfig:"RELAY_DESCRIPTION" default:"Internal NIP-29 group relay"`
+	RelayContact     string `envconfig:"RELAY_CONTACT"`
+	RelayIcon        string `envconfig:"RELAY_ICON"`
+	DatabasePath     string `envconfig:"DATABASE_PATH" default:"./data/db"`
+
+	// LiveKit (optional). When unset the relay reports no AV support.
+	LivekitURL       string `envconfig:"LIVEKIT_URL"` // e.g. ws://localhost:7880
+	LivekitAPIKey    string `envconfig:"LIVEKIT_API_KEY"`
+	LivekitAPISecret string `envconfig:"LIVEKIT_API_SECRET"`
+
+	RelayPubkey string `envconfig:"-"`
+}
+
+var (
+	s     Settings
+	db    = &badger.BadgerBackend{}
+	log   = zerolog.New(os.Stderr).Output(zerolog.ConsoleWriter{Out: os.Stdout}).With().Timestamp().Logger()
+	relay *khatru.Relay
+	state *relay29.State
+)
+
+var (
+	adminRole     = &nip29.Role{Name: "admin", Description: "full group control"}
+	moderatorRole = &nip29.Role{Name: "moderator", Description: "can remove users and delete messages"}
+)
+
+func main() {
+	if err := envconfig.Process("", &s); err != nil {
+		log.Fatal().Err(err).Msg("couldn't process envconfig")
+		return
+	}
+	if !nostr.IsValid32ByteHex(s.RelayPrivkey) {
+		log.Fatal().Msg("RELAY_PRIVKEY must be a 64-character hex secret key")
+		return
+	}
+	s.RelayPubkey, _ = nostr.GetPublicKey(s.RelayPrivkey)
+
+	db.Path = s.DatabasePath
+	if err := db.Init(); err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize database")
+		return
+	}
+	log.Info().Str("path", db.Path).Msg("initialized database")
+
+	relay, state = khatru29.Init(relay29.Options{
+		Domain:                  s.Domain,
+		DB:                      db,
+		SecretKey:               s.RelayPrivkey,
+		DefaultRoles:            []*nip29.Role{adminRole, moderatorRole},
+		GroupCreatorDefaultRole: adminRole,
+	})
+
+	// Role-based moderation permissions, enforced by relay29 on every
+	// moderation event (NIP-29 kinds 9000-9008).
+	state.AllowAction = func(ctx context.Context, group nip29.Group, role *nip29.Role, action relay29.Action) bool {
+		if role == adminRole {
+			return true
+		}
+		if role == moderatorRole {
+			switch action.(type) {
+			case relay29.RemoveUser, relay29.DeleteEvent, relay29.PutUser:
+				return true
+			}
+		}
+		return false
+	}
+
+	relay.Info.Name = s.RelayName
+	relay.Info.Description = s.RelayDescription
+	relay.Info.Contact = s.RelayContact
+	relay.Info.Icon = s.RelayIcon
+
+	// Allow non-group "unmanaged" kinds (profiles, NIP-51 group lists) so an
+	// internal deployment works with this relay alone. See unmanaged.go.
+	setupUnmanagedKinds()
+
+	// Invite-code support (kind 9009 + honoring codes on kind 9021). See invites.go.
+	setupInvites()
+
+	// Work around relay29's inverted `closed` flag handling. See fixes.go.
+	setupClosedFlagFix()
+
+	relay.RejectEvent = append(relay.RejectEvent,
+		policies.PreventLargeTags(64),
+		policies.PreventTooManyIndexableTags(6, []int{9005}, nil),
+		policies.RestrictToSpecifiedKinds(true,
+			// group content
+			9, 10, 11, 12, 1111,
+			30023, 31922, 31923, 9802,
+			// moderation + membership
+			9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009,
+			9021, 9022,
+			// unmanaged kinds (profiles, user group lists)
+			0, 10009,
+		),
+		policies.PreventTimestampsInThePast(60*time.Second),
+		policies.PreventTimestampsInTheFuture(30*time.Second),
+	)
+
+	// LiveKit voice/video endpoints (NIP-29 AV spaces). See livekit.go.
+	if s.LivekitURL != "" && s.LivekitAPIKey != "" && s.LivekitAPISecret != "" {
+		setupLivekit()
+		log.Info().Str("livekit", s.LivekitURL).Msg("livekit AV support enabled")
+	} else {
+		log.Warn().Msg("livekit not configured; voice chat disabled")
+	}
+
+	relay.Router().HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("armada relay: connect with a NIP-29 client"))
+	})
+
+	log.Info().Str("relay-pubkey", s.RelayPubkey).Msg("running on http://0.0.0.0:" + s.Port)
+	if err := http.ListenAndServe(":"+s.Port, relay); err != nil {
+		log.Fatal().Err(err).Msg("failed to serve")
+	}
+}

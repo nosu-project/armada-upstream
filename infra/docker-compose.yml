@@ -1,0 +1,65 @@
+# Armada internal stack: NIP-29 relay + LiveKit SFU + web client.
+#
+# 1. cp .env.example .env  (and fill in keys; see README)
+# 2. docker compose up -d --build
+#
+# Everything binds to the host only; put your internal reverse proxy / TLS in
+# front if you serve beyond localhost.
+
+services:
+  relay:
+    build: ../server
+    restart: unless-stopped
+    environment:
+      PORT: "5577"
+      DOMAIN: ${RELAY_DOMAIN:-localhost:5577}
+      PUBLIC_BASE_URL: ${RELAY_PUBLIC_BASE_URL:-http://localhost:5577}
+      RELAY_NAME: ${RELAY_NAME:-Armada Relay}
+      RELAY_DESCRIPTION: ${RELAY_DESCRIPTION:-Internal NIP-29 group relay}
+      RELAY_PRIVKEY: ${RELAY_PRIVKEY:?set RELAY_PRIVKEY in .env (64-char hex)}
+      DATABASE_PATH: /data/db
+      LIVEKIT_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-armada}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env (32+ chars)}
+    ports:
+      - "5577:5577"
+    volumes:
+      - relay-data:/data
+
+  livekit:
+    image: livekit/livekit-server:v1.8
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          tcp_port: 7881
+          port_range_start: 50000
+          port_range_end: 50100
+          use_external_ip: false
+        keys:
+          ${LIVEKIT_API_KEY:-armada}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
+        webhook:
+          api_key: ${LIVEKIT_API_KEY:-armada}
+          urls:
+            - http://relay:5577/livekit/webhook
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50100:50000-50100/udp"
+
+  client:
+    build:
+      context: ../client
+      args:
+        VITE_APP_NAME: ${APP_NAME:-Armada}
+        VITE_PLATFORM_RELAYS: ${PLATFORM_RELAYS:-ws://localhost:5577}
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - relay
+
+volumes:
+  relay-data:

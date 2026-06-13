@@ -1,0 +1,138 @@
+import React, { useEffect, useMemo, useRef } from "react";
+import { NostrEvent, NostrFilter, NPool, NRelay1 } from "@nostrify/nostrify";
+import { NostrContext } from "@nostrify/react";
+import { NUser, useNostrLogin } from "@nostrify/react/login";
+import type { NostrSigner } from "@nostrify/types";
+
+import { EventStoreContext } from "@/contexts/EventStoreContext";
+import { useAppContext } from "@/hooks/useAppContext";
+import { NIndexedDBStore } from "@/lib/NIndexedDBStore";
+import { NostrBatcher } from "@/lib/NostrBatcher";
+import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
+
+interface NostrProviderProps {
+  children: React.ReactNode;
+}
+
+/**
+ * Provides the relay pool for the whole app.
+ *
+ * Ported from Ditto's NostrProvider:
+ * - NIP-42 AUTH: every relay opened through the pool (including targeted
+ *   `nostr.relay(url)` handles) signs kind 22242 challenges with the active
+ *   login's signer.
+ * - Queries are batched (NostrBatcher) and cached in IndexedDB.
+ *
+ * Routing is Armada-specific: all configured servers (platform + user-added)
+ * are queried for reads and writes. Group-scoped traffic should use
+ * `nostr.relay(serverUrl)` directly so it stays on that server.
+ */
+const NostrProvider: React.FC<NostrProviderProps> = (props) => {
+  const { children } = props;
+  const { config } = useAppContext();
+  const { logins } = useNostrLogin();
+
+  const pool = useRef<NPool | undefined>(undefined);
+
+  // Shared IndexedDB event cache (batcher writes results into it).
+  const eventStore = useRef<Promise<NIndexedDBStore> | undefined>(undefined);
+  eventStore.current ??= NIndexedDBStore.open();
+
+  // All servers: pinned platform relays + user-added ones.
+  const servers = useMemo(() => {
+    const urls = new Set<string>(PLATFORM_RELAYS);
+    for (const url of config.addedRelays) {
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) urls.add(normalized);
+    }
+    return [...urls];
+  }, [config.addedRelays]);
+
+  const serversRef = useRef(servers);
+  useEffect(() => {
+    serversRef.current = servers;
+  }, [servers]);
+
+  // Stable ref to the current user's signer for NIP-42 AUTH. The `open()`
+  // callback reads from this ref when a relay sends an AUTH challenge, so it
+  // always uses the latest signer without recreating the pool.
+  const signerRef = useRef<NostrSigner | undefined>(undefined);
+
+  const currentLogin = logins[0];
+  const currentSigner = useMemo(() => {
+    if (!currentLogin) return undefined;
+    try {
+      switch (currentLogin.type) {
+        case "nsec":
+          return NUser.fromNsecLogin(currentLogin).signer;
+        case "bunker":
+          // pool.current is created synchronously during first render below.
+          return NUser.fromBunkerLogin(currentLogin, pool.current!).signer;
+        case "extension":
+          return NUser.fromExtensionLogin(currentLogin).signer;
+        default:
+          return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+  }, [currentLogin]);
+
+  signerRef.current = currentSigner;
+
+  if (!pool.current) {
+    pool.current = new NPool({
+      open(url: string) {
+        return new NRelay1(url, {
+          // NIP-42: respond to relay AUTH challenges by signing a kind 22242
+          // ephemeral event with the current user's signer.
+          auth: async (challenge: string) => {
+            const signer = signerRef.current;
+            if (!signer) {
+              throw new Error("AUTH failed: no signer available (user not logged in)");
+            }
+            return signer.signEvent({
+              kind: 22242,
+              content: "",
+              tags: [
+                ["relay", url],
+                ["challenge", challenge],
+              ],
+              created_at: Math.floor(Date.now() / 1000),
+            });
+          },
+        });
+      },
+      reqRouter(filters: NostrFilter[]): Map<string, NostrFilter[]> {
+        return new Map(serversRef.current.map((url) => [url, filters]));
+      },
+      eventRouter(_event: NostrEvent) {
+        return [...serversRef.current];
+      },
+      // Resolve queries quickly once any relay sends EOSE.
+      eoseTimeout: 300,
+    });
+  }
+
+  // Wrap the pool in the batching proxy (combines profile/id lookups into single REQs).
+  const batcher = useRef<NostrBatcher | undefined>(undefined);
+  if (!batcher.current && pool.current) {
+    batcher.current = new NostrBatcher(pool.current, eventStore.current);
+  }
+
+  useEffect(() => {
+    return () => {
+      pool.current?.close();
+    };
+  }, []);
+
+  return (
+    <NostrContext.Provider value={{ nostr: (batcher.current ?? pool.current) as unknown as NPool }}>
+      <EventStoreContext.Provider value={eventStore.current}>
+        {children}
+      </EventStoreContext.Provider>
+    </NostrContext.Provider>
+  );
+};
+
+export default NostrProvider;

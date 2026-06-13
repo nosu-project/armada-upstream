@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.eslintcache
+*.local
+.env
+data/
+server/armada-relay
+.tsbuildinfo

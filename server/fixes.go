@@ -1,0 +1,69 @@
+package main
+
+import (
+	"context"
+
+	"github.com/nbd-wtf/go-nostr"
+)
+
+// relay29 v0.5.1 has an inverted boolean in EditMetadata.Apply:
+//
+//	if a.ClosedValue != nil {
+//	    group.Closed = !*a.ClosedValue   // <- bug: negates the value
+//	}
+//
+// so a kind 9002 with a `closed` tag OPENS the group and vice versa. The bug
+// affects both live processing (ApplyModerationAction) and the startup replay
+// (loadGroupsFromDB). We correct the in-memory state in both places.
+func setupClosedFlagFix() {
+	// Live: runs after relay29's ApplyModerationAction (OnEventSaved order).
+	relay.OnEventSaved = append(relay.OnEventSaved, func(ctx context.Context, event *nostr.Event) {
+		if event.Kind != nostr.KindSimpleGroupEditMetadata {
+			return
+		}
+		gtag := event.Tags.GetFirst([]string{"h", ""})
+		if gtag == nil {
+			return
+		}
+		group, _ := state.Groups.Load((*gtag)[1])
+		if group == nil {
+			return
+		}
+		if event.Tags.GetFirst([]string{"closed"}) != nil {
+			group.Closed = true
+		} else if event.Tags.GetFirst([]string{"open"}) != nil {
+			group.Closed = false
+		}
+	})
+
+	// Startup: recompute Closed from the latest 9002 per group.
+	ch, err := db.QueryEvents(context.Background(), nostr.Filter{
+		Kinds: []int{nostr.KindSimpleGroupEditMetadata},
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to replay edit-metadata events for closed-flag fix")
+		return
+	}
+	latest := map[string]*nostr.Event{} // groupId -> newest 9002
+	for event := range ch {
+		gtag := event.Tags.GetFirst([]string{"h", ""})
+		if gtag == nil {
+			continue
+		}
+		id := (*gtag)[1]
+		if prev, ok := latest[id]; !ok || prev.CreatedAt < event.CreatedAt {
+			latest[id] = event
+		}
+	}
+	for id, event := range latest {
+		group, _ := state.Groups.Load(id)
+		if group == nil {
+			continue
+		}
+		if event.Tags.GetFirst([]string{"closed"}) != nil {
+			group.Closed = true
+		} else if event.Tags.GetFirst([]string{"open"}) != nil {
+			group.Closed = false
+		}
+	}
+}
