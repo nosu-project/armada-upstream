@@ -1,18 +1,16 @@
 import { Outlet } from "react-router-dom";
 
-import { ServerRail } from "@/components/layout/ServerRail";
-
 /**
- * Discord-style application frame: a narrow server rail on the far left,
- * with the routed page (server/channel views) filling the rest.
+ * Application frame. Desktop renders the multi-pane Discord layout (server
+ * rail + the routed page's own sidebars). On mobile each route is a single
+ * full-screen drill-down level (servers/channels → chat → members), so the
+ * shared frame here is intentionally thin — the panes manage their own
+ * responsive visibility.
  */
 export function MainLayout() {
   return (
     <div className="flex h-full w-full overflow-hidden">
-      <ServerRail />
-      <div className="flex-1 min-w-0 flex">
-        <Outlet />
-      </div>
+      <Outlet />
     </div>
   );
 }

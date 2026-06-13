@@ -50,7 +50,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
               <AvatarFallback>{getDisplayName(currentUser).charAt(0)}</AvatarFallback>
             </Avatar>
           )}
-          <div className='flex-1 text-left hidden md:block truncate'>
+          <div className='flex-1 text-left block truncate min-w-0'>
             {isLoading ? (
               <Skeleton className='h-4 w-24' />
             ) : (

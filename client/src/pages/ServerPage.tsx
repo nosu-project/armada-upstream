@@ -2,6 +2,7 @@ import { Hash, Server as ServerIcon, Trash2, Volume2 } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
+import { ServerRail } from "@/components/layout/ServerRail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +13,9 @@ import { toast } from "@/hooks/useToast";
 import { PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 
 /**
- * Server home: relay info and a browsable grid of its channels.
+ * Server home (drill-down level 1). On mobile the server rail + channel list
+ * fill the screen; the welcome/info pane only appears on desktop. Tapping a
+ * channel pushes to the chat screen.
  */
 export function ServerPage() {
   const { server } = useParams<{ server: string }>();
@@ -40,9 +43,12 @@ export function ServerPage() {
 
   return (
     <>
-      <ChannelSidebar relayUrl={relayUrl} />
+      <ServerRail />
+      {/* Mobile: channel list fills the screen. Desktop: fixed-width sidebar. */}
+      <ChannelSidebar relayUrl={relayUrl} className="flex-1 sidebar:flex-none" />
 
-      <main className="flex-1 min-w-0 overflow-y-auto">
+      {/* Welcome / server info pane — desktop only. */}
+      <main className="hidden sidebar:block flex-1 min-w-0 overflow-y-auto">
         <div className="max-w-3xl mx-auto p-8 space-y-6">
           <div className="flex items-start gap-4">
             <div className="flex size-16 items-center justify-center rounded-2xl bg-primary/10 text-primary shrink-0">

@@ -2,54 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theme color tokens (--background, --primary, …) are injected at runtime into
+ * <style id="theme-vars"> by:
+ *   - public/theme.js  (synchronously in <head>, before first paint)
+ *   - useApplyTheme()  (AppProvider, reactive to config changes)
+ * derived from 3 core colors via deriveTokensFromCore(). See src/themes.ts.
+ *
+ * They are intentionally NOT defined here: this build does not emit CSS
+ * cascade layers, so a static `:root { --background … }` here would be an
+ * equal-specificity, equal-origin rule competing with the injected
+ * stylesheet on source order — which would override the selected theme.
+ *
+ * Only non-themed layout sizing tokens live here.
+ */
 @layer base {
   :root {
-    --background: 220 18% 97%;
-    --foreground: 224 25% 12%;
-    --card: 0 0% 100%;
-    --card-foreground: 224 25% 12%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 224 25% 12%;
-    --primary: 235 70% 58%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 220 14% 92%;
-    --secondary-foreground: 224 25% 16%;
-    --muted: 220 14% 92%;
-    --muted-foreground: 224 10% 42%;
-    --accent: 220 14% 90%;
-    --accent-foreground: 224 25% 16%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 142 72% 29%;
-    --success-foreground: 138 60% 94%;
-    --border: 220 13% 86%;
-    --input: 220 13% 86%;
-    --ring: 235 70% 58%;
     --radius: 0.75rem;
-  }
-
-  .dark {
-    --background: 222 18% 9%;
-    --foreground: 220 14% 92%;
-    --card: 222 17% 12%;
-    --card-foreground: 220 14% 92%;
-    --popover: 222 17% 11%;
-    --popover-foreground: 220 14% 92%;
-    --primary: 235 80% 68%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 222 14% 16%;
-    --secondary-foreground: 220 14% 88%;
-    --muted: 222 14% 16%;
-    --muted-foreground: 220 9% 60%;
-    --accent: 222 14% 19%;
-    --accent-foreground: 220 14% 92%;
-    --destructive: 0 62% 52%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 142 60% 35%;
-    --success-foreground: 138 60% 94%;
-    --border: 222 13% 19%;
-    --input: 222 13% 22%;
-    --ring: 235 80% 68%;
+    --top-bar-height: 3rem;
+    --bottom-nav-height: 3.25rem;
   }
 }
 
@@ -66,5 +37,42 @@
 
   html, body, #root {
     height: 100%;
+  }
+}
+
+@layer utilities {
+  /*
+   * Safe-area helpers. On the web the Capacitor-injected --safe-area-inset-*
+   * vars are absent, so these fall back to the standard env() values (which
+   * require <meta viewport-fit=cover>, already set in index.html).
+   */
+  .safe-area-top {
+    padding-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  }
+  .safe-area-bottom {
+    padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Top of the mobile content, just below the fixed top bar + its inset. */
+  .top-mobile-bar {
+    top: calc(var(--top-bar-height) + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  }
+
+  /* Bottom padding so content clears the fixed bottom nav + home-indicator. */
+  .pb-mobile-nav {
+    padding-bottom: calc(var(--bottom-nav-height) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  }
+
+  /* Position a fixed element just above the bottom nav (e.g. a FAB). */
+  .bottom-mobile-nav {
+    bottom: calc(var(--bottom-nav-height) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  }
+
+  /* Slide-away transform for the auto-hiding mobile chrome. */
+  .nav-hidden-up {
+    transform: translateY(calc(-1 * (var(--top-bar-height) + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)))));
+  }
+  .nav-hidden-down {
+    transform: translateY(calc(var(--bottom-nav-height) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))));
   }
 }

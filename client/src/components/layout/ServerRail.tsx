@@ -20,7 +20,7 @@ function relayHost(url: string): string {
   }
 }
 
-function ServerButton({ url }: { url: string }) {
+function ServerButton({ url, onNavigate }: { url: string; onNavigate?: () => void }) {
   const { data: info } = useRelayInfo(url);
   const host = relayHost(url);
   const name = info?.name || host;
@@ -32,6 +32,7 @@ function ServerButton({ url }: { url: string }) {
         <NavLink
           to={`/s/${relayToRouteParam(url)}`}
           aria-label={name}
+          onClick={onNavigate}
           className={({ isActive }) =>
             cn(
               "group relative flex items-center justify-center",
@@ -74,7 +75,7 @@ function ServerButton({ url }: { url: string }) {
  * Far-left vertical rail listing every server (relay): pinned platform
  * relays first, then user-added ones, then add-server and settings actions.
  */
-export function ServerRail() {
+export function ServerRail({ onNavigate, className }: { onNavigate?: () => void; className?: string }) {
   const { config } = useAppContext();
   const navigate = useNavigate();
   const [addOpen, setAddOpen] = useState(false);
@@ -91,9 +92,12 @@ export function ServerRail() {
   return (
     <nav
       aria-label="Servers"
-      className="flex flex-col items-center gap-3 w-[72px] shrink-0 pt-1 pb-3 bg-background border-r overflow-y-auto"
+      className={cn(
+        "flex flex-col items-center gap-3 w-[72px] shrink-0 pt-1 pb-3 bg-background border-r overflow-y-auto",
+        className,
+      )}
     >
-      {servers.map((url) => <ServerButton key={url} url={url} />)}
+      {servers.map((url) => <ServerButton key={url} url={url} onNavigate={onNavigate} />)}
 
       <div className="w-8 border-t" />
 
@@ -121,7 +125,10 @@ export function ServerRail() {
             size="icon"
             aria-label="Settings"
             className="size-12 rounded-3xl hover:rounded-2xl transition-all"
-            onClick={() => navigate("/settings")}
+            onClick={() => {
+              onNavigate?.();
+              navigate("/settings");
+            }}
           >
             <Settings className="size-5" />
           </Button>

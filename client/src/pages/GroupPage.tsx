@@ -1,4 +1,4 @@
-import { DoorOpen, Hash, Loader2, Lock, LogOut, Settings2, Volume2 } from "lucide-react";
+import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, Settings2, Users, Volume2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Navigate, useParams } from "react-router-dom";
 
@@ -7,8 +7,10 @@ import { MemberList } from "@/components/chat/MemberList";
 import { VoiceBar } from "@/components/chat/VoiceBar";
 import { GroupSettingsDialog } from "@/components/dialogs/GroupSettingsDialog";
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
+import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useGroup } from "@/hooks/useGroup";
@@ -76,6 +78,8 @@ export function GroupPage() {
   const { removeUser } = useGroupModeration(relayUrl ?? "", groupId ?? "");
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [channelsOpen, setChannelsOpen] = useState(false);
 
   const isAdmin = useMemo(
     () => Boolean(user && details?.admins.some((a) => a.pubkey === user.pubkey)),
@@ -115,11 +119,24 @@ export function GroupPage() {
 
   return (
     <>
-      <ChannelSidebar relayUrl={relayUrl} />
+      {/* Desktop panes (hidden on mobile — the chat is the full screen). */}
+      <ServerRail className="hidden sidebar:flex" />
+      <ChannelSidebar relayUrl={relayUrl} className="hidden sidebar:flex" />
 
       <main className="flex-1 min-w-0 flex flex-col">
         {/* Channel header */}
-        <header className="h-14 px-4 flex items-center gap-2 border-b shadow-sm shrink-0">
+        <header className="h-14 px-2 sidebar:px-4 flex items-center gap-1.5 border-b shadow-sm shrink-0 safe-area-top">
+          {/* Mobile menu → reveals the channel list as a left drawer. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Open channels"
+            className="size-9 shrink-0 sidebar:hidden"
+            onClick={() => setChannelsOpen(true)}
+          >
+            <Menu className="size-5" />
+          </Button>
+
           {group?.hasLivekit
             ? <Volume2 className="size-5 text-muted-foreground shrink-0" />
             : <Hash className="size-5 text-muted-foreground shrink-0" />}
@@ -155,6 +172,16 @@ export function GroupPage() {
               <TooltipContent>Channel settings</TooltipContent>
             </Tooltip>
           )}
+          {/* Mobile members button → opens the member sheet. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Members"
+            className="size-8 sidebar:hidden"
+            onClick={() => setMembersOpen(true)}
+          >
+            <Users className="size-4" />
+          </Button>
           {user && isMember && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -182,7 +209,7 @@ export function GroupPage() {
         {/* Voice */}
         {hasVoice && <VoiceBar relayUrl={relayUrl} groupId={groupId} />}
 
-        {/* Chat + members */}
+        {/* Chat + members (member panel desktop-only; mobile uses the sheet) */}
         <div className="flex flex-1 min-h-0">
           <GroupChat
             relayUrl={relayUrl}
@@ -198,6 +225,42 @@ export function GroupPage() {
           />
         </div>
       </main>
+
+      {/* Mobile channel list drawer (server rail + channels) */}
+      <Sheet open={channelsOpen} onOpenChange={setChannelsOpen}>
+        <SheetContent
+          side="left"
+          className="flex w-[min(20rem,85vw)] gap-0 p-0 sidebar:hidden [&>button]:hidden"
+          aria-label="Channels"
+        >
+          <div className="flex h-full w-full safe-area-top">
+            <ServerRail onNavigate={() => setChannelsOpen(false)} />
+            <ChannelSidebar
+              relayUrl={relayUrl}
+              onNavigate={() => setChannelsOpen(false)}
+              className="flex-1"
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Mobile member sheet */}
+      <Sheet open={membersOpen} onOpenChange={setMembersOpen}>
+        <SheetContent side="right" className="w-[min(18rem,80vw)] p-0 sidebar:hidden" aria-label="Members">
+          <div className="h-full overflow-y-auto safe-area-top">
+            <MemberList
+              admins={details?.admins ?? []}
+              members={details?.members ?? []}
+              canModerate={isAdmin}
+              onRemove={(pubkey) => {
+                removeUser.mutate({ pubkey });
+                setMembersOpen(false);
+              }}
+              className="block w-full border-l-0"
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {group && (
         <GroupSettingsDialog

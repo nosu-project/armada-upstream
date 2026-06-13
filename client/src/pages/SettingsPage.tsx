@@ -3,22 +3,13 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
+import { ThemeSelector } from "@/components/ThemeSelector";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useAppContext } from "@/hooks/useAppContext";
 import { toast } from "@/hooks/useToast";
 import { APP_NAME, APP_RELAYS, normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
-
-import type { Theme } from "@/contexts/AppContext";
 
 /** App settings: account, theme, the server list, and app relays. */
 export function SettingsPage() {
@@ -42,7 +33,7 @@ export function SettingsPage() {
 
   return (
     <main className="flex-1 min-w-0 overflow-y-auto">
-      <div className="max-w-2xl mx-auto p-8 space-y-6">
+      <div className="max-w-2xl mx-auto p-4 sm:p-8 space-y-6 safe-area-top safe-area-bottom">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" aria-label="Back" onClick={() => navigate(-1)}>
             <ArrowLeft className="size-5" />
@@ -63,25 +54,12 @@ export function SettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Appearance</CardTitle>
+            <CardDescription>
+              Pick a base mode, a named theme, or build your own from three colors.
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center justify-between">
-              <Label htmlFor="theme-select">Theme</Label>
-              <Select
-                value={config.theme}
-                onValueChange={(value) =>
-                  updateConfig((current) => ({ ...current, theme: value as Theme }))}
-              >
-                <SelectTrigger id="theme-select" className="w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="dark">Dark</SelectItem>
-                  <SelectItem value="light">Light</SelectItem>
-                  <SelectItem value="system">System</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            <ThemeSelector />
           </CardContent>
         </Card>
 

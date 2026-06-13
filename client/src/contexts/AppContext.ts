@@ -2,7 +2,9 @@ import { createContext } from "react";
 
 import { APP_RELAYS } from "@/lib/platform";
 
-export type Theme = "light" | "dark" | "system";
+import type { ThemeConfig, ThemesConfig } from "@/themes";
+
+export type Theme = "light" | "dark" | "system" | "custom";
 
 /**
  * Application configuration, persisted to localStorage by AppProvider.
@@ -12,8 +14,18 @@ export type Theme = "light" | "dark" | "system";
  * additional internal relay URLs.
  */
 export interface AppConfig {
-  /** Display theme. */
+  /** Display theme mode. */
   theme: Theme;
+  /**
+   * Custom theme colors, used when `theme === "custom"` (set by named
+   * presets or the in-app theme builder).
+   */
+  customTheme?: ThemeConfig;
+  /**
+   * Optional per-mode overrides for the builtin light/dark themes. When set,
+   * these replace the builtin core colors for the respective mode.
+   */
+  themes?: ThemesConfig;
   /** Relay (server) URLs the user added on top of the pinned platform relays. */
   addedRelays: string[];
   /**

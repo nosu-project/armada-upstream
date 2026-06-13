@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAuthor } from "@/hooks/useAuthor";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { cn } from "@/lib/utils";
 
 import type { Nip29Admin } from "@/lib/nip29";
 
@@ -66,15 +67,17 @@ interface MemberListProps {
   members: string[];
   canModerate: boolean;
   onRemove?: (pubkey: string) => void;
+  /** Override the default desktop panel chrome (e.g. for the mobile drawer). */
+  className?: string;
 }
 
 /** Right-hand member panel: admins (with roles) first, then regular members. */
-export function MemberList({ admins, members, canModerate, onRemove }: MemberListProps) {
+export function MemberList({ admins, members, canModerate, onRemove, className }: MemberListProps) {
   const adminPubkeys = new Set(admins.map((a) => a.pubkey));
   const regulars = members.filter((pubkey) => !adminPubkeys.has(pubkey));
 
   return (
-    <aside className="w-56 shrink-0 border-l bg-card/50 overflow-y-auto p-2 hidden lg:block">
+    <aside className={cn("w-56 shrink-0 border-l bg-card/50 overflow-y-auto p-2 hidden lg:block", className)}>
       {admins.length > 0 && (
         <>
           <h3 className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">

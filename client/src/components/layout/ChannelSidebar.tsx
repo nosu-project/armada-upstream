@@ -15,11 +15,12 @@ import { cn } from "@/lib/utils";
 
 import type { Nip29Group } from "@/lib/nip29";
 
-function ChannelLink({ group }: { group: Nip29Group }) {
+function ChannelLink({ group, onNavigate }: { group: Nip29Group; onNavigate?: () => void }) {
   const Icon = group.hasLivekit ? Volume2 : Hash;
   return (
     <NavLink
       to={`/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`}
+      onClick={onNavigate}
       className={({ isActive }) =>
         cn(
           "flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors",
@@ -36,19 +37,21 @@ function ChannelLink({ group }: { group: Nip29Group }) {
 
 interface ChannelSidebarProps {
   relayUrl: string;
+  onNavigate?: () => void;
+  className?: string;
 }
 
 /**
  * Channel list for a server: its NIP-29 groups, a create-channel action, and
  * the account area pinned to the bottom (Discord-style).
  */
-export function ChannelSidebar({ relayUrl }: ChannelSidebarProps) {
+export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSidebarProps) {
   const { data: groups, isLoading, relayInfo } = useRelayGroups(relayUrl);
   const { user } = useCurrentUser();
   const [createOpen, setCreateOpen] = useState(false);
 
   return (
-    <aside className="flex flex-col w-60 shrink-0 border-r bg-card/50">
+    <aside className={cn("flex flex-col w-60 shrink-0 border-r bg-card/50", className)}>
       {/* Server header */}
       <div className="px-4 h-14 flex items-center border-b shadow-sm">
         <div className="min-w-0">
@@ -92,7 +95,7 @@ export function ChannelSidebar({ relayUrl }: ChannelSidebarProps) {
             ))}
           </div>
         ) : groups && groups.length > 0 ? (
-          groups.map((group) => <ChannelLink key={group.id} group={group} />)
+          groups.map((group) => <ChannelLink key={group.id} group={group} onNavigate={onNavigate} />)
         ) : (
           <div className="px-2 py-8 text-center text-sm text-muted-foreground">
             {groups ? "No channels yet." : (
