@@ -68,3 +68,13 @@ export const APP_RELAYS: string[] = (import.meta.env.VITE_APP_RELAYS || "wss://r
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
+
+/**
+ * Default search relays (Ditto's hardcoded `DITTO_RELAYS` concept, made
+ * user-editable here). NIP-50 search queries (`search` filters) route here
+ * instead of fanning out to every server. Seeds `AppConfig.searchRelays`.
+ */
+export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "wss://relay.ditto.pub,wss://relay.dreamith.to")
+  .split(",")
+  .map((url: string) => normalizeRelayUrl(url))
+  .filter((url: string | undefined): url is string => Boolean(url));

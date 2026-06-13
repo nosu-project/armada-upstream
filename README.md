@@ -75,6 +75,10 @@ Configuration (build-time env):
   (kind 0), group lists (kind 10009) — in the style of Ditto's app relays
   (default `wss://relay.ditto.pub,wss://relay.dreamith.to`); users can edit
   the list in Settings, including removing all of them for air-gapped use
+- `VITE_SEARCH_RELAYS` — relays used for NIP-50 full-text search (profile /
+  mention autocomplete); `search` filters route only to these (default
+  `wss://relay.ditto.pub,wss://relay.dreamith.to`). User-editable in Settings;
+  when empty, search falls back to the app relays
 - `VITE_APP_NAME` — display name
 
 ## Server development

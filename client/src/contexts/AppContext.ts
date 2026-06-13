@@ -1,6 +1,6 @@
 import { createContext } from "react";
 
-import { APP_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 
 import type { ThemeConfig, ThemesConfig } from "@/themes";
 
@@ -35,6 +35,13 @@ export interface AppConfig {
    * Group-scoped events never route here.
    */
   appRelays: string[];
+  /**
+   * Search relays for NIP-50 queries (`search` filters: profile/mention
+   * autocomplete, etc.). Ditto hardcodes these (DITTO_RELAYS); here they are
+   * user-editable. Seeded from VITE_SEARCH_RELAYS. When empty, search falls
+   * back to the app relays.
+   */
+  searchRelays: string[];
 }
 
 export interface AppContextType {
@@ -47,6 +54,7 @@ export const defaultConfig: AppConfig = {
   theme: "dark",
   addedRelays: [],
   appRelays: [...APP_RELAYS],
+  searchRelays: [...SEARCH_RELAYS],
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);

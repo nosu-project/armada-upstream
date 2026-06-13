@@ -60,6 +60,9 @@ export function NostrSync() {
       ...(settings.theme !== undefined ? { theme: settings.theme } : {}),
       ...(settings.customTheme !== undefined ? { customTheme: settings.customTheme } : {}),
       ...(settings.themes !== undefined ? { themes: settings.themes } : {}),
+      ...(settings.addedRelays !== undefined ? { addedRelays: settings.addedRelays } : {}),
+      ...(settings.appRelays !== undefined ? { appRelays: settings.appRelays } : {}),
+      ...(settings.searchRelays !== undefined ? { searchRelays: settings.searchRelays } : {}),
     }));
 
     setLocalSettingsSync(user.pubkey, remoteTs);

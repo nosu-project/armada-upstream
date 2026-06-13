@@ -1,34 +1,30 @@
-import { ArrowLeft, Plus, RotateCcw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
+import { RelayListEditor } from "@/components/RelayListEditor";
 import { ThemeSelector } from "@/components/ThemeSelector";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { useAppContext } from "@/hooks/useAppContext";
-import { toast } from "@/hooks/useToast";
-import { APP_NAME, APP_RELAYS, normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
+import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { APP_NAME, APP_RELAYS, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 
-/** App settings: account, theme, the server list, and app relays. */
+import type { EncryptedSettings } from "@/lib/schemas";
+
+/** App settings: account, theme, the server list, app relays, and search relays. */
 export function SettingsPage() {
   const navigate = useNavigate();
   const { config, updateConfig } = useAppContext();
-  const [newAppRelay, setNewAppRelay] = useState("");
+  const { updateSettings, hasNip44Support } = useEncryptedSettings();
 
-  const handleAddAppRelay = () => {
-    const normalized = normalizeRelayUrl(newAppRelay);
-    if (!normalized) {
-      toast({ title: "Invalid relay URL", description: "Enter a ws:// or wss:// URL.", variant: "destructive" });
-      return;
+  /** Update a relay field locally and sync to encrypted settings when logged in. */
+  const setRelays = (key: "addedRelays" | "appRelays" | "searchRelays") => (relays: string[]) => {
+    updateConfig((current) => ({ ...current, [key]: relays }));
+    if (hasNip44Support) {
+      updateSettings({ [key]: relays } as Partial<EncryptedSettings>).catch((err) =>
+        console.warn("Relay sync failed:", err));
     }
-    if (config.appRelays.includes(normalized)) {
-      toast({ title: "Already in the list", description: normalized });
-      return;
-    }
-    updateConfig((current) => ({ ...current, appRelays: [...current.appRelays, normalized] }));
-    setNewAppRelay("");
   };
 
   return (
@@ -71,36 +67,14 @@ export function SettingsPage() {
               yourself can be removed here.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {PLATFORM_RELAYS.map((url) => (
-              <div key={url} className="flex items-center gap-2 rounded-lg border p-3">
-                <span className="text-sm font-mono break-all flex-1">{url}</span>
-                <span className="text-xs text-muted-foreground shrink-0">Pinned</span>
-              </div>
-            ))}
-            {config.addedRelays.map((url) => (
-              <div key={url} className="flex items-center gap-2 rounded-lg border p-3">
-                <span className="text-sm font-mono break-all flex-1">{url}</span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Remove ${url}`}
-                  className="size-7 text-muted-foreground hover:text-destructive shrink-0"
-                  onClick={() =>
-                    updateConfig((current) => ({
-                      ...current,
-                      addedRelays: current.addedRelays.filter((u) => u !== url),
-                    }))}
-                >
-                  <Trash2 className="size-4" />
-                </Button>
-              </div>
-            ))}
-            {config.addedRelays.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                No extra servers added. Use the + button in the server rail to add one.
-              </p>
-            )}
+          <CardContent>
+            <RelayListEditor
+              pinned={PLATFORM_RELAYS}
+              relays={config.addedRelays}
+              onChange={setRelays("addedRelays")}
+              emptyText="No extra servers added. Use the + button in the server rail to add one."
+              placeholder="wss://server.example.com"
+            />
           </CardContent>
         </Card>
 
@@ -114,60 +88,33 @@ export function SettingsPage() {
               internal deployment.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {config.appRelays.map((url) => (
-              <div key={url} className="flex items-center gap-2 rounded-lg border p-3">
-                <span className="text-sm font-mono break-all flex-1">{url}</span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Remove ${url}`}
-                  className="size-7 text-muted-foreground hover:text-destructive shrink-0"
-                  onClick={() =>
-                    updateConfig((current) => ({
-                      ...current,
-                      appRelays: current.appRelays.filter((u) => u !== url),
-                    }))}
-                >
-                  <Trash2 className="size-4" />
-                </Button>
-              </div>
-            ))}
-            {config.appRelays.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                No app relays — profiles and lists are stored on your internal servers only.
-              </p>
-            )}
+          <CardContent>
+            <RelayListEditor
+              relays={config.appRelays}
+              onChange={setRelays("appRelays")}
+              onReset={() => setRelays("appRelays")([...APP_RELAYS])}
+              emptyText="No app relays — profiles and lists are stored on your internal servers only."
+            />
+          </CardContent>
+        </Card>
 
-            <form
-              className="flex gap-2 pt-1"
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleAddAppRelay();
-              }}
-            >
-              <Input
-                value={newAppRelay}
-                onChange={(e) => setNewAppRelay(e.target.value)}
-                placeholder="wss://relay.example.com"
-                aria-label="Add app relay"
-                autoComplete="off"
-              />
-              <Button type="submit" variant="outline" disabled={!newAppRelay.trim()}>
-                <Plus className="size-4 mr-1.5" /> Add
-              </Button>
-            </form>
-
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground"
-              onClick={() =>
-                updateConfig((current) => ({ ...current, appRelays: [...APP_RELAYS] }))}
-            >
-              <RotateCcw className="size-3.5 mr-1.5" /> Reset to defaults
-            </Button>
+        <Card>
+          <CardHeader>
+            <CardTitle>Search relays</CardTitle>
+            <CardDescription>
+              Relays used for full-text search (NIP-50) — profile and mention autocomplete.
+              Search queries route only to these, not to every server. When empty, search
+              falls back to your app relays. Look for the NIP-50 badge to confirm a relay
+              supports search.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RelayListEditor
+              relays={config.searchRelays}
+              onChange={setRelays("searchRelays")}
+              onReset={() => setRelays("searchRelays")([...SEARCH_RELAYS])}
+              emptyText="No search relays — search falls back to your app relays."
+            />
           </CardContent>
         </Card>
       </div>

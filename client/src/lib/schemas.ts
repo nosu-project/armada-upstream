@@ -33,6 +33,7 @@ export const AppConfigSchema = z.object({
   themes: ThemesConfigSchema.optional().catch(undefined),
   addedRelays: z.array(z.string()).catch([]),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
+  searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
 });
 
 /**
@@ -44,6 +45,12 @@ export const EncryptedSettingsSchema = z.looseObject({
   theme: z.enum(["light", "dark", "system", "custom"]).optional(),
   customTheme: ThemeConfigSchema.optional(),
   themes: ThemesConfigSchema.optional(),
+  /** Extra (user-added) servers. */
+  addedRelays: z.array(z.string()).optional(),
+  /** General-purpose app relays. */
+  appRelays: z.array(z.string()).optional(),
+  /** NIP-50 search relays. */
+  searchRelays: z.array(z.string()).optional(),
   /** ms timestamp of the last write, used to resolve sync conflicts. */
   lastSync: z.number().optional(),
 });

@@ -62,6 +62,22 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     poolRelaysRef.current = poolRelays;
   }, [poolRelays]);
 
+  // Search relays (NIP-50). `search` filters route here instead of fanning
+  // out to every server. Falls back to the pool relays when none configured.
+  const searchRelays = useMemo(() => {
+    const urls = new Set<string>();
+    for (const url of config.searchRelays) {
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) urls.add(normalized);
+    }
+    return [...urls];
+  }, [config.searchRelays]);
+
+  const searchRelaysRef = useRef(searchRelays);
+  useEffect(() => {
+    searchRelaysRef.current = searchRelays;
+  }, [searchRelays]);
+
   // Stable ref to the current user's signer for NIP-42 AUTH. The `open()`
   // callback reads from this ref when a relay sends an AUTH challenge, so it
   // always uses the latest signer without recreating the pool.
@@ -113,6 +129,14 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         });
       },
       reqRouter(filters: NostrFilter[]): Map<string, NostrFilter[]> {
+        // NIP-50 search: route to dedicated search relays (Ditto pattern),
+        // falling back to the pool relays when none are configured.
+        if (filters.some((f) => "search" in f)) {
+          const targets = searchRelaysRef.current.length > 0
+            ? searchRelaysRef.current
+            : poolRelaysRef.current;
+          return new Map(targets.map((url) => [url, filters]));
+        }
         return new Map(poolRelaysRef.current.map((url) => [url, filters]));
       },
       eventRouter(_event: NostrEvent) {
