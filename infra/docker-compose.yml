@@ -17,6 +17,9 @@ services:
       RELAY_NAME: ${RELAY_NAME:-Armada Relay}
       RELAY_DESCRIPTION: ${RELAY_DESCRIPTION:-Internal NIP-29 group relay}
       RELAY_PRIVKEY: ${RELAY_PRIVKEY:?set RELAY_PRIVKEY in .env (64-char hex)}
+      GROUP_ID: ${GROUP_ID:-armada}
+      GROUP_NAME: ${GROUP_NAME:-Armada}
+      ADMIN_PUBKEY: ${ADMIN_PUBKEY:?set ADMIN_PUBKEY in .env (npub or hex, comma-separated)}
       DATABASE_PATH: /data/db
       LIVEKIT_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-armada}

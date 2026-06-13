@@ -61,13 +61,30 @@ esac
 # ── .env bootstrap ────────────────────────────────────────────────────────────
 if [ ! -f .env ]; then
   say "no infra/.env found — generating one with fresh secrets"
+
+  # The human admin's pubkey cannot be auto-generated; it identifies who owns
+  # the community. Prompt for it (npub or 64-char hex; comma-separated for
+  # multiple admins). Allow ADMIN_PUBKEY to be preset in the environment for
+  # non-interactive installs.
+  ADMIN_PUBKEY=${ADMIN_PUBKEY:-}
+  while [ -z "$ADMIN_PUBKEY" ]; do
+    if [ ! -t 0 ]; then
+      die "ADMIN_PUBKEY is required: set it in the environment or run interactively. It is the community admin's Nostr pubkey (npub or 64-char hex)."
+    fi
+    printf 'Community admin pubkey (npub or hex, comma-separated for multiple): '
+    read -r ADMIN_PUBKEY
+  done
+
   RELAY_PRIVKEY=$(randhex)
   LIVEKIT_API_SECRET=$(randhex)
   CLIENT_PORT=$(first_free_port 8080)
   [ "$CLIENT_PORT" != "8080" ] && say "port 8080 is busy; using $CLIENT_PORT for the client"
+  # Escape characters that are special to sed's replacement (commas are fine).
+  ADMIN_PUBKEY_ESC=$(printf '%s' "$ADMIN_PUBKEY" | sed 's/[&/\]/\\&/g')
   sed \
     -e "s/^RELAY_PRIVKEY=$/RELAY_PRIVKEY=$RELAY_PRIVKEY/" \
     -e "s/^LIVEKIT_API_SECRET=$/LIVEKIT_API_SECRET=$LIVEKIT_API_SECRET/" \
+    -e "s/^ADMIN_PUBKEY=$/ADMIN_PUBKEY=$ADMIN_PUBKEY_ESC/" \
     -e "s/^CLIENT_PORT=8080$/CLIENT_PORT=$CLIENT_PORT/" \
     .env.example > .env
   chmod 600 .env
@@ -120,7 +137,7 @@ cat <<EOF
 
   First steps:
     1. Open http://localhost:$CLIENT_PORT and click "Sign up" (generates a key).
-    2. Create a channel with the + button in the sidebar.
+    2. The community already exists; you're dropped straight into it.
     3. Click "Join voice" in any channel to test audio (localhost is a
        secure context, so the mic prompt works out of the box).
 

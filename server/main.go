@@ -29,12 +29,21 @@ type Settings struct {
 	RelayIcon        string `envconfig:"RELAY_ICON"`
 	DatabasePath     string `envconfig:"DATABASE_PATH" default:"./data/db"`
 
+	// Single-community model: this relay hosts exactly one NIP-29 group,
+	// provisioned on startup. See group.go.
+	GroupID     string `envconfig:"GROUP_ID" default:"armada"`
+	GroupName   string `envconfig:"GROUP_NAME" default:"Armada"`
+	AdminPubkey string `envconfig:"ADMIN_PUBKEY" required:"true"` // comma-separated npub/hex
+
 	// LiveKit (optional). When unset the relay reports no AV support.
 	LivekitURL       string `envconfig:"LIVEKIT_URL"` // e.g. ws://localhost:7880
 	LivekitAPIKey    string `envconfig:"LIVEKIT_API_KEY"`
 	LivekitAPISecret string `envconfig:"LIVEKIT_API_SECRET"`
 
 	RelayPubkey string `envconfig:"-"`
+
+	// AdminPubkeys is AdminPubkey parsed into validated 32-byte hex pubkeys.
+	AdminPubkeys []string `envconfig:"-"`
 }
 
 var (
@@ -60,6 +69,13 @@ func main() {
 		return
 	}
 	s.RelayPubkey, _ = nostr.GetPublicKey(s.RelayPrivkey)
+
+	admins, err := parseAdminPubkeys(s.AdminPubkey)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid ADMIN_PUBKEY")
+		return
+	}
+	s.AdminPubkeys = admins
 
 	db.Path = s.DatabasePath
 	if err := db.Init(); err != nil {
@@ -139,6 +155,10 @@ func main() {
 	relay.Router().HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("armada relay: connect with a NIP-29 client"))
 	})
+
+	// Single-community model: provision the one group, seed admins, and reject
+	// any attempt to create additional groups. See group.go.
+	setupSingleGroup()
 
 	log.Info().Str("relay-pubkey", s.RelayPubkey).Msg("running on http://0.0.0.0:" + s.Port)
 	if err := http.ListenAndServe(":"+s.Port, relay); err != nil {
