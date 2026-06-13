@@ -551,7 +551,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const charCount = content.length;
 
   return (
-    <div className="border-t shrink-0">
+    <div className="shrink-0">
       {/* Reply banner */}
       {replyTo && <ReplyBanner event={replyTo} onCancel={onCancelReply} />}
 
@@ -661,7 +661,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     aria-label="More options"
                     disabled={isUploading}
                     className={cn(
-                      "p-2 shrink-0 rounded-full transition-colors disabled:opacity-40",
+                      "p-2 shrink-0 rounded-full transition-colors disabled:opacity-40 flex items-center justify-center size-9",
                       plusOpen || mode === "poll"
                         ? "text-primary bg-primary/10"
                         : "text-muted-foreground hover:text-foreground hover:bg-secondary",
@@ -718,7 +718,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   placeholder={mode === "poll" ? "Ask a question…" : "Message the channel…"}
                   rows={1}
                   maxLength={MAX_CHARS}
-                  className="w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto"
+                  className="w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto"
                   disabled={isSending}
                 />
                 <MentionAutocomplete
@@ -741,7 +741,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     onClick={() => setPickerOpen((v) => !v)}
                     aria-label="Emoji / GIF / Stickers"
                     className={cn(
-                      "p-2 shrink-0 rounded-full transition-colors",
+                      "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9",
                       pickerOpen
                         ? "text-primary bg-primary/10"
                         : "text-muted-foreground hover:text-foreground hover:bg-secondary",
@@ -761,7 +761,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       type="button"
                       onClick={handleStartRecording}
                       aria-label="Voice message"
-                      className="p-2 shrink-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                      className="p-2 shrink-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center justify-center size-9"
                     >
                       <Mic className="size-5" />
                     </button>
@@ -774,7 +774,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   onClick={mode === "poll" ? handlePollSubmit : handleSend}
                   disabled={mode === "poll" ? !isPollValid || isSending : !content.trim() || isSending}
                   aria-label={mode === "poll" ? "Publish poll" : "Send message"}
-                  className="p-2 shrink-0 rounded-full bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground"
+                  className="p-2 shrink-0 rounded-full bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9"
                 >
                   {isSending
                     ? <Loader2 className="size-5 animate-spin" />

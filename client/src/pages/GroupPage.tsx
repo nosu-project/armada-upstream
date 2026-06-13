@@ -1,4 +1,4 @@
-import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, Settings2, Users, Volume2 } from "lucide-react";
+import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Settings2, Users, Volume2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Navigate, useParams } from "react-router-dom";
 
@@ -9,6 +9,12 @@ import { GroupSettingsDialog } from "@/components/dialogs/GroupSettingsDialog";
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -80,6 +86,7 @@ export function GroupPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const [channelsOpen, setChannelsOpen] = useState(false);
+  const [inCall, setInCall] = useState(false);
 
   const isAdmin = useMemo(
     () => Boolean(user && details?.admins.some((a) => a.pubkey === user.pubkey)),
@@ -156,6 +163,22 @@ export function GroupPage() {
               <TooltipContent>Private — only members can read</TooltipContent>
             </Tooltip>
           )}
+          {hasVoice && !inCall && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Join voice"
+                  className="size-8 text-muted-foreground hover:text-success"
+                  onClick={() => setInCall(true)}
+                >
+                  <Phone className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Join voice</TooltipContent>
+            </Tooltip>
+          )}
           {isAdmin && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -183,21 +206,28 @@ export function GroupPage() {
             <Users className="size-4" />
           </Button>
           {user && isMember && (
-            <Tooltip>
-              <TooltipTrigger asChild>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label="Leave channel"
-                  className="size-8 text-muted-foreground hover:text-destructive"
+                  aria-label="More options"
+                  className="size-8 text-muted-foreground"
+                >
+                  <MoreVertical className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
                   onClick={handleLeave}
                   disabled={leave.isPending}
+                  className="text-destructive focus:text-destructive"
                 >
                   <LogOut className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Leave channel</TooltipContent>
-            </Tooltip>
+                  Leave channel
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </header>
 
@@ -206,8 +236,15 @@ export function GroupPage() {
           <JoinBanner relayUrl={relayUrl} groupId={groupId} isClosed={Boolean(group?.isClosed)} />
         )}
 
-        {/* Voice */}
-        {hasVoice && <VoiceBar relayUrl={relayUrl} groupId={groupId} />}
+        {/* Voice — only present while a call is active */}
+        {hasVoice && (
+          <VoiceBar
+            relayUrl={relayUrl}
+            groupId={groupId}
+            active={inCall}
+            onLeave={() => setInCall(false)}
+          />
+        )}
 
         {/* Chat + members (member panel desktop-only; mobile uses the sheet) */}
         <div className="flex flex-1 min-h-0">

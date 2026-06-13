@@ -8,8 +8,8 @@ import {
   useTracks,
 } from "@livekit/components-react";
 import { ConnectionState, Track } from "livekit-client";
-import { Headphones, Loader2, Mic, MicOff, Phone, PhoneOff } from "lucide-react";
-import { useCallback, useState } from "react";
+import { Headphones, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
+import { useCallback } from "react";
 
 import "@livekit/components-styles";
 
@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { pubkeyFromLivekitIdentity, useLivekitParticipants, useLivekitToken } from "@/hooks/useLivekit";
+import { pubkeyFromLivekitIdentity, useLivekitToken } from "@/hooks/useLivekit";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
@@ -100,50 +100,26 @@ function InCallView() {
 interface VoiceBarProps {
   relayUrl: string;
   groupId: string;
+  /** Whether the local user wants to be in the call. Controlled by the parent. */
+  active: boolean;
+  /** Called when the call ends (disconnect / error back). */
+  onLeave: () => void;
 }
 
 /**
- * Voice chat bar for a NIP-29 group with the `livekit` tag.
+ * Active voice call bar for a NIP-29 group with the `livekit` tag.
  *
- * Idle: shows current room presence (kind 39004) and a Join button.
- * Joining: fetches a LiveKit JWT from the relay's NIP-29 token endpoint
- * (NIP-98 signed) and connects audio-only.
+ * Renders nothing unless `active` is true. When active, it fetches a LiveKit
+ * JWT from the relay's NIP-29 token endpoint (NIP-98 signed) and connects
+ * audio-only. The "Join voice" affordance lives in the channel header.
  */
-export function VoiceBar({ relayUrl, groupId }: VoiceBarProps) {
+export function VoiceBar({ relayUrl, groupId, active, onLeave }: VoiceBarProps) {
   const { user } = useCurrentUser();
-  const [wantsToJoin, setWantsToJoin] = useState(false);
-  const { data: tokenData, error: tokenError, isLoading } = useLivekitToken(relayUrl, groupId, wantsToJoin);
-  const { data: liveParticipants = [] } = useLivekitParticipants(relayUrl, groupId);
+  const { data: tokenData, error: tokenError, isLoading } = useLivekitToken(relayUrl, groupId, active);
 
-  const handleDisconnected = useCallback(() => setWantsToJoin(false), []);
+  const handleDisconnected = useCallback(() => onLeave(), [onLeave]);
 
-  if (!user) return null;
-
-  if (!wantsToJoin) {
-    return (
-      <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30">
-        <Headphones className="size-4 text-muted-foreground shrink-0" />
-        {liveParticipants.length > 0 ? (
-          <>
-            <div className="flex -space-x-1.5">
-              {liveParticipants.slice(0, 5).map((pubkey) => (
-                <ParticipantAvatar key={pubkey} pubkey={pubkey} />
-              ))}
-            </div>
-            <span className="text-sm text-muted-foreground flex-1">
-              {liveParticipants.length} in voice
-            </span>
-          </>
-        ) : (
-          <span className="text-sm text-muted-foreground flex-1">Voice channel</span>
-        )}
-        <Button className="h-8 px-3 text-sm" onClick={() => setWantsToJoin(true)}>
-          <Phone className="size-3.5 mr-1.5" />
-          Join voice
-        </Button>
-      </div>
-    );
-  }
+  if (!user || !active) return null;
 
   if (isLoading) {
     return (
@@ -160,7 +136,7 @@ export function VoiceBar({ relayUrl, groupId }: VoiceBarProps) {
         <span className="text-sm text-destructive flex-1">
           Could not join voice{tokenError instanceof Error ? `: ${tokenError.message}` : "."}
         </span>
-        <Button className="h-8 px-3 text-sm" variant="outline" onClick={() => setWantsToJoin(false)}>
+        <Button className="h-8 px-3 text-sm" variant="outline" onClick={onLeave}>
           Back
         </Button>
       </div>
