@@ -1,4 +1,4 @@
-import { Hash, Server as ServerIcon, Trash2, Volume2 } from "lucide-react";
+import { Hash, Trash2, Volume2 } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
@@ -51,8 +51,8 @@ export function ServerPage() {
       <main className="hidden sidebar:block flex-1 min-w-0 overflow-y-auto">
         <div className="max-w-3xl mx-auto p-8 space-y-6">
           <div className="flex items-start gap-4">
-            <div className="flex size-16 items-center justify-center rounded-2xl bg-primary/10 text-primary shrink-0">
-              <ServerIcon className="size-8" />
+            <div className="flex size-16 items-center justify-center clip-corner-lg bg-primary/10 shrink-0 overflow-hidden">
+              <img src="/logo.svg" alt="Armada" className="size-16" />
             </div>
             <div className="flex-1 min-w-0">
               <h1 className="text-2xl font-bold truncate">

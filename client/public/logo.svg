@@ -1,0 +1,62 @@
+<svg width="256" height="256" viewBox="16 10 224 236" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Armada">
+  <title>Armada</title>
+  <defs>
+    <!-- Rose-magenta blade (primary: hsl 330 90% 62%) -->
+    <linearGradient id="armada-blade" x1="64" y1="40" x2="192" y2="216" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fb4d96"/>
+      <stop offset="1" stop-color="#e0186f"/>
+    </linearGradient>
+    <!-- Deep violet-black sea (background: hsl 260 22% 9%) -->
+    <linearGradient id="armada-sea" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#191320"/>
+      <stop offset="1" stop-color="#100b15"/>
+    </linearGradient>
+    <!-- Soft neon glow for the blade -->
+    <filter id="armada-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!--
+    The crest. The cut-corner "vessel" silhouette (clip-corner-lg):
+    top-left and bottom-right corners chamfered, the others rounded.
+  -->
+  <path d="M64 16 H232 a8 8 0 0 1 8 8 V192 L192 240 H24 a8 8 0 0 1 -8 -8 V64 Z"
+        fill="url(#armada-sea)"/>
+  <!-- Gilt hairline edge (regal restraint) -->
+  <path d="M64 16 H232 a8 8 0 0 1 8 8 V192 L192 240 H24 a8 8 0 0 1 -8 -8 V64 Z"
+        fill="none" stroke="#e8d4a8" stroke-opacity="0.28" stroke-width="2"/>
+
+  <!-- Phosphor-cyan wake: the virtual sea beneath the blade -->
+  <g stroke="#19e6e6" stroke-linecap="round">
+    <path d="M84 182 H172" stroke-width="6" stroke-opacity="0.9"/>
+    <path d="M100 198 H156" stroke-width="4" stroke-opacity="0.5"/>
+    <path d="M114 210 H142" stroke-width="3" stroke-opacity="0.28"/>
+  </g>
+
+  <!--
+    The monogram A as an approaching vessel: the upper counter reads as a
+    triangular SAIL, and the bar is shaped into a HULL with a center prow
+    point — a bow cutting toward the viewer. The cyan wake below completes
+    the "approaching on the water" read.
+  -->
+  <g filter="url(#armada-glow)">
+    <!-- Inner A counter — flat sea, no gradient (the sail) -->
+    <path d="M128 96 L160 168 H96 Z" fill="#100b15"/>
+    <!-- Outer A / blade -->
+    <path d="M128 44 L184 168 H160 L128 96 L96 168 H72 Z"
+          fill="url(#armada-blade)"/>
+    <!-- Hull: symmetric, with sharp angled side cuts slicing in to a center
+         prow point (approaching head-on). -->
+    <path d="M98 132 H158 L156 150 L128 168 L100 150 Z" fill="#100b15"/>
+  </g>
+  <!-- The ship's crest: a thin, subtle inverted V (^) at the bow, sitting high.
+       Symmetric; tips poke into the blade. -->
+  <path d="M110 148 L128 134 L146 148" fill="none"
+        stroke="url(#armada-blade)" stroke-opacity="0.7"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

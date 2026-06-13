@@ -1,0 +1,35 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Armada">
+  <title>Armada</title>
+
+  <!-- Flat violet-black sea. No gradients. -->
+  <rect width="1200" height="630" fill="#100b15"/>
+
+  <!-- The crest mark — flat fills, no glow. -->
+  <g transform="translate(110, 195) scale(1.0)">
+    <!-- Cut-corner vessel crest -->
+    <path d="M64 16 H232 a8 8 0 0 1 8 8 V192 L192 240 H24 a8 8 0 0 1 -8 -8 V64 Z" fill="#15101c"/>
+    <path d="M64 16 H232 a8 8 0 0 1 8 8 V192 L192 240 H24 a8 8 0 0 1 -8 -8 V64 Z" fill="none" stroke="#e8d4a8" stroke-opacity="0.28" stroke-width="2"/>
+    <!-- cyan wake -->
+    <g stroke="#19e6e6" stroke-linecap="round">
+      <path d="M84 182 H172" stroke-width="6" stroke-opacity="0.9"/>
+      <path d="M100 198 H156" stroke-width="4" stroke-opacity="0.5"/>
+      <path d="M114 210 H142" stroke-width="3" stroke-opacity="0.28"/>
+    </g>
+    <!-- the A / approaching ship -->
+    <path d="M128 96 L160 168 H96 Z" fill="#100b15"/>
+    <path d="M128 44 L184 168 H160 L128 96 L96 168 H72 Z" fill="#fb4d96"/>
+    <path d="M98 132 H158 L156 150 L128 168 L100 150 Z" fill="#100b15"/>
+    <path d="M110 148 L128 134 L146 148" fill="none" stroke="#fb4d96" stroke-opacity="0.7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Monospace wordmark + terminal-style tagline. -->
+  <g font-family="'JetBrains Mono','Courier New',monospace">
+    <text x="400" y="300" font-size="92" font-weight="700" letter-spacing="2" fill="#f1e7d2">armada</text>
+    <text x="402" y="356" font-size="26" letter-spacing="1" fill="#fb4d96">
+      <tspan fill="#19e6e6">$ </tspan>a sovereign harbor on the open relays
+    </text>
+    <text x="402" y="396" font-size="26" letter-spacing="1" fill="#f1e7d2" fill-opacity="0.55">
+      your keys. your fleet.<tspan fill="#fb4d96">_</tspan>
+    </text>
+  </g>
+</svg>
