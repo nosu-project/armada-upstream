@@ -38,9 +38,14 @@ services:
         port: 7880
         rtc:
           tcp_port: 7881
+          udp_port: 50000
           port_range_start: 50000
           port_range_end: 50100
+          # Advertise the public edge (stardust) IP as the ICE host candidate so
+          # external browsers send media to stardust:UDP, which forwards over
+          # wireguard to this container. LAN clients reach it directly too.
           use_external_ip: false
+          node_ip: ${LIVEKIT_NODE_IP:-127.0.0.1}
         keys:
           ${LIVEKIT_API_KEY:-armada}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
         webhook:

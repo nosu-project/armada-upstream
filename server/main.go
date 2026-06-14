@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/fiatjaf/eventstore/badger"
@@ -69,6 +70,12 @@ func main() {
 		return
 	}
 	s.RelayPubkey, _ = nostr.GetPublicKey(s.RelayPrivkey)
+
+	// The LiveKit JS SDK appends its own "/rtc" signal path to the server URL
+	// it's handed. If LIVEKIT_URL already ends in "/rtc" (a common reverse-proxy
+	// misconfiguration), the client ends up requesting "/rtc/rtc/..." which 404s
+	// and voice silently fails. Normalize it here so the bug can't recur.
+	s.LivekitURL = normalizeLivekitURL(s.LivekitURL)
 
 	admins, err := parseAdminPubkeys(s.AdminPubkey)
 	if err != nil {
@@ -164,4 +171,17 @@ func main() {
 	if err := http.ListenAndServe(":"+s.Port, relay); err != nil {
 		log.Fatal().Err(err).Msg("failed to serve")
 	}
+}
+
+// normalizeLivekitURL strips a trailing "/rtc" (and any trailing slash) from the
+// LiveKit server URL handed to clients. The LiveKit client SDK always appends
+// its own "/rtc" signal path, so a URL ending in "/rtc" produces a doubled
+// "/rtc/rtc/..." request that the server returns 404 for, breaking voice.
+func normalizeLivekitURL(u string) string {
+	u = strings.TrimRight(u, "/")
+	if strings.HasSuffix(u, "/rtc") {
+		u = strings.TrimSuffix(u, "/rtc")
+		u = strings.TrimRight(u, "/")
+	}
+	return u
 }
