@@ -41,20 +41,40 @@ services:
           udp_port: 50000
           port_range_start: 50000
           port_range_end: 50100
-          # Advertise the public edge (stardust) IP as the ICE host candidate so
-          # external browsers send media to stardust:UDP, which forwards over
-          # wireguard to this container. LAN clients reach it directly too.
-          use_external_ip: false
-          node_ip: ${LIVEKIT_NODE_IP:-127.0.0.1}
+          # By default LiveKit auto-discovers the public IP via STUN
+          # (use_external_ip). For deployments behind a reverse proxy / split
+          # network, set LIVEKIT_NODE_IP to the address clients should send
+          # media to (e.g. the SFU host's LAN IP) and it takes precedence.
+          use_external_ip: ${LIVEKIT_USE_EXTERNAL_IP:-true}
+          node_ip: ${LIVEKIT_NODE_IP:-}
+          interfaces:
+            includes:
+              - ${LIVEKIT_IFACE:-eth0}
+        # Embedded TURN/TLS relay. Off by default (localhost quickstart needs no
+        # TURN). Enable for production so clients on networks that block/mangle
+        # UDP (mobile, CGNAT, corporate firewalls) relay media over TLS/443.
+        # Requires a real cert for LIVEKIT_TURN_DOMAIN mounted at LIVEKIT_CERT_DIR
+        # and the edge to deliver turn.<domain>:443 to this container (SNI
+        # passthrough). See AGENTS.md ("Voice / LiveKit") for the full setup.
+        turn:
+          enabled: ${LIVEKIT_TURN_ENABLED:-false}
+          domain: ${LIVEKIT_TURN_DOMAIN:-turn.localhost}
+          tls_port: 443
+          cert_file: /certs/tls.crt
+          key_file: /certs/tls.key
+          external_tls: false
         keys:
           ${LIVEKIT_API_KEY:-armada}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
         webhook:
           api_key: ${LIVEKIT_API_KEY:-armada}
           urls:
             - http://relay:5577/livekit/webhook
+    volumes:
+      - ${LIVEKIT_CERT_DIR:-./certs/turn}:/certs:ro
     ports:
       - "7880:7880"
       - "7881:7881"
+      - "${LIVEKIT_TURN_PORT:-5349}:443"
       - "50000-50100:50000-50100/udp"
 
   client:

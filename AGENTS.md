@@ -1,0 +1,242 @@
+# AGENTS.md
+
+Guidance for agents and operators working on Armada, with a focus on **hosting
+it for real users** (beyond the localhost quickstart). The localhost story is in
+`README.md`; this file covers production: reverse proxies, single-domain
+routing, and getting LiveKit voice to work behind an edge.
+
+## Repo layout
+
+| Path      | What                                                            |
+|-----------|-----------------------------------------------------------------|
+| `client/` | React 19 + Vite web client (nginx-served static build)          |
+| `server/` | Go relay: khatru + relay29 + badger + LiveKit token endpoint    |
+| `infra/`  | `docker-compose.yml` + `.env.example` for the full stack        |
+| `start.sh`| Turnkey wrapper around `docker compose` in `infra/`             |
+
+Three containers: `relay` (:5577), `livekit` (:7880 signaling, :7881 TCP,
+50000-50100/udp media, optional TURN/TLS), `client` (nginx on :80 → host
+`CLIENT_PORT`).
+
+## Build / test
+
+- Client: `cd client && npm install && npm run test` (tsc + eslint + vitest +
+  production build).
+- Relay: `cd server && RELAY_PRIVKEY=$(openssl rand -hex 32) go run .` —
+  or just build the image via `docker compose build relay`.
+- Full stack: `./start.sh` (generates `infra/.env` on first run, builds, starts,
+  health-checks).
+
+## Secrets
+
+`infra/.env` holds `RELAY_PRIVKEY` and `LIVEKIT_API_SECRET`. It is **gitignored**
+(`.gitignore` matches `.env`) — never commit it, never paste its contents into
+docs or commits. `RELAY_PRIVKEY` is the relay's Nostr identity; rotating it
+orphans all existing groups.
+
+---
+
+## Single-domain hosting (relay + client on one domain)
+
+Armada is designed to run the relay and client on the **same origin** (e.g.
+`armada.example.com`), split by path and by WebSocket upgrade. The client
+derives the relay's HTTP origin from the relay WS URL (`relayToHttpUrl()` in
+`client/src/lib/platform.ts`), so the relay's HTTP endpoints must live under the
+same origin.
+
+Set in `infra/.env`:
+
+```
+RELAY_DOMAIN=armada.example.com
+RELAY_PUBLIC_BASE_URL=https://armada.example.com   # MUST match exactly; used for NIP-98 u-tag checks
+PLATFORM_RELAYS=wss://armada.example.com           # client connects the relay WS at the domain root
+LIVEKIT_PUBLIC_URL=wss://armada.example.com        # signaling; SDK appends /rtc (see "LiveKit URL gotcha")
+```
+
+Reverse-proxy split (reference: Caddy). Route by path + WS upgrade; everything
+else is the SPA:
+
+```caddyfile
+armada.example.com {
+    tls you@example.com
+
+    # LiveKit signaling websocket. The JS SDK connects to <PUBLIC_URL>/rtc.
+    handle /rtc* {
+        reverse_proxy SFU_HOST:7880
+    }
+    # Relay NIP-29 LiveKit token + capability endpoints (NIP-98 authed).
+    handle /.well-known/nip29/* {
+        reverse_proxy RELAY_HOST:5577
+    }
+    handle /livekit/* {
+        reverse_proxy RELAY_HOST:5577
+    }
+    # Relay WebSocket (Nostr) + NIP-11 (Accept: application/nostr+json).
+    @relay {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    @nip11 header Accept application/nostr+json
+    handle @relay  { reverse_proxy RELAY_HOST:5577 }
+    handle @nip11  { reverse_proxy RELAY_HOST:5577 }
+    # Everything else: the web client SPA.
+    handle { reverse_proxy CLIENT_HOST:8080 }
+}
+```
+
+Caddy per-site `log { output file ... }` blocks fail to **create** a new log
+file under some sandbox configs; if a reload errors with `permission denied` on
+the log path, `touch` the file and `chown` it to the caddy user first.
+
+### LiveKit URL gotcha (the #1 voice-breaker)
+
+The LiveKit JS SDK **always appends `/rtc`** to the server URL it's given
+(`appendUrlPath(urlObj, 'rtc')`). So:
+
+- Correct: `LIVEKIT_PUBLIC_URL=wss://armada.example.com` → SDK connects to
+  `…/rtc` → proxy routes `/rtc*` to the SFU. ✅
+- Wrong: `…/rtc` → SDK connects to `…/rtc/rtc` → 404, voice silently fails. ❌
+
+The relay normalizes a trailing `/rtc` away defensively
+(`normalizeLivekitURL` in `server/main.go`), but set it correctly anyway.
+
+---
+
+## Voice / LiveKit (the hard part)
+
+WebRTC media is the tricky bit. There are three viable media paths; pick based
+on where clients are.
+
+### 1. Public SFU (simplest)
+
+If the SFU host has a reachable public IP and you can open UDP 50000-50100 +
+TCP 7881 to it, just set `LIVEKIT_USE_EXTERNAL_IP=true` (default). Clients send
+media directly. No TURN needed. This is the standard LiveKit deployment.
+
+### 2. LAN clients → direct; external clients → TURN/TLS
+
+This is the reference deployment (SFU on a private LXC, reached through an edge
+that only forwards 80/443):
+
+```
+LIVEKIT_USE_EXTERNAL_IP=false
+LIVEKIT_NODE_IP=<SFU LAN IP, e.g. 192.168.1.150>
+LIVEKIT_TURN_ENABLED=true
+LIVEKIT_TURN_DOMAIN=turn.example.com
+LIVEKIT_CERT_DIR=/abs/path/to/certs/turn   # contains tls.crt + tls.key
+LIVEKIT_TURN_PORT=443                       # host port mapped to SFU :443
+```
+
+- **LAN clients** get the host candidate `NODE_IP:5xxxx` and connect directly
+  over the LAN (low latency, no relay).
+- **External clients** can't reach the private `NODE_IP`, so ICE falls back to
+  the embedded **TURN/TLS relay** on `turn.example.com:443`.
+
+### Do NOT forward UDP through a NAT edge
+
+A tempting-but-broken approach: DNAT/forward UDP 50000-50100 from the public
+edge to the SFU over a tunnel (e.g. WireGuard), with MASQUERADE. **This breaks
+voice**: MASQUERADE rewrites every client's source to the gateway's tunnel IP,
+so the SFU sees all clients as the same address with shifting ports. ICE
+candidate pairs thrash ("ice reconnected or switched pair" spam, `prflx
+10.0.0.1:...`), connections are unstable, and mobile (where NAT rebinds ports
+constantly) drops. Use the TURN/TLS path instead — it preserves per-client
+identity and survives mobile/CGNAT/corporate firewalls (this is what Signal
+does: prefer direct, relay over TLS/443 when needed).
+
+### TURN/TLS through an HTTPS edge (SNI passthrough)
+
+If your edge terminates TLS for the app (e.g. Caddy on 443), TURN/TLS can't go
+through it (TURN is not HTTP). Route the TURN subdomain by **SNI** *before* TLS
+termination, passing it through raw to the SFU, which terminates TURN/TLS
+itself.
+
+Reference edge: `Cloudflare → nginx (L4 stream, ssl_preread) → WireGuard → SFU`.
+
+```nginx
+# nginx.conf (stream module + ssl_preread)
+stream {
+  map $ssl_preread_server_name $https_upstream {
+    turn.example.com   SFU_TUNNEL_IP:443;   # TURN/TLS terminates at the SFU
+    default            APP_EDGE_IP:443;     # your app's TLS terminator (caddy)
+  }
+  server { listen 80;  proxy_pass APP_EDGE_IP:80; }
+  server { listen 443; ssl_preread on; proxy_pass $https_upstream; }
+}
+```
+
+DNS: `turn.example.com` must be **DNS-only / not proxied** (e.g. Cloudflare grey
+cloud) so the raw TLS/TURN reaches your edge IP, not Cloudflare's HTTP proxy.
+
+Cert: the SFU terminates TURN/TLS, so it needs a **real, browser-trusted** cert
+for `turn.example.com` (self-signed will not work for `turns:`). With
+`acme.sh`, TLS-ALPN-01 works nicely because the SNI route already delivers
+`turn.example.com:443` to the SFU:
+
+```sh
+# Issue (SFU container, port 443 free during issuance):
+acme.sh --issue --alpn --tlsport 443 -d turn.example.com --server letsencrypt
+acme.sh --install-cert -d turn.example.com --ecc \
+  --fullchain-file $CERT_DIR/tls.crt --key-file $CERT_DIR/tls.key \
+  --reloadcmd "cd infra && docker compose restart livekit"
+```
+
+Renewal needs port 443, which LiveKit holds in production. Run a wrapper that
+stops LiveKit, renews via ALPN on 443, then restarts (≈10s voice blip every
+~60 days). Note: a 3-level subdomain like `turn.app.example.com` is **not**
+covered by Cloudflare's free `*.example.com` edge cert — using your own Let's
+Encrypt cert (as above) sidesteps that entirely.
+
+### Verifying voice
+
+- `curl -o /dev/null -w '%{http_code}' https://armada.example.com/.well-known/nip29/livekit` → `204`
+- TURN/TLS cert: `openssl s_client -connect turn.example.com:443 -servername turn.example.com` → cert CN matches.
+- Watch ICE selection: `docker logs -f infra-livekit-1 | grep -iE "participant active|connectionType|switched pair"`.
+  Healthy = a stable selected pair (`connectionType: udp`/`relay`) without
+  repeated "switched pair". `prflx <gateway-IP>` everywhere = NAT/MASQUERADE
+  problem (see above).
+- "Can't hear myself" is **normal** — WebRTC doesn't loop back your own audio.
+  Test with a second participant.
+
+---
+
+## Running Docker inside an unprivileged Proxmox LXC
+
+The reference SFU/relay host is an unprivileged LXC. Pitfalls hit (and fixed):
+
+- **`features: nesting=1,keyctl=1`** required on the container for Docker.
+- **runc 1.3.x breaks** with `open sysctl net.ipv4.ip_unprivileged_port_start
+  … permission denied` when starting bridge-networked containers in an
+  unprivileged userns. Fix: install runc **1.2.x** and point Docker at it via
+  `/etc/docker/daemon.json` (`default-runtime` → a runtime whose `path` is the
+  1.2.x binary). runc 1.1.x is too old (lacks the time namespace).
+- **AppArmor**: Docker's `docker-default` profile can't load in the container
+  (`apparmor failed to apply profile … no such file or directory`, also breaks
+  `docker build`). Simplest fix: `apt-get purge apparmor` inside the container
+  so Docker detects it absent and skips it (acceptable on an internal host).
+- **Do not toggle `unprivileged` on an existing rootfs.** Flipping a created
+  container between unprivileged/privileged scrambles UID mapping
+  (`/root/.ssh` ends up owned by 100000 → SSH pubkey auth silently fails with
+  StrictModes). Recreate the container with the desired mode instead.
+- Give the container a **static IP** if a reverse proxy targets it by address;
+  a changing DHCP lease silently breaks the upstream.
+
+## Networking quick reference (reference deployment)
+
+```
+Cloudflare (armada.* orange/proxied; turn.* grey/DNS-only)
+  → edge VPS  nginx stream:
+       :443 ssl_preread → SNI armada.* ⇒ app TLS terminator (Caddy)
+                          SNI turn.*   ⇒ WireGuard ⇒ SFU :443 (TURN/TLS)
+       :80/:443 default ⇒ Caddy
+  → Caddy (LAN): path-split armada.* → relay :5577 / client :8080 / SFU :7880 (/rtc)
+  → SFU LXC: LiveKit (LAN host candidate for LAN clients; TURN/TLS for external)
+```
+
+## Conventions
+
+- Commit messages: concise, imperative, sentence case (see `git log`).
+- Don't commit `infra/.env`, certs, or any secret material.
+- Only commit/push when asked. Verify the relay builds (`go build ./...` in
+  `server/`) and the client builds (`npm run test` in `client/`) before
+  committing changes to those.
