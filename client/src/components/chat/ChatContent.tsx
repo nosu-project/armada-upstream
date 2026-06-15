@@ -114,6 +114,28 @@ const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 1111, 1222, 1244]);
 export function ChatContent({ event, className, disableNoteEmbeds = false }: ChatContentProps) {
   const tokens = useMemo(() => {
     const text = event.content;
+
+    // Map of imeta-declared URL → MIME, so extension-less media URLs (e.g.
+    // blossom sha256 filenames) declared in an imeta tag still render as an
+    // embed rather than a bare link followed by a duplicate embed.
+    const imetaMimeByUrl = new Map<string, string>();
+    if (MEDIA_IMETA_KINDS.has(event.kind)) {
+      for (const tag of event.tags) {
+        if (tag[0] !== "imeta") continue;
+        let rawUrl: string | undefined;
+        let mime: string | undefined;
+        for (let j = 1; j < tag.length; j++) {
+          const sp = tag[j].indexOf(" ");
+          if (sp === -1) continue;
+          const key = tag[j].slice(0, sp);
+          if (key === "url") rawUrl = tag[j].slice(sp + 1);
+          else if (key === "m") mime = tag[j].slice(sp + 1);
+        }
+        const u = sanitizeUrl(rawUrl);
+        if (u && mime) imetaMimeByUrl.set(u, mime);
+      }
+    }
+
     // Match: BOLT11 invoices | URLs | nostr:-prefixed NIP-19 ids | @-prefixed or bare NIP-19 ids | hashtags
     const regex = new RegExp(
       "(?:lightning:)?(ln(?:bc|tb|bcrt|tbs)\\d*[munp]?1[023456789acdefghjklmnpqrstuvwxyz]+)" +
@@ -178,8 +200,12 @@ export function ChatContent({ event, className, disableNoteEmbeds = false }: Cha
           continue;
         }
 
-        // Non-image media URLs (video, audio) — render inline at their position
-        if (EMBED_MEDIA_URL_REGEX.test(url)) {
+        // Non-image media URLs (video, audio) — render inline at their position.
+        // Match by extension, or by an imeta-declared audio/video MIME (covers
+        // extension-less upload URLs like blossom sha256 filenames).
+        const imetaMime = imetaMimeByUrl.get(url);
+        const isImetaMedia = imetaMime?.startsWith("audio/") || imetaMime?.startsWith("video/");
+        if (EMBED_MEDIA_URL_REGEX.test(url) || isImetaMedia) {
           if (result.length > 0) {
             const prev = result[result.length - 1];
             if (prev.type === "text") {
