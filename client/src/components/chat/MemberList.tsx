@@ -198,7 +198,7 @@ export function MemberList({
         // Floating roster: detached by a margin, cut-corner card, same recessed
         // chrome shade as the rail/console/header. No border.
         "hidden sidebar:flex flex-col w-64 shrink-0 overflow-y-auto",
-        "my-2 mr-2 p-1.5 clip-corner-lg bg-black/30",
+        "my-3 mr-2 p-1.5 clip-corner-lg bg-black/30",
         className,
       )}
     >

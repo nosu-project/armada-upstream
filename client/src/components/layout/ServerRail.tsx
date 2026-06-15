@@ -157,7 +157,7 @@ export function ServerRail({
       aria-label="Servers"
       className={cn(
         // Chrome plane — deepest part of the recessed frame.
-        "flex flex-col items-center gap-3 w-[72px] shrink-0 pt-2 pb-3 overflow-y-auto bg-black/40",
+        "flex flex-col items-center gap-5 w-[72px] shrink-0 pt-3 pb-3 overflow-y-auto bg-black/40",
         className,
       )}
     >

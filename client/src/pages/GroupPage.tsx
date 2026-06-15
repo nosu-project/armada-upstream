@@ -155,7 +155,7 @@ export function GroupPage() {
       <main className="flex-1 min-w-0 flex flex-col safe-area-top">
         {/* Channel header — detached floating command bar, matching the right
             roster: same margin, cut-corner card, and recessed chrome shade. */}
-        <header className="relative h-11 mx-2 mt-2 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-black/30">
+        <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-black/30">
           {/* Mobile menu → reveals the channel list as a left drawer. */}
           <Button
             variant="ghost"

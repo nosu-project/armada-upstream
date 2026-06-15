@@ -678,7 +678,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const charCount = content.length;
 
   return (
-    <div className="shrink-0 pb-[env(safe-area-inset-bottom,0px)] sidebar:pb-0">
+    <div className="shrink-0 pb-[env(safe-area-inset-bottom,0px)] sidebar:pb-1">
       {/* Reply banner */}
       {replyTo && <ReplyBanner event={replyTo} onCancel={onCancelReply} />}
 
@@ -815,7 +815,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             />
 
             {/* ── Input pill: + | textarea | emoji | mic/send ──── */}
-            <div className="flex items-end gap-0.5 clip-corner-lg bg-secondary/60 px-1.5 py-1">
+            <div className="flex items-end gap-0.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
               {/* Plus menu: attach + poll (Discord-style) */}
               <Popover open={plusOpen} onOpenChange={setPlusOpen}>
                 <PopoverTrigger asChild>

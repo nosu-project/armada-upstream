@@ -111,7 +111,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
     >
       {/* Server header — aligned with the channel rows' text gutter below
           (container px-1 + row pl-4 = pl-5 here) so the grid lines up. */}
-      <div className="pl-5 pr-3 pt-3 pb-2 flex flex-col justify-center">
+      <div className="pl-5 pr-3 pt-5 pb-3 flex flex-col justify-center">
         <h2 className="font-semibold truncate leading-tight tracking-wide text-sm">
           {relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "")}
         </h2>
@@ -123,8 +123,11 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
         )}
       </div>
 
+      {/* Divider between the server header and the channel list. */}
+      <div className="mx-3 h-0.5 shrink-0 bg-white/10" />
+
       {/* Channels */}
-      <div className="flex-1 overflow-y-auto px-1 pb-2 space-y-0.5">
+      <div className="flex-1 overflow-y-auto px-1 pt-[11px] pb-2 space-y-0.5">
         <div className="flex items-center justify-between pl-4 pr-2 py-1">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Channels
@@ -171,7 +174,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       <div ref={callBarRef} className="empty:hidden shrink-0" />
 
       {/* Account area */}
-      <div className="px-1 pb-safe shrink-0 bg-background/40">
+      <div className="px-3 pb-safe shrink-0">
         {user ? (
           <LoginArea className="w-full flex" />
         ) : (
