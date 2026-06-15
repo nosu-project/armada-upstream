@@ -177,6 +177,14 @@ interface ChatComposerProps {
   sendOverride?: (finalText: string) => Promise<void>;
   /** Placeholder text for the input (defaults to the group placeholder). */
   placeholder?: string;
+  /**
+   * Optimistic-send hooks (group mode). When provided, an outgoing message is
+   * inserted into the timeline as `pending` the moment it's signed, then
+   * confirmed (`onSent` of the publish) or marked failed for retry.
+   */
+  onOptimisticInsert?: (event: NostrEvent) => void;
+  onOptimisticSent?: (id: string) => void;
+  onOptimisticFailed?: (id: string) => void;
 }
 
 /**
@@ -189,7 +197,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder, onOptimisticInsert, onOptimisticSent, onOptimisticFailed }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
@@ -630,6 +638,36 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // Delegated send (e.g. DMs): the caller owns publishing. The whole
         // text is sent as-is (NIP-29 tagging / polls don't apply here).
         await sendOverride(finalText);
+        resetComposeState();
+        onSent?.();
+      } else if (onOptimisticInsert) {
+        // Optimistic group send: render the message immediately on sign, reset
+        // the composer, then confirm/fail in the background.
+        let signedId: string | undefined;
+        resetComposeState();
+        onSent?.();
+        try {
+          await createEvent({
+            kind: KIND_GROUP_CHAT,
+            content: finalText,
+            tags: buildMessageTags(finalText),
+            relay: relayUrl,
+            onSigned: (event) => {
+              signedId = event.id;
+              onOptimisticInsert(event);
+            },
+          });
+          if (signedId) onOptimisticSent?.(signedId);
+        } catch {
+          if (signedId) onOptimisticFailed?.(signedId);
+          else {
+            toast({
+              title: "Message not sent",
+              description: "Could not sign the message.",
+              variant: "destructive",
+            });
+          }
+        }
       } else {
         await createEvent({
           kind: KIND_GROUP_CHAT,
@@ -637,9 +675,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           tags: buildMessageTags(finalText),
           relay: relayUrl,
         });
+        resetComposeState();
+        onSent?.();
       }
-      resetComposeState();
-      onSent?.();
     } catch {
       toast({
         title: "Message not sent",
@@ -647,7 +685,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         variant: "destructive",
       });
     }
-  }, [content, attachments, user, isSending, sendOverride, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast]);
+  }, [content, attachments, user, isSending, sendOverride, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed]);
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;

@@ -20,6 +20,12 @@ export type EventTemplate = Omit<NostrEvent, "id" | "pubkey" | "sig" | "created_
    * servers via the pool's eventRouter.
    */
   relay?: string;
+  /**
+   * Called with the fully-signed event immediately before it is sent to the
+   * network. Lets callers optimistically insert the event into a local cache
+   * (and learn its final id) before the relay round-trip completes.
+   */
+  onSigned?: (event: NostrEvent) => void;
 };
 
 /** Returns true if the kind falls in a replaceable or addressable range. */
@@ -38,7 +44,7 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         throw new Error("User is not logged in");
       }
 
-      const { prev, relay, ...template } = t;
+      const { prev, relay, onSigned, ...template } = t;
       const tags = [...(template.tags ?? [])];
 
       // NIP-89 client tag
@@ -71,6 +77,9 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         );
       }
 
+      // Let callers optimistically render the event before the network call.
+      onSigned?.(event);
+
       if (relay) {
         await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(8000) });
       } else {
@@ -81,6 +90,30 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
     },
     onError: (error) => {
       console.error("Failed to publish event:", error);
+    },
+  });
+}
+
+/**
+ * Re-publish an already-signed event (e.g. retrying a failed optimistic send).
+ * Unlike `useNostrPublish`, this does not re-sign or mutate tags — the event id
+ * is preserved so it reconciles with the original optimistic message.
+ */
+export function useRepublish(): UseMutationResult<
+  NostrEvent,
+  Error,
+  { event: NostrEvent; relay?: string }
+> {
+  const { nostr } = useNostr();
+
+  return useMutation({
+    mutationFn: async ({ event, relay }) => {
+      if (relay) {
+        await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(8000) });
+      } else {
+        await nostr.event(event, { signal: AbortSignal.timeout(8000) });
+      }
+      return event;
     },
   });
 }

@@ -1,4 +1,4 @@
-import { Hash, Reply, Trash2 } from "lucide-react";
+import { AlertCircle, Hash, Loader2, Reply, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -18,9 +18,13 @@ import { useEvent } from "@/hooks/useEvent";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useReactions } from "@/hooks/useReactions";
+import { useRepublish } from "@/hooks/useNostrPublish";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { cn } from "@/lib/utils";
+
+import type { SendStatus } from "@/hooks/useGroupMessages";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -69,19 +73,31 @@ interface ChatMessageProps {
   groupId: string;
   canWrite: boolean;
   canModerate: boolean;
+  /** Optimistic send status, if this message is locally-published & unconfirmed. */
+  sendStatus?: SendStatus;
+  onRetry?: () => void;
+  onDiscard?: () => void;
   onDelete: (eventId: string) => void;
   onReply: (event: NostrEvent) => void;
 }
 
-function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, onDelete, onReply }: ChatMessageProps) {
+function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, onRetry, onDiscard, onDelete, onReply }: ChatMessageProps) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);
   const replyToId = getReplyToId(event);
   const { tallies, react } = useReactions(event, relayUrl, groupId);
+  const isPending = sendStatus === "pending";
+  const isFailed = sendStatus === "failed";
 
   return (
-    <div className="group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors">
+    <div
+      className={cn(
+        "group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
+        isPending && "opacity-60",
+        isFailed && "bg-destructive/5",
+      )}
+    >
       <ProfilePreviewCard pubkey={event.pubkey}>
         <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
@@ -102,6 +118,9 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, onDelete
           <span className="text-[11px] text-muted-foreground/70 shrink-0">
             {shortTimeAgo(event.created_at)}
           </span>
+          {isPending && (
+            <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
+          )}
         </div>
         {replyToId && <ReplyContext eventId={replyToId} relayUrl={relayUrl} />}
         {event.kind === KIND_POLL
@@ -113,6 +132,18 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, onDelete
           )
           : <ChatContent event={event} className="text-[15px]" />}
         <ReactionBar tallies={tallies} canReact={canWrite} onReact={react} />
+        {isFailed && (
+          <div className="flex items-center gap-2 mt-1 text-[11px] text-destructive">
+            <AlertCircle className="size-3.5 shrink-0" />
+            <span>Failed to send.</span>
+            <button type="button" className="font-semibold underline hover:no-underline" onClick={onRetry}>
+              Retry
+            </button>
+            <button type="button" className="text-muted-foreground hover:text-foreground" onClick={onDiscard}>
+              Discard
+            </button>
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0">
         {canWrite && <ReactionPicker onReact={react} />}
@@ -169,8 +200,17 @@ interface GroupChatProps {
  */
 export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupChatProps) {
   const { user } = useCurrentUser();
-  const { data: messages = [], isLoading } = useGroupMessages(relayUrl, groupId);
+  const {
+    data: messages = [],
+    isLoading,
+    status: sendStatus,
+    insertOptimistic,
+    markSent,
+    markFailed,
+    removeOptimistic,
+  } = useGroupMessages(relayUrl, groupId);
   const { deleteEvent } = useGroupModeration(relayUrl, groupId);
+  const { mutateAsync: republish } = useRepublish();
   const { markRead } = useReadState();
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
@@ -214,6 +254,21 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupCha
     isAutoScrollRef.current = true;
   }, []);
 
+  // Retry a failed optimistic message: re-publish the already-signed event
+  // (id preserved) and reconcile status on the result.
+  const handleRetry = useCallback(
+    async (event: NostrEvent) => {
+      markFailed(event.id); // keep it visible; flip back to pending below
+      try {
+        await republish({ event, relay: relayUrl });
+        markSent(event.id);
+      } catch {
+        markFailed(event.id);
+      }
+    },
+    [republish, relayUrl, markSent, markFailed],
+  );
+
   return (
     <div className="flex flex-col flex-1 min-h-0 min-w-0">
       {/* Messages */}
@@ -249,6 +304,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupCha
               groupId={groupId}
               canWrite={Boolean(user && canWrite)}
               canModerate={canModerate}
+              sendStatus={sendStatus[msg.id]}
+              onRetry={() => handleRetry(msg)}
+              onDiscard={() => removeOptimistic(msg.id)}
               onDelete={(eventId) => deleteEvent.mutate({ eventId })}
               onReply={setReplyTo}
             />
@@ -265,6 +323,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupCha
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(undefined)}
           onSent={handleSent}
+          onOptimisticInsert={insertOptimistic}
+          onOptimisticSent={markSent}
+          onOptimisticFailed={markFailed}
         />
       ) : (
         <div className="border-t p-3 shrink-0 pb-safe">
