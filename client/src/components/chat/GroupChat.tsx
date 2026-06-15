@@ -151,7 +151,7 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
     <div
       onMouseLeave={disarmDelete}
       className={cn(
-        "group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
+        "group relative flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
         isPending && "opacity-60",
         isFailed && "bg-destructive/5",
       )}
@@ -253,7 +253,7 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
           </div>
         )}
       </div>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0">
+      <div className="absolute top-1 right-2.5 flex items-center gap-0.5 rounded-md border bg-background/95 shadow-sm opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         {canWrite && !isEditing && <ReactionPicker onReact={react} />}
         {canWrite && !isEditing && (
           <Tooltip>
