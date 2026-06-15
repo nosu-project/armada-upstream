@@ -296,7 +296,8 @@ export function GroupPage() {
           <div
             className={cn(
               "shrink-0 overflow-hidden transition-[width] duration-200 ease-out",
-              membersVisible ? "w-[16.5rem]" : "w-0",
+              "w-0",
+              membersVisible && "sidebar:w-[16.5rem]",
             )}
           >
             <div
