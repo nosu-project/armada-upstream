@@ -73,7 +73,7 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
         isClosed,
       });
       // Best-effort: remember the group in the user's NIP-51 list.
-      updateList({ action: "add", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
+      updateList({ type: "add-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
 
       toast({ title: "Channel created", description: name.trim() });
       onOpenChange(false);

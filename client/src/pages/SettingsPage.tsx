@@ -8,7 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { APP_NAME, APP_RELAYS, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 
 import type { EncryptedSettings } from "@/lib/schemas";
@@ -17,14 +19,43 @@ import type { EncryptedSettings } from "@/lib/schemas";
 export function SettingsPage() {
   const navigate = useNavigate();
   const { config, updateConfig } = useAppContext();
+  const { user } = useCurrentUser();
   const { updateSettings, hasNip44Support } = useEncryptedSettings();
+  const { mutateAsync: updateList } = useUpdateUserGroupList();
 
-  /** Update a relay field locally and sync to encrypted settings when logged in. */
-  const setRelays = (key: "addedRelays" | "appRelays" | "searchRelays" | "dmRelays") => (relays: string[]) => {
+  /**
+   * Update a relay field locally and sync to encrypted settings when logged in.
+   * The added-server list (`addedRelays`) is handled separately by
+   * `setAddedRelays` — it lives in the NIP-29 kind 10009 list, not 30078.
+   */
+  const setRelays = (key: "appRelays" | "searchRelays" | "dmRelays") => (relays: string[]) => {
     updateConfig((current) => ({ ...current, [key]: relays }));
     if (hasNip44Support) {
       updateSettings({ [key]: relays } as Partial<EncryptedSettings>).catch((err) =>
         console.warn("Relay sync failed:", err));
+    }
+  };
+
+  /**
+   * Update the user's server list. The local cache updates immediately; the
+   * change is diffed and persisted to the NIP-29 kind 10009 list (`r` tags),
+   * the cross-device source of truth.
+   */
+  const setAddedRelays = (relays: string[]) => {
+    const prev = config.addedRelays;
+    updateConfig((current) => ({ ...current, addedRelays: relays }));
+    if (!user) return;
+    for (const url of relays) {
+      if (!prev.includes(url)) {
+        updateList({ type: "add-server", url }).catch((err) =>
+          console.warn("Failed to add server to group list:", err));
+      }
+    }
+    for (const url of prev) {
+      if (!relays.includes(url)) {
+        updateList({ type: "remove-server", url }).catch((err) =>
+          console.warn("Failed to remove server from group list:", err));
+      }
     }
   };
 
@@ -74,14 +105,15 @@ export function SettingsPage() {
             <CardTitle>Servers</CardTitle>
             <CardDescription>
               {APP_NAME} is pinned to your internal platform relays. Servers you add
-              yourself can be removed here.
+              yourself sync across your devices via your NIP-29 group list and can be
+              removed here.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <RelayListEditor
               pinned={PLATFORM_RELAYS}
               relays={config.addedRelays}
-              onChange={setRelays("addedRelays")}
+              onChange={setAddedRelays}
               emptyText="No extra servers added. Use the + button in the server rail to add one."
               placeholder="wss://server.example.com"
             />

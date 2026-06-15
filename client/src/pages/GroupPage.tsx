@@ -42,7 +42,7 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   const handleJoin = useCallback(async () => {
     try {
       await join.mutateAsync({ code: code.trim() || undefined });
-      updateList({ action: "add", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
+      updateList({ type: "add-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
       toast({ title: "Join request sent", description: "The relay will admit you automatically or after review." });
     } catch (e) {
       toast({
@@ -135,7 +135,7 @@ export function GroupPage() {
   const handleLeave = async () => {
     try {
       await leave.mutateAsync({});
-      updateList({ action: "remove", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
+      updateList({ type: "remove-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
       toast({ title: "Left channel" });
     } catch (e) {
       toast({

@@ -8,8 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
+import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 
 /**
@@ -21,6 +23,8 @@ export function ServerPage() {
   const { server } = useParams<{ server: string }>();
   const navigate = useNavigate();
   const { config, updateConfig } = useAppContext();
+  const { user } = useCurrentUser();
+  const { mutateAsync: updateList } = useUpdateUserGroupList();
   const relayUrl = server ? routeParamToRelay(server) : undefined;
 
   const { data: groups, isLoading, relayInfo } = useRelayGroups(relayUrl);
@@ -37,6 +41,10 @@ export function ServerPage() {
       ...current,
       addedRelays: current.addedRelays.filter((url) => url !== relayUrl),
     }));
+    if (user && relayUrl) {
+      updateList({ type: "remove-server", url: relayUrl }).catch((err) =>
+        console.warn("Failed to sync server removal to group list:", err));
+    }
     toast({ title: "Server removed", description: relayUrl });
     navigate("/");
   };

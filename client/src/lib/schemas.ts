@@ -47,8 +47,6 @@ export const EncryptedSettingsSchema = z.looseObject({
   theme: z.enum(["light", "dark", "system", "custom"]).optional(),
   customTheme: ThemeConfigSchema.optional(),
   themes: ThemesConfigSchema.optional(),
-  /** Extra (user-added) servers. */
-  addedRelays: z.array(z.string()).optional(),
   /** General-purpose app relays. */
   appRelays: z.array(z.string()).optional(),
   /** NIP-50 search relays. */

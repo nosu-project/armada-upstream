@@ -26,7 +26,14 @@ export interface AppConfig {
    * these replace the builtin core colors for the respective mode.
    */
   themes?: ThemesConfig;
-  /** Relay (server) URLs the user added on top of the pinned platform relays. */
+  /**
+   * Relay (server) URLs the user added on top of the pinned platform relays.
+   *
+   * This is a fast/offline **cache** of the user's NIP-29 server list, which
+   * lives canonically in their kind 10009 event (`r` tags, NIP-51, NIP-44
+   * encrypted to self). NostrSync hydrates this from the 10009 list on login;
+   * AddServerDialog / ServerPage / Settings write through to both.
+   */
   addedRelays: string[];
   /**
    * App relays for non-NIP-29 traffic (kind 0 profiles, kind 10009 lists,

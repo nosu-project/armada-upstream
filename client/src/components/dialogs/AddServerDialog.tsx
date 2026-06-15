@@ -14,7 +14,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
+import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
 
 interface AddServerDialogProps {
@@ -28,6 +30,8 @@ interface AddServerDialogProps {
  */
 export function AddServerDialog({ open, onOpenChange }: AddServerDialogProps) {
   const { config, updateConfig } = useAppContext();
+  const { user } = useCurrentUser();
+  const { mutateAsync: updateList } = useUpdateUserGroupList();
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -59,10 +63,16 @@ export function AddServerDialog({ open, onOpenChange }: AddServerDialogProps) {
     }
     setChecking(false);
 
+    // Update the local cache immediately for instant UI, then persist to the
+    // user's NIP-29 server list (kind 10009 `r` tags) when signed in.
     updateConfig((current) => ({
       ...current,
       addedRelays: [...current.addedRelays, normalized],
     }));
+    if (user) {
+      updateList({ type: "add-server", url: normalized }).catch((err) =>
+        console.warn("Failed to sync server to group list:", err));
+    }
     toast({ title: "Server added", description: normalized });
     setUrl("");
     onOpenChange(false);

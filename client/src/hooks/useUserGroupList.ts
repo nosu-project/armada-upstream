@@ -3,13 +3,55 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
-import { KIND_USER_GROUPS, parseUserGroupList, type GroupRef } from "@/lib/nip29";
+import {
+  buildGroupListTags,
+  KIND_USER_GROUPS,
+  parseGroupListTags,
+  type GroupRef,
+  type UserGroupList,
+} from "@/lib/nip29";
+import { normalizeRelayUrl } from "@/lib/platform";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NUser } from "@nostrify/react/login";
+
+/** Empty list, used before any 10009 event exists. */
+const EMPTY_LIST: UserGroupList = { groups: [], servers: [] };
 
 /**
- * The user's kind 10009 group list (NIP-51), used as the "joined servers and
- * channels" memory across devices.
+ * Decrypt the NIP-44 private items of a kind 10009 event (NIP-51) and merge
+ * them with the public tags. Private items live in `.content` as a stringified
+ * tag array, encrypted to self. Falls back to public-only when there is no
+ * signer or decryption fails.
+ */
+async function readGroupListEvent(
+  event: NostrEvent | null,
+  signer: NUser["signer"] | undefined,
+): Promise<UserGroupList> {
+  if (!event) return EMPTY_LIST;
+
+  const tags = [...event.tags];
+  if (event.content && signer?.nip44) {
+    try {
+      const decrypted = await signer.nip44.decrypt(event.pubkey, event.content);
+      const privateTags = JSON.parse(decrypted);
+      if (Array.isArray(privateTags)) {
+        for (const tag of privateTags) {
+          if (Array.isArray(tag)) tags.push(tag as string[]);
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to decrypt group list private items:", err);
+    }
+  }
+  return parseGroupListTags(tags);
+}
+
+/**
+ * The user's kind 10009 group list (NIP-51 "Simple groups"). This is the
+ * cross-device source of truth for both joined channels (`group` tags) and the
+ * servers the user has added (`r` tags). Private items are NIP-44 encrypted to
+ * self in `.content`.
  */
 export function useUserGroupList() {
   const { nostr } = useNostr();
@@ -23,9 +65,11 @@ export function useUserGroupList() {
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
       const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+      const list = await readGroupListEvent(latest, user!.signer);
       return {
         event: latest as NostrEvent | null,
-        groups: latest ? parseUserGroupList(latest) : [],
+        groups: list.groups,
+        servers: list.servers,
       };
     },
     enabled: Boolean(user),
@@ -33,7 +77,45 @@ export function useUserGroupList() {
   });
 }
 
-/** Add or remove a group ref in the user's kind 10009 list (read-modify-write). */
+/** A single mutation against the user's kind 10009 list (read-modify-write). */
+type GroupListAction =
+  | { type: "add-group"; ref: GroupRef }
+  | { type: "remove-group"; ref: GroupRef }
+  | { type: "add-server"; url: string }
+  | { type: "remove-server"; url: string };
+
+function applyAction(list: UserGroupList, action: GroupListAction): UserGroupList {
+  switch (action.type) {
+    case "add-group": {
+      const without = list.groups.filter(
+        (g) => !(g.id === action.ref.id && g.relay === action.ref.relay),
+      );
+      return { ...list, groups: [...without, action.ref] };
+    }
+    case "remove-group":
+      return {
+        ...list,
+        groups: list.groups.filter(
+          (g) => !(g.id === action.ref.id && g.relay === action.ref.relay),
+        ),
+      };
+    case "add-server": {
+      const url = normalizeRelayUrl(action.url) ?? action.url;
+      if (list.servers.includes(url)) return list;
+      return { ...list, servers: [...list.servers, url] };
+    }
+    case "remove-server": {
+      const url = normalizeRelayUrl(action.url) ?? action.url;
+      return { ...list, servers: list.servers.filter((s) => s !== url) };
+    }
+  }
+}
+
+/**
+ * Mutate the user's kind 10009 list (add/remove a group or a server) with a
+ * read-modify-write against fresh relay state. Items are stored as NIP-44
+ * private items (encrypted to self) in `.content`, matching NIP-51.
+ */
 export function useUpdateUserGroupList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -41,8 +123,11 @@ export function useUpdateUserGroupList() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ action, ref }: { action: "add" | "remove"; ref: GroupRef }) => {
+    mutationFn: async (action: GroupListAction) => {
       if (!user) throw new Error("User is not logged in");
+      if (!user.signer.nip44) {
+        throw new Error("NIP-44 encryption not supported by this signer");
+      }
 
       // Read-modify-write against fresh relay state, never the query cache.
       const events = await nostr.query(
@@ -50,21 +135,24 @@ export function useUpdateUserGroupList() {
         { signal: AbortSignal.timeout(8000) },
       );
       const prev = events.sort((a, b) => b.created_at - a.created_at)[0];
+      const current = await readGroupListEvent(prev ?? null, user.signer);
+      const next = applyAction(current, action);
 
-      const existing = prev ? parseUserGroupList(prev) : [];
-      const without = existing.filter((g) => !(g.id === ref.id && g.relay === ref.relay));
-      const next = action === "add" ? [...without, ref] : without;
+      // Preserve any unrelated tags (title, etc.) from the previous event, but
+      // drop the public group/r items — those now live encrypted in .content.
+      const otherTags =
+        prev?.tags.filter(([name]) => name !== "group" && name !== "r") ?? [];
 
-      // Preserve any non-"group" tags from the previous list event.
-      const otherTags = prev?.tags.filter(([name]) => name !== "group") ?? [];
+      const privateTags = buildGroupListTags(next);
+      const content = await user.signer.nip44.encrypt(
+        user.pubkey,
+        JSON.stringify(privateTags),
+      );
 
       return publishEvent({
         kind: KIND_USER_GROUPS,
-        content: prev?.content ?? "",
-        tags: [
-          ...otherTags,
-          ...next.map((g) => ["group", g.id, g.relay]),
-        ],
+        content,
+        tags: otherTags,
         prev: prev ?? undefined,
       });
     },

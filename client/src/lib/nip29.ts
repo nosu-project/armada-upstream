@@ -90,6 +90,18 @@ export interface GroupRef {
   relay: string;
 }
 
+/**
+ * The fully-parsed kind 10009 list (NIP-51 "Simple groups"): the user's joined
+ * groups (`group` tags) and the servers/relays they use (`r` tags). Both can
+ * appear in the public tags or the NIP-44-encrypted private tags.
+ */
+export interface UserGroupList {
+  /** Joined groups: `["group", id, relay, name?]`. */
+  groups: GroupRef[];
+  /** Servers in use: `["r", relayUrl]`. Normalized, de-duplicated. */
+  servers: string[];
+}
+
 // ── Parsing ──────────────────────────────────────────────────────────────────
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -160,16 +172,52 @@ export function parseGroupParticipants(event: NostrEvent): string[] {
     .map(([, pubkey]) => pubkey);
 }
 
-/** Parse a kind 10009 user-groups list into group references. */
+/** Parse a kind 10009 user-groups list into group references (public tags only). */
 export function parseUserGroupList(event: NostrEvent): GroupRef[] {
   if (event.kind !== KIND_USER_GROUPS) return [];
-  const refs: GroupRef[] = [];
-  for (const [name, id, relay] of event.tags) {
-    if (name === "group" && id && relay) {
-      refs.push({ id, relay });
+  return parseGroupListTags(event.tags).groups;
+}
+
+/**
+ * Parse a set of kind 10009 tags (public or decrypted-private) into the full
+ * list of joined groups and servers. Per NIP-51, the "Simple groups" list
+ * carries `["group", id, relay, name?]` and `["r", relayUrl]` items.
+ */
+export function parseGroupListTags(tags: string[][]): UserGroupList {
+  const groups: GroupRef[] = [];
+  const servers: string[] = [];
+  const seenGroups = new Set<string>();
+  const seenServers = new Set<string>();
+
+  for (const [name, a, b] of tags) {
+    if (name === "group" && a && b) {
+      const key = `${a}\u0000${b}`;
+      if (!seenGroups.has(key)) {
+        seenGroups.add(key);
+        groups.push({ id: a, relay: b });
+      }
+    } else if (name === "r" && a) {
+      if (!seenServers.has(a)) {
+        seenServers.add(a);
+        servers.push(a);
+      }
     }
   }
-  return refs;
+
+  return { groups, servers };
+}
+
+/**
+ * Build the kind 10009 tag list from groups + servers. Group tags carry the
+ * host relay so the group can be located; server tags (`r`) list each relay in
+ * use (NIP-51). Items are emitted in chronological order (servers first, then
+ * groups) — callers preserve ordering by passing the existing arrays through.
+ */
+export function buildGroupListTags(list: UserGroupList): string[][] {
+  return [
+    ...list.servers.map((url) => ["r", url]),
+    ...list.groups.map((g) => ["group", g.id, g.relay]),
+  ];
 }
 
 /** Get the group id (`h` tag) of a group-scoped event. */

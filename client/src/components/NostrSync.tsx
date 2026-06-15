@@ -10,6 +10,8 @@ import {
   useEncryptedSettings,
 } from "@/hooks/useEncryptedSettings";
 import { useTheme } from "@/hooks/useTheme";
+import { useUserGroupList } from "@/hooks/useUserGroupList";
+import { PLATFORM_RELAYS } from "@/lib/platform";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
 
 /**
@@ -17,9 +19,11 @@ import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
  * Adapted from Ditto's NostrSync.
  *
  *  1. Pulls Armada's own encrypted settings (NIP-78, kind 30078,
- *     d="armada/metadata") into AppConfig — theme/customTheme/themes —
- *     timestamp-guarded so a stale relay event never clobbers a fresh local
- *     edit.
+ *     d="armada/metadata") into AppConfig — theme/customTheme/themes and the
+ *     app/search/DM relay lists — timestamp-guarded so a stale relay event
+ *     never clobbers a fresh local edit.
+ *  1b. Hydrates the `addedRelays` cache from the user's NIP-29 server list
+ *     (kind 10009 `r` tags), which is the cross-device source of truth.
  *  2. Interop: if the user has never picked a theme in Armada, adopt their
  *     Ditto *active profile theme* (kind 16767) so Ditto users feel at home.
  *
@@ -30,16 +34,19 @@ export function NostrSync() {
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   const { settings } = useEncryptedSettings();
+  const { data: groupList } = useUserGroupList();
   const { applyCustomTheme } = useTheme();
 
   const lastAppliedPubkey = useRef<string | undefined>(undefined);
   const dittoCheckedPubkey = useRef<string | undefined>(undefined);
+  const serversAppliedPubkey = useRef<string | undefined>(undefined);
 
   // Reset guards when the account changes.
   useEffect(() => {
     if (user?.pubkey !== lastAppliedPubkey.current) {
       lastAppliedPubkey.current = undefined;
     }
+    serversAppliedPubkey.current = undefined;
   }, [user?.pubkey]);
 
   // ─── 1. Armada encrypted settings → local config ─────────────────────
@@ -60,7 +67,6 @@ export function NostrSync() {
       ...(settings.theme !== undefined ? { theme: settings.theme } : {}),
       ...(settings.customTheme !== undefined ? { customTheme: settings.customTheme } : {}),
       ...(settings.themes !== undefined ? { themes: settings.themes } : {}),
-      ...(settings.addedRelays !== undefined ? { addedRelays: settings.addedRelays } : {}),
       ...(settings.appRelays !== undefined ? { appRelays: settings.appRelays } : {}),
       ...(settings.searchRelays !== undefined ? { searchRelays: settings.searchRelays } : {}),
       ...(settings.useOwnDmRelays !== undefined ? { useOwnDmRelays: settings.useOwnDmRelays } : {}),
@@ -70,6 +76,27 @@ export function NostrSync() {
     setLocalSettingsSync(user.pubkey, remoteTs);
     lastAppliedPubkey.current = user.pubkey;
   }, [user?.pubkey, settings, updateConfig]);
+
+  // ─── 1b. NIP-29 server list (kind 10009 `r` tags) → addedRelays cache ──
+  // The 10009 list is the cross-device source of truth for added servers;
+  // localStorage `addedRelays` is just a fast/offline cache. Hydrate it once
+  // per account from the list, dropping platform-pinned relays (those are not
+  // "added"). Runs after the list query resolves.
+  useEffect(() => {
+    if (!user?.pubkey || !groupList) return;
+    if (serversAppliedPubkey.current === user.pubkey) return;
+    serversAppliedPubkey.current = user.pubkey;
+
+    const pinned = new Set(PLATFORM_RELAYS);
+    const fromList = groupList.servers.filter((url) => !pinned.has(url));
+
+    updateConfig((current) => {
+      const same =
+        current.addedRelays.length === fromList.length &&
+        current.addedRelays.every((url) => fromList.includes(url));
+      return same ? current : { ...current, addedRelays: fromList };
+    });
+  }, [user?.pubkey, groupList, updateConfig]);
 
   // ─── 2. Ditto active profile theme fallback (first-time Armada users) ─
   useEffect(() => {
