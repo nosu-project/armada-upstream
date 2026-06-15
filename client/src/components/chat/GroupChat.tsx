@@ -109,6 +109,33 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   const canEdit = isOwn && event.kind === KIND_GROUP_CHAT && !isPending && !isFailed;
   const wasEdited = event.tags.some(([name]) => name === "edited");
   const [editText, setEditText] = useState(event.content);
+  // Two-step delete: the first click arms (highlights) the trash button, the
+  // second click within the timeout actually deletes. Prevents fat-finger
+  // deletes from a single misclick.
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const disarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const disarmDelete = useCallback(() => {
+    if (disarmTimer.current) clearTimeout(disarmTimer.current);
+    disarmTimer.current = null;
+    setDeleteArmed(false);
+  }, []);
+
+  const handleDeleteClick = useCallback(() => {
+    if (deleteArmed) {
+      disarmDelete();
+      onDelete(event.id);
+    } else {
+      setDeleteArmed(true);
+      if (disarmTimer.current) clearTimeout(disarmTimer.current);
+      disarmTimer.current = setTimeout(() => setDeleteArmed(false), 3000);
+    }
+  }, [deleteArmed, disarmDelete, onDelete, event.id]);
+
+  // Clean up the disarm timer on unmount.
+  useEffect(() => () => {
+    if (disarmTimer.current) clearTimeout(disarmTimer.current);
+  }, []);
 
   // Reset the draft whenever an edit (re)starts.
   useEffect(() => {
@@ -117,6 +144,7 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
 
   return (
     <div
+      onMouseLeave={disarmDelete}
       className={cn(
         "group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
         isPending && "opacity-60",
@@ -245,14 +273,20 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Delete message"
-                className="size-7 text-muted-foreground hover:text-destructive"
-                onClick={() => onDelete(event.id)}
+                aria-label={deleteArmed ? "Confirm delete message" : "Delete message"}
+                aria-pressed={deleteArmed}
+                className={cn(
+                  "size-7 transition-colors",
+                  deleteArmed
+                    ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    : "text-muted-foreground hover:text-destructive",
+                )}
+                onClick={handleDeleteClick}
               >
                 <Trash2 className="size-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Delete message</TooltipContent>
+            <TooltipContent>{deleteArmed ? "Click again to delete" : "Delete message"}</TooltipContent>
           </Tooltip>
         )}
       </div>
