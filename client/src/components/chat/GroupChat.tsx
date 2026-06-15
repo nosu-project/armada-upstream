@@ -1,4 +1,4 @@
-import { AlertCircle, Hash, Loader2, Reply, Trash2 } from "lucide-react";
+import { AlertCircle, Hash, Loader2, Reply, Search, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -6,7 +6,6 @@ import { ChatContent } from "@/components/chat/ChatContent";
 import { PollCard } from "@/components/chat/PollCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
-import { GroupSearchPanel } from "@/components/chat/GroupSearchPanel";
 import LoginDialog from "@/components/auth/LoginDialog";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -18,6 +17,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEvent } from "@/hooks/useEvent";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
+import { useGroupSearch } from "@/hooks/useGroupSearch";
 import { useReactions } from "@/hooks/useReactions";
 import { useRepublish } from "@/hooks/useNostrPublish";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
@@ -76,8 +76,8 @@ interface ChatMessageProps {
   canModerate: boolean;
   /** Optimistic send status, if this message is locally-published & unconfirmed. */
   sendStatus?: SendStatus;
-  /** Briefly highlight this message (e.g. jumped-to from search). */
-  highlight?: boolean;
+  /** Search term to highlight in the message body (search-results mode). */
+  highlight?: string;
   onRetry?: () => void;
   onDiscard?: () => void;
   onDelete: (eventId: string) => void;
@@ -95,12 +95,10 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
 
   return (
     <div
-      data-message-id={event.id}
       className={cn(
         "group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
         isPending && "opacity-60",
         isFailed && "bg-destructive/5",
-        highlight && "bg-primary/10 ring-1 ring-primary/40",
       )}
     >
       <ProfilePreviewCard pubkey={event.pubkey}>
@@ -131,11 +129,11 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
         {event.kind === KIND_POLL
           ? (
             <>
-              <ChatContent event={event} className="text-[15px]" />
+              <ChatContent event={event} className="text-[15px]" highlight={highlight} />
               <PollCard event={event} relayUrl={relayUrl} groupId={groupId} canVote={canWrite} />
             </>
           )
-          : <ChatContent event={event} className="text-[15px]" />}
+          : <ChatContent event={event} className="text-[15px]" highlight={highlight} />}
         <ReactionBar tallies={tallies} canReact={canWrite} onReact={react} />
         {isFailed && (
           <div className="flex items-center gap-2 mt-1 text-[11px] text-destructive">
@@ -196,10 +194,11 @@ interface GroupChatProps {
   canWrite: boolean;
   /** Whether the current user can moderate (delete messages). */
   canModerate: boolean;
-  /** Whether the in-channel search panel is open. */
-  searchOpen?: boolean;
-  /** Close the search panel. */
-  onCloseSearch?: () => void;
+  /**
+   * Active search query. When non-empty, the timeline is replaced by matching
+   * messages (filtered in-place in the chat area, not a separate view).
+   */
+  searchQuery?: string;
 }
 
 /**
@@ -207,7 +206,7 @@ interface GroupChatProps {
  * (and kind 1068 polls) with the `h` tag and NIP-29 `previous` timeline
  * references, published only to the group's host relay.
  */
-export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchOpen, onCloseSearch }: GroupChatProps) {
+export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuery = "" }: GroupChatProps) {
   const { user } = useCurrentUser();
   const {
     data: messages = [],
@@ -221,10 +220,14 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchOpen
   const { deleteEvent } = useGroupModeration(relayUrl, groupId);
   const { mutateAsync: republish } = useRepublish();
   const { markRead } = useReadState();
+  const { results: searchResults, isLoading: searchLoading, active: searching } = useGroupSearch(
+    relayUrl,
+    groupId,
+    searchQuery,
+  );
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
-  const [highlightId, setHighlightId] = useState<string | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
 
@@ -259,18 +262,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchOpen
     isAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
   }, []);
 
-  // Scroll a message into view (e.g. picked from search) and briefly highlight
-  // it. Disables auto-scroll-to-bottom so we don't immediately jump away.
-  const scrollToMessage = useCallback((event: NostrEvent) => {
-    isAutoScrollRef.current = false;
-    setHighlightId(event.id);
-    requestAnimationFrame(() => {
-      const el = scrollRef.current?.querySelector(`[data-message-id="${event.id}"]`);
-      el?.scrollIntoView({ block: "center", behavior: "smooth" });
-    });
-    setTimeout(() => setHighlightId((cur) => (cur === event.id ? undefined : cur)), 2000);
-  }, []);
-
   const handleSent = useCallback(() => {
     setReplyTo(undefined);
     isAutoScrollRef.current = true;
@@ -293,21 +284,45 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchOpen
 
   return (
     <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
-      {searchOpen && (
-        <GroupSearchPanel
-          relayUrl={relayUrl}
-          groupId={groupId}
-          onClose={() => onCloseSearch?.()}
-          onPick={scrollToMessage}
-        />
-      )}
-      {/* Messages */}
+      {/* Messages (or search results, filtered in-place) */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
         className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-3 py-4 space-y-1"
       >
-        {isLoading ? (
+        {searching ? (
+          searchLoading ? (
+            <div className="flex justify-center py-10">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : searchResults.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <Search className="size-9 text-muted-foreground/40 mb-3" />
+              <p className="text-sm text-muted-foreground">No messages found</p>
+            </div>
+          ) : (
+            <>
+              <p className="px-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
+              </p>
+              {[...searchResults]
+                .sort((a, b) => a.created_at - b.created_at)
+                .map((msg) => (
+                  <ChatMessage
+                    key={msg.id}
+                    event={msg}
+                    relayUrl={relayUrl}
+                    groupId={groupId}
+                    canWrite={Boolean(user && canWrite)}
+                    canModerate={canModerate}
+                    highlight={searchQuery}
+                    onDelete={(eventId) => deleteEvent.mutate({ eventId })}
+                    onReply={setReplyTo}
+                  />
+                ))}
+            </>
+          )
+        ) : isLoading ? (
           <div className="space-y-3 p-2">
             {Array.from({ length: 8 }).map((_, i) => (
               <div key={i} className="flex items-start gap-3">
@@ -335,7 +350,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchOpen
               canWrite={Boolean(user && canWrite)}
               canModerate={canModerate}
               sendStatus={sendStatus[msg.id]}
-              highlight={highlightId === msg.id}
               onRetry={() => handleRetry(msg)}
               onDiscard={() => removeOptimistic(msg.id)}
               onDelete={(eventId) => deleteEvent.mutate({ eventId })}
@@ -345,8 +359,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchOpen
         )}
       </div>
 
-      {/* Composer */}
-      {user && canWrite ? (
+      {/* Composer — hidden while showing search results. */}
+      {searching ? null : user && canWrite ? (
         <ChatComposer
           relayUrl={relayUrl}
           groupId={groupId}

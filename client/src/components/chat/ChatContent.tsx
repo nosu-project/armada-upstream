@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 
 import type { AddrCoords } from "@/hooks/useEvent";
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { ReactNode } from "react";
 
 interface ChatContentProps {
   event: NostrEvent;
@@ -28,6 +29,8 @@ interface ChatContentProps {
   /** When true, nested nostr:nevent/note/naddr embeds render as inline links
    *  instead of cards. Used inside embedded cards to prevent recursion. */
   disableNoteEmbeds?: boolean;
+  /** When set, occurrences of this term in plain text are highlighted. */
+  highlight?: string;
 }
 
 /** Bech32 charset used by NIP-19 identifiers. */
@@ -66,6 +69,43 @@ type ContentToken =
   | { type: "hashtag"; tag: string; raw: string }
   | { type: "relay-link"; url: string }
   | { type: "lightning-invoice"; invoice: string };
+
+/**
+ * Render text with a highlighted search term, after custom-emoji replacement.
+ * Splits on case-insensitive occurrences of `term`, emojifies each segment,
+ * and wraps the matched segments in a `<mark>`.
+ */
+function highlightText(
+  text: string,
+  term: string | undefined,
+  emojiMap: Map<string, string>,
+  imgClassName?: string,
+): ReactNode[] {
+  if (!term || !term.trim()) return emojify(text, emojiMap, imgClassName);
+
+  const needle = term.trim().toLowerCase();
+  const out: ReactNode[] = [];
+  const hay = text.toLowerCase();
+  let from = 0;
+  let key = 0;
+
+  for (;;) {
+    const idx = hay.indexOf(needle, from);
+    if (idx === -1) {
+      out.push(...emojify(text.slice(from), emojiMap, imgClassName));
+      break;
+    }
+    if (idx > from) out.push(...emojify(text.slice(from, idx), emojiMap, imgClassName));
+    out.push(
+      <mark key={`hl-${key++}`} className="bg-primary/30 text-foreground rounded-[2px]">
+        {emojify(text.slice(idx, idx + needle.length), emojiMap, imgClassName)}
+      </mark>,
+    );
+    from = idx + needle.length;
+  }
+
+  return out;
+}
 
 /**
  * Regex segment matching a single visual emoji unit (ZWJ sequences, skin
@@ -111,7 +151,7 @@ const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 1111, 1222, 1244]);
  * cards), nostr: URIs (mentions, embedded note/naddr cards), hashtags,
  * NIP-30 custom emoji, and lightning invoices.
  */
-export function ChatContent({ event, className, disableNoteEmbeds = false }: ChatContentProps) {
+export function ChatContent({ event, className, disableNoteEmbeds = false, highlight }: ChatContentProps) {
   const tokens = useMemo(() => {
     const text = event.content;
 
@@ -462,8 +502,9 @@ export function ChatContent({ event, className, disableNoteEmbeds = false }: Cha
           case "text":
             return (
               <span key={i}>
-                {emojify(
+                {highlightText(
                   token.value,
+                  highlight,
                   emojiMap,
                   isEmojiOnly ? "inline h-10 w-10 object-contain align-text-bottom" : undefined,
                 )}

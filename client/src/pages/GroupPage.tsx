@@ -1,4 +1,4 @@
-import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Search, Settings2, UserPlus, Users, Volume2 } from "lucide-react";
+import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Search, Settings2, UserPlus, Users, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -105,8 +105,9 @@ export function GroupPage() {
   /** Whether the desktop member roster is shown (toggled from the header). */
   const [membersVisible, setMembersVisible] = useState(true);
   const [channelsOpen, setChannelsOpen] = useState(false);
-  /** Whether the in-channel message search panel is open. */
+  /** Whether the header search bar is expanded, and its current query text. */
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   /** Server whose channels are shown in the mobile drawer (defaults to current). */
   const [drawerServer, setDrawerServer] = useState(relayUrl ?? "");
 
@@ -114,6 +115,16 @@ export function GroupPage() {
     () => Boolean(user && details?.admins.some((a) => a.pubkey === user.pubkey)),
     [user, details?.admins],
   );
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // Focus the search field when it expands.
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+  }, []);
 
   if (!relayUrl || !groupId) {
     return <Navigate to="/" replace />;
@@ -204,7 +215,7 @@ export function GroupPage() {
               <TooltipContent>Join voice</TooltipContent>
             </Tooltip>
           )}
-          {/* Search messages in this channel. */}
+          {/* Search messages in this channel — expands inline below. */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -213,7 +224,7 @@ export function GroupPage() {
                 aria-label="Search messages"
                 aria-pressed={searchOpen}
                 className={cn("size-8 text-muted-foreground", searchOpen && "text-foreground")}
-                onClick={() => setSearchOpen((v) => !v)}
+                onClick={() => setSearchOpen(true)}
               >
                 <Search className="size-4" />
               </Button>
@@ -293,6 +304,41 @@ export function GroupPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+
+          {/* Inline search bar: smoothly expands across the header (covering the
+              title and actions) when open. On mobile it leaves the menu button
+              visible; on desktop it covers the full bar. An X dismisses it. */}
+          <div
+            className={cn(
+              "absolute inset-y-0 right-0 z-10 flex items-center gap-1.5 px-2 sidebar:px-3",
+              "bg-chrome clip-corner-lg overflow-hidden",
+              "transition-[left] duration-300 ease-in-out",
+              searchOpen
+                ? "left-10 sidebar:left-0 pointer-events-auto"
+                : "left-full pointer-events-none",
+            )}
+          >
+            <Search className="size-4 text-muted-foreground shrink-0" />
+            <Input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") closeSearch();
+              }}
+              placeholder="Search this channel…"
+              className="h-8 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Close search"
+              className="size-8 shrink-0 text-muted-foreground"
+              onClick={closeSearch}
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
         </header>
 
         {/* Join banner */}
@@ -310,8 +356,7 @@ export function GroupPage() {
             groupId={groupId}
             canWrite={canWrite}
             canModerate={isAdmin}
-            searchOpen={searchOpen}
-            onCloseSearch={() => setSearchOpen(false)}
+            searchQuery={searchOpen ? searchQuery : ""}
           />
           <div
             className={cn(
