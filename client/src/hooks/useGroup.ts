@@ -7,10 +7,12 @@ import {
   KIND_GROUP_MEMBERS,
   KIND_GROUP_METADATA,
   KIND_GROUP_ROLES,
+  KIND_PUT_USER,
+  KIND_REMOVE_USER,
   parseGroupAdmins,
-  parseGroupMembers,
   parseGroupMetadata,
   parseGroupRoles,
+  resolveGroupMembers,
   type Nip29Admin,
   type Nip29Group,
   type Nip29Role,
@@ -37,17 +39,32 @@ export function useGroup(relayUrl: string | undefined, groupId: string | undefin
     queryKey: ["nip29", "group", relayUrl, groupId, relaySelf ?? "any"],
     queryFn: async ({ signal }) => {
       const events = await nostr.relay(relayUrl!).query(
-        [{
-          kinds: [KIND_GROUP_METADATA, KIND_GROUP_ADMINS, KIND_GROUP_MEMBERS, KIND_GROUP_ROLES],
-          "#d": [groupId!],
-          ...(relaySelf ? { authors: [relaySelf] } : {}),
-        }],
+        [
+          {
+            kinds: [KIND_GROUP_METADATA, KIND_GROUP_ADMINS, KIND_GROUP_MEMBERS, KIND_GROUP_ROLES],
+            "#d": [groupId!],
+            ...(relaySelf ? { authors: [relaySelf] } : {}),
+          },
+          // Live membership moderation events. The relay only regenerates its
+          // kind 39002 members snapshot on changes, so fold these in to keep the
+          // roster current (see resolveGroupMembers / Flotilla's getRoomMembers).
+          {
+            kinds: [KIND_PUT_USER, KIND_REMOVE_USER],
+            "#h": [groupId!],
+            limit: 500,
+          },
+        ],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
 
-      // Keep only the newest event per kind.
+      // Keep only the newest addressable/relay-signed event per kind.
       const newest = new Map<number, typeof events[number]>();
+      const addRemoveEvents: typeof events = [];
       for (const event of events) {
+        if (event.kind === KIND_PUT_USER || event.kind === KIND_REMOVE_USER) {
+          addRemoveEvents.push(event);
+          continue;
+        }
         const existing = newest.get(event.kind);
         if (!existing || existing.created_at < event.created_at) {
           newest.set(event.kind, event);
@@ -62,7 +79,7 @@ export function useGroup(relayUrl: string | undefined, groupId: string | undefin
       return {
         group: metadataEvent ? parseGroupMetadata(metadataEvent, relayUrl!) : undefined,
         admins: adminsEvent ? parseGroupAdmins(adminsEvent) : [],
-        members: membersEvent ? parseGroupMembers(membersEvent) : [],
+        members: resolveGroupMembers(groupId!, membersEvent, addRemoveEvents),
         roles: rolesEvent ? parseGroupRoles(rolesEvent) : [],
       };
     },
