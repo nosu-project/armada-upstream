@@ -167,6 +167,16 @@ interface ChatComposerProps {
   onCancelReply?: () => void;
   /** Called after a message is successfully sent. */
   onSent?: () => void;
+  /**
+   * When provided, the composer sends via this callback (with the final text,
+   * including any appended attachment URLs) instead of publishing a NIP-29
+   * kind-9 group message. Used by DMs, where the whole content is encrypted
+   * and NIP-29 group tagging / polls don't apply. Poll mode is hidden in this
+   * mode. The returned promise resolving means "sent" (composer is reset).
+   */
+  sendOverride?: (finalText: string) => Promise<void>;
+  /** Placeholder text for the input (defaults to the group placeholder). */
+  placeholder?: string;
 }
 
 /**
@@ -174,8 +184,12 @@ interface ChatComposerProps {
  * and :shortcode: autocomplete, emoji/GIF/sticker pickers, media uploads with
  * NIP-92 imeta tags, paste-to-upload, voice messages, NIP-88 polls, replies,
  * NIP-18 quotes, and per-channel drafts.
+ *
+ * With `sendOverride` it doubles as a generic rich composer (e.g. DMs): the
+ * same input/upload/picker UX, but sending is delegated to the caller and
+ * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
@@ -612,12 +626,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     if (!finalText || !user || isSending || finalText.length > MAX_CHARS) return;
 
     try {
-      await createEvent({
-        kind: KIND_GROUP_CHAT,
-        content: finalText,
-        tags: buildMessageTags(finalText),
-        relay: relayUrl,
-      });
+      if (sendOverride) {
+        // Delegated send (e.g. DMs): the caller owns publishing. The whole
+        // text is sent as-is (NIP-29 tagging / polls don't apply here).
+        await sendOverride(finalText);
+      } else {
+        await createEvent({
+          kind: KIND_GROUP_CHAT,
+          content: finalText,
+          tags: buildMessageTags(finalText),
+          relay: relayUrl,
+        });
+      }
       resetComposeState();
       onSent?.();
     } catch {
@@ -627,7 +647,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         variant: "destructive",
       });
     }
-  }, [content, attachments, user, isSending, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast]);
+  }, [content, attachments, user, isSending, sendOverride, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast]);
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;
@@ -937,8 +957,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                         setPlusOpen(false);
                         textareaRef.current?.focus();
                       }}
+                      hidden={Boolean(sendOverride)}
                       className={cn(
                         "flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm transition-colors",
+                        sendOverride && "hidden",
                         mode === "poll"
                           ? "text-primary bg-primary/10"
                           : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
@@ -960,7 +982,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   onChange={(e) => setContent(e.target.value)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
-                  placeholder={mode === "poll" ? "Ask a question…" : "Message the channel…"}
+                  placeholder={mode === "poll" ? "Ask a question…" : (placeholder ?? "Message the channel…")}
                   rows={1}
                   maxLength={MAX_CHARS}
                   className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto align-middle"
@@ -1000,7 +1022,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </Tooltip>
 
               {/* Mic when empty, send when there's something to send (Signal-style) */}
-              {mode === "post" && !hasContent && voiceRecorder.isSupported ? (
+              {mode === "post" && !hasContent && !sendOverride && voiceRecorder.isSupported ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button

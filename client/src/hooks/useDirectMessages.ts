@@ -2,22 +2,14 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { PLATFORM_RELAYS } from "@/lib/platform";
+import { effectiveDmRelays } from "@/contexts/AppContext";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /** NIP-04 encrypted direct message kind. */
 export const KIND_DM = 4;
-
-/**
- * The relay DMs live on. DMs are stored on the Armada platform relay, which
- * enforces NIP-42 auth and the participant-only read guard (see server/
- * unmanaged.go). The first platform relay is the home relay.
- */
-export function dmRelay(): string {
-  return PLATFORM_RELAYS[0];
-}
 
 /** The other participant of a DM event, from the viewer's perspective. */
 export function dmCounterparty(event: NostrEvent, self: string): string | undefined {
@@ -48,17 +40,19 @@ export function useDMSupport(): boolean {
 export function useDMConversations() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const queryClient = useQueryClient();
-  const relayUrl = dmRelay();
+  const relays = effectiveDmRelays(config);
+  const relayKey = relays.join(",");
 
-  const queryKey = ["dm", "conversations", user?.pubkey];
+  const queryKey = ["dm", "conversations", user?.pubkey, relayKey];
 
   const query = useQuery<NostrEvent[]>({
     queryKey,
     enabled: !!user?.pubkey,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
-      const events = await nostr.relay(relayUrl).query(
+      const events = await nostr.group(relays).query(
         [
           { kinds: [KIND_DM], authors: [pubkey], limit: 500 },
           { kinds: [KIND_DM], "#p": [pubkey], limit: 500 },
@@ -79,7 +73,7 @@ export function useDMConversations() {
 
     (async () => {
       try {
-        for await (const msg of nostr.relay(relayUrl).req(
+        for await (const msg of nostr.group(relays).req(
           [
             { kinds: [KIND_DM], authors: [pubkey], since },
             { kinds: [KIND_DM], "#p": [pubkey], since },
@@ -99,9 +93,8 @@ export function useDMConversations() {
     })();
 
     return () => controller.abort();
-    // queryKey is derived from user.pubkey; relayUrl is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, relayUrl, queryClient]);
+  }, [nostr, user?.pubkey, relayKey, queryClient]);
 
   const self = user?.pubkey ?? "";
 
@@ -130,11 +123,13 @@ export function useDMConversations() {
 export function useDirectMessages(peer: string | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const queryClient = useQueryClient();
-  const relayUrl = dmRelay();
+  const relays = effectiveDmRelays(config);
+  const relayKey = relays.join(",");
 
   const self = user?.pubkey;
-  const queryKey = ["dm", "thread", self, peer];
+  const queryKey = ["dm", "thread", self, peer, relayKey];
 
   const query = useQuery<DecryptedDM[]>({
     queryKey,
@@ -142,7 +137,7 @@ export function useDirectMessages(peer: string | undefined) {
     queryFn: async ({ signal }) => {
       const nip04 = user!.signer.nip04!;
       // Both directions of the conversation.
-      const events = await nostr.relay(relayUrl).query(
+      const events = await nostr.group(relays).query(
         [
           { kinds: [KIND_DM], authors: [self!], "#p": [peer!] },
           { kinds: [KIND_DM], authors: [peer!], "#p": [self!] },
@@ -178,7 +173,7 @@ export function useDirectMessages(peer: string | undefined) {
 
     (async () => {
       try {
-        for await (const msg of nostr.relay(relayUrl).req(
+        for await (const msg of nostr.group(relays).req(
           [
             { kinds: [KIND_DM], authors: [self], "#p": [peer], since },
             { kinds: [KIND_DM], authors: [peer], "#p": [self], since },
@@ -213,7 +208,7 @@ export function useDirectMessages(peer: string | undefined) {
 
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, self, peer, user?.signer.nip04, relayUrl, queryClient]);
+  }, [nostr, self, peer, user?.signer.nip04, relayKey, queryClient]);
 
   const send = useMutation({
     mutationFn: async (text: string) => {
@@ -230,7 +225,7 @@ export function useDirectMessages(peer: string | undefined) {
         created_at: Math.floor(Date.now() / 1000),
       });
 
-      await nostr.relay(relayUrl).event(event, { signal: AbortSignal.timeout(8000) });
+      await nostr.group(relays).event(event, { signal: AbortSignal.timeout(8000) });
 
       // Optimistically render the sent message.
       queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>

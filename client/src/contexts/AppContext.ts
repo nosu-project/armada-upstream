@@ -42,6 +42,17 @@ export interface AppConfig {
    * back to the app relays.
    */
   searchRelays: string[];
+  /**
+   * Whether to use the user's own DM relays (`dmRelays`) instead of the
+   * default app relays for direct messages. Off by default — DMs use the
+   * app relay unless the user opts in.
+   */
+  useOwnDmRelays: boolean;
+  /**
+   * The user's custom direct-message relays, used only when
+   * `useOwnDmRelays` is true. Seeded from the app relays.
+   */
+  dmRelays: string[];
 }
 
 export interface AppContextType {
@@ -55,6 +66,21 @@ export const defaultConfig: AppConfig = {
   addedRelays: [],
   appRelays: [...APP_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
+  useOwnDmRelays: false,
+  dmRelays: [...APP_RELAYS],
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
+
+/**
+ * The relays direct messages read from and write to. Defaults to the app
+ * relays; switches to the user's own DM relays only when they opt in (and
+ * have configured at least one). Falls back to the app relays if the custom
+ * list is empty.
+ */
+export function effectiveDmRelays(config: AppConfig): string[] {
+  if (config.useOwnDmRelays && config.dmRelays.length > 0) {
+    return config.dmRelays;
+  }
+  return config.appRelays;
+}

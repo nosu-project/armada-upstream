@@ -63,6 +63,8 @@ export function NostrSync() {
       ...(settings.addedRelays !== undefined ? { addedRelays: settings.addedRelays } : {}),
       ...(settings.appRelays !== undefined ? { appRelays: settings.appRelays } : {}),
       ...(settings.searchRelays !== undefined ? { searchRelays: settings.searchRelays } : {}),
+      ...(settings.useOwnDmRelays !== undefined ? { useOwnDmRelays: settings.useOwnDmRelays } : {}),
+      ...(settings.dmRelays !== undefined ? { dmRelays: settings.dmRelays } : {}),
     }));
 
     setLocalSettingsSync(user.pubkey, remoteTs);

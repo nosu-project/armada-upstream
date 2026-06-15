@@ -34,6 +34,8 @@ export const AppConfigSchema = z.object({
   addedRelays: z.array(z.string()).catch([]),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
+  useOwnDmRelays: z.boolean().catch(defaultConfig.useOwnDmRelays),
+  dmRelays: z.array(z.string()).catch(defaultConfig.dmRelays),
 });
 
 /**
@@ -51,6 +53,10 @@ export const EncryptedSettingsSchema = z.looseObject({
   appRelays: z.array(z.string()).optional(),
   /** NIP-50 search relays. */
   searchRelays: z.array(z.string()).optional(),
+  /** Whether DMs use the user's own relays instead of the app relays. */
+  useOwnDmRelays: z.boolean().optional(),
+  /** The user's custom DM relays. */
+  dmRelays: z.array(z.string()).optional(),
   /** ms timestamp of the last write, used to resolve sync conflicts. */
   lastSync: z.number().optional(),
 });

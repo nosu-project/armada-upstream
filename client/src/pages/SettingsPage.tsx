@@ -6,6 +6,7 @@ import { RelayListEditor } from "@/components/RelayListEditor";
 import { ThemeSelector } from "@/components/ThemeSelector";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
 import { APP_NAME, APP_RELAYS, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
@@ -19,11 +20,20 @@ export function SettingsPage() {
   const { updateSettings, hasNip44Support } = useEncryptedSettings();
 
   /** Update a relay field locally and sync to encrypted settings when logged in. */
-  const setRelays = (key: "addedRelays" | "appRelays" | "searchRelays") => (relays: string[]) => {
+  const setRelays = (key: "addedRelays" | "appRelays" | "searchRelays" | "dmRelays") => (relays: string[]) => {
     updateConfig((current) => ({ ...current, [key]: relays }));
     if (hasNip44Support) {
       updateSettings({ [key]: relays } as Partial<EncryptedSettings>).catch((err) =>
         console.warn("Relay sync failed:", err));
+    }
+  };
+
+  /** Toggle whether DMs use the user's own relays; sync to encrypted settings. */
+  const setUseOwnDmRelays = (value: boolean) => {
+    updateConfig((current) => ({ ...current, useOwnDmRelays: value }));
+    if (hasNip44Support) {
+      updateSettings({ useOwnDmRelays: value }).catch((err) =>
+        console.warn("DM relay setting sync failed:", err));
     }
   };
 
@@ -115,6 +125,31 @@ export function SettingsPage() {
               onReset={() => setRelays("searchRelays")([...SEARCH_RELAYS])}
               emptyText="No search relays — search falls back to your app relays."
             />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Direct messages</CardTitle>
+            <CardDescription>
+              Direct messages use your app relays by default. Turn this on to store and read
+              DMs on your own relays instead.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <label className="flex items-center justify-between gap-4 cursor-pointer">
+              <span className="text-sm font-medium">Use my own DM relays</span>
+              <Switch checked={config.useOwnDmRelays} onCheckedChange={setUseOwnDmRelays} />
+            </label>
+            {config.useOwnDmRelays && (
+              <RelayListEditor
+                relays={config.dmRelays}
+                onChange={setRelays("dmRelays")}
+                onReset={() => setRelays("dmRelays")([...APP_RELAYS])}
+                emptyText="No DM relays — add at least one, or DMs fall back to your app relays."
+                placeholder="wss://dm-relay.example.com"
+              />
+            )}
           </CardContent>
         </Card>
       </div>

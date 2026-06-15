@@ -1,8 +1,9 @@
-import { ArrowUpRight, Loader2, MessageSquare, Plus, X } from "lucide-react";
+import { Loader2, MessageSquare, Plus, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
 
+import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -99,30 +100,29 @@ function Conversation({ peer }: { peer: string }) {
   const { user } = useCurrentUser();
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
-  const { messages, isLoading, send, isSending } = useDirectMessages(peer);
+  const { messages, isLoading, send } = useDirectMessages(peer);
   const { toast } = useToast();
-  const [text, setText] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
-  const handleSend = useCallback(async () => {
-    const value = text.trim();
-    if (!value || isSending) return;
-    setText("");
-    try {
-      await send(value);
-    } catch (e) {
-      setText(value);
-      toast({
-        title: "Message not sent",
-        description: e instanceof Error ? e.message : "The relay rejected the message.",
-        variant: "destructive",
-      });
-    }
-  }, [text, isSending, send, toast]);
+  const handleSubmit = useCallback(
+    async (text: string) => {
+      try {
+        await send(text);
+      } catch (e) {
+        toast({
+          title: "Message not sent",
+          description: e instanceof Error ? e.message : "The relay rejected the message.",
+          variant: "destructive",
+        });
+        throw e; // keep the composer's content so the user can retry
+      }
+    },
+    [send, toast],
+  );
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -153,36 +153,13 @@ function Conversation({ peer }: { peer: string }) {
         )}
       </div>
 
-      <div className="p-2 shrink-0 pb-[env(safe-area-inset-bottom,0px)]">
-        <div className="flex items-end gap-1 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder={`Message ${name}…`}
-            rows={1}
-            className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground max-h-40"
-          />
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={!text.trim() || isSending}
-            aria-label="Send message"
-            className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9"
-          >
-            {isSending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <ArrowUpRight className="size-5" strokeWidth={2.5} />
-            )}
-          </button>
-        </div>
-      </div>
+      <ChatComposer
+        relayUrl="dm"
+        groupId={peer}
+        messages={[]}
+        placeholder={`Message ${name}…`}
+        sendOverride={handleSubmit}
+      />
     </div>
   );
 }
@@ -284,7 +261,7 @@ export function DMsPage() {
       {/* Conversation list pane — full screen on mobile when no peer selected. */}
       <aside
         className={cn(
-          "relative flex flex-col w-full sidebar:w-72 shrink-0 bg-chrome-deep safe-area-top",
+          "relative flex flex-col w-full sidebar:w-60 shrink-0 bg-chrome safe-area-top",
           activePeer && "hidden sidebar:flex",
         )}
       >
