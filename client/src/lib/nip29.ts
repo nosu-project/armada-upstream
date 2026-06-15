@@ -176,42 +176,6 @@ export function parseGroupMembers(event: NostrEvent): string[] {
     .map(([, pubkey]) => pubkey);
 }
 
-/**
- * Resolve a group's current members by folding the relay's kind 39002 snapshot
- * together with the live kind 9000 (put-user) / 9001 (remove-user) moderation
- * events. Relays (e.g. zooid) only regenerate the 39002 snapshot on membership
- * changes, so a member admitted via a 9000 event may not yet appear in the
- * latest snapshot the client has cached. Replaying add/remove on top — in
- * chronological order — keeps the roster current, matching Flotilla's
- * `getRoomMembers`.
- */
-export function resolveGroupMembers(
-  groupId: string,
-  membersSnapshot: NostrEvent | undefined,
-  addRemoveEvents: NostrEvent[],
-): string[] {
-  const members = new Set<string>(membersSnapshot ? parseGroupMembers(membersSnapshot) : []);
-  const snapshotAt = membersSnapshot?.created_at ?? 0;
-
-  // Only events newer than the snapshot can change its truth; older add/removes
-  // are already reflected in the snapshot the relay generated.
-  const relevant = addRemoveEvents
-    .filter((e) => (e.kind === KIND_PUT_USER || e.kind === KIND_REMOVE_USER)
-      && getGroupId(e) === groupId
-      && e.created_at >= snapshotAt)
-    .sort((a, b) => a.created_at - b.created_at);
-
-  for (const event of relevant) {
-    for (const [n, pubkey] of event.tags) {
-      if (n !== "p" || !HEX64.test(pubkey ?? "")) continue;
-      if (event.kind === KIND_PUT_USER) members.add(pubkey);
-      else members.delete(pubkey);
-    }
-  }
-
-  return [...members];
-}
-
 /** Parse a kind 39003 group-roles event. */
 export function parseGroupRoles(event: NostrEvent): Nip29Role[] {
   if (event.kind !== KIND_GROUP_ROLES) return [];
