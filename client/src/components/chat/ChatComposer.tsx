@@ -442,6 +442,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       // ignore
     }
     onCancelReply?.();
+    // Keep the composer focused after sending so the user can immediately type
+    // the next message (clicking the send button otherwise drops focus).
+    requestAnimationFrame(() => textareaRef.current?.focus());
   }, [draftKey, onCancelReply]);
 
   const handleFileUpload = useCallback(async (file: File) => {
