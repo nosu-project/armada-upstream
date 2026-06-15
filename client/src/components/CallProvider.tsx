@@ -1,6 +1,7 @@
 import { LiveKitRoom, RoomAudioRenderer } from "@livekit/components-react";
+import { DisconnectReason, type RoomOptions } from "livekit-client";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 
@@ -14,6 +15,7 @@ import { useLivekitToken } from "@/hooks/useLivekit";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { CallContext, type ActiveCall } from "@/contexts/CallContext";
 import { relayToRouteParam } from "@/lib/platform";
+import { getPreferredMicId } from "@/lib/voiceDevices";
 import { cn } from "@/lib/utils";
 
 /**
@@ -43,7 +45,31 @@ function PersistentVoiceRoom({
   const channelName = details?.group?.name ?? "voice";
   const serverName = relayInfo?.name ?? call.relayUrl.replace(/^wss?:\/\//, "");
 
-  const handleDisconnected = useCallback(() => onLeave(), [onLeave]);
+  const handleDisconnected = useCallback(
+    (reason?: DisconnectReason) => {
+      // LiveKit only fires onDisconnected after its built-in reconnection has
+      // been exhausted (or on a terminal reason like the room being closed or
+      // the participant removed), so by the time we get here the call is truly
+      // over and we tear it down. The reason is logged to aid debugging the
+      // "voice silently drops" class of issues documented in AGENTS.md.
+      if (reason !== undefined && reason !== DisconnectReason.CLIENT_INITIATED) {
+        console.warn("voice disconnected", { reason: DisconnectReason[reason] ?? reason });
+      }
+      onLeave();
+    },
+    [onLeave],
+  );
+
+  // Apply the user's remembered microphone so a call opens on their chosen
+  // input device. Recomputed per mount (rooms remount on channel switch).
+  const roomOptions = useMemo<RoomOptions>(() => {
+    const micId = getPreferredMicId();
+    return {
+      adaptiveStream: true,
+      dynacast: true,
+      audioCaptureDefaults: micId ? { deviceId: micId } : undefined,
+    };
+  }, []);
 
   const goToChannel = () => {
     navigate(`/s/${relayToRouteParam(call.relayUrl)}/${encodeURIComponent(call.groupId)}`);
@@ -127,6 +153,7 @@ function PersistentVoiceRoom({
       connect
       audio
       video={false}
+      options={roomOptions}
       onDisconnected={handleDisconnected}
       // `display: contents` so the room container generates no box of its own:
       // it must not take flex space or paint a background over the chat. The

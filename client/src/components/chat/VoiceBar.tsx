@@ -2,19 +2,29 @@ import {
   DisconnectButton,
   useConnectionState,
   useLocalParticipant,
+  useMediaDeviceSelect,
   useParticipants,
   useTracks,
 } from "@livekit/components-react";
 import { ConnectionState, Track } from "livekit-client";
-import { Headphones, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
+import { Check, Headphones, Loader2, Mic, MicOff, PhoneOff, Settings2, Volume2 } from "lucide-react";
 
 import "@livekit/components-styles";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { pubkeyFromLivekitIdentity } from "@/hooks/useLivekit";
+import { rememberVoiceDevice } from "@/lib/voiceDevices";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
@@ -42,6 +52,85 @@ function ParticipantAvatar({ pubkey, isSpeaking }: { pubkey: string; isSpeaking?
       </TooltipTrigger>
       <TooltipContent>{displayName}</TooltipContent>
     </Tooltip>
+  );
+}
+
+/** Whether this browser supports choosing the audio output (speaker) sink. */
+const supportsSpeakerSelection =
+  typeof document !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+
+function DeviceSelectGroup({
+  kind,
+  label,
+  icon,
+}: {
+  kind: MediaDeviceKind;
+  label: string;
+  icon: React.ReactNode;
+}) {
+  // `requestPermissions` enumerates labelled devices (needs an active mic grant,
+  // which we already have once in a call). Selecting persists the choice.
+  const { devices, activeDeviceId, setActiveMediaDevice } = useMediaDeviceSelect({
+    kind,
+    requestPermissions: true,
+  });
+
+  if (devices.length === 0) return null;
+
+  return (
+    <>
+      <DropdownMenuLabel className="flex items-center gap-2 text-xs">
+        {icon}
+        {label}
+      </DropdownMenuLabel>
+      {devices.map((device) => {
+        const active = device.deviceId === activeDeviceId;
+        return (
+          <DropdownMenuItem
+            key={device.deviceId}
+            onSelect={() => {
+              void setActiveMediaDevice(device.deviceId);
+              rememberVoiceDevice(kind, device.deviceId);
+            }}
+            className="gap-2"
+          >
+            <Check className={cn("size-3.5 shrink-0", active ? "opacity-100" : "opacity-0")} />
+            <span className="truncate">{device.label || "Unnamed device"}</span>
+          </DropdownMenuItem>
+        );
+      })}
+    </>
+  );
+}
+
+/** A gear button opening a mic (and, when supported, speaker) device picker. */
+function DeviceMenu() {
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="icon" className="size-8 shrink-0" aria-label="Audio settings">
+              <Settings2 className="size-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent>Audio settings</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="max-w-72">
+        <DeviceSelectGroup kind="audioinput" label="Microphone" icon={<Mic className="size-3.5" />} />
+        {supportsSpeakerSelection && (
+          <>
+            <DropdownMenuSeparator />
+            <DeviceSelectGroup
+              kind="audiooutput"
+              label="Speaker"
+              icon={<Volume2 className="size-3.5" />}
+            />
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -73,6 +162,15 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
       <div className="flex items-center justify-center gap-2 px-3 py-2 min-h-12">
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
         <span className="text-sm text-muted-foreground">Connecting to voice…</span>
+      </div>
+    );
+  }
+
+  if (connectionState === ConnectionState.Reconnecting) {
+    return (
+      <div className="flex items-center justify-center gap-2 px-3 py-2 min-h-12">
+        <Loader2 className="size-4 animate-spin text-amber-500" />
+        <span className="text-sm text-amber-500">Reconnecting…</span>
       </div>
     );
   }
@@ -132,6 +230,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
         <div className="flex items-center gap-2">
           {participantsEl}
           {micBtn}
+          <DeviceMenu />
           {hangupBtn}
         </div>
       </div>
@@ -143,6 +242,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
       {labelEl && <span className="shrink-0 max-w-40 truncate">{labelEl}</span>}
       {participantsEl}
       {micBtn}
+      <DeviceMenu />
       {hangupBtn}
     </div>
   );
