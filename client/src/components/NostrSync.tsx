@@ -10,6 +10,7 @@ import {
   useEncryptedSettings,
 } from "@/hooks/useEncryptedSettings";
 import { useTheme } from "@/hooks/useTheme";
+import { useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { PLATFORM_RELAYS } from "@/lib/platform";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
@@ -35,6 +36,7 @@ export function NostrSync() {
   const { config, updateConfig } = useAppContext();
   const { settings } = useEncryptedSettings();
   const { data: groupList } = useUserGroupList();
+  const { hydrate: hydrateReadState } = useReadState();
   const { applyCustomTheme } = useTheme();
 
   const lastAppliedPubkey = useRef<string | undefined>(undefined);
@@ -76,6 +78,14 @@ export function NostrSync() {
     setLocalSettingsSync(user.pubkey, remoteTs);
     lastAppliedPubkey.current = user.pubkey;
   }, [user?.pubkey, settings, updateConfig]);
+
+  // ─── 1a. Read-state (unread/mention) → local read-state cache ─────────
+  // Merge-hydrate (max timestamp wins) so synced reads from other devices
+  // mark conversations read here too. Safe to run on every settings change.
+  useEffect(() => {
+    if (!user?.pubkey || !settings?.readState) return;
+    hydrateReadState(settings.readState);
+  }, [user?.pubkey, settings?.readState, hydrateReadState]);
 
   // ─── 1b. NIP-29 server list (kind 10009 `r` tags) → addedRelays cache ──
   // The 10009 list is the cross-device source of truth for added servers;

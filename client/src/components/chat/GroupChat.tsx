@@ -18,6 +18,7 @@ import { useEvent } from "@/hooks/useEvent";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useReactions } from "@/hooks/useReactions";
+import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 
@@ -170,11 +171,30 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupCha
   const { user } = useCurrentUser();
   const { data: messages = [], isLoading } = useGroupMessages(relayUrl, groupId);
   const { deleteEvent } = useGroupModeration(relayUrl, groupId);
+  const { markRead } = useReadState();
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
+
+  // Mark the channel read up to the newest message while it's on screen. Only
+  // when the document is visible so a backgrounded tab doesn't silently clear
+  // unread. Re-runs on focus and as new messages stream in.
+  useEffect(() => {
+    if (!user || messages.length === 0) return;
+    const latest = messages[messages.length - 1]?.created_at ?? 0;
+    if (latest <= 0) return;
+
+    const stamp = () => {
+      if (document.visibilityState === "visible") {
+        markRead(channelReadKey(relayUrl, groupId), latest);
+      }
+    };
+    stamp();
+    document.addEventListener("visibilitychange", stamp);
+    return () => document.removeEventListener("visibilitychange", stamp);
+  }, [user, messages, relayUrl, groupId, markRead]);
 
   // Auto-scroll to bottom when new messages arrive (unless user scrolled up).
   useEffect(() => {

@@ -9,7 +9,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
+import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
+import { useRelayUnread } from "@/hooks/useRelayUnread";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +42,10 @@ function ServerButton({
   inCall?: boolean;
 }) {
   const { data: info } = useRelayInfo(url);
+  const { user } = useCurrentUser();
+  const { data: groups } = useRelayGroups(user ? url : undefined);
+  const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
+  const { anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
   const host = relayHost(url);
   const name = info?.name || host;
   const initial = name.trim().charAt(0).toUpperCase() || "?";
@@ -85,6 +92,20 @@ function ServerButton({
             <Headphones className="size-2.5" />
           </span>
         )}
+        {/* Unread / mention indicator (hidden while active — you're reading it). */}
+        {!isActive && anyMention ? (
+          <span
+            className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+            aria-label="You were mentioned"
+          >
+            @
+          </span>
+        ) : !isActive && anyUnread ? (
+          <span
+            className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
+            aria-label="Unread messages"
+          />
+        ) : null}
       </span>
     </>
   );
@@ -143,6 +164,7 @@ export function ServerRail({
   const navigate = useNavigate();
   const { activeCall } = useCall();
   const { user } = useCurrentUser();
+  const hasUnreadDMs = useHasUnreadDMs();
   const [addOpen, setAddOpen] = useState(false);
 
   const servers = useMemo(() => {
@@ -190,6 +212,13 @@ export function ServerRail({
                 >
                   <MessageSquare className="size-5" />
                 </span>
+                {/* Unread DM indicator (hidden on the active DMs view). */}
+                {hasUnreadDMs && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-primary ring-2 ring-background group-aria-[current=page]:hidden"
+                    aria-label="Unread direct messages"
+                  />
+                )}
               </span>
             </NavLink>
           </TooltipTrigger>

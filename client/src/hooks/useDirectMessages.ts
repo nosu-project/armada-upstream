@@ -4,6 +4,7 @@ import { useEffect, useMemo } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -142,6 +143,26 @@ export function useDMConversations() {
     isLoading: query.isLoading,
     error: query.error,
   };
+}
+
+/**
+ * Whether the user has any unread direct messages — the latest message in any
+ * conversation is from the peer and newer than the thread's last-read stamp.
+ * Drives the unread dot on the DMs button in the server rail.
+ */
+export function useHasUnreadDMs(): boolean {
+  const { user } = useCurrentUser();
+  const { conversations } = useDMConversations();
+  const { getLastRead } = useReadState();
+
+  return useMemo(() => {
+    if (!user) return false;
+    return conversations.some(
+      (c) =>
+        c.latest.pubkey !== user.pubkey &&
+        c.latest.created_at > getLastRead(dmReadKey(c.peer)),
+    );
+  }, [user, conversations, getLastRead]);
 }
 
 /**

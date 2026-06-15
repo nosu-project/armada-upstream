@@ -1,5 +1,5 @@
 import { Hash, Headphones, Loader2, Lock, Plus, Volume2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { CreateGroupDialog } from "@/components/dialogs/CreateGroupDialog";
@@ -14,15 +14,26 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
 import { useLivekitParticipants } from "@/hooks/useLivekit";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
+import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
 import { relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 import type { Nip29Group } from "@/lib/nip29";
 
-function ChannelLink({ group, onNavigate }: { group: Nip29Group; onNavigate?: () => void }) {
+function ChannelLink({
+  group,
+  unread,
+  onNavigate,
+}: {
+  group: Nip29Group;
+  unread?: GroupUnread;
+  onNavigate?: () => void;
+}) {
   const { activeCall } = useCall();
   const Icon = group.hasLivekit ? Volume2 : Hash;
   const inCall = activeCall?.relayUrl === group.relay && activeCall?.groupId === group.id;
+  const hasUnread = Boolean(unread);
+  const hasMention = Boolean(unread?.mention);
   // Live presence (kind 39004) so we can show when others are in voice here,
   // even if we haven't joined. Only worth querying for voice-capable groups.
   const { data: participants } = useLivekitParticipants(
@@ -42,6 +53,8 @@ function ChannelLink({ group, onNavigate }: { group: Nip29Group; onNavigate?: ()
           // echoes the console's diagonal.
           "gutter-tick flex items-center gap-2 pl-4 pr-2 py-1.5 text-sm transition-colors",
           "text-muted-foreground hover:text-foreground",
+          // Unread channels read brighter even when not selected.
+          !isActive && hasUnread && "text-foreground font-medium",
           isActive && "is-active text-foreground font-medium",
         )}
     >
@@ -68,6 +81,17 @@ function ChannelLink({ group, onNavigate }: { group: Nip29Group; onNavigate?: ()
         </Tooltip>
       ) : null}
       {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
+      {/* Unread / mention indicator: an "@" pill for mentions, else a dot. */}
+      {hasMention ? (
+        <span
+          className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+          aria-label="You were mentioned"
+        >
+          @
+        </span>
+      ) : hasUnread ? (
+        <span className="shrink-0 size-2 rounded-full bg-foreground" aria-label="Unread messages" />
+      ) : null}
     </NavLink>
   );
 }
@@ -90,6 +114,9 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const [createOpen, setCreateOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [signupOpen, setSignupOpen] = useState(false);
+
+  const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
+  const { byGroup } = useRelayUnread(relayUrl, groupIds);
 
   // Register this sidebar's slot so the persistent call bar portals above the
   // account pill. Every instance (desktop pane + mobile drawer) registers; the
@@ -157,7 +184,9 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
             ))}
           </div>
         ) : groups && groups.length > 0 ? (
-          groups.map((group) => <ChannelLink key={group.id} group={group} onNavigate={onNavigate} />)
+          groups.map((group) => (
+            <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
+          ))
         ) : (
           <div className="px-2 py-8 text-center text-sm text-muted-foreground">
             {groups ? "No channels yet." : (

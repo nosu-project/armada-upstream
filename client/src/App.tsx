@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppProvider } from "@/components/AppProvider";
 import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
+import { ReadStateProvider } from "@/components/ReadStateProvider";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -29,9 +30,11 @@ export function App() {
         <NostrLoginProvider storageKey="armada:login">
           <NostrProvider>
             <TooltipProvider>
-              <NostrSync />
-              <Toaster />
-              <AppRouter />
+              <ReadStateProvider>
+                <NostrSync />
+                <Toaster />
+                <AppRouter />
+              </ReadStateProvider>
             </TooltipProvider>
           </NostrProvider>
         </NostrLoginProvider>

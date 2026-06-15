@@ -55,6 +55,12 @@ export const EncryptedSettingsSchema = z.looseObject({
   useOwnDmRelays: z.boolean().optional(),
   /** The user's custom DM relays. */
   dmRelays: z.array(z.string()).optional(),
+  /**
+   * Per-conversation last-read timestamps (unix seconds), keyed by a stable
+   * conversation id (e.g. `${relayUrl}::${groupId}` for channels, `dm:${pubkey}`
+   * for direct messages). Drives unread/mention badges across devices.
+   */
+  readState: z.record(z.string(), z.number()).optional(),
   /** ms timestamp of the last write, used to resolve sync conflicts. */
   lastSync: z.number().optional(),
 });

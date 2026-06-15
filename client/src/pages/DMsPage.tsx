@@ -17,6 +17,7 @@ import {
   useDMSupport,
 } from "@/hooks/useDirectMessages";
 import { useSearchProfiles } from "@/hooks/useSearchProfiles";
+import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useToast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -42,12 +43,14 @@ function ConversationRow({
   peer,
   preview,
   previewText,
+  unread,
   active,
   onClick,
 }: {
   peer: string;
   preview: NostrEvent | undefined;
   previewText: string | undefined;
+  unread: boolean;
   active: boolean;
   onClick: () => void;
 }) {
@@ -71,13 +74,18 @@ function ConversationRow({
         </AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium truncate">{name}</div>
+        <div className={cn("text-sm truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
+          {name}
+        </div>
         {preview && (
-          <div className="text-xs text-muted-foreground truncate">
+          <div className={cn("text-xs truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
             {previewText ?? "Encrypted message"}
           </div>
         )}
       </div>
+      {unread && (
+        <span className="shrink-0 size-2 rounded-full bg-primary" aria-label="Unread messages" />
+      )}
     </button>
   );
 }
@@ -126,12 +134,26 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
   const { messages, isLoading, send } = useDirectMessages(peer);
+  const { markRead } = useReadState();
   const { toast } = useToast();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
+
+  // Mark the thread read up to the newest message while it's visible.
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const latest = messages[messages.length - 1]?.created_at ?? 0;
+    if (latest <= 0) return;
+    const stamp = () => {
+      if (document.visibilityState === "visible") markRead(dmReadKey(peer), latest);
+    };
+    stamp();
+    document.addEventListener("visibilitychange", stamp);
+    return () => document.removeEventListener("visibilitychange", stamp);
+  }, [messages, peer, markRead]);
 
   const handleSubmit = useCallback(
     async (text: string) => {
@@ -284,6 +306,8 @@ function ConversationList({
   openPeer: (pubkey: string) => void;
   className?: string;
 }) {
+  const { user } = useCurrentUser();
+  const { getLastRead } = useReadState();
   return (
     <aside
       className={cn(
@@ -330,6 +354,12 @@ function ConversationList({
               peer={c.peer}
               preview={c.latest}
               previewText={previews[c.peer]}
+              unread={
+                Boolean(c.latest) &&
+                c.latest.pubkey !== user?.pubkey &&
+                c.latest.created_at > getLastRead(dmReadKey(c.peer)) &&
+                c.peer !== activePeer
+              }
               active={c.peer === activePeer}
               onClick={() => openPeer(c.peer)}
             />
