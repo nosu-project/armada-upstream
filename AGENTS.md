@@ -107,6 +107,20 @@ The relay normalizes a trailing `/rtc` away defensively
 WebRTC media is the tricky bit. There are three viable media paths; pick based
 on where clients are.
 
+### Keep the LiveKit server protocol in sync with the client SDK (the #2 voice-breaker)
+
+The LiveKit **server image** (`infra/docker-compose.yml`, pinned to an exact
+patch like `v1.9.12`) and the **client SDK** (`livekit-client` in
+`client/package.json`) negotiate over a versioned signaling protocol. If they
+skew — e.g. an old server speaking protocol 15 against a newer client speaking
+protocol 17 — the symptom is nasty and non-obvious: signaling connects, then the
+client requests `/rtc/v1`, falls back to `/rtc`, fails WebRTC negotiation
+(`NegotiationError: negotiation timed out`, `v1 RTC path not found. Consider
+upgrading your LiveKit server version`), and **full-reconnects every ~16s** for
+every participant. It looks like a network/proxy problem but isn't. When you
+bump `livekit-client`, bump the server image to a matching/newer release in the
+same change.
+
 ### 1. Public SFU (simplest)
 
 If the SFU host has a reachable public IP and you can open UDP 50000-50100 +

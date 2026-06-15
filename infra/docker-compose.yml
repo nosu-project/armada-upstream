@@ -30,7 +30,11 @@ services:
       - relay-data:/data
 
   livekit:
-    image: livekit/livekit-server:v1.9
+    # Pin an exact patch: the server's signaling protocol must match the
+    # bundled livekit-client SDK (client/package.json). A skew (e.g. server
+    # protocol 15 vs client protocol 17) makes clients fail WebRTC negotiation
+    # and full-reconnect every ~16s. Bump this together with the client SDK.
+    image: livekit/livekit-server:v1.9.12
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:
