@@ -20,6 +20,8 @@ export interface ReactionTally {
   url?: string;
   /** Number of distinct pubkeys that reacted with this key. */
   count: number;
+  /** The distinct pubkeys that reacted with this key, in reaction order. */
+  pubkeys: string[];
   /** Whether the current user reacted with this key. */
   mine: boolean;
   /** The current user's reaction event for this key (used to retract it). */
@@ -82,8 +84,9 @@ export function useReactions(target: NostrEvent, relayUrl: string, groupId: stri
     for (const reaction of latest.values()) {
       const key = reactionKey(reaction);
       const url = reaction.tags.find(([n]) => n === "emoji")?.[2];
-      const tally = byKey.get(key) ?? { key, url, count: 0, mine: false };
+      const tally = byKey.get(key) ?? { key, url, count: 0, pubkeys: [], mine: false };
       tally.count += 1;
+      tally.pubkeys.push(reaction.pubkey);
       if (url && !tally.url) tally.url = url;
       if (user && reaction.pubkey === user.pubkey) {
         tally.mine = true;

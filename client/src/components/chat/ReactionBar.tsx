@@ -2,10 +2,14 @@ import { SmilePlus } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAuthor } from "@/hooks/useAuthor";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
+import { getAvatarShape } from "@/lib/avatarShape";
+import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
@@ -22,45 +26,124 @@ interface ReactionBarProps {
   onReact: (input: ReactInput) => void;
 }
 
+/** Renders the visual content of a reaction key (custom image or emoji glyph). */
+function ReactionGlyph({ tally, className }: { tally: ReactionTally; className?: string }) {
+  const isCustom = tally.url && tally.key.startsWith(":") && tally.key.endsWith(":");
+  if (isCustom) {
+    return (
+      <CustomEmojiImg
+        name={tally.key.slice(1, -1)}
+        url={tally.url!}
+        className={cn("inline object-contain", className ?? "h-5 w-5")}
+      />
+    );
+  }
+  return <span className={cn("leading-none", className ?? "text-base")}>{tally.key}</span>;
+}
+
+/** A single reactor row (avatar + display name) inside the detail popover. */
+function ReactorRow({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata;
+  const displayName = getDisplayName(metadata, pubkey);
+  return (
+    <div className="flex items-center gap-2 px-2 py-1">
+      <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
+        <AvatarImage src={metadata?.picture} alt={displayName} />
+        <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
+          {displayName[0]?.toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+      <span className="text-xs truncate">{displayName}</span>
+    </div>
+  );
+}
+
+/** A reaction pill that opens a popover listing reactors with a toggle button. */
+function ReactionPill({
+  tally,
+  canReact,
+  onReact,
+}: {
+  tally: ReactionTally;
+  canReact: boolean;
+  onReact: (input: ReactInput) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const toggle = () =>
+    onReact({
+      key: tally.key,
+      content: tally.key === "👍" ? "+" : tally.key,
+      emojiUrl: tally.url,
+    });
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-sm leading-none transition-colors",
+            tally.mine
+              ? "border-primary bg-primary/15 text-primary"
+              : "border-border/60 bg-secondary/40 text-foreground hover:border-foreground/40 hover:bg-secondary/70",
+          )}
+        >
+          <ReactionGlyph tally={tally} className="h-5 w-5 text-base" />
+          <span className="tabular-nums font-medium">{tally.count}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="w-56 p-0 rounded-xl border-border shadow-lg overflow-hidden"
+      >
+        <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+          <ReactionGlyph tally={tally} className="h-6 w-6 text-xl" />
+          <span className="text-xs text-muted-foreground">
+            {tally.count} {tally.count === 1 ? "reaction" : "reactions"}
+          </span>
+        </div>
+        <div className="max-h-48 overflow-y-auto py-1">
+          {tally.pubkeys.map((pubkey) => (
+            <ReactorRow key={pubkey} pubkey={pubkey} />
+          ))}
+        </div>
+        {canReact && (
+          <div className="border-t border-border/60 p-1.5">
+            <Button
+              size="sm"
+              variant={tally.mine ? "secondary" : "default"}
+              className="w-full h-7 rounded-lg text-xs"
+              onClick={() => {
+                toggle();
+                setOpen(false);
+              }}
+            >
+              {tally.mine ? "Remove reaction" : "+1"}
+            </Button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /**
- * Renders the NIP-25 reaction tally pills beneath a message. Clicking a pill
- * toggles the current user's own reaction with that emoji on/off.
+ * Renders the NIP-25 reaction tally pills beneath a message. Each pill opens a
+ * popover listing who reacted, with a button to add or remove the current
+ * user's own reaction.
  */
 export function ReactionBar({ tallies, canReact, onReact }: ReactionBarProps) {
   if (tallies.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-1 mt-1">
-      {tallies.map((tally) => {
-        const isCustom = tally.url && tally.key.startsWith(":") && tally.key.endsWith(":");
-        return (
-          <button
-            key={tally.key}
-            type="button"
-            disabled={!canReact}
-            onClick={() =>
-              canReact &&
-              onReact({
-                key: tally.key,
-                content: tally.key === "👍" ? "+" : tally.key,
-                emojiUrl: tally.url,
-              })
-            }
-            className={cn(
-              "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs leading-none transition-colors",
-              tally.mine
-                ? "border-primary bg-primary/15 text-primary"
-                : "border-border/60 bg-secondary/40 text-foreground hover:border-foreground/30",
-              !canReact && "cursor-default opacity-80",
-            )}
-          >
-            {isCustom
-              ? <CustomEmojiImg name={tally.key.slice(1, -1)} url={tally.url!} className="inline h-4 w-4 object-contain" />
-              : <span className="text-sm leading-none">{tally.key}</span>}
-            <span className="tabular-nums">{tally.count}</span>
-          </button>
-        );
-      })}
+    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+      {tallies.map((tally) => (
+        <ReactionPill key={tally.key} tally={tally} canReact={canReact} onReact={onReact} />
+      ))}
     </div>
   );
 }
