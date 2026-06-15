@@ -1027,7 +1027,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   rows={1}
                   maxLength={MAX_CHARS}
                   className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto align-middle"
-                  disabled={isSending}
                 />
                 <MentionAutocomplete
                   textareaRef={textareaRef}
