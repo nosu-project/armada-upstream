@@ -1,5 +1,5 @@
 import { Hash, Headphones, Loader2, Lock, Plus, Volume2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { CreateGroupDialog } from "@/components/dialogs/CreateGroupDialog";
@@ -85,9 +85,20 @@ interface ChannelSidebarProps {
 export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSidebarProps) {
   const { data: groups, isLoading, relayInfo } = useRelayGroups(relayUrl);
   const { user } = useCurrentUser();
+  const { registerCallBarSlot } = useCall();
+  const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [signupOpen, setSignupOpen] = useState(false);
+
+  // Register this sidebar's slot so the persistent call bar portals above the
+  // account pill. Every instance (desktop pane + mobile drawer) registers; the
+  // hidden panes simply don't show their copy.
+  useEffect(() => {
+    const el = callBarRef.current;
+    if (!el) return;
+    return registerCallBarSlot(el);
+  }, [registerCallBarSlot]);
 
   return (
     <aside
@@ -154,6 +165,10 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           </div>
         )}
       </div>
+
+      {/* Voice call bar slot — the persistent call UI portals here on desktop. */}
+      {/* Voice call bar slot — the persistent call UI portals here. */}
+      <div ref={callBarRef} className="empty:hidden shrink-0" />
 
       {/* Account area */}
       <div className="px-1 pb-safe shrink-0 bg-background/40">

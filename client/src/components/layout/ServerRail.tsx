@@ -51,12 +51,6 @@ function ServerButton({
           isActive ? "h-9 opacity-100" : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-4",
         )}
       />
-      {/* Voice indicator: a headphones badge when a call is live on this server. */}
-      {inCall && (
-        <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
-          <Headphones className="size-2.5" />
-        </span>
-      )}
       {/*
         Angular crest. Glow lives on the wrapper as a drop-shadow so it
         traces the fin silhouette (a box-shadow would be clipped away
@@ -64,13 +58,16 @@ function ServerButton({
       */}
       <span
         className={cn(
-          "transition-all duration-150",
-          isActive
-            ? "[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]"
-            : "opacity-50 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
+          "relative block size-12 transition-all duration-150",
+          isActive && "[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
         )}
       >
-        <Avatar className="size-12 clip-corner-lg">
+        <Avatar
+          className={cn(
+            "size-12 clip-corner-lg transition-all duration-150",
+            !isActive && "opacity-50 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
+          )}
+        >
           <AvatarImage src={info?.icon} alt={name} />
           <AvatarFallback
             className={cn(
@@ -81,6 +78,12 @@ function ServerButton({
             {initial}
           </AvatarFallback>
         </Avatar>
+        {/* Voice indicator: a headphones badge when a call is live here. */}
+        {inCall && (
+          <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
+            <Headphones className="size-2.5" />
+          </span>
+        )}
       </span>
     </>
   );
