@@ -70,7 +70,7 @@ export function ThreadPanel({ root, relayUrl, groupId, canWrite, autoFocus = fal
   const { replies, isLoading, sendReply } = useThread(root, relayUrl, groupId);
 
   return (
-    <aside className="flex flex-col min-h-0 w-full min-w-0 sidebar:my-3 sidebar:mr-2 p-1.5 sidebar:clip-corner-lg bg-chrome">
+    <aside className="flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome">
       <div className="flex items-center justify-between px-2 py-1 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <MessagesSquare className="size-4 text-muted-foreground shrink-0" />

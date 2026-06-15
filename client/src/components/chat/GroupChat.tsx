@@ -110,6 +110,11 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   const isPending = sendStatus === "pending";
   const isFailed = sendStatus === "failed";
   const isOwn = user?.pubkey === event.pubkey;
+  // Highlight messages that mention you or reply to you: both add a `p` tag for
+  // the current user (NIP-27 mention / NIP-10 reply). Not your own messages.
+  const mentionsMe = Boolean(
+    user && !isOwn && event.tags.some(([name, value]) => name === "p" && value === user.pubkey),
+  );
   // Only plain chat messages are editable (polls carry structured tags).
   const canEdit = isOwn && event.kind === KIND_GROUP_CHAT && !isPending && !isFailed;
   const wasEdited = event.tags.some(([name]) => name === "edited");
@@ -151,7 +156,8 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
     <div
       onMouseLeave={disarmDelete}
       className={cn(
-        "group relative flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
+        "group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
+        mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
         isPending && "opacity-60",
         isFailed && "bg-destructive/5",
       )}
@@ -182,6 +188,82 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
           {isPending && (
             <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
           )}
+          {/* Inline action toolbar, right-aligned on the header row. Negative
+              vertical margins keep the taller icon buttons from increasing the
+              header row's height. */}
+          <div className="ml-auto -my-1.5 flex items-center gap-0.5 self-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            {canWrite && !isEditing && <ReactionPicker onReact={react} />}
+            {canWrite && !isEditing && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Reply"
+                    className="size-7 text-muted-foreground hover:text-primary"
+                    onClick={() => onReply(event)}
+                  >
+                    <Reply className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Reply</TooltipContent>
+              </Tooltip>
+            )}
+            {canWrite && !isEditing && onOpenThread && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Reply in thread"
+                    className="size-7 text-muted-foreground hover:text-primary"
+                    onClick={() => onOpenThread(event)}
+                  >
+                    <MessagesSquare className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Reply in thread</TooltipContent>
+              </Tooltip>
+            )}
+            {canEdit && !isEditing && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Edit message"
+                    className="size-7 text-muted-foreground hover:text-primary"
+                    onClick={() => onEdit?.(event)}
+                  >
+                    <Pencil className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Edit message</TooltipContent>
+              </Tooltip>
+            )}
+            {canModerate && !isEditing && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={deleteArmed ? "Confirm delete message" : "Delete message"}
+                    aria-pressed={deleteArmed}
+                    className={cn(
+                      "size-7 transition-colors",
+                      deleteArmed
+                        ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        : "text-muted-foreground hover:text-destructive",
+                    )}
+                    onClick={handleDeleteClick}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{deleteArmed ? "Click again to delete" : "Delete message"}</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
         </div>
         {replyToId && <ReplyContext eventId={replyToId} relayUrl={relayUrl} />}
         {isEditing ? (
@@ -251,79 +333,6 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
               Discard
             </button>
           </div>
-        )}
-      </div>
-      <div className="absolute top-1 right-2.5 flex items-center gap-0.5 rounded-md border bg-background/95 shadow-sm opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-        {canWrite && !isEditing && <ReactionPicker onReact={react} />}
-        {canWrite && !isEditing && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Reply"
-                className="size-7 text-muted-foreground hover:text-primary"
-                onClick={() => onReply(event)}
-              >
-                <Reply className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Reply</TooltipContent>
-          </Tooltip>
-        )}
-        {canWrite && !isEditing && onOpenThread && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Reply in thread"
-                className="size-7 text-muted-foreground hover:text-primary"
-                onClick={() => onOpenThread(event)}
-              >
-                <MessagesSquare className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Reply in thread</TooltipContent>
-          </Tooltip>
-        )}
-        {canEdit && !isEditing && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Edit message"
-                className="size-7 text-muted-foreground hover:text-primary"
-                onClick={() => onEdit?.(event)}
-              >
-                <Pencil className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Edit message</TooltipContent>
-          </Tooltip>
-        )}
-        {canModerate && !isEditing && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={deleteArmed ? "Confirm delete message" : "Delete message"}
-                aria-pressed={deleteArmed}
-                className={cn(
-                  "size-7 transition-colors",
-                  deleteArmed
-                    ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    : "text-muted-foreground hover:text-destructive",
-                )}
-                onClick={handleDeleteClick}
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{deleteArmed ? "Click again to delete" : "Delete message"}</TooltipContent>
-          </Tooltip>
         )}
       </div>
     </div>
@@ -520,7 +529,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
   );
 
   return (
-    <div className="flex flex-1 min-h-0 min-w-0">
+    <div className="relative flex flex-1 min-h-0 min-w-0">
       <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
       {/* Messages (or search results, filtered in-place) */}
       <div
@@ -653,19 +662,28 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
       />
       </div>
 
-      {/* Thread panel: slides in/out like the member roster. The wrapper
-          animates width (0 → fixed) while the inner panel slides in from the
-          right. Content persists through the close animation via lastThreadRoot. */}
+      {/* Thread panel. On desktop it's an in-flow sibling whose width animates
+          open (0 → fixed). On mobile it overlays the chat (absolute) so the
+          message list never reflows/animates when the thread opens or closes. */}
       <div
         className={cn(
-          "shrink-0 overflow-hidden transition-[width] duration-200 ease-out",
-          "w-0",
-          threadRoot && "sidebar:w-[23rem] w-full",
+          "overflow-hidden",
+          "absolute inset-0 z-20 sidebar:static sidebar:z-auto",
+          "sidebar:shrink-0 sidebar:w-0 sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
+          threadRoot ? "sidebar:w-[23rem]" : "pointer-events-none sidebar:pointer-events-auto",
         )}
       >
+        {/* Mobile backdrop: fades in/out in sync with the panel slide so the
+            chat is blocked once the panel is in view (not before). */}
         <div
           className={cn(
-            "h-full flex sidebar:w-[23rem] w-full transition-transform duration-200 ease-out",
+            "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
+            threadRoot ? "opacity-100" : "opacity-0",
+          )}
+        />
+        <div
+          className={cn(
+            "relative h-full flex w-full sidebar:w-[23rem] transition-transform duration-200 ease-out",
             threadRoot ? "translate-x-0" : "translate-x-full",
           )}
         >

@@ -254,8 +254,9 @@ export function GroupPage() {
             variant="ghost"
             size="icon"
             aria-label="Members"
+            aria-pressed={membersOpen}
             className="size-8 sidebar:hidden"
-            onClick={() => setMembersOpen(true)}
+            onClick={() => setMembersOpen((v) => !v)}
           >
             <Users className="size-4" />
           </Button>
@@ -380,8 +381,10 @@ export function GroupPage() {
         {/* The active voice call (if any) renders as a persistent docked bar in
             MainLayout, so it survives navigation between channels/servers. */}
 
-        {/* Chat + members (member panel desktop-only; mobile uses the sheet) */}
-        <div className="flex flex-1 min-h-0">
+        {/* Chat + members. The member panel mirrors the thread panel: in-flow
+            animated-width on desktop, full-screen floating card overlay on
+            mobile (no drawer/backdrop). */}
+        <div className="relative flex flex-1 min-h-0">
           <GroupChat
             relayUrl={relayUrl}
             groupId={groupId}
@@ -391,15 +394,26 @@ export function GroupPage() {
           />
           <div
             className={cn(
-              "shrink-0 overflow-hidden transition-[width] duration-200 ease-out",
-              "w-0",
+              "overflow-hidden",
+              "absolute inset-0 z-20 sidebar:static sidebar:z-auto",
+              "sidebar:shrink-0 sidebar:w-0 sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
+              membersOpen ? "" : "pointer-events-none sidebar:pointer-events-auto",
               membersVisible && "sidebar:w-[16.5rem]",
             )}
           >
+            {/* Mobile backdrop: fades in/out in sync with the panel slide. */}
             <div
               className={cn(
-                "w-[16.5rem] h-full flex transition-transform duration-200 ease-out",
-                membersVisible ? "translate-x-0" : "translate-x-full",
+                "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
+                membersOpen ? "opacity-100" : "opacity-0",
+              )}
+            />
+            <div
+              className={cn(
+                "relative h-full flex w-full sidebar:w-[16.5rem] transition-transform duration-200 ease-out",
+                // Mobile: driven by membersOpen. Desktop: driven by membersVisible.
+                membersOpen ? "translate-x-0" : "translate-x-full",
+                membersVisible ? "sidebar:translate-x-0" : "sidebar:translate-x-full",
               )}
             >
               <MemberList
@@ -410,6 +424,7 @@ export function GroupPage() {
                 currentUserPubkey={user?.pubkey}
                 onRemove={(pubkey) => removeUser.mutate({ pubkey })}
                 onSetRole={(pubkey, roles) => putUser.mutate({ pubkey, roles })}
+                onClose={() => setMembersOpen(false)}
               />
             </div>
           </div>
@@ -438,32 +453,6 @@ export function GroupPage() {
               relayUrl={drawerServer}
               onNavigate={() => setChannelsOpen(false)}
               className="flex-1"
-            />
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      {/* Mobile member sheet */}
-      <Sheet open={membersOpen} onOpenChange={setMembersOpen}>
-        <SheetContent
-          side="right"
-          className="w-[min(18rem,80vw)] p-0 sidebar:hidden [&>button]:hidden"
-          aria-label="Members"
-          onOpenAutoFocus={(e) => e.preventDefault()}
-        >
-          <div className="h-full overflow-y-auto safe-area-top">
-            <MemberList
-              admins={details?.admins ?? []}
-              members={details?.members ?? []}
-              canModerate={isAdmin}
-              viewerIsAdmin={isAdmin}
-              currentUserPubkey={user?.pubkey}
-              onRemove={(pubkey) => {
-                removeUser.mutate({ pubkey });
-                setMembersOpen(false);
-              }}
-              onSetRole={(pubkey, roles) => putUser.mutate({ pubkey, roles })}
-              className="block w-full border-l-0"
             />
           </div>
         </SheetContent>

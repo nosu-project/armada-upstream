@@ -1,4 +1,4 @@
-import { AtSign, Copy, Crown, MoreVertical, Shield, ShieldOff, UserMinus } from "lucide-react";
+import { AtSign, Copy, Crown, MoreVertical, Shield, ShieldOff, UserMinus, X } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
@@ -174,6 +174,8 @@ interface MemberListProps {
   currentUserPubkey?: string;
   onRemove?: (pubkey: string) => void;
   onSetRole?: (pubkey: string, roles: string[]) => void;
+  /** Close the panel (mobile overlay close button). */
+  onClose?: () => void;
   /** Override the default desktop panel chrome (e.g. for the mobile drawer). */
   className?: string;
 }
@@ -187,6 +189,7 @@ export function MemberList({
   currentUserPubkey,
   onRemove,
   onSetRole,
+  onClose,
   className,
 }: MemberListProps) {
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
@@ -196,12 +199,22 @@ export function MemberList({
     <aside
       className={cn(
         // Floating roster: detached by a margin, cut-corner card, same recessed
-        // chrome shade as the rail/console/header. No border.
-        "hidden sidebar:flex flex-col w-64 shrink-0 overflow-y-auto",
-        "my-3 mr-2 p-1.5 clip-corner-lg bg-chrome",
+        // chrome shade as the rail/console/header. No border. Matches the thread
+        // panel: full-screen card overlay on mobile, in-flow card on desktop.
+        "flex flex-col flex-1 min-w-0 overflow-y-auto",
+        "m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome",
         className,
       )}
     >
+      {/* Mobile close affordance (desktop hides via the header toggle). */}
+      {onClose && (
+        <div className="flex items-center justify-between px-2 py-1 shrink-0 sidebar:hidden">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Members</h3>
+          <Button variant="ghost" size="icon" aria-label="Close members" className="size-6" onClick={onClose}>
+            <X className="size-4" />
+          </Button>
+        </div>
+      )}
       {admins.length > 0 && (
         <>
           <h3 className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
