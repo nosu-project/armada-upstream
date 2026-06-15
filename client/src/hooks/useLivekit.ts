@@ -93,7 +93,16 @@ export function useLivekitToken(relayUrl: string, groupId: string, enabled: bool
       return fetchLivekitToken(relayUrl, groupId, user.signer);
     },
     enabled: enabled && Boolean(user),
-    staleTime: 4 * 60 * 1000,
+    // The token must stay STABLE for the lifetime of a call. Each mint embeds a
+    // fresh random LiveKit identity (NIP-29 `pubkey-<rand>`), so a refetch would
+    // hand LiveKitRoom a new token+identity and force a disconnect/rejoin as a
+    // different participant (observed as CLIENT_REQUEST_LEAVE churn every few
+    // seconds). Never auto-refetch while mounted; the token is valid for 6h.
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: 1,
   });
 }

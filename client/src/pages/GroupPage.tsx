@@ -1,5 +1,5 @@
 import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Settings2, Users, Volume2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Navigate, useParams } from "react-router-dom";
 
 import { GroupChat } from "@/components/chat/GroupChat";
@@ -107,8 +107,14 @@ export function GroupPage() {
   // does), so gate the composer on membership.
   const canWrite = Boolean(user) && isMember;
   // Voice is available when the group is tagged `livekit` or the relay
-  // advertises the NIP-29 LiveKit extension for all its groups.
-  const hasVoice = Boolean(group?.hasLivekit || relayHasLivekit);
+  // advertises the NIP-29 LiveKit extension for all its groups. Make it sticky:
+  // once we've seen voice support, never flip back to false on a transient
+  // query refetch — otherwise the VoiceBar (and its LiveKitRoom) would unmount
+  // and tear down an active call, reconnecting every refetch cycle.
+  const rawHasVoice = Boolean(group?.hasLivekit || relayHasLivekit);
+  const hasVoiceRef = useRef(false);
+  if (rawHasVoice) hasVoiceRef.current = true;
+  const hasVoice = rawHasVoice || hasVoiceRef.current;
 
   const handleLeave = async () => {
     try {
@@ -237,8 +243,9 @@ export function GroupPage() {
           <JoinBanner relayUrl={relayUrl} groupId={groupId} isClosed={Boolean(group?.isClosed)} />
         )}
 
-        {/* Voice — only present while a call is active */}
-        {hasVoice && (
+        {/* Voice — keep mounted while a call is active even if `hasVoice`
+            briefly flickers on a query refetch, so the call isn't torn down. */}
+        {(hasVoice || inCall) && (
           <VoiceBar
             relayUrl={relayUrl}
             groupId={groupId}
