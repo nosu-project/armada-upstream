@@ -1,4 +1,4 @@
-import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Search, Settings2, UserPlus, Users, Volume2, X } from "lucide-react";
+import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -96,7 +96,7 @@ export function GroupPage() {
   const { data: membership } = useGroupMembership(relayUrl, groupId);
   const { data: relayHasLivekit } = useRelayLivekitSupport(relayUrl);
   const leave = useLeaveGroup(relayUrl ?? "", groupId ?? "");
-  const { removeUser, putUser } = useGroupModeration(relayUrl ?? "", groupId ?? "");
+  const { removeUser, putUser, deleteGroup } = useGroupModeration(relayUrl ?? "", groupId ?? "");
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const { activeCall, joinCall } = useCall();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -153,6 +153,23 @@ export function GroupPage() {
     } catch (e) {
       toast({
         title: "Leave failed",
+        description: e instanceof Error ? e.message : "The relay rejected the request.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm(`Delete "${group?.name ?? groupId}"? This removes the channel for everyone and cannot be undone.`)) {
+      return;
+    }
+    try {
+      await deleteGroup.mutateAsync({});
+      updateList({ type: "remove-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
+      toast({ title: "Channel deleted" });
+    } catch (e) {
+      toast({
+        title: "Delete failed",
         description: e instanceof Error ? e.message : "The relay rejected the request.",
         variant: "destructive",
       });
@@ -277,24 +294,37 @@ export function GroupPage() {
                   {group?.name ?? "Channel"}
                 </DropdownMenuLabel>
                 {isAdmin && (
-                  <DropdownMenuItem className="gap-2.5 px-3 py-2" onClick={() => setInviteOpen(true)}>
+                  <DropdownMenuItem className="px-3 py-2" onClick={() => setInviteOpen(true)}>
                     <UserPlus className="size-4" />
                     Invite people
                   </DropdownMenuItem>
                 )}
                 {isAdmin && (
-                  <DropdownMenuItem className="py-2" onClick={() => setSettingsOpen(true)}>
+                  <DropdownMenuItem className="px-3 py-2" onClick={() => setSettingsOpen(true)}>
                     <Settings2 className="size-4" />
                     Channel settings
                   </DropdownMenuItem>
                 )}
+                {isAdmin && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={handleDelete}
+                      disabled={deleteGroup.isPending}
+                      className="px-3 py-2 text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="size-4" />
+                      Delete channel
+                    </DropdownMenuItem>
+                  </>
+                )}
                 {user && isMember && (
                   <>
-                    {isAdmin && <DropdownMenuSeparator />}
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onClick={handleLeave}
                       disabled={leave.isPending}
-                      className="py-2 text-destructive focus:text-destructive"
+                      className="px-3 py-2 text-destructive focus:text-destructive"
                     >
                       <LogOut className="size-4" />
                       Leave channel
