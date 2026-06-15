@@ -332,6 +332,42 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     [detectedEmbeds, removedEmbeds],
   );
 
+  /** Uploaded attachments (insertion-ordered) derived from their NIP-94 tags. */
+  const attachments = useMemo(
+    () =>
+      Array.from(uploadedFileGroups.entries()).map(([url, tags]) => {
+        const mime = tags.find((t) => t[0] === "m")?.[1] ?? "";
+        return { url, mime, isImage: mime.startsWith("image/") };
+      }),
+    [uploadedFileGroups],
+  );
+
+  const removeAttachment = useCallback((url: string) => {
+    setUploadedFileGroups((prev) => {
+      const next = new Map(prev);
+      next.delete(url);
+      return next;
+    });
+    // Also drop the URL from the text if it was typed/pasted there.
+    setContent((prev) =>
+      prev
+        .split("\n")
+        .filter((line) => line.trim() !== url)
+        .join("\n"),
+    );
+  }, []);
+
+  /** Register an externally-sourced media URL (GIF, sticker) as an attachment
+   *  chip, so it previews above the input instead of pasting a raw URL. */
+  const registerAttachment = useCallback((url: string, fallbackMime: string, dim?: string) => {
+    const ext = url.split(/[?#]/)[0].split(".").pop()?.toLowerCase() ?? "";
+    const extMime = mimeFromExt(ext);
+    const mime = extMime === "application/octet-stream" ? fallbackMime : extMime;
+    const tags: string[][] = [["url", url], ["m", mime]];
+    if (dim) tags.push(["dim", dim]);
+    setUploadedFileGroups((prev) => new Map(prev).set(url, tags));
+  }, []);
+
   const resetComposeState = useCallback(() => {
     setContent("");
     setPickerOpen(false);
@@ -377,7 +413,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
 
       setUploadedFileGroups((prev) => new Map(prev).set(url, tags));
-      setContent((prev) => (prev ? prev + "\n" + url : url));
+      // The URL is tracked as an attachment chip (rendered above the input)
+      // rather than dumped into the text; it's appended to content on send.
     } catch {
       toast({ title: "Upload failed", description: "Could not upload file.", variant: "destructive" });
     }
@@ -493,13 +530,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const handleSend = useCallback(async () => {
     const text = content.trim();
-    if (!text || !user || isSending || text.length > MAX_CHARS) return;
+    // Append any attachment URLs not already present in the text so the
+    // imeta/media tagging in buildMessageTags picks them up.
+    const extraUrls = attachments
+      .map((a) => a.url)
+      .filter((url) => !text.includes(url));
+    const finalText = [text, ...extraUrls].filter(Boolean).join("\n");
+    if (!finalText || !user || isSending || finalText.length > MAX_CHARS) return;
 
     try {
       await createEvent({
         kind: KIND_GROUP_CHAT,
-        content: text,
-        tags: buildMessageTags(text),
+        content: finalText,
+        tags: buildMessageTags(finalText),
         relay: relayUrl,
       });
       resetComposeState();
@@ -511,10 +554,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         variant: "destructive",
       });
     }
-  }, [content, user, isSending, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast]);
+  }, [content, attachments, user, isSending, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast]);
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;
+  // A message is sendable when there's text or at least one attachment.
+  const hasContent = content.trim().length > 0 || attachments.length > 0;
 
   const handlePollSubmit = useCallback(async () => {
     const finalContent = content.trim();
@@ -655,6 +700,42 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Attachment previews — uploaded images render as inline thumbnails. */}
+      {(attachments.length > 0 || isUploading) && (
+        <div className="flex flex-wrap gap-2 px-3 pt-2 animate-in slide-in-from-top-2 fade-in-0 duration-200">
+          {attachments.map((att) => (
+            <div
+              key={att.url}
+              className="group relative size-20 rounded-lg overflow-hidden border border-border bg-secondary/40 shrink-0"
+            >
+              {att.isImage ? (
+                <img src={att.url} alt="attachment" className="size-full object-cover" />
+              ) : (
+                <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
+                  <Paperclip className="size-5" />
+                  <span className="text-[10px] truncate max-w-full">
+                    {att.mime.split("/")[1] || "file"}
+                  </span>
+                </div>
+              )}
+              <button
+                type="button"
+                aria-label="Remove attachment"
+                onClick={() => removeAttachment(att.url)}
+                className="absolute top-1 right-1 p-0.5 rounded-full bg-background/80 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          ))}
+          {isUploading && (
+            <div className="size-20 rounded-lg border border-border bg-secondary/40 shrink-0 flex items-center justify-center">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          )}
         </div>
       )}
 
@@ -830,7 +911,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </Tooltip>
 
               {/* Mic when empty, send when there's something to send (Signal-style) */}
-              {mode === "post" && !content.trim() && voiceRecorder.isSupported ? (
+              {mode === "post" && !hasContent && voiceRecorder.isSupported ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -848,7 +929,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 <button
                   type="button"
                   onClick={mode === "poll" ? handlePollSubmit : handleSend}
-                  disabled={mode === "poll" ? !isPollValid || isSending : !content.trim() || isSending}
+                  disabled={mode === "poll" ? !isPollValid || isSending : !hasContent || isSending}
                   aria-label={mode === "poll" ? "Publish poll" : "Send message"}
                   className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9"
                 >
@@ -1051,14 +1132,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               height={360}
               autoFocus={!isMobile}
               onSelect={(emoji) => {
-                setContent((prev) => (prev ? prev + "\n" + emoji.url : emoji.url));
+                registerAttachment(emoji.url, "image/webp");
                 setPickerOpen(false);
               }}
             />
           ) : (
             <GifPicker
               onSelect={(gif) => {
-                setContent((prev) => (prev ? prev + "\n" + gif.url : gif.url));
+                registerAttachment(gif.url, "image/gif", `${gif.width}x${gif.height}`);
                 setPickerOpen(false);
               }}
             />
