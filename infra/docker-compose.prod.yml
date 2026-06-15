@@ -1,0 +1,59 @@
+# Production overlay for hosting behind a split-network edge (reference
+# deployment: SFU on an unprivileged Proxmox LXC, reached through an edge that
+# only forwards 80/443). Apply on top of the base compose:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What this changes and why:
+#
+#   LiveKit runs with HOST NETWORKING. WebRTC media — including the embedded
+#   TURN relay's port range — must not traverse Docker's bridge NAT. On a
+#   bridge network, relayed media is SNAT'd to the docker0/bridge gateway
+#   (e.g. 172.18.0.1); the SFU then observes a peer-reflexive candidate at that
+#   gateway IP, ICE selects it, and the media path breaks every ~10s. Host
+#   networking removes the Docker NAT so the TURN relay + SFU see real
+#   addresses. (LiveKit's own docs recommend host networking for Docker.)
+#
+# Requirements when using this overlay (set in .env):
+#   LIVEKIT_USE_EXTERNAL_IP=false
+#   LIVEKIT_NODE_IP=<SFU LAN IP>          # LAN clients connect here directly
+#   LIVEKIT_TURN_ENABLED=true
+#   LIVEKIT_TURN_DOMAIN=turn.example.com  # cert CN; edge SNI-routes :443 here
+#   LIVEKIT_CERT_DIR=/abs/path/to/certs   # tls.crt + tls.key for TURN_DOMAIN
+#   LIVEKIT_IFACE=eth0                    # host's real interface
+#
+# See AGENTS.md ("Voice / LiveKit") for the full edge + cert recipe.
+
+services:
+  livekit:
+    # Bind directly on the host; no Docker bridge NAT in the media path.
+    network_mode: host
+    environment:
+      # Host networking ignores `ports:`. LiveKit binds 7880/7881/443 and the
+      # media/relay ranges directly on the host. The webhook must reach the
+      # relay, which publishes :5577 on the host, via loopback.
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          tcp_port: 7881
+          udp_port: 50000
+          port_range_start: 50000
+          port_range_end: 50100
+          use_external_ip: ${LIVEKIT_USE_EXTERNAL_IP:-false}
+          node_ip: ${LIVEKIT_NODE_IP:-}
+          interfaces:
+            includes:
+              - ${LIVEKIT_IFACE:-eth0}
+        turn:
+          enabled: ${LIVEKIT_TURN_ENABLED:-true}
+          domain: ${LIVEKIT_TURN_DOMAIN:-turn.localhost}
+          tls_port: ${LIVEKIT_TURN_PORT:-443}
+          cert_file: /certs/tls.crt
+          key_file: /certs/tls.key
+          external_tls: false
+        keys:
+          ${LIVEKIT_API_KEY:-armada}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
+        webhook:
+          api_key: ${LIVEKIT_API_KEY:-armada}
+          urls:
+            - http://127.0.0.1:5577/livekit/webhook

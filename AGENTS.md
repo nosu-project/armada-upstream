@@ -132,6 +132,29 @@ LIVEKIT_TURN_PORT=443                       # host port mapped to SFU :443
 - **External clients** can't reach the private `NODE_IP`, so ICE falls back to
   the embedded **TURN/TLS relay** on `turn.example.com:443`.
 
+Apply the production overlay (`infra/docker-compose.prod.yml`), which switches
+LiveKit to host networking:
+
+```
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+### Run LiveKit with host networking (Docker)
+
+WebRTC media — including the embedded TURN relay's port range — **must not
+traverse Docker's bridge NAT**. On a bridge network, relayed media is SNAT'd to
+the docker0/bridge gateway (e.g. `172.18.0.1`); the SFU then observes a
+peer-reflexive candidate at that gateway IP, ICE selects it, and the media path
+**cuts out every ~10 seconds** (`[remote][selected] udp4 prflx 172.18.0.1:...`,
+`connectionType: udp` that won't hold). Host networking removes the Docker NAT,
+and the SFU then selects a stable `relay` pair (`connectionType: turn`).
+
+`infra/docker-compose.prod.yml` does this. With host networking, LiveKit binds
+7880/7881/443 + the media ranges directly on the host, `ports:` are ignored,
+and the webhook must reach the relay (which publishes :5577 on the host) via
+`http://127.0.0.1:5577`. LiveKit's own docs recommend host networking for
+Dockerized deploys for the same reason.
+
 ### Do NOT forward UDP through a NAT edge
 
 A tempting-but-broken approach: DNAT/forward UDP 50000-50100 from the public
@@ -193,8 +216,12 @@ Encrypt cert (as above) sidesteps that entirely.
 - TURN/TLS cert: `openssl s_client -connect turn.example.com:443 -servername turn.example.com` → cert CN matches.
 - Watch ICE selection: `docker logs -f infra-livekit-1 | grep -iE "participant active|connectionType|switched pair"`.
   Healthy = a stable selected pair (`connectionType: udp`/`relay`) without
-  repeated "switched pair". `prflx <gateway-IP>` everywhere = NAT/MASQUERADE
-  problem (see above).
+  repeated "switched pair". Relayed external clients should show
+  `connectionType: turn` with a `relay <SFU IP>` selected pair. If instead you
+  see `prflx 172.18.0.x` (the Docker bridge gateway) cutting out every ~10s,
+  LiveKit is on a bridge network — switch it to host networking (see "Run
+  LiveKit with host networking"). `prflx <gateway-IP>` from a NAT/MASQUERADE
+  edge is the other variant of the same problem (see above).
 - "Can't hear myself" is **normal** — WebRTC doesn't loop back your own audio.
   Test with a second participant.
 
