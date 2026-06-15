@@ -1,11 +1,12 @@
-import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Settings2, Users, Volume2 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
-import { Navigate, useParams } from "react-router-dom";
+import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Settings2, UserPlus, Users, Volume2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
 import { GroupChat } from "@/components/chat/GroupChat";
 import { MemberList } from "@/components/chat/MemberList";
 import { VoiceBar } from "@/components/chat/VoiceBar";
 import { GroupSettingsDialog } from "@/components/dialogs/GroupSettingsDialog";
+import { InvitePeopleDialog } from "@/components/dialogs/InvitePeopleDialog";
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -30,9 +33,12 @@ import { routeParamToRelay } from "@/lib/platform";
 function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId: string; isClosed: boolean }) {
   const join = useJoinGroup(relayUrl, groupId);
   const { mutateAsync: updateList } = useUpdateUserGroupList();
-  const [code, setCode] = useState("");
+  const [searchParams] = useSearchParams();
+  const inviteCode = searchParams.get("code") ?? "";
+  const [code, setCode] = useState(inviteCode);
+  const autoJoined = useRef(false);
 
-  const handleJoin = async () => {
+  const handleJoin = useCallback(async () => {
     try {
       await join.mutateAsync({ code: code.trim() || undefined });
       updateList({ action: "add", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
@@ -44,7 +50,15 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
         variant: "destructive",
       });
     }
-  };
+  }, [join, code, updateList, groupId, relayUrl]);
+
+  // Shared invite link → join automatically once on arrival.
+  useEffect(() => {
+    if (inviteCode && !autoJoined.current && !join.isPending) {
+      autoJoined.current = true;
+      void handleJoin();
+    }
+  }, [inviteCode, join.isPending, handleJoin]);
 
   return (
     <div className="flex flex-wrap items-center gap-2 mx-2 mt-2 px-4 py-2.5 clip-corner-lg bg-black/30">
@@ -81,9 +95,10 @@ export function GroupPage() {
   const { data: membership } = useGroupMembership(relayUrl, groupId);
   const { data: relayHasLivekit } = useRelayLivekitSupport(relayUrl);
   const leave = useLeaveGroup(relayUrl ?? "", groupId ?? "");
-  const { removeUser } = useGroupModeration(relayUrl ?? "", groupId ?? "");
+  const { removeUser, putUser } = useGroupModeration(relayUrl ?? "", groupId ?? "");
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const [channelsOpen, setChannelsOpen] = useState(false);
   const [inCall, setInCall] = useState(false);
@@ -186,22 +201,6 @@ export function GroupPage() {
               <TooltipContent>Join voice</TooltipContent>
             </Tooltip>
           )}
-          {isAdmin && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Channel settings"
-                  className="size-8"
-                  onClick={() => setSettingsOpen(true)}
-                >
-                  <Settings2 className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Channel settings</TooltipContent>
-            </Tooltip>
-          )}
           {/* Mobile members button → opens the member sheet. */}
           <Button
             variant="ghost"
@@ -212,7 +211,7 @@ export function GroupPage() {
           >
             <Users className="size-4" />
           </Button>
-          {user && isMember && (
+          {(isAdmin || (user && isMember)) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -224,15 +223,35 @@ export function GroupPage() {
                   <MoreVertical className="size-4" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  onClick={handleLeave}
-                  disabled={leave.isPending}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <LogOut className="size-4" />
-                  Leave channel
-                </DropdownMenuItem>
+              <DropdownMenuContent align="end" className="w-56 p-1.5">
+                <DropdownMenuLabel className="text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                  {group?.name ?? "Channel"}
+                </DropdownMenuLabel>
+                {isAdmin && (
+                  <DropdownMenuItem className="gap-2.5 px-3 py-2" onClick={() => setInviteOpen(true)}>
+                    <UserPlus className="size-4" />
+                    Invite people
+                  </DropdownMenuItem>
+                )}
+                {isAdmin && (
+                  <DropdownMenuItem className="py-2" onClick={() => setSettingsOpen(true)}>
+                    <Settings2 className="size-4" />
+                    Channel settings
+                  </DropdownMenuItem>
+                )}
+                {user && isMember && (
+                  <>
+                    {isAdmin && <DropdownMenuSeparator />}
+                    <DropdownMenuItem
+                      onClick={handleLeave}
+                      disabled={leave.isPending}
+                      className="py-2 text-destructive focus:text-destructive"
+                    >
+                      <LogOut className="size-4" />
+                      Leave channel
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -266,7 +285,10 @@ export function GroupPage() {
             admins={details?.admins ?? []}
             members={details?.members ?? []}
             canModerate={isAdmin}
+            viewerIsAdmin={isAdmin}
+            currentUserPubkey={user?.pubkey}
             onRemove={(pubkey) => removeUser.mutate({ pubkey })}
+            onSetRole={(pubkey, roles) => putUser.mutate({ pubkey, roles })}
           />
         </div>
       </main>
@@ -277,6 +299,7 @@ export function GroupPage() {
           side="left"
           className="flex w-[min(20rem,85vw)] gap-0 p-0 sidebar:hidden [&>button]:hidden"
           aria-label="Channels"
+          onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <div className="flex h-full w-full safe-area-top">
             <ServerRail onNavigate={() => setChannelsOpen(false)} />
@@ -291,16 +314,24 @@ export function GroupPage() {
 
       {/* Mobile member sheet */}
       <Sheet open={membersOpen} onOpenChange={setMembersOpen}>
-        <SheetContent side="right" className="w-[min(18rem,80vw)] p-0 sidebar:hidden" aria-label="Members">
+        <SheetContent
+          side="right"
+          className="w-[min(18rem,80vw)] p-0 sidebar:hidden [&>button]:hidden"
+          aria-label="Members"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
           <div className="h-full overflow-y-auto safe-area-top">
             <MemberList
               admins={details?.admins ?? []}
               members={details?.members ?? []}
               canModerate={isAdmin}
+              viewerIsAdmin={isAdmin}
+              currentUserPubkey={user?.pubkey}
               onRemove={(pubkey) => {
                 removeUser.mutate({ pubkey });
                 setMembersOpen(false);
               }}
+              onSetRole={(pubkey, roles) => putUser.mutate({ pubkey, roles })}
               className="block w-full border-l-0"
             />
           </div>
@@ -313,6 +344,14 @@ export function GroupPage() {
           group={group}
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
+        />
+      )}
+      {group && (
+        <InvitePeopleDialog
+          relayUrl={relayUrl}
+          group={group}
+          open={inviteOpen}
+          onOpenChange={setInviteOpen}
         />
       )}
     </>

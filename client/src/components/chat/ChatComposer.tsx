@@ -27,6 +27,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useInsertText } from "@/hooks/useInsertText";
+import { useMentionInsertions } from "@/hooks/useMentionBus";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useToast } from "@/hooks/useToast";
@@ -175,6 +176,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const pickerRef = useRef<HTMLDivElement>(null);
   const pickerToggleRef = useRef<HTMLButtonElement>(null);
   const { insertAtCursor, insertEmoji } = useInsertText(textareaRef, content, setContent);
+
+  // Let other components (e.g. the member list) request a mention insertion.
+  useMentionInsertions((text) => {
+    insertEmoji(text);
+    textareaRef.current?.focus();
+  });
 
   // Voice recording
   const voiceRecorder = useVoiceRecorder();
