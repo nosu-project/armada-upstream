@@ -740,11 +740,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         textareaRef.current?.focus();
       } else if (result.action.kind === "openMention") {
         // Seed an "@" so the mention autocomplete opens for the next keystroke.
-        setContent("@");
+        // A `prefix` (e.g. "/slap ") keeps a wrapping command so the resolved
+        // mention re-runs that command on send.
+        const prefix = result.action.prefix ?? "";
+        const seed = `${prefix}@`;
+        setContent(seed);
         requestAnimationFrame(() => {
           const el = textareaRef.current;
           el?.focus();
-          el?.setSelectionRange(1, 1);
+          el?.setSelectionRange(seed.length, seed.length);
         });
       } else if (result.action.kind === "clearDraft") {
         resetComposeState();

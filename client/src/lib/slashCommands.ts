@@ -37,7 +37,7 @@ export type SlashRunResult =
 export type SlashAction =
   | { kind: "openPoll" }
   | { kind: "clearDraft" }
-  | { kind: "openMention" }
+  | { kind: "openMention"; prefix?: string }
   | { kind: "openThread" }
   | { kind: "kick"; pubkey: string }
   | { kind: "ban"; pubkey: string; reason?: string };
@@ -138,9 +138,18 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: "Slap someone around a bit with a large trout",
     usage: "/slap <name>",
     kind: "text",
+    runsOnSelect: true,
     run: (arg) => {
-      const target = arg.trim() || "themselves";
-      return { type: "send", text: `${ME_ACTION_PREFIX}slaps ${target} around a bit with a large trout` };
+      const rest = arg.trim();
+      // Picked from the menu with no target yet: open the @ picker seeded with
+      // "/slap " so the resolved mention re-runs this command on send.
+      if (!rest) return { type: "action", action: { kind: "openMention", prefix: "/slap " } };
+      // The target is the first token (a resolved nostr: mention or raw name);
+      // anything after it is the user's own action text. Default to the classic
+      // "around a bit with a large trout" when they appended nothing.
+      const [target, ...tail] = rest.split(/\s+/);
+      const suffix = tail.length ? tail.join(" ") : "around a bit with a large trout";
+      return { type: "send", text: `${ME_ACTION_PREFIX}slaps ${target} ${suffix}` };
     },
   },
   {

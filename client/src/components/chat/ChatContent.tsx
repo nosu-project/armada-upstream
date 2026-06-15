@@ -31,6 +31,13 @@ interface ChatContentProps {
   disableNoteEmbeds?: boolean;
   /** When set, occurrences of this term in plain text are highlighted. */
   highlight?: string;
+  /** When set, this text is rendered instead of `event.content` (e.g. a
+   *  /me action body with its marker prefix stripped). Tags/imeta still come
+   *  from `event`. */
+  contentOverride?: string;
+  /** When true, mention chips render the bare display name without an `@`
+   *  prefix. Used for /me actions, which read as prose ("Alice slaps Bob"). */
+  noMentionAtPrefix?: boolean;
 }
 
 /** Bech32 charset used by NIP-19 identifiers. */
@@ -151,9 +158,9 @@ const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 1111, 1222, 1244]);
  * cards), nostr: URIs (mentions, embedded note/naddr cards), hashtags,
  * NIP-30 custom emoji, and lightning invoices.
  */
-export function ChatContent({ event, className, disableNoteEmbeds = false, highlight }: ChatContentProps) {
+export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false }: ChatContentProps) {
   const tokens = useMemo(() => {
-    const text = event.content;
+    const text = contentOverride ?? event.content;
 
     // Map of imeta-declared URL → MIME, so extension-less media URLs (e.g.
     // blossom sha256 filenames) declared in an imeta tag still render as an
@@ -406,7 +413,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
 
     // Filter out empty text tokens
     return result.filter((t) => !(t.type === "text" && t.value === ""));
-  }, [event]);
+  }, [event, contentOverride]);
 
   // Build emoji map for NIP-30 custom emoji rendering. Merge the event's own
   // emoji tags with the viewer's collection so shortcodes still render when
@@ -612,7 +619,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             );
           }
           case "mention":
-            return <NostrMention key={i} pubkey={token.pubkey} />;
+            return <NostrMention key={i} pubkey={token.pubkey} noAtPrefix={noMentionAtPrefix} />;
           case "nostr-link":
             return (
               <a
@@ -745,7 +752,7 @@ function ImageGrid({ images, onOpen }: { images: string[]; onOpen: (index: numbe
 }
 
 /** Mention chip resolving the profile's display name. */
-function NostrMention({ pubkey }: { pubkey: string }) {
+function NostrMention({ pubkey, noAtPrefix = false }: { pubkey: string; noAtPrefix?: boolean }) {
   const author = useAuthor(pubkey);
   const hasRealName = !!(author.data?.metadata?.name || author.data?.metadata?.display_name);
   const displayName = getDisplayName(author.data?.metadata, pubkey);
@@ -758,7 +765,7 @@ function NostrMention({ pubkey }: { pubkey: string }) {
       )}
       title={pubkey}
     >
-      @{displayName}
+      {noAtPrefix ? "" : "@"}{displayName}
     </span>
   );
 }

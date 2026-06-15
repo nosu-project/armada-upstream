@@ -19,7 +19,7 @@ import { useEvent } from "@/hooks/useEvent";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useGroupSearch } from "@/hooks/useGroupSearch";
-import { useEditMessage } from "@/hooks/useEditMessage";
+import { useDeleteOwnMessage, useEditMessage } from "@/hooks/useEditMessage";
 import { useReactions } from "@/hooks/useReactions";
 import { useReplyCount } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";import { channelReadKey, useReadState } from "@/hooks/useReadState";
@@ -87,7 +87,9 @@ interface ChatMessageProps {
   isEditing?: boolean;
   onRetry?: () => void;
   onDiscard?: () => void;
-  onDelete: (eventId: string) => void;
+  /** Delete this message. Self-deletes publish NIP-09 (kind 5); moderator
+   *  deletes of others' messages use the NIP-29 moderation event. */
+  onDelete: (event: NostrEvent) => void;
   onReply: (event: NostrEvent) => void;
   /** Open the threaded-replies side panel for this message. */
   onOpenThread?: (event: NostrEvent) => void;
@@ -117,6 +119,9 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   );
   // Only plain chat messages are editable (polls carry structured tags).
   const canEdit = isOwn && event.kind === KIND_GROUP_CHAT && !isPending && !isFailed;
+  // The author can delete their own confirmed message (NIP-09 kind 5);
+  // moderators can delete anyone's (NIP-29 moderation event).
+  const canDelete = (isOwn && !isPending && !isFailed) || canModerate;
   const wasEdited = event.tags.some(([name]) => name === "edited");
   const [editText, setEditText] = useState(event.content);
   // Two-step delete: the first click arms (highlights) the trash button, the
@@ -124,6 +129,10 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   // deletes from a single misclick.
   const [deleteArmed, setDeleteArmed] = useState(false);
   const disarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Touch devices have no hover, so the action toolbar (reply/react/thread/…)
+  // would never appear. Tapping the message toggles it "active" to keep the
+  // toolbar open for interaction; tapping again (or another message) closes it.
+  const [active, setActive] = useState(false);
 
   const disarmDelete = useCallback(() => {
     if (disarmTimer.current) clearTimeout(disarmTimer.current);
@@ -134,13 +143,13 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   const handleDeleteClick = useCallback(() => {
     if (deleteArmed) {
       disarmDelete();
-      onDelete(event.id);
+      onDelete(event);
     } else {
       setDeleteArmed(true);
       if (disarmTimer.current) clearTimeout(disarmTimer.current);
       disarmTimer.current = setTimeout(() => setDeleteArmed(false), 3000);
     }
-  }, [deleteArmed, disarmDelete, onDelete, event.id]);
+  }, [deleteArmed, disarmDelete, onDelete, event]);
 
   // Clean up the disarm timer on unmount.
   useEffect(() => () => {
@@ -152,11 +161,22 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
     if (isEditing) setEditText(event.content);
   }, [isEditing, event.content]);
 
+  // Toggle the toolbar on tap, but ignore taps that land on interactive
+  // children (buttons, links, inputs, mention chips) so those still act
+  // normally instead of being swallowed by the toggle.
+  const handleRowClick = useCallback((e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button, a, input, textarea, [role='button']")) return;
+    setActive((v) => !v);
+  }, []);
+
   return (
     <div
       onMouseLeave={disarmDelete}
+      onClick={handleRowClick}
+      data-active={active || undefined}
       className={cn(
         "group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
+        active && "bg-secondary/40",
         mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
         isPending && "opacity-60",
         isFailed && "bg-destructive/5",
@@ -191,7 +211,7 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
           {/* Inline action toolbar, right-aligned on the header row. Negative
               vertical margins keep the taller icon buttons from increasing the
               header row's height. */}
-          <div className="ml-auto -my-1.5 flex items-center gap-0.5 self-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          <div className="ml-auto -my-1.5 flex items-center gap-0.5 self-center opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity">
             {canWrite && !isEditing && <ReactionPicker onReact={react} />}
             {canWrite && !isEditing && (
               <Tooltip>
@@ -241,7 +261,7 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
                 <TooltipContent>Edit message</TooltipContent>
               </Tooltip>
             )}
-            {canModerate && !isEditing && (
+            {canDelete && !isEditing && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -304,10 +324,16 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
             <PollCard event={event} relayUrl={relayUrl} groupId={groupId} canVote={canWrite} />
           </>
         ) : isMeAction(event) ? (
-          <p className="text-[15px] italic text-muted-foreground">
+          <div className="text-[15px] italic text-muted-foreground">
             <span className="font-semibold not-italic text-primary">{displayName}</span>{" "}
-            {meActionText(event)}
-          </p>
+            <ChatContent
+              event={event}
+              contentOverride={meActionText(event)}
+              className="inline italic"
+              highlight={highlight}
+              noMentionAtPrefix
+            />
+          </div>
         ) : (
           <ChatContent event={event} className="text-[15px]" highlight={highlight} />
         )}
@@ -372,6 +398,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
   const { deleteEvent, removeUser } = useGroupModeration(relayUrl, groupId);
   const { mutateAsync: republish } = useRepublish();
   const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);
+  const { mutate: deleteOwnMessage } = useDeleteOwnMessage(relayUrl, groupId);
   const { markRead } = useReadState();
   const { results: searchResults, isLoading: searchLoading, active: searching } = useGroupSearch(
     relayUrl,
@@ -499,6 +526,19 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     [republish, relayUrl, markSent, markFailed],
   );
 
+  // Delete a message: the author's own posts go out as NIP-09 kind 5 deletions;
+  // moderators deleting others' posts use the NIP-29 moderation event.
+  const handleDelete = useCallback(
+    (event: NostrEvent) => {
+      if (user?.pubkey === event.pubkey) {
+        deleteOwnMessage({ event });
+      } else {
+        deleteEvent.mutate({ eventId: event.id });
+      }
+    },
+    [user?.pubkey, deleteOwnMessage, deleteEvent],
+  );
+
   // Submit an inline edit: delete the original + republish at its timestamp,
   // optimistically swapping the original message for the edited one.
   const handleEditSubmit = useCallback(
@@ -563,7 +603,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
                     canWrite={Boolean(user && canWrite)}
                     canModerate={canModerate}
                     highlight={searchQuery}
-                    onDelete={(eventId) => deleteEvent.mutate({ eventId })}
+                    onDelete={handleDelete}
                     onReply={setReplyTo}
                   />
                 ))}
@@ -600,7 +640,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
               isEditing={editingId === msg.id}
               onRetry={() => handleRetry(msg)}
               onDiscard={() => removeOptimistic(msg.id)}
-              onDelete={(eventId) => deleteEvent.mutate({ eventId })}
+              onDelete={handleDelete}
               onReply={setReplyTo}
               onOpenThread={openThread}
               onEdit={(e) => setEditingId(e.id)}

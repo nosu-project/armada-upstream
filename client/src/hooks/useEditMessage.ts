@@ -54,3 +54,29 @@ export function useEditMessage(relayUrl: string, groupId: string) {
     },
   });
 }
+
+/**
+ * Delete a message the current user authored, NIP-09 style (kind 5). The relay
+ * enforces author-only deletion; the `h` tag scopes it to the group and `k`
+ * records the deleted kind per NIP-09. Use this for self-deletes; moderator
+ * deletion of others' messages goes through the NIP-29 moderation event
+ * (kind 9005) in `useGroupModeration`.
+ */
+export function useDeleteOwnMessage(relayUrl: string, groupId: string) {
+  const { mutateAsync: publish } = useNostrPublish();
+
+  return useMutation<void, Error, { event: NostrEvent }>({
+    mutationFn: async ({ event }) => {
+      await publish({
+        kind: KIND_DELETE,
+        content: "",
+        tags: [
+          ["e", event.id],
+          ["k", String(event.kind)],
+          ["h", groupId],
+        ],
+        relay: relayUrl,
+      });
+    },
+  });
+}
