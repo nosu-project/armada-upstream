@@ -168,24 +168,31 @@ export function ServerRail({
             to="/dms"
             aria-label="Direct messages"
             onClick={onNavigate}
-            className={({ isActive }) =>
-              cn(
-                "group relative flex items-center justify-center size-12 clip-corner-lg transition-all",
-                isActive
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-secondary text-secondary-foreground hover:bg-primary hover:text-primary-foreground",
-              )
-            }
+            className="group relative flex items-center justify-center"
           >
-            <MessageSquare className="size-5" />
+            <span
+              className={cn(
+                "relative block size-12 transition-all duration-150",
+                "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
+              )}
+            >
+              <span
+                className={cn(
+                  "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                  "bg-muted text-primary opacity-50 saturate-50",
+                  "group-hover:opacity-100 group-hover:saturate-100",
+                  "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                )}
+              >
+                <MessageSquare className="size-5" />
+              </span>
+            </span>
           </NavLink>
         </TooltipTrigger>
         <TooltipContent side="right" className="font-medium">
           Direct messages
         </TooltipContent>
       </Tooltip>
-
-      <div className="w-7 h-px bg-chrome-divider" />
 
       {servers.map((url) => (
         <ServerButton

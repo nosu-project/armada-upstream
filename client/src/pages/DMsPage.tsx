@@ -294,19 +294,24 @@ export function DMsPage() {
           activePeer && "hidden sidebar:flex",
         )}
       >
-        <header className="h-12 mx-2 mt-3 px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
-          <MessageSquare className="size-5 text-muted-foreground" />
-          <h1 className="font-semibold flex-1">Direct Messages</h1>
+        <header className="relative pl-5 pr-3 pt-5 pb-3 flex flex-col justify-center shrink-0">
+          <h1 className="font-semibold truncate leading-tight tracking-wide text-sm pr-8">Direct Messages</h1>
+          <span className="text-[11px] text-muted-foreground truncate leading-tight">
+            Message your friends.
+          </span>
           <Button
             variant="ghost"
             size="icon"
             aria-label="New message"
-            className="size-8"
+            className="absolute right-3 bottom-3 size-8"
             onClick={() => setComposing(true)}
           >
             <Plus className="size-5" />
           </Button>
         </header>
+
+        {/* Divider between the header and the conversation list. */}
+        <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
 
         <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
           {!dmSupported ? (
