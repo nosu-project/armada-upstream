@@ -1,4 +1,4 @@
-import { AlertCircle, Hash, Loader2, Pencil, Reply, Search, Trash2 } from "lucide-react";
+import { AlertCircle, Hash, Loader2, MessagesSquare, Pencil, Reply, Search, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -6,6 +6,7 @@ import { ChatContent } from "@/components/chat/ChatContent";
 import { PollCard } from "@/components/chat/PollCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
+import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import LoginDialog from "@/components/auth/LoginDialog";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -20,12 +21,13 @@ import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useGroupSearch } from "@/hooks/useGroupSearch";
 import { useEditMessage } from "@/hooks/useEditMessage";
 import { useReactions } from "@/hooks/useReactions";
-import { useRepublish } from "@/hooks/useNostrPublish";
-import { channelReadKey, useReadState } from "@/hooks/useReadState";
+import { useReplyCount } from "@/hooks/useThread";
+import { useRepublish } from "@/hooks/useNostrPublish";import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { isMeAction, meActionText, type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 import type { SendStatus } from "@/hooks/useGroupMessages";
@@ -87,6 +89,8 @@ interface ChatMessageProps {
   onDiscard?: () => void;
   onDelete: (eventId: string) => void;
   onReply: (event: NostrEvent) => void;
+  /** Open the threaded-replies side panel for this message. */
+  onOpenThread?: (event: NostrEvent) => void;
   /** Begin editing this message (own, non-poll messages only). */
   onEdit?: (event: NostrEvent) => void;
   /** Submit an inline edit with new content. */
@@ -95,13 +99,14 @@ interface ChatMessageProps {
   onEditCancel?: () => void;
 }
 
-function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, onRetry, onDiscard, onDelete, onReply, onEdit, onEditSubmit, onEditCancel }: ChatMessageProps) {
+function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, onRetry, onDiscard, onDelete, onReply, onOpenThread, onEdit, onEditSubmit, onEditCancel }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);
   const replyToId = getReplyToId(event);
   const { tallies, react } = useReactions(event, relayUrl, groupId);
+  const replyCount = useReplyCount(event.id, relayUrl);
   const isPending = sendStatus === "pending";
   const isFailed = sendStatus === "failed";
   const isOwn = user?.pubkey === event.pubkey;
@@ -216,10 +221,25 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
             <ChatContent event={event} className="text-[15px]" highlight={highlight} />
             <PollCard event={event} relayUrl={relayUrl} groupId={groupId} canVote={canWrite} />
           </>
+        ) : isMeAction(event) ? (
+          <p className="text-[15px] italic text-muted-foreground">
+            <span className="font-semibold not-italic text-primary">{displayName}</span>{" "}
+            {meActionText(event)}
+          </p>
         ) : (
           <ChatContent event={event} className="text-[15px]" highlight={highlight} />
         )}
         {!isEditing && <ReactionBar tallies={tallies} canReact={canWrite} onReact={react} />}
+        {!isEditing && replyCount > 0 && onOpenThread && (
+          <button
+            type="button"
+            onClick={() => onOpenThread(event)}
+            className="mt-0.5 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10 transition-colors"
+          >
+            <MessagesSquare className="size-3.5" />
+            {replyCount} {replyCount === 1 ? "reply" : "replies"}
+          </button>
+        )}
         {isFailed && (
           <div className="flex items-center gap-2 mt-1 text-[11px] text-destructive">
             <AlertCircle className="size-3.5 shrink-0" />
@@ -249,6 +269,22 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
               </Button>
             </TooltipTrigger>
             <TooltipContent>Reply</TooltipContent>
+          </Tooltip>
+        )}
+        {canWrite && !isEditing && onOpenThread && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Reply in thread"
+                className="size-7 text-muted-foreground hover:text-primary"
+                onClick={() => onOpenThread(event)}
+              >
+                <MessagesSquare className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Reply in thread</TooltipContent>
           </Tooltip>
         )}
         {canEdit && !isEditing && (
@@ -324,7 +360,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     markFailed,
     removeOptimistic,
   } = useGroupMessages(relayUrl, groupId);
-  const { deleteEvent } = useGroupModeration(relayUrl, groupId);
+  const { deleteEvent, removeUser } = useGroupModeration(relayUrl, groupId);
   const { mutateAsync: republish } = useRepublish();
   const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);
   const { markRead } = useReadState();
@@ -334,11 +370,29 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     searchQuery,
   );
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
+  const [threadRoot, setThreadRoot] = useState<NostrEvent | undefined>(undefined);
+  // Focus the thread reply input when the panel opens via /thread (vs. just
+  // clicking a "N replies" badge to browse).
+  const [threadAutoFocus, setThreadAutoFocus] = useState(false);
+  // The root kept mounted through the panel's slide-out close animation. It
+  // tracks threadRoot when open and lingers (so content stays put) while
+  // closing; cleared a beat after threadRoot becomes undefined.
+  const [lastThreadRoot, setLastThreadRoot] = useState<NostrEvent | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
+
+  // Keep the thread panel content mounted through its slide-out animation.
+  useEffect(() => {
+    if (threadRoot) {
+      setLastThreadRoot(threadRoot);
+      return;
+    }
+    const t = setTimeout(() => setLastThreadRoot(undefined), 200);
+    return () => clearTimeout(t);
+  }, [threadRoot]);
 
   // Mark the channel read up to the newest message while it's on screen. Only
   // when the document is visible so a backgrounded tab doesn't silently clear
@@ -365,6 +419,23 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     }
   }, [messages]);
 
+  // Opening/closing the thread panel reflows the message column (its width
+  // animates over ~200ms), which would otherwise let the bottom-anchored view
+  // drift. While the panel animates, keep the scroll pinned to the bottom if
+  // the user was already there.
+  useEffect(() => {
+    if (!isAutoScrollRef.current) return;
+    let raf = 0;
+    const start = performance.now();
+    const pin = (now: number) => {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+      if (now - start < 260) raf = requestAnimationFrame(pin);
+    };
+    raf = requestAnimationFrame(pin);
+    return () => cancelAnimationFrame(raf);
+  }, [threadRoot]);
+
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -375,6 +446,34 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     setReplyTo(undefined);
     isAutoScrollRef.current = true;
   }, []);
+
+  // Open the thread panel for a message. `focusReply` focuses the reply input
+  // (used by /thread); badge/button clicks just browse without stealing focus.
+  const openThread = useCallback((event: NostrEvent, focusReply = false) => {
+    setThreadAutoFocus(focusReply);
+    setThreadRoot(event);
+  }, []);
+
+  // Run a slash command delegated by the composer (/thread, /kick, /ban). The
+  // composer resolves any target pubkey and resets itself.
+  const handleSlashAction = useCallback(
+    async (action: SlashAction) => {
+      if (action.kind === "openThread") {
+        const latest = messages[messages.length - 1];
+        if (latest) openThread(latest, true);
+        else toast({ title: "No message to thread", description: "Send a message first." });
+        return;
+      }
+      if (action.kind === "kick" || action.kind === "ban") {
+        await removeUser.mutateAsync({
+          pubkey: action.pubkey,
+          reason: action.kind === "ban" ? action.reason : undefined,
+        });
+        toast({ title: "User removed", description: "The user was removed from the channel." });
+      }
+    },
+    [removeUser, messages, openThread],
+  );
 
   // Retry a failed optimistic message: re-publish the already-signed event
   // (id preserved) and reconcile status on the result.
@@ -421,7 +520,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
   );
 
   return (
-    <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
+    <div className="flex flex-1 min-h-0 min-w-0">
+      <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
       {/* Messages (or search results, filtered in-place) */}
       <div
         ref={scrollRef}
@@ -493,6 +593,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
               onDiscard={() => removeOptimistic(msg.id)}
               onDelete={(eventId) => deleteEvent.mutate({ eventId })}
               onReply={setReplyTo}
+              onOpenThread={openThread}
               onEdit={(e) => setEditingId(e.id)}
               onEditSubmit={handleEditSubmit}
               onEditCancel={() => setEditingId(undefined)}
@@ -513,6 +614,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
           onOptimisticInsert={insertOptimistic}
           onOptimisticSent={markSent}
           onOptimisticFailed={markFailed}
+          canModerate={canModerate}
+          onSlashAction={handleSlashAction}
         />
       ) : (
         <div className="border-t p-3 shrink-0 pb-safe">
@@ -548,6 +651,36 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
         isOpen={signupDialogOpen}
         onClose={() => setSignupDialogOpen(false)}
       />
+      </div>
+
+      {/* Thread panel: slides in/out like the member roster. The wrapper
+          animates width (0 → fixed) while the inner panel slides in from the
+          right. Content persists through the close animation via lastThreadRoot. */}
+      <div
+        className={cn(
+          "shrink-0 overflow-hidden transition-[width] duration-200 ease-out",
+          "w-0",
+          threadRoot && "sidebar:w-[23rem] w-full",
+        )}
+      >
+        <div
+          className={cn(
+            "h-full flex sidebar:w-[23rem] w-full transition-transform duration-200 ease-out",
+            threadRoot ? "translate-x-0" : "translate-x-full",
+          )}
+        >
+          {lastThreadRoot && (
+            <ThreadPanel
+              root={lastThreadRoot}
+              relayUrl={relayUrl}
+              groupId={groupId}
+              canWrite={Boolean(user && canWrite)}
+              autoFocus={threadAutoFocus}
+              onClose={() => setThreadRoot(undefined)}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }

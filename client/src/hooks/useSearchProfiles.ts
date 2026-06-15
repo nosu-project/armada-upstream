@@ -117,3 +117,54 @@ export function useSearchProfiles(query: string) {
     data,
   };
 }
+
+/**
+ * Resolve a fixed set of pubkeys (e.g. a room's members) to profiles for the
+ * @-mention autocomplete, filtered by `query`. Reads cached author metadata
+ * from the Query cache; pubkeys without cached metadata still appear (matched
+ * by their npub/hex) so any room member can be mentioned. Used to scope the
+ * mention menu to people in the room instead of searching all of Nostr.
+ */
+export function useMemberProfiles(pubkeys: string[], query: string) {
+  const queryClient = useQueryClient();
+
+  return useMemo<SearchProfile[]>(() => {
+    const lowerQuery = query.trim().toLowerCase();
+
+    const profiles: SearchProfile[] = pubkeys.map((pubkey) => {
+      const entry = queryClient
+        .getQueryCache()
+        .find({ queryKey: ["author", pubkey] });
+      const data = entry?.state.data as
+        | { event?: NostrEvent; metadata?: NostrMetadata }
+        | undefined;
+      return {
+        pubkey,
+        metadata: data?.metadata ?? {},
+        event: data?.event ?? ({ pubkey, tags: [], content: "", kind: 0, created_at: 0, id: "", sig: "" } as NostrEvent),
+      };
+    });
+
+    const matched = lowerQuery
+      ? profiles.filter(({ pubkey, metadata }) => {
+          const name = metadata.name?.toLowerCase() ?? "";
+          const displayName = metadata.display_name?.toLowerCase() ?? "";
+          const nip05 = metadata.nip05?.toLowerCase() ?? "";
+          return (
+            name.includes(lowerQuery) ||
+            displayName.includes(lowerQuery) ||
+            nip05.includes(lowerQuery) ||
+            pubkey.startsWith(lowerQuery)
+          );
+        })
+      : profiles;
+
+    matched.sort((a, b) => {
+      const aName = (a.metadata.name || a.metadata.display_name || a.pubkey).toLowerCase();
+      const bName = (b.metadata.name || b.metadata.display_name || b.pubkey).toLowerCase();
+      return aName.localeCompare(bName);
+    });
+
+    return matched.slice(0, 10);
+  }, [pubkeys, query, queryClient]);
+}

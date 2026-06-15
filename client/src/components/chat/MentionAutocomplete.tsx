@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
-import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
+import { useSearchProfiles, useMemberProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +12,12 @@ interface MentionAutocompleteProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   content: string;
   onInsertMention: (params: { start: number; end: number; replacement: string }) => void;
+  /**
+   * When provided, restrict mention candidates to these pubkeys (the room's
+   * members) instead of searching all of Nostr. Used by group chat so `@`
+   * only suggests people in the room.
+   */
+  restrictToPubkeys?: string[];
 }
 
 /** CSS properties that affect text layout and must be copied to the mirror element. */
@@ -76,23 +82,28 @@ export function MentionAutocomplete({
   textareaRef,
   content,
   onInsertMention,
+  restrictToPubkeys,
 }: MentionAutocompleteProps) {
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionStart, setMentionStart] = useState(-1);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  // Bottom-anchored so a short list hugs the composer instead of floating.
+  const [dropdownPos, setDropdownPos] = useState<{ bottom: number; left: number } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const handleClose = useCallback(() => setIsOpen(false), []);
-  const { computePosition, renderPortal } = usePortalDropdown({
+  const { renderPortal } = usePortalDropdown({
     textareaRef,
     isOpen,
     onClose: handleClose,
     dropdownHeight: 240, // must match max-h-[240px] below
   });
 
-  const { data: profiles } = useSearchProfiles(isOpen ? mentionQuery : "");
+  const restricted = Array.isArray(restrictToPubkeys);
+  const { data: searchProfiles } = useSearchProfiles(isOpen && !restricted ? mentionQuery : "");
+  const memberProfiles = useMemberProfiles(restrictToPubkeys ?? [], isOpen ? mentionQuery : "");
+  const profiles = restricted ? memberProfiles : searchProfiles;
 
   // Detect @mention query at cursor.
   const detectMention = useCallback((text?: string, cursorPos?: number) => {
@@ -124,7 +135,7 @@ export function MentionAutocomplete({
 
     const query = value.slice(atPos + 1, cursor);
 
-    if (query.length === 0 || query.length > 50) {
+    if (query.length > 50) {
       setIsOpen(false);
       setMentionQuery("");
       setMentionStart(-1);
@@ -136,9 +147,15 @@ export function MentionAutocomplete({
     setIsOpen(true);
     setSelectedIndex(0);
 
-    const coords = getCaretCoordinates(textarea, atPos);
-    setDropdownPos(computePosition(coords));
-  }, [textareaRef, computePosition]);
+    // Anchor the menu's bottom just above the composer's top edge so a short
+    // list hugs the composer; track the caret horizontally.
+    const caret = getCaretCoordinates(textarea, atPos);
+    const rect = textarea.getBoundingClientRect();
+    setDropdownPos({
+      bottom: window.innerHeight - rect.top + 6,
+      left: Math.max(8, Math.min(rect.left + caret.left, window.innerWidth - 280 - 8)),
+    });
+  }, [textareaRef]);
 
   // Listen for input/cursor changes on the textarea element.
   useEffect(() => {
@@ -240,8 +257,8 @@ export function MentionAutocomplete({
   const dropdown = (
     <div
       data-autocomplete-dropdown
-      className="fixed z-[300] w-[280px] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150 pointer-events-auto"
-      style={{ top: dropdownPos.top, left: dropdownPos.left }}
+      className="fixed z-[300] w-[280px] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
+      style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
       <div ref={listRef} className="max-h-[240px] overflow-y-auto py-1">
         {profiles.map((profile, index) => (

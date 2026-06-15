@@ -15,6 +15,8 @@ export const KIND_REACTION = 7;
 export const KIND_GROUP_CHAT = 9;
 /** Thread/forum post inside a group. */
 export const KIND_GROUP_THREAD = 11;
+/** NIP-22 comment — used here as a threaded reply to a chat message. */
+export const KIND_COMMENT = 1111;
 
 /** Moderation: add user / set roles. */
 export const KIND_PUT_USER = 9000;
@@ -260,4 +262,46 @@ export function buildPreviousRefs(events: NostrEvent[], selfPubkey: string | und
     if (picked.size >= count) break;
   }
   return [...picked];
+}
+
+/**
+ * Build the NIP-22 tags for a kind-1111 comment replying to `parent` inside a
+ * NIP-29 group. The uppercase `K`/`E`/`P` tags pin the immutable *thread root*;
+ * the lowercase `k`/`e`/`p` tags point at the *immediate parent*. When the
+ * parent is itself a comment, its uppercase root tags are inherited so the root
+ * is stable at any nesting depth (matching Flotilla / @welshman). The group `h`
+ * tag is kept so the NIP-29 relay scopes and authorizes the reply.
+ *
+ * https://github.com/nostr-protocol/nips/blob/master/22.md
+ */
+export function buildCommentTags(parent: NostrEvent, groupId: string): string[][] {
+  const tags: string[][] = [["h", groupId]];
+
+  const rootTags = parent.tags.filter(([n]) => n === "K" || n === "E" || n === "P");
+  if (rootTags.length > 0) {
+    // Parent is itself a comment: inherit its root pointer verbatim.
+    for (const t of rootTags) tags.push([...t]);
+  } else {
+    // Parent is the root of this thread.
+    tags.push(["K", String(parent.kind)]);
+    tags.push(["E", parent.id, "", parent.pubkey]);
+    tags.push(["P", parent.pubkey]);
+  }
+
+  // Immediate-parent pointer (always the event being replied to).
+  tags.push(["k", String(parent.kind)]);
+  tags.push(["e", parent.id, "", parent.pubkey]);
+  tags.push(["p", parent.pubkey]);
+
+  return tags;
+}
+
+/** The thread-root event id a comment belongs to (its uppercase `E` tag). */
+export function getCommentRootId(event: NostrEvent): string | undefined {
+  return tag(event, "E")?.[1];
+}
+
+/** The immediate parent event id a comment replies to (its lowercase `e` tag). */
+export function getCommentParentId(event: NostrEvent): string | undefined {
+  return tag(event, "e")?.[1];
 }

@@ -19,6 +19,7 @@ import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
 import { GifPicker } from "@/components/chat/GifPicker";
 import { MentionAutocomplete } from "@/components/chat/MentionAutocomplete";
+import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { StickerPicker } from "@/components/chat/StickerPicker";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -26,6 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
+import { useGroup } from "@/hooks/useGroup";
 import { useInsertText } from "@/hooks/useInsertText";
 import { useMentionInsertions } from "@/hooks/useMentionBus";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -39,6 +41,7 @@ import { extractHashtags } from "@/lib/hashtag";
 import { IMETA_MEDIA_URL_REGEX, IMETA_MEDIA_URL_TEST_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { buildPreviousRefs, KIND_GROUP_CHAT } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
+import { parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 import type { AddrCoords } from "@/hooks/useEvent";
@@ -178,6 +181,12 @@ interface ChatComposerProps {
   /** Placeholder text for the input (defaults to the group placeholder). */
   placeholder?: string;
   /**
+   * Extra key fragment to scope the per-channel localStorage draft. Use a
+   * distinct value (e.g. a thread root id) when more than one composer targets
+   * the same group so their drafts don't collide.
+   */
+  draftScope?: string;
+  /**
    * Optimistic-send hooks (group mode). When provided, an outgoing message is
    * inserted into the timeline as `pending` the moment it's signed, then
    * confirmed (`onSent` of the publish) or marked failed for retry.
@@ -185,6 +194,15 @@ interface ChatComposerProps {
   onOptimisticInsert?: (event: NostrEvent) => void;
   onOptimisticSent?: (id: string) => void;
   onOptimisticFailed?: (id: string) => void;
+  /** Whether the current user can moderate (enables moderation slash commands). */
+  canModerate?: boolean;
+  /** Focus the textarea on mount (e.g. when a thread panel opens). */
+  autoFocus?: boolean;
+  /**
+   * Run a slash-command moderation action (e.g. /kick, /ban). Delegated to the
+   * caller, which owns the NIP-29 moderation mutations and member roster.
+   */
+  onSlashAction?: (action: SlashAction) => void | Promise<void>;
 }
 
 /**
@@ -197,7 +215,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder, onOptimisticInsert, onOptimisticSent, onOptimisticFailed }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onSlashAction }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
@@ -205,7 +223,22 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const { toast } = useToast();
   const isMobile = useIsMobile();
 
-  const draftKey = `chat-draft:${relayUrl}:${groupId}`;
+  // Scope @-mentions to people in the room: admins, members, and anyone who
+  // has spoken in this view. DMs (relayUrl === "dm") have no room, so mentions
+  // are disabled there.
+  const isDM = relayUrl === "dm";
+  const { data: groupDetails } = useGroup(isDM ? undefined : relayUrl, isDM ? undefined : groupId);
+  const memberPubkeys = useMemo(() => {
+    if (isDM) return undefined;
+    const set = new Set<string>();
+    for (const a of groupDetails?.admins ?? []) set.add(a.pubkey);
+    for (const m of groupDetails?.members ?? []) set.add(m);
+    for (const m of messages) set.add(m.pubkey);
+    if (user) set.add(user.pubkey);
+    return [...set];
+  }, [isDM, groupDetails?.admins, groupDetails?.members, messages, user]);
+
+  const draftKey = `chat-draft:${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
   const [content, setContent] = useState(() => readDraft(draftKey).content);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -270,6 +303,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   useEffect(() => {
     if (replyTo) textareaRef.current?.focus();
   }, [replyTo]);
+
+  // Focus on mount when requested (e.g. the thread panel opening via /thread).
+  useEffect(() => {
+    if (autoFocus) requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [autoFocus]);
 
   // Dismiss the emoji/GIF/sticker picker when interacting outside it — e.g.
   // clicking back into the chat messages or the composer's text input.
@@ -626,14 +664,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return tags;
   }, [groupId, messages, user, replyTo, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
 
-  const handleSend = useCallback(async () => {
-    const text = content.trim();
-    // Append any attachment URLs not already present in the text so the
-    // imeta/media tagging in buildMessageTags picks them up.
-    const extraUrls = attachments
-      .map((a) => a.url)
-      .filter((url) => !text.includes(url));
-    const finalText = [text, ...extraUrls].filter(Boolean).join("\n");
+  /** Publish a finalized message body via the active send path. */
+  const publishMessage = useCallback(async (finalText: string) => {
     if (!finalText || !user || isSending || finalText.length > MAX_CHARS) return;
 
     try {
@@ -688,7 +720,79 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         variant: "destructive",
       });
     }
-  }, [content, attachments, user, isSending, sendOverride, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed]);
+  }, [user, isSending, sendOverride, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed]);
+
+  /** Execute a parsed slash command's result (run action / send rewritten text). */
+  const executeSlashCommand = useCallback(async (command: SlashCommand, arg: string) => {
+    const result = command.run(arg, { canModerate, resolvePubkey: resolveNpubArg });
+    if (result.type === "error") {
+      toast({ title: "Command failed", description: result.message, variant: "destructive" });
+      return;
+    }
+    if (result.type === "noop") {
+      resetComposeState();
+      return;
+    }
+    if (result.type === "action") {
+      if (result.action.kind === "openPoll") {
+        setContent("");
+        setMode("poll");
+        textareaRef.current?.focus();
+      } else if (result.action.kind === "openMention") {
+        // Seed an "@" so the mention autocomplete opens for the next keystroke.
+        setContent("@");
+        requestAnimationFrame(() => {
+          const el = textareaRef.current;
+          el?.focus();
+          el?.setSelectionRange(1, 1);
+        });
+      } else if (result.action.kind === "clearDraft") {
+        resetComposeState();
+      } else {
+        // Delegated actions (moderation, open thread) handled by the parent.
+        try {
+          await onSlashAction?.(result.action);
+          resetComposeState();
+        } catch {
+          toast({ title: "Command failed", description: "The action could not be completed.", variant: "destructive" });
+        }
+      }
+      return;
+    }
+    // result.type === "send": publish the rewritten text.
+    await publishMessage(result.text);
+  }, [canModerate, onSlashAction, resetComposeState, toast, publishMessage]);
+
+  /** Run a command picked from the autocomplete menu (Tab/Enter/click). */
+  const runSlashFromMenu = useCallback((command: SlashCommand) => {
+    const parsed = parseSlashCommand(textareaRef.current?.value ?? "");
+    void executeSlashCommand(command, parsed?.command === command ? parsed.arg : "");
+  }, [executeSlashCommand]);
+
+  const handleSend = useCallback(async () => {
+    const text = content.trim();
+
+    // Slash commands: only when the message is purely a "/command …" with no
+    // attachments, in group mode (not delegated DM/thread sends). Text commands
+    // (/me, /shrug) rewrite the outgoing message; action/moderation commands
+    // run a side-effect and send nothing.
+    if (!sendOverride && text.startsWith("/") && attachments.length === 0) {
+      const parsed = parseSlashCommand(text);
+      if (parsed) {
+        await executeSlashCommand(parsed.command, parsed.arg);
+        return;
+      }
+      // Unknown /command: fall through and send it literally.
+    }
+
+    // Append any attachment URLs not already present in the text so the
+    // imeta/media tagging in buildMessageTags picks them up.
+    const extraUrls = attachments
+      .map((a) => a.url)
+      .filter((url) => !text.includes(url));
+    const finalText = [text, ...extraUrls].filter(Boolean).join("\n");
+    await publishMessage(finalText);
+  }, [content, attachments, sendOverride, executeSlashCommand, publishMessage]);
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;
@@ -1028,11 +1132,23 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   maxLength={MAX_CHARS}
                   className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto align-middle"
                 />
-                <MentionAutocomplete
-                  textareaRef={textareaRef}
-                  content={content}
-                  onInsertMention={insertAtCursor}
-                />
+                {!isDM && (
+                  <MentionAutocomplete
+                    textareaRef={textareaRef}
+                    content={content}
+                    onInsertMention={insertAtCursor}
+                    restrictToPubkeys={memberPubkeys}
+                  />
+                )}
+                {!sendOverride && (
+                  <SlashCommandAutocomplete
+                    textareaRef={textareaRef}
+                    content={content}
+                    canModerate={canModerate}
+                    onInsertCommand={insertAtCursor}
+                    onRunCommand={runSlashFromMenu}
+                  />
+                )}
                 <EmojiShortcodeAutocomplete
                   textareaRef={textareaRef}
                   content={content}
