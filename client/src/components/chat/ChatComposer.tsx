@@ -148,6 +148,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
   });
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Keeps the picker mounted through its slide-down exit animation.
+  const [pickerMounted, setPickerMounted] = useState(false);
+  // Animation target for the slide-up/down (toggled a frame after mount).
+  const [pickerVisible, setPickerVisible] = useState(false);
   const [pickerTab, setPickerTab] = useState<"emoji" | "gif" | "stickers">("emoji");
   const [plusOpen, setPlusOpen] = useState(false);
   const [removedEmbeds, setRemovedEmbeds] = useState<Set<string>>(new Set());
@@ -156,6 +160,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   // Poll mode state
   const [mode, setMode] = useState<"post" | "poll">("post");
+  // Mount + animation-target flags so the poll panel slides up/down like the picker.
+  const [pollMounted, setPollMounted] = useState(false);
+  const [pollVisible, setPollVisible] = useState(false);
   const [pollOptions, setPollOptions] = useState([
     { id: pollOptionId(), label: "" },
     { id: pollOptionId(), label: "" },
@@ -165,6 +172,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const pickerToggleRef = useRef<HTMLButtonElement>(null);
   const { insertAtCursor, insertEmoji } = useInsertText(textareaRef, content, setContent);
 
   // Voice recording
@@ -195,6 +204,72 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   useEffect(() => {
     if (replyTo) textareaRef.current?.focus();
   }, [replyTo]);
+
+  // Dismiss the emoji/GIF/sticker picker when interacting outside it — e.g.
+  // clicking back into the chat messages or the composer's text input.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (pickerRef.current?.contains(target)) return;
+      if (pickerToggleRef.current?.contains(target)) return;
+      setPickerOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [pickerOpen]);
+
+  // Mount the picker on open; keep it in the DOM briefly on close so the
+  // slide-down exit transition can play before unmounting.
+  useEffect(() => {
+    if (pickerOpen) {
+      setPickerMounted(true);
+      return;
+    }
+    setPickerVisible(false);
+    if (!pickerMounted) return;
+    const t = setTimeout(() => setPickerMounted(false), 200);
+    return () => clearTimeout(t);
+  }, [pickerOpen, pickerMounted]);
+
+  // Once mounted (and still open), flip the animation target on the next paint
+  // so the enter transition runs from the collapsed (0fr) state to open (1fr).
+  useEffect(() => {
+    if (!pickerMounted || !pickerOpen) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setPickerVisible(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [pickerMounted, pickerOpen]);
+
+  // Same mount/slide lifecycle as the picker, for the inline poll options panel.
+  const pollMode = mode === "poll";
+  useEffect(() => {
+    if (pollMode) {
+      setPollMounted(true);
+      return;
+    }
+    setPollVisible(false);
+    if (!pollMounted) return;
+    const t = setTimeout(() => setPollMounted(false), 200);
+    return () => clearTimeout(t);
+  }, [pollMode, pollMounted]);
+
+  useEffect(() => {
+    if (!pollMounted || !pollMode) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setPollVisible(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [pollMounted, pollMode]);
 
   // Auto-save draft (debounced).
   useEffect(() => {
@@ -557,7 +632,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       {/* Detected quote embeds */}
       {visibleEmbeds.length > 0 && (
-        <div className="px-3 pt-2 space-y-1 max-h-44 overflow-y-auto">
+        <div className="px-3 pt-2 space-y-1 max-h-44 overflow-y-auto animate-in slide-in-from-top-2 fade-in-0 duration-200">
           {visibleEmbeds.map((embed) => (
             <div key={embed.value} className="relative">
               {embed.type === "naddr" && embed.addr ? (
@@ -738,6 +813,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 <TooltipTrigger asChild>
                   <button
                     type="button"
+                    ref={pickerToggleRef}
                     onClick={() => setPickerOpen((v) => !v)}
                     aria-label="Emoji / GIF / Stickers"
                     className={cn(
@@ -798,11 +874,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             )}
 
             {/* ── Poll options ─────────────────────────────────── */}
-            {mode === "poll" && (
-              <div className="space-y-2 pt-2">
-                <div className="space-y-1.5">
-                  {pollOptions.map((opt, idx) => (
-                    <div key={opt.id} className="flex items-center gap-2">
+            {pollMounted && (
+              <div
+                className={cn(
+                  "grid transition-[grid-template-rows,opacity] duration-200 ease-out",
+                  pollVisible ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+                )}
+              >
+                <div className="overflow-hidden min-h-0">
+                <div className="space-y-2 pt-2">
+                  <div className="space-y-1.5">
+                    {pollOptions.map((opt, idx) => (
+                      <div key={opt.id} className="flex items-center gap-2">
                       <input
                         type="text"
                         value={opt.label}
@@ -877,14 +960,25 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   ))}
                 </div>
               </div>
+                </div>
+              </div>
             )}
           </>
         )}
       </div>
 
       {/* ── Emoji / GIF / sticker picker panel ───────────────── */}
-      {pickerOpen && !voiceRecorder.isRecording && (
-        <div className="shrink-0 overflow-hidden animate-in fade-in-0 duration-150 border-t">
+      {pickerMounted && !voiceRecorder.isRecording && (
+        <div
+          ref={pickerRef}
+          className={cn(
+            "shrink-0 grid transition-[grid-template-rows,opacity] duration-200 ease-out",
+            pickerVisible
+              ? "grid-rows-[1fr] opacity-100"
+              : "grid-rows-[0fr] opacity-0",
+          )}
+        >
+          <div className="overflow-hidden min-h-0">
           <div className="flex gap-1 px-3 pt-2">
             <button
               type="button"
@@ -935,7 +1029,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           {pickerTab === "emoji" ? (
             <Suspense
               fallback={
-                <div className="w-full h-[280px] flex items-center justify-center">
+                <div className="w-full h-[360px] flex items-center justify-center">
                   <Loader2 className="size-6 animate-spin text-muted-foreground" />
                 </div>
               }
@@ -954,7 +1048,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           ) : pickerTab === "stickers" ? (
             <StickerPicker
               customEmojis={customEmojis}
-              height={280}
+              height={360}
               autoFocus={!isMobile}
               onSelect={(emoji) => {
                 setContent((prev) => (prev ? prev + "\n" + emoji.url : emoji.url));
@@ -969,6 +1063,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               }}
             />
           )}
+          </div>
         </div>
       )}
     </div>
@@ -984,7 +1079,7 @@ function ReplyBanner({ event, onCancel }: { event: NostrEvent; onCancel?: () => 
   const preview = event.content.replace(new RegExp(IMETA_MEDIA_URL_TEST_REGEX.source, "gi"), "📎").trim();
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-secondary/40 border-b text-xs">
+    <div className="flex items-center gap-2 px-3 py-1.5 bg-secondary/40 border-b text-xs animate-in slide-in-from-top-2 fade-in-0 duration-200">
       <Reply className="size-3.5 text-muted-foreground shrink-0" />
       <span className="text-muted-foreground shrink-0">
         Replying to <span className="font-semibold text-foreground">{displayName}</span>
