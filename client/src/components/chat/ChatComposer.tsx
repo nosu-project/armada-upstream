@@ -52,9 +52,53 @@ const KIND_POLL = 1068;
 
 const MAX_CHARS = 2000;
 
+/** MIME types accepted via paste/drag-and-drop (matches the file picker). */
+const ACCEPTED_PASTE_RE = /^(image|video|audio)\//;
+
 /** Short random ID for poll options. */
 function pollOptionId(): string {
   return Math.random().toString(36).slice(2, 8);
+}
+
+/** A per-channel composer draft persisted in localStorage. */
+interface Draft {
+  content: string;
+  /** Uploaded attachments as [url, NIP-94 tags] entries (Blossom URLs). */
+  attachments: [string, string[][]][];
+}
+
+/**
+ * Read a channel draft. Tolerates the legacy plain-string format (older builds
+ * stored just the text) by treating a non-JSON value as the content.
+ */
+function readDraft(key: string): Draft {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return { content: "", attachments: [] };
+    if (raw[0] === "{") {
+      const parsed = JSON.parse(raw) as Partial<Draft>;
+      return {
+        content: typeof parsed.content === "string" ? parsed.content : "",
+        attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
+      };
+    }
+    return { content: raw, attachments: [] };
+  } catch {
+    return { content: "", attachments: [] };
+  }
+}
+
+/** Write or clear a channel draft. Clears when there's nothing worth keeping. */
+function writeDraft(key: string, content: string, attachments: Map<string, string[][]>): void {
+  try {
+    if (content.trim() || attachments.size > 0) {
+      localStorage.setItem(key, JSON.stringify({ content, attachments: [...attachments] }));
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // localStorage might be full or unavailable.
+  }
 }
 
 /**
@@ -141,13 +185,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const draftKey = `chat-draft:${relayUrl}:${groupId}`;
 
-  const [content, setContent] = useState(() => {
-    try {
-      return localStorage.getItem(draftKey) ?? "";
-    } catch {
-      return "";
-    }
-  });
+  const [content, setContent] = useState(() => readDraft(draftKey).content);
   const [pickerOpen, setPickerOpen] = useState(false);
   // Keeps the picker mounted through its slide-down exit animation.
   const [pickerMounted, setPickerMounted] = useState(false);
@@ -157,7 +195,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const [plusOpen, setPlusOpen] = useState(false);
   const [removedEmbeds, setRemovedEmbeds] = useState<Set<string>>(new Set());
   /** Maps uploaded file URLs to their NIP-94 tags (grouped per upload). */
-  const [uploadedFileGroups, setUploadedFileGroups] = useState<Map<string, string[][]>>(new Map());
+  const [uploadedFileGroups, setUploadedFileGroups] = useState<Map<string, string[][]>>(
+    () => new Map(readDraft(draftKey).attachments),
+  );
 
   // Poll mode state
   const [mode, setMode] = useState<"post" | "poll">("post");
@@ -187,15 +227,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const voiceRecorder = useVoiceRecorder();
   const [isPublishingVoice, setIsPublishingVoice] = useState(false);
 
-  // When switching channels, load that channel's draft.
+  // When switching channels, load that channel's draft (text + attachments).
   useEffect(() => {
-    try {
-      setContent(localStorage.getItem(draftKey) ?? "");
-    } catch {
-      setContent("");
-    }
+    const draft = readDraft(draftKey);
+    setContent(draft.content);
+    setUploadedFileGroups(new Map(draft.attachments));
     setRemovedEmbeds(new Set());
-    setUploadedFileGroups(new Map());
     setMode("post");
   }, [draftKey]);
 
@@ -278,21 +315,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     };
   }, [pollMounted, pollMode]);
 
-  // Auto-save draft (debounced).
+  // Auto-save draft (debounced): persists the text and any uploaded attachments
+  // (already-uploaded Blossom URLs, so safe to serialize) per channel.
   useEffect(() => {
     const timer = setTimeout(() => {
-      try {
-        if (content.trim()) {
-          localStorage.setItem(draftKey, content);
-        } else {
-          localStorage.removeItem(draftKey);
-        }
-      } catch {
-        // localStorage might be full or unavailable
-      }
+      writeDraft(draftKey, content, uploadedFileGroups);
     }, 300);
     return () => clearTimeout(timer);
-  }, [content, draftKey]);
+  }, [content, uploadedFileGroups, draftKey]);
 
   // Detect quote embeds in content (nevent, note, naddr) for preview + q tags.
   const detectedEmbeds = useMemo(() => {
@@ -431,16 +461,52 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const items = e.clipboardData?.items;
     if (!items) return;
 
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.type.startsWith("image/")) {
-        e.preventDefault();
-        const file = item.getAsFile();
-        if (file) {
-          await handleFileUpload(file);
-        }
-        break;
-      }
+    // Upload every pasted file (images, video, audio). Non-file items (plain
+    // text, HTML) fall through to the textarea's default paste handling.
+    const files = Array.from(items)
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null && ACCEPTED_PASTE_RE.test(f.type));
+
+    if (files.length === 0) return;
+    e.preventDefault();
+    for (const file of files) {
+      await handleFileUpload(file);
+    }
+  }, [handleFileUpload]);
+
+  // Drag-and-drop upload onto the composer. `dragDepth` tracks nested
+  // enter/leave events so the overlay doesn't flicker over child elements.
+  const [isDragging, setIsDragging] = useState(false);
+  const dragDepth = useRef(0);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setIsDragging(true);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    const files = Array.from(e.dataTransfer.files ?? []).filter((f) => ACCEPTED_PASTE_RE.test(f.type));
+    dragDepth.current = 0;
+    setIsDragging(false);
+    if (files.length === 0) return;
+    e.preventDefault();
+    for (const file of files) {
+      await handleFileUpload(file);
     }
   }, [handleFileUpload]);
 
@@ -678,7 +744,23 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const charCount = content.length;
 
   return (
-    <div className="shrink-0 pb-[env(safe-area-inset-bottom,0px)] sidebar:pb-1">
+    <div
+      className="relative shrink-0 pb-[env(safe-area-inset-bottom,0px)] sidebar:pb-1"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag-and-drop upload overlay */}
+      {isDragging && (
+        <div className="absolute inset-0 z-30 m-1 flex items-center justify-center clip-corner-lg border-2 border-dashed border-primary/60 bg-primary/10 backdrop-blur-sm pointer-events-none animate-in fade-in-0 duration-150">
+          <div className="flex items-center gap-2 text-sm font-medium text-primary">
+            <Paperclip className="size-4" />
+            Drop files to upload
+          </div>
+        </div>
+      )}
+
       {/* Reply banner */}
       {replyTo && <ReplyBanner event={replyTo} onCancel={onCancelReply} />}
 
