@@ -1,4 +1,4 @@
-import { Headphones, Plus, Settings } from "lucide-react";
+import { Headphones, MessageSquare, Plus, Settings } from "lucide-react";
 import { useMemo, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -161,6 +161,32 @@ export function ServerRail({
         className,
       )}
     >
+      {/* Direct messages — account-level, above the servers (Discord-style). */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <NavLink
+            to="/dms"
+            aria-label="Direct messages"
+            onClick={onNavigate}
+            className={({ isActive }) =>
+              cn(
+                "group relative flex items-center justify-center size-12 clip-corner-lg transition-all",
+                isActive
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-secondary text-secondary-foreground hover:bg-primary hover:text-primary-foreground",
+              )
+            }
+          >
+            <MessageSquare className="size-5" />
+          </NavLink>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="font-medium">
+          Direct messages
+        </TooltipContent>
+      </Tooltip>
+
+      <div className="w-7 h-px bg-chrome-divider" />
+
       {servers.map((url) => (
         <ServerButton
           key={url}

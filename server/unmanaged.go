@@ -11,13 +11,21 @@ import (
 // NIP-29 groups but that an internal single-relay deployment still needs:
 //
 //   - kind 0:     user profiles (display names and avatars in the client)
+//   - kind 4:     NIP-04 encrypted direct messages (relay-scoped DMs)
 //   - kind 10009: the user's NIP-51 list of joined groups
 //
 // relay29's policies reject everything without an `h` tag, so we wrap them
 // to skip these kinds, and add our own guard requiring NIP-42 auth so only
 // the key owner can publish them.
 func isUnmanagedKind(kind int) bool {
-	return kind == 0 || kind == 10009
+	return kind == 0 || kind == 4 || kind == 10009
+}
+
+// isDMKind reports whether the kind is a relay-scoped direct message (NIP-04).
+// DMs share the unmanaged-kind machinery but have stricter read rules: only a
+// conversation participant may query them (enforced in the RejectFilter guard).
+func isDMKind(kind int) bool {
+	return kind == 4
 }
 
 func setupUnmanagedKinds() {
@@ -33,14 +41,15 @@ func setupUnmanagedKinds() {
 		}
 	}
 
-	// Only the authenticated key owner may write their profile / group list.
+	// Only the authenticated key owner may write their own events (profile,
+	// group list, or DM — a DM is signed by its sender).
 	relay.RejectEvent = append(relay.RejectEvent, func(ctx context.Context, event *nostr.Event) (bool, string) {
 		if !isUnmanagedKind(event.Kind) {
 			return false, ""
 		}
 		authed := khatru.GetAuthed(ctx)
 		if authed == "" {
-			return true, "auth-required: must authenticate to publish profiles or lists"
+			return true, "auth-required: must authenticate to publish this event"
 		}
 		if authed != event.PubKey {
 			return true, "restricted: cannot publish events for other pubkeys"
@@ -76,6 +85,22 @@ func setupUnmanagedKinds() {
 		if !filterIsUnmanaged(filter) {
 			return false, ""
 		}
+		// DMs (kind 4) are private: only a conversation participant may read
+		// them. Require NIP-42 auth and that the authed pubkey is either the
+		// sender (authors) or a recipient (`#p`) the query is scoped to. This
+		// both prevents scraping and stops anyone reading others' DMs.
+		if filterIsDM(filter) {
+			authed := khatru.GetAuthed(ctx)
+			if authed == "" {
+				return true, "auth-required: must authenticate to read direct messages"
+			}
+			inAuthors := contains(filter.Authors, authed)
+			inRecipients := contains(filter.Tags["p"], authed)
+			if !inAuthors && !inRecipients {
+				return true, "restricted: can only read direct messages you sent or received"
+			}
+			return false, ""
+		}
 		if len(filter.Authors) == 0 {
 			return true, "unmanaged-kind queries must specify authors"
 		}
@@ -104,4 +129,24 @@ func filterIsUnmanaged(filter nostr.Filter) bool {
 		}
 	}
 	return true
+}
+
+// filterIsDM reports whether an (already unmanaged) filter touches DMs. Any
+// filter that includes kind 4 is held to the stricter participant-only rule.
+func filterIsDM(filter nostr.Filter) bool {
+	for _, kind := range filter.Kinds {
+		if isDMKind(kind) {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, v := range haystack {
+		if v == needle {
+			return true
+		}
+	}
+	return false
 }

@@ -146,8 +146,8 @@ func main() {
 			// moderation + membership
 			9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009,
 			9021, 9022,
-			// unmanaged kinds (profiles, user group lists)
-			0, 10009,
+			// unmanaged kinds (profiles, NIP-04 DMs, user group lists)
+			0, 4, 10009,
 		),
 		policies.PreventTimestampsInThePast(60*time.Second),
 		policies.PreventTimestampsInTheFuture(30*time.Second),
