@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { PollCard } from "@/components/chat/PollCard";
+import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import LoginDialog from "@/components/auth/LoginDialog";
 import SignupDialog from "@/components/auth/SignupDialog";
@@ -80,15 +81,23 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, onDelete
 
   return (
     <div className="group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors">
-      <Avatar shape={getAvatarShape(metadata)} className="size-10 shrink-0 mt-0.5">
-        <AvatarImage src={metadata?.picture} alt={displayName} />
-        <AvatarFallback className="bg-primary/20 text-primary text-sm">
-          {displayName[0]?.toUpperCase()}
-        </AvatarFallback>
-      </Avatar>
+      <ProfilePreviewCard pubkey={event.pubkey}>
+        <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
+            <AvatarImage src={metadata?.picture} alt={displayName} />
+            <AvatarFallback className="bg-primary/20 text-primary text-sm">
+              {displayName[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+        </button>
+      </ProfilePreviewCard>
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
-          <span className="text-[15px] font-semibold text-primary truncate">{displayName}</span>
+          <ProfilePreviewCard pubkey={event.pubkey}>
+            <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
+              {displayName}
+            </button>
+          </ProfilePreviewCard>
           <span className="text-[11px] text-muted-foreground/70 shrink-0">
             {shortTimeAgo(event.created_at)}
           </span>
