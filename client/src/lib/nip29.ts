@@ -7,6 +7,8 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 // ── Kinds ────────────────────────────────────────────────────────────────────
 
+/** NIP-25 reaction to an event (requires `h` tag inside a group). */
+export const KIND_REACTION = 7;
 /** Chat message inside a group (requires `h` tag). */
 export const KIND_GROUP_CHAT = 9;
 /** Thread/forum post inside a group. */

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { PollCard } from "@/components/chat/PollCard";
+import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import LoginDialog from "@/components/auth/LoginDialog";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -15,6 +16,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEvent } from "@/hooks/useEvent";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
+import { useReactions } from "@/hooks/useReactions";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 
@@ -74,6 +76,7 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, onDelete
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);
   const replyToId = getReplyToId(event);
+  const { tallies, react } = useReactions(event, relayUrl, groupId);
 
   return (
     <div className="group flex items-start gap-2.5 py-1 px-2 rounded hover:bg-secondary/40 transition-colors">
@@ -99,8 +102,10 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, onDelete
             </>
           )
           : <ChatContent event={event} className="text-sm" />}
+        <ReactionBar tallies={tallies} canReact={canWrite} onReact={react} />
       </div>
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0">
+        {canWrite && <ReactionPicker onReact={react} />}
         {canWrite && (
           <Tooltip>
             <TooltipTrigger asChild>
