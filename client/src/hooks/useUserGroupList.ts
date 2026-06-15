@@ -82,7 +82,8 @@ type GroupListAction =
   | { type: "add-group"; ref: GroupRef }
   | { type: "remove-group"; ref: GroupRef }
   | { type: "add-server"; url: string }
-  | { type: "remove-server"; url: string };
+  | { type: "remove-server"; url: string }
+  | { type: "reorder-servers"; urls: string[] };
 
 function applyAction(list: UserGroupList, action: GroupListAction): UserGroupList {
   switch (action.type) {
@@ -107,6 +108,26 @@ function applyAction(list: UserGroupList, action: GroupListAction): UserGroupLis
     case "remove-server": {
       const url = normalizeRelayUrl(action.url) ?? action.url;
       return { ...list, servers: list.servers.filter((s) => s !== url) };
+    }
+    case "reorder-servers": {
+      // Reorder the existing servers to match `urls`. Normalize and dedupe the
+      // incoming order, keep only servers already in the list (so a stale
+      // reorder can't add/drop entries), then append any servers the caller
+      // omitted to avoid silently losing them.
+      const known = new Set(list.servers);
+      const desired: string[] = [];
+      const seen = new Set<string>();
+      for (const raw of action.urls) {
+        const url = normalizeRelayUrl(raw) ?? raw;
+        if (known.has(url) && !seen.has(url)) {
+          seen.add(url);
+          desired.push(url);
+        }
+      }
+      for (const url of list.servers) {
+        if (!seen.has(url)) desired.push(url);
+      }
+      return { ...list, servers: desired };
     }
   }
 }

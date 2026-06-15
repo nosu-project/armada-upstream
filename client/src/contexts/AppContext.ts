@@ -36,6 +36,13 @@ export interface AppConfig {
    */
   addedRelays: string[];
   /**
+   * User-defined display order for the server rail, by relay URL. Covers both
+   * pinned platform relays and user-added ones (the relay list itself does not
+   * carry a rail order). Any server not listed here falls back to the default
+   * order (pinned first, then added). Stored locally in app config.
+   */
+  serverOrder: string[];
+  /**
    * App relays for non-NIP-29 traffic (kind 0 profiles, kind 10009 lists,
    * etc.) — Ditto's "app relays" concept. Seeded from VITE_APP_RELAYS
    * (default: relay.ditto.pub + relay.dreamith.to); user-editable.
@@ -71,6 +78,7 @@ export interface AppContextType {
 export const defaultConfig: AppConfig = {
   theme: "dark",
   addedRelays: [],
+  serverOrder: [],
   appRelays: [...APP_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
   useOwnDmRelays: false,
