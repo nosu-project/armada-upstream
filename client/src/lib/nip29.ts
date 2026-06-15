@@ -7,6 +7,8 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 // ── Kinds ────────────────────────────────────────────────────────────────────
 
+/** NIP-09 event deletion request. */
+export const KIND_DELETE = 5;
 /** NIP-25 reaction to an event (requires `h` tag inside a group). */
 export const KIND_REACTION = 7;
 /** Chat message inside a group (requires `h` tag). */

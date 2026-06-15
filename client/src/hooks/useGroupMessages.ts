@@ -8,9 +8,13 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 /** NIP-88 poll kind — polls posted to the group render in the timeline. */
 const KIND_POLL = 1068;
+/** NIP-09 deletion kind. */
+const KIND_DELETE = 5;
 
 /** Event kinds shown in the group timeline. */
 const TIMELINE_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
+/** Kinds the live subscription watches (timeline + deletions). */
+const LIVE_KINDS = [KIND_GROUP_CHAT, KIND_POLL, KIND_DELETE];
 
 /** Delivery status of an optimistically-inserted (locally-published) message. */
 export type SendStatus = "pending" | "failed";
@@ -126,11 +130,20 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     (async () => {
       try {
         for await (const msg of nostr.relay(relayUrl).req(
-          [{ kinds: TIMELINE_KINDS, "#h": [groupId], since: Math.floor(Date.now() / 1000) - 5 }],
+          [{ kinds: LIVE_KINDS, "#h": [groupId], since: Math.floor(Date.now() / 1000) - 5 }],
           { signal: controller.signal },
         )) {
           if (msg[0] === "EVENT") {
             const event = msg[2] as NostrEvent;
+            if (event.kind === KIND_DELETE) {
+              // NIP-09: drop any referenced messages from the timeline. The
+              // relay already removed them from its store; this updates the
+              // live cache (e.g. another client edited/deleted a message).
+              for (const [name, id] of event.tags) {
+                if (name === "e" && id) removeOptimistic(id);
+              }
+              continue;
+            }
             upsertMessage(event);
             setStatus(event.id, undefined);
           }
@@ -141,7 +154,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     })();
 
     return () => controller.abort();
-  }, [nostr, relayUrl, groupId, upsertMessage, setStatus]);
+  }, [nostr, relayUrl, groupId, upsertMessage, setStatus, removeOptimistic]);
 
   const helpers = useMemo(
     () => ({ status, insertOptimistic, markSent, markFailed, removeOptimistic }),

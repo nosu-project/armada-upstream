@@ -143,13 +143,17 @@ func main() {
 			7,
 			// NIP-88 polls (1068) + votes (1018), scoped to the group via `h`
 			1068, 1018,
+			// NIP-09 deletions (kind 5): authors editing/removing their own
+			// messages. khatru enforces author-only deletion; carries an `h`
+			// tag so it routes/scopes to the group.
+			5,
 			// moderation + membership
 			9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009,
 			9021, 9022,
 			// unmanaged kinds (profiles, NIP-04 DMs, user group lists)
 			0, 4, 10009,
 		),
-		policies.PreventTimestampsInThePast(60*time.Second),
+		preventTimestampsInThePast,
 		policies.PreventTimestampsInTheFuture(30*time.Second),
 	)
 

@@ -1,4 +1,4 @@
-import { AlertCircle, Hash, Loader2, Reply, Search, Trash2 } from "lucide-react";
+import { AlertCircle, Hash, Loader2, Pencil, Reply, Search, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -18,11 +18,14 @@ import { useEvent } from "@/hooks/useEvent";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useGroupSearch } from "@/hooks/useGroupSearch";
+import { useEditMessage } from "@/hooks/useEditMessage";
 import { useReactions } from "@/hooks/useReactions";
 import { useRepublish } from "@/hooks/useNostrPublish";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
+import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
 
 import type { SendStatus } from "@/hooks/useGroupMessages";
@@ -78,13 +81,22 @@ interface ChatMessageProps {
   sendStatus?: SendStatus;
   /** Search term to highlight in the message body (search-results mode). */
   highlight?: string;
+  /** Whether this message is currently being edited inline. */
+  isEditing?: boolean;
   onRetry?: () => void;
   onDiscard?: () => void;
   onDelete: (eventId: string) => void;
   onReply: (event: NostrEvent) => void;
+  /** Begin editing this message (own, non-poll messages only). */
+  onEdit?: (event: NostrEvent) => void;
+  /** Submit an inline edit with new content. */
+  onEditSubmit?: (event: NostrEvent, content: string) => void;
+  /** Cancel an in-progress inline edit. */
+  onEditCancel?: () => void;
 }
 
-function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, onRetry, onDiscard, onDelete, onReply }: ChatMessageProps) {
+function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, onRetry, onDiscard, onDelete, onReply, onEdit, onEditSubmit, onEditCancel }: ChatMessageProps) {
+  const { user } = useCurrentUser();
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);
@@ -92,6 +104,16 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   const { tallies, react } = useReactions(event, relayUrl, groupId);
   const isPending = sendStatus === "pending";
   const isFailed = sendStatus === "failed";
+  const isOwn = user?.pubkey === event.pubkey;
+  // Only plain chat messages are editable (polls carry structured tags).
+  const canEdit = isOwn && event.kind === KIND_GROUP_CHAT && !isPending && !isFailed;
+  const wasEdited = event.tags.some(([name]) => name === "edited");
+  const [editText, setEditText] = useState(event.content);
+
+  // Reset the draft whenever an edit (re)starts.
+  useEffect(() => {
+    if (isEditing) setEditText(event.content);
+  }, [isEditing, event.content]);
 
   return (
     <div
@@ -121,20 +143,55 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
           <span className="text-[11px] text-muted-foreground/70 shrink-0">
             {shortTimeAgo(event.created_at)}
           </span>
+          {wasEdited && !isEditing && (
+            <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
+          )}
           {isPending && (
             <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
           )}
         </div>
         {replyToId && <ReplyContext eventId={replyToId} relayUrl={relayUrl} />}
-        {event.kind === KIND_POLL
-          ? (
-            <>
-              <ChatContent event={event} className="text-[15px]" highlight={highlight} />
-              <PollCard event={event} relayUrl={relayUrl} groupId={groupId} canVote={canWrite} />
-            </>
-          )
-          : <ChatContent event={event} className="text-[15px]" highlight={highlight} />}
-        <ReactionBar tallies={tallies} canReact={canWrite} onReact={react} />
+        {isEditing ? (
+          <div className="mt-0.5">
+            <textarea
+              autoFocus
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  onEditSubmit?.(event, editText);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  onEditCancel?.();
+                }
+              }}
+              rows={Math.min(6, Math.max(1, editText.split("\n").length))}
+              className="w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+              <button
+                type="button"
+                className="font-semibold text-primary hover:underline"
+                onClick={() => onEditSubmit?.(event, editText)}
+              >
+                Save
+              </button>
+              <button type="button" className="hover:text-foreground" onClick={() => onEditCancel?.()}>
+                Cancel
+              </button>
+              <span className="opacity-70">escape to cancel · enter to save</span>
+            </div>
+          </div>
+        ) : event.kind === KIND_POLL ? (
+          <>
+            <ChatContent event={event} className="text-[15px]" highlight={highlight} />
+            <PollCard event={event} relayUrl={relayUrl} groupId={groupId} canVote={canWrite} />
+          </>
+        ) : (
+          <ChatContent event={event} className="text-[15px]" highlight={highlight} />
+        )}
+        {!isEditing && <ReactionBar tallies={tallies} canReact={canWrite} onReact={react} />}
         {isFailed && (
           <div className="flex items-center gap-2 mt-1 text-[11px] text-destructive">
             <AlertCircle className="size-3.5 shrink-0" />
@@ -149,8 +206,8 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
         )}
       </div>
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0">
-        {canWrite && <ReactionPicker onReact={react} />}
-        {canWrite && (
+        {canWrite && !isEditing && <ReactionPicker onReact={react} />}
+        {canWrite && !isEditing && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -166,7 +223,23 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
             <TooltipContent>Reply</TooltipContent>
           </Tooltip>
         )}
-        {canModerate && (
+        {canEdit && !isEditing && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Edit message"
+                className="size-7 text-muted-foreground hover:text-primary"
+                onClick={() => onEdit?.(event)}
+              >
+                <Pencil className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Edit message</TooltipContent>
+          </Tooltip>
+        )}
+        {canModerate && !isEditing && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -219,6 +292,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
   } = useGroupMessages(relayUrl, groupId);
   const { deleteEvent } = useGroupModeration(relayUrl, groupId);
   const { mutateAsync: republish } = useRepublish();
+  const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);
   const { markRead } = useReadState();
   const { results: searchResults, isLoading: searchLoading, active: searching } = useGroupSearch(
     relayUrl,
@@ -226,6 +300,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     searchQuery,
   );
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
+  const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -280,6 +355,35 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
       }
     },
     [republish, relayUrl, markSent, markFailed],
+  );
+
+  // Submit an inline edit: delete the original + republish at its timestamp,
+  // optimistically swapping the original message for the edited one.
+  const handleEditSubmit = useCallback(
+    async (original: NostrEvent, content: string) => {
+      const trimmed = content.trim();
+      if (!trimmed || trimmed === original.content.trim()) {
+        setEditingId(undefined);
+        return;
+      }
+      setEditingId(undefined);
+      try {
+        const edited = await editMessage({ original, content: trimmed });
+        // Swap the original for the edited event (which keeps its timestamp).
+        if (edited.id !== original.id) {
+          removeOptimistic(original.id);
+          insertOptimistic(edited);
+          markSent(edited.id);
+        }
+      } catch {
+        toast({
+          title: "Edit failed",
+          description: "The relay rejected the edit.",
+          variant: "destructive",
+        });
+      }
+    },
+    [editMessage, removeOptimistic, insertOptimistic, markSent],
   );
 
   return (
@@ -350,10 +454,14 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
               canWrite={Boolean(user && canWrite)}
               canModerate={canModerate}
               sendStatus={sendStatus[msg.id]}
+              isEditing={editingId === msg.id}
               onRetry={() => handleRetry(msg)}
               onDiscard={() => removeOptimistic(msg.id)}
               onDelete={(eventId) => deleteEvent.mutate({ eventId })}
               onReply={setReplyTo}
+              onEdit={(e) => setEditingId(e.id)}
+              onEditSubmit={handleEditSubmit}
+              onEditCancel={() => setEditingId(undefined)}
             />
           ))
         )}
