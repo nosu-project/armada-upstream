@@ -40,11 +40,13 @@ function resolvePubkey(input: string): string | undefined {
 function ConversationRow({
   peer,
   preview,
+  previewText,
   active,
   onClick,
 }: {
   peer: string;
   preview: NostrEvent | undefined;
+  previewText: string | undefined;
   active: boolean;
   onClick: () => void;
 }) {
@@ -71,9 +73,7 @@ function ConversationRow({
         <div className="text-sm font-medium truncate">{name}</div>
         {preview && (
           <div className="text-xs text-muted-foreground truncate">
-            {/* Content is encrypted on the wire; the list only knows there is
-                activity, not the plaintext (decryption happens in the thread). */}
-            Encrypted message
+            {previewText ?? "Encrypted message"}
           </div>
         )}
       </div>
@@ -81,9 +81,30 @@ function ConversationRow({
   );
 }
 
-function MessageBubble({ mine, content }: { mine: boolean; content: string }) {
+function formatDmTime(seconds: number): string {
+  const date = new Date(seconds * 1000);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  const time = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (sameDay) return time;
+  const dayMs = 86_400_000;
+  const yesterday = new Date(now.getTime() - dayMs).toDateString() === date.toDateString();
+  if (yesterday) return `Yesterday ${time}`;
+  const date_ = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${date_} ${time}`;
+}
+
+function MessageBubble({
+  mine,
+  content,
+  createdAt,
+}: {
+  mine: boolean;
+  content: string;
+  createdAt: number;
+}) {
   return (
-    <div className={cn("flex", mine ? "justify-end" : "justify-start")}>
+    <div className={cn("flex flex-col", mine ? "items-end" : "items-start")}>
       <div
         className={cn(
           "max-w-[75%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words",
@@ -92,6 +113,9 @@ function MessageBubble({ mine, content }: { mine: boolean; content: string }) {
       >
         {content}
       </div>
+      <span className="text-[10px] text-muted-foreground mt-0.5 px-1 select-none">
+        {formatDmTime(createdAt)}
+      </span>
     </div>
   );
 }
@@ -148,7 +172,12 @@ function Conversation({ peer }: { peer: string }) {
           </div>
         ) : (
           messages.map((m) => (
-            <MessageBubble key={m.id} mine={m.pubkey === user?.pubkey} content={m.content} />
+            <MessageBubble
+              key={m.id}
+              mine={m.pubkey === user?.pubkey}
+              content={m.content}
+              createdAt={m.created_at}
+            />
           ))
         )}
       </div>
@@ -228,7 +257,7 @@ export function DMsPage() {
   const { peer: rawPeer } = useParams<{ peer: string }>();
   const { user } = useCurrentUser();
   const dmSupported = useDMSupport();
-  const { conversations, isLoading } = useDMConversations();
+  const { conversations, previews, isLoading } = useDMConversations();
   const [composing, setComposing] = useState(false);
 
   const activePeer = rawPeer ? resolvePubkey(rawPeer) : undefined;
@@ -298,6 +327,7 @@ export function DMsPage() {
                 key={c.peer}
                 peer={c.peer}
                 preview={c.latest}
+                previewText={previews[c.peer]}
                 active={c.peer === activePeer}
                 onClick={() => openPeer(c.peer)}
               />

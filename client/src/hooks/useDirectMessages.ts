@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -99,7 +99,7 @@ export function useDMConversations() {
   const self = user?.pubkey ?? "";
 
   // Reduce raw events to one entry per counterparty (latest wins).
-  const conversations = (() => {
+  const conversations = useMemo(() => {
     const byPeer = new Map<string, { peer: string; latest: NostrEvent }>();
     for (const event of query.data ?? []) {
       const peer = dmCounterparty(event, self);
@@ -110,9 +110,38 @@ export function useDMConversations() {
       }
     }
     return [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
-  })();
+  }, [query.data, self]);
 
-  return { conversations, isLoading: query.isLoading, error: query.error };
+  // Decrypt just the latest message of each conversation for the list preview.
+  // Sequential decrypt (see thread loop) to avoid NIP-07 concurrency rejections.
+  const previewKey = conversations
+    .map((c) => `${c.peer}:${c.latest.id}`)
+    .join(",");
+
+  const previews = useQuery<Record<string, string>>({
+    queryKey: ["dm", "previews", self, previewKey],
+    enabled: !!self && !!user?.signer.nip04 && conversations.length > 0,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const nip04 = user!.signer.nip04!;
+      const out: Record<string, string> = {};
+      for (const { peer, latest } of conversations) {
+        try {
+          out[peer] = await nip04.decrypt(peer, latest.content);
+        } catch (err) {
+          console.warn("DM preview decrypt failed", { peer, id: latest.id, err });
+        }
+      }
+      return out;
+    },
+  });
+
+  return {
+    conversations,
+    previews: previews.data ?? {},
+    isLoading: query.isLoading,
+    error: query.error,
+  };
 }
 
 /**
@@ -136,18 +165,27 @@ export function useDirectMessages(peer: string | undefined) {
     enabled: !!self && !!peer && !!user?.signer.nip04,
     queryFn: async ({ signal }) => {
       const nip04 = user!.signer.nip04!;
-      // Both directions of the conversation.
+      // Query ONLY self-scoped filters. Relays enforce that you may only read
+      // your own DMs and reject (closing the whole REQ) any filter naming
+      // another pubkey — so `authors:[peer]`/`#p:[peer]` would return nothing.
+      // Our own kind-4 set covers both directions of every conversation:
+      //   - sent to peer  → authored by self (`authors:[self]`)
+      //   - received      → addressed to self (`#p:[self]`)
+      // We then narrow to this peer client-side.
       const events = await nostr.group(relays).query(
         [
-          { kinds: [KIND_DM], authors: [self!], "#p": [peer!] },
-          { kinds: [KIND_DM], authors: [peer!], "#p": [self!] },
+          { kinds: [KIND_DM], authors: [self!], limit: 1000 },
+          { kinds: [KIND_DM], "#p": [self!], limit: 1000 },
         ],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
 
+      // Keep only events that belong to this 1:1 conversation.
+      const inThread = events.filter((e) => dmCounterparty(e, self!) === peer);
+
       // De-duplicate (relays in the group may each return the same event).
       const byId = new Map<string, NostrEvent>();
-      for (const event of events) byId.set(event.id, event);
+      for (const event of inThread) byId.set(event.id, event);
 
       // Decrypt sequentially, not via Promise.all: NIP-07 extensions serialize
       // (and may reject) concurrent nip04.decrypt calls, which would otherwise
@@ -158,8 +196,9 @@ export function useDirectMessages(peer: string | undefined) {
         try {
           const content = await nip04.decrypt(counterparty, event.content);
           decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
-        } catch {
+        } catch (err) {
           // undecryptable (not actually for us, or signer refused) — skip
+          console.warn("DM decrypt failed", { id: event.id, counterparty, err });
         }
       }
 
@@ -179,18 +218,21 @@ export function useDirectMessages(peer: string | undefined) {
       try {
         for await (const msg of nostr.group(relays).req(
           [
-            { kinds: [KIND_DM], authors: [self], "#p": [peer], since },
-            { kinds: [KIND_DM], authors: [peer], "#p": [self], since },
+            { kinds: [KIND_DM], authors: [self], since },
+            { kinds: [KIND_DM], "#p": [self], since },
           ],
           { signal: controller.signal },
         )) {
           if (msg[0] !== "EVENT") continue;
           const event = msg[2] as NostrEvent;
+          // Only messages in this 1:1 conversation.
+          if (dmCounterparty(event, self) !== peer) continue;
           const counterparty = event.pubkey === self ? peer : event.pubkey;
           let content: string;
           try {
             content = await nip04.decrypt(counterparty, event.content);
-          } catch {
+          } catch (err) {
+            console.warn("DM live decrypt failed", { id: event.id, counterparty, err });
             continue;
           }
           const decrypted: DecryptedDM = {
