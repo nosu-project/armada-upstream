@@ -121,6 +121,24 @@ function contrastForeground(bgHsl: string): string {
   return isDarkTheme(bgHsl) ? "0 0% 100%" : "222.2 84% 4.9%";
 }
 
+/**
+ * Composite a translucent `overlay` color (at `alpha`) over an opaque `base`,
+ * returning the resulting HSL string. Equivalent to a `bg-<overlay>/<alpha>`
+ * layer painted on top of an opaque `base` background — used to reproduce the
+ * old hardcoded chrome overlays exactly (black/30, black/40, white/10).
+ */
+function overlayHsl(baseHsl: string, overlayHslStr: string, alpha: number): string {
+  const b = parseHsl(baseHsl);
+  const o = parseHsl(overlayHslStr);
+  const [br, bg, bb] = hslToRgb(b.h, b.s, b.l);
+  const [or, og, ob] = hslToRgb(o.h, o.s, o.l);
+  const r = Math.round(br * (1 - alpha) + or * alpha);
+  const g = Math.round(bg * (1 - alpha) + og * alpha);
+  const bl = Math.round(bb * (1 - alpha) + ob * alpha);
+  const { h, s, l } = rgbToHsl(r, g, bl);
+  return formatHsl(h, s, l);
+}
+
 // ─── Auto-Derive Full Token Set from Core Colors ──────────────────────
 
 /**
@@ -149,11 +167,14 @@ export function deriveTokensFromCore(
     : formatHsl(primaryParsed.h, primaryParsed.s * 0.5, 82);
   const input = border;
 
-  // Muted foreground: a dimmer version of the main text color
+  // Muted foreground: a dimmer version of the main text color. Scale the
+  // saturation down proportionally (rather than subtracting a flat amount,
+  // which can clamp low-saturation text to a dead grey) so it keeps the
+  // theme's hue and never reads as a neutral grey.
   const fg = parseHsl(text);
   const mutedFg = dark
-    ? formatHsl(fg.h, Math.max(fg.s - 20, 0), Math.max(fg.l - 30, 40))
-    : formatHsl(fg.h, Math.max(fg.s - 30, 0), Math.min(fg.l + 35, 55));
+    ? formatHsl(fg.h, Math.max(fg.s * 0.7, 12), Math.max(fg.l - 30, 40))
+    : formatHsl(fg.h, Math.max(fg.s * 0.7, 18), Math.min(fg.l + 35, 55));
 
   // Primary/accent foregrounds: auto-contrast
   const primaryFg = contrastForeground(primary);
@@ -169,6 +190,33 @@ export function deriveTokensFromCore(
   // Second neon: a phosphor-cyan counter-accent (the virtual sea's wake),
   // fixed so it stays cold against any warm primary.
   const accent2 = dark ? "180 90% 55%" : "190 85% 40%";
+
+  // Chrome: recessed framing planes (top bar, rails, sidebars, roster, call
+  // bar). Replaces the old hardcoded overlays.
+  //
+  // DARK: reproduce the original look *exactly* — the old chrome was an opaque
+  // background with a translucent black overlay (`bg-black/30`, rail `/40`) and
+  // a white hairline (`bg-white/10`). Compositing those over the background is
+  // pixel-identical to what shipped, so dark is unchanged (it darkens AND
+  // slightly desaturates, which the previous hue-preserving darken did not).
+  //
+  // LIGHT: a black overlay turns a near-white page into muddy grey, so instead
+  // darken the background while keeping/boosting the theme hue — a recessed,
+  // tinted plane with enough drop to separate from the page.
+  let chrome: string;
+  let chromeDeep: string;
+  let chromeDivider: string;
+  if (dark) {
+    chrome = overlayHsl(background, "0 0% 0%", 0.3);
+    chromeDeep = overlayHsl(background, "0 0% 0%", 0.4);
+    chromeDivider = overlayHsl(background, "0 0% 100%", 0.1);
+  } else {
+    const bg = parseHsl(background);
+    const s = Math.min(bg.s + 8, 100);
+    chrome = formatHsl(bg.h, s, Math.max(bg.l - 6, 0));
+    chromeDeep = formatHsl(bg.h, s, Math.max(bg.l - 9, 0));
+    chromeDivider = formatHsl(bg.h, s, Math.max(bg.l - 13, 0));
+  }
 
   return {
     background,
@@ -193,5 +241,8 @@ export function deriveTokensFromCore(
     border,
     input,
     ring: primary,
+    chrome,
+    chromeDeep,
+    chromeDivider,
   };
 }

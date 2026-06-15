@@ -86,7 +86,7 @@ function PersistentVoiceRoom({
 
   if (isLoading) {
     return placeBar(
-      <div className="flex items-center justify-center gap-2 px-3 py-2 clip-corner-lg bg-black/40 min-h-12 shadow-lg">
+      <div className="flex items-center justify-center gap-2 px-3 py-2 clip-corner-lg bg-chrome-deep min-h-12 shadow-lg">
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
         <span className="text-sm text-muted-foreground">Requesting voice access…</span>
       </div>,
@@ -95,7 +95,7 @@ function PersistentVoiceRoom({
 
   if (error || !tokenData) {
     return placeBar(
-      <div className="flex items-center gap-2 px-3 py-2 clip-corner-lg bg-black/40 min-h-12 shadow-lg">
+      <div className="flex items-center gap-2 px-3 py-2 clip-corner-lg bg-chrome-deep min-h-12 shadow-lg">
         <span className="text-sm text-destructive flex-1 min-w-0 truncate">
           Could not join voice{error instanceof Error ? `: ${error.message}` : "."}
         </span>
@@ -109,13 +109,13 @@ function PersistentVoiceRoom({
   const label = <><span className="text-muted-foreground/70">{serverName}</span>{" "}#{channelName}</>;
 
   const mobileBar = (
-    <div className="clip-corner-lg bg-black/40 shadow-lg">
+    <div className="clip-corner-lg bg-chrome-deep shadow-lg">
       <InCallView label={label} onLabelClick={goToChannel} />
     </div>
   );
 
   const desktopBar = (
-    <div className="clip-corner-lg bg-black/40 shadow-lg">
+    <div className="clip-corner-lg bg-chrome-deep shadow-lg">
       <InCallView label={label} onLabelClick={goToChannel} stacked />
     </div>
   );

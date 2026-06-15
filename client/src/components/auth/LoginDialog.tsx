@@ -480,7 +480,7 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
         </div>
 
         {/* Manual URI input section - collapsible */}
-        <div className='pt-4 border-t border-gray-200 dark:border-gray-700'>
+        <div className='pt-4 border-t border-border'>
           <button
             type='button'
             onClick={() => setShowBunkerInput(!showBunkerInput)}
@@ -501,7 +501,7 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
                   id='connectBunkerUri'
                   value={bunkerUri}
                   onChange={(e) => setBunkerUri(e.target.value)}
-                  className='rounded-lg border-gray-300 dark:border-gray-700 focus-visible:ring-primary text-base md:text-sm'
+                  className='rounded-lg border-border focus-visible:ring-primary text-base md:text-sm'
                   placeholder='bunker://'
                 />
                 {bunkerUri && !validateBunkerUri(bunkerUri) && (

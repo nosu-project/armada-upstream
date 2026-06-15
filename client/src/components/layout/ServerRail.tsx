@@ -157,7 +157,7 @@ export function ServerRail({
       aria-label="Servers"
       className={cn(
         // Chrome plane — deepest part of the recessed frame.
-        "flex flex-col items-center gap-5 w-[72px] shrink-0 pt-3 pb-3 overflow-y-auto bg-black/40",
+        "flex flex-col items-center gap-5 w-[72px] shrink-0 pt-3 pb-3 overflow-y-auto bg-chrome-deep",
         className,
       )}
     >
@@ -172,7 +172,7 @@ export function ServerRail({
         />
       ))}
 
-      <div className="w-7 h-px bg-white/10" />
+      <div className="w-7 h-px bg-chrome-divider" />
 
       <Tooltip>
         <TooltipTrigger asChild>

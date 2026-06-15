@@ -91,6 +91,23 @@
   }
 }
 
+@layer utilities {
+  /*
+   * ── Chrome surfaces ──────────────────────────────────────────────────
+   * Structural framing (top bar, server rail, channel sidebar, member
+   * roster, call bar). Previously a hardcoded `bg-black/3x` overlay: a
+   * recessed hull on dark themes, but a muddy grey on light ones. Now driven
+   * by theme tokens derived per-mode in deriveTokensFromCore(): the chrome
+   * shade is the background darkened while *keeping the theme hue*, so it
+   * reads as a recessed, tinted plane on both dark and light themes. Dark
+   * stays visually identical to the old overlay; light no longer goes grey.
+   */
+  .bg-chrome { background-color: hsl(var(--chrome)); }
+  .bg-chrome-deep { background-color: hsl(var(--chrome-deep)); }
+  .bg-chrome-divider { background-color: hsl(var(--chrome-divider)); }
+  .border-chrome { border-color: hsl(var(--chrome-divider)); }
+}
+
 /*
  * ── Armada "Corsair" — angular neon HUD primitives ───────────────────────
  * A duelist's deck under neon. These build on the runtime --primary token so

@@ -61,6 +61,17 @@ export interface ThemeTokens {
   border: string;
   input: string;
   ring: string;
+  /**
+   * Recessed "chrome" framing surface (top bar, rails, sidebars, roster, call
+   * bar). The background darkened a few points of lightness while keeping the
+   * theme hue — a recessed, tinted plane. Replaces the old hardcoded
+   * `bg-black/30` overlay (identical on dark; no longer muddy grey on light).
+   */
+  chrome: string;
+  /** The deepest chrome plane (server rail, call bar) — a bit more recessed. */
+  chromeDeep: string;
+  /** Hairline divider inside chrome (replaces hardcoded `bg-white/10`). */
+  chromeDivider: string;
 }
 
 /**
@@ -70,9 +81,13 @@ export interface ThemeTokens {
  */
 export const builtinThemes: Record<"light" | "dark", CoreThemeColors> = {
   light: {
-    background: "220 18% 97%",
-    text: "224 25% 12%",
-    primary: "235 70% 58%",
+    // Light Corsair: the same privateer aesthetic flown by day. A cool,
+    // faintly violet parchment (background) and deep violet-ink text mirror
+    // the dark theme's violet sea, while the electric rose-magenta blade
+    // (primary) carries straight over so accents retint identically.
+    background: "260 30% 97%",
+    text: "260 30% 14%",
+    primary: "330 80% 52%",
   },
   dark: {
     // Armada "Corsair": a hacker-privateer on the virtual sea. The sea is a

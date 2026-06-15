@@ -9,7 +9,8 @@
   var STORAGE_KEY = "armada:app-config";
 
   var builtins = {
-    light: { background: "220 18% 97%", text: "224 25% 12%", primary: "235 70% 58%" },
+    // Light "Corsair": violet parchment + violet ink + rose-magenta blade.
+    light: { background: "260 30% 97%", text: "260 30% 14%", primary: "330 80% 52%" },
     // Armada "Corsair": cold violet-black sea, gilt-cream text, rose-magenta blade.
     dark: { background: "260 22% 9%", text: "42 38% 90%", primary: "330 90% 62%" },
   };
@@ -43,6 +44,30 @@
   function lighten(hsl, a) { var c = parseHsl(hsl); return fmt(c.h, c.s, Math.min(100, c.l + a)); }
   function darken(hsl, a) { var c = parseHsl(hsl); return fmt(c.h, c.s, Math.max(0, c.l - a)); }
   function contrastFg(bg) { return isDark(bg) ? "0 0% 100%" : "222.2 84% 4.9%"; }
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var l = (max + min) / 2;
+    if (max === min) return { h: 0, s: 0, l: l * 100 };
+    var d = max - min;
+    var s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    var h = 0;
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+    return { h: h * 360, s: s * 100, l: l * 100 };
+  }
+  // Composite a translucent overlay color over an opaque base (matches the
+  // old chrome overlays: black/30, black/40, white/10).
+  function overlay(base, ov, a) {
+    var b = parseHsl(base), o = parseHsl(ov);
+    var br = hslToRgb(b.h, b.s, b.l), or = hslToRgb(o.h, o.s, o.l);
+    var r = Math.round(br[0] * (1 - a) + or[0] * a);
+    var g = Math.round(br[1] * (1 - a) + or[1] * a);
+    var bl = Math.round(br[2] * (1 - a) + or[2] * a);
+    var c = rgbToHsl(r, g, bl);
+    return fmt(c.h, c.s, c.l);
+  }
 
   function derive(bg, text, primary) {
     var dark = isDark(bg);
@@ -52,9 +77,21 @@
     var sec = dark ? lighten(bg, 8) : darken(bg, 4);
     var border = dark ? fmt(p.h, p.s * 0.4, 30) : fmt(p.h, p.s * 0.5, 82);
     var mutedFg = dark
-      ? fmt(fg.h, Math.max(fg.s - 20, 0), Math.max(fg.l - 30, 40))
-      : fmt(fg.h, Math.max(fg.s - 30, 0), Math.min(fg.l + 35, 55));
+      ? fmt(fg.h, Math.max(fg.s * 0.7, 12), Math.max(fg.l - 30, 40))
+      : fmt(fg.h, Math.max(fg.s * 0.7, 18), Math.min(fg.l + 35, 55));
     var pFg = contrastFg(primary);
+    var b = parseHsl(bg);
+    var chrome, chromeDeep, chromeDivider;
+    if (dark) {
+      chrome = overlay(bg, "0 0% 0%", 0.3);
+      chromeDeep = overlay(bg, "0 0% 0%", 0.4);
+      chromeDivider = overlay(bg, "0 0% 100%", 0.1);
+    } else {
+      var s = Math.min(b.s + 8, 100);
+      chrome = fmt(b.h, s, Math.max(b.l - 6, 0));
+      chromeDeep = fmt(b.h, s, Math.max(b.l - 9, 0));
+      chromeDivider = fmt(b.h, s, Math.max(b.l - 13, 0));
+    }
     return {
       "--background": bg,
       "--foreground": text,
@@ -78,6 +115,9 @@
       "--border": border,
       "--input": border,
       "--ring": primary,
+      "--chrome": chrome,
+      "--chrome-deep": chromeDeep,
+      "--chrome-divider": chromeDivider,
     };
   }
 

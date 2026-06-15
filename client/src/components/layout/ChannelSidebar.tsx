@@ -105,7 +105,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       className={cn(
         // Chrome plane — recessed, darker than the deck, identical to the rail,
         // header, and roster so they read as one frame around the bright chat.
-        "relative flex flex-col w-60 shrink-0 bg-black/30",
+        "relative flex flex-col w-60 shrink-0 bg-chrome",
         className,
       )}
     >
@@ -124,7 +124,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       </div>
 
       {/* Divider between the server header and the channel list. */}
-      <div className="mx-3 h-0.5 shrink-0 bg-white/10" />
+      <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
 
       {/* Channels */}
       <div className="flex-1 overflow-y-auto px-1 pt-[11px] pb-2 space-y-0.5">
