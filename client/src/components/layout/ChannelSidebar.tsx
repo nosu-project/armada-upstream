@@ -111,7 +111,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
     >
       {/* Server header — aligned with the channel rows' text gutter below
           (container px-1 + row pl-4 = pl-5 here) so the grid lines up. */}
-      <div className="pl-5 pr-3 pt-4 pb-2 flex flex-col justify-center">
+      <div className="pl-5 pr-3 pt-3 pb-2 flex flex-col justify-center">
         <h2 className="font-semibold truncate leading-tight tracking-wide text-sm">
           {relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "")}
         </h2>

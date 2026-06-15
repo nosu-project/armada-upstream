@@ -678,7 +678,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const charCount = content.length;
 
   return (
-    <div className="shrink-0 pb-safe">
+    <div className="shrink-0 pb-[env(safe-area-inset-bottom,0px)] sidebar:pb-0">
       {/* Reply banner */}
       {replyTo && <ReplyBanner event={replyTo} onCancel={onCancelReply} />}
 
@@ -746,7 +746,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         </div>
       )}
 
-      <div className="p-3 pb-2">
+      <div className="p-2">
         {voiceRecorder.isRecording || isPublishingVoice ? (
           /* ── Voice recording UI ─────────────────────────────── */
           <div className="flex items-center gap-3 rounded-xl bg-destructive/5 border border-destructive/20 px-3 py-2.5">

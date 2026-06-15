@@ -29,6 +29,7 @@ import { useRelayLivekitSupport } from "@/hooks/useLivekit";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { toast } from "@/hooks/useToast";
 import { routeParamToRelay } from "@/lib/platform";
+import { cn } from "@/lib/utils";
 
 function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId: string; isClosed: boolean }) {
   const join = useJoinGroup(relayUrl, groupId);
@@ -101,6 +102,8 @@ export function GroupPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
+  /** Whether the desktop member roster is shown (toggled from the header). */
+  const [membersVisible, setMembersVisible] = useState(true);
   const [channelsOpen, setChannelsOpen] = useState(false);
   /** Server whose channels are shown in the mobile drawer (defaults to current). */
   const [drawerServer, setDrawerServer] = useState(relayUrl ?? "");
@@ -209,6 +212,25 @@ export function GroupPage() {
           >
             <Users className="size-4" />
           </Button>
+          {/* Desktop members toggle → shows/hides the roster panel. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={membersVisible ? "Hide members" : "Show members"}
+                aria-pressed={membersVisible}
+                className={cn(
+                  "size-8 hidden sidebar:inline-flex text-muted-foreground",
+                  membersVisible && "text-foreground",
+                )}
+                onClick={() => setMembersVisible((v) => !v)}
+              >
+                <Users className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
+          </Tooltip>
           {(isAdmin || (user && isMember)) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -271,15 +293,29 @@ export function GroupPage() {
             canWrite={canWrite}
             canModerate={isAdmin}
           />
-          <MemberList
-            admins={details?.admins ?? []}
-            members={details?.members ?? []}
-            canModerate={isAdmin}
-            viewerIsAdmin={isAdmin}
-            currentUserPubkey={user?.pubkey}
-            onRemove={(pubkey) => removeUser.mutate({ pubkey })}
-            onSetRole={(pubkey, roles) => putUser.mutate({ pubkey, roles })}
-          />
+          <div
+            className={cn(
+              "shrink-0 overflow-hidden transition-[width] duration-200 ease-out",
+              membersVisible ? "w-[16.5rem]" : "w-0",
+            )}
+          >
+            <div
+              className={cn(
+                "w-[16.5rem] h-full flex transition-transform duration-200 ease-out",
+                membersVisible ? "translate-x-0" : "translate-x-full",
+              )}
+            >
+              <MemberList
+                admins={details?.admins ?? []}
+                members={details?.members ?? []}
+                canModerate={isAdmin}
+                viewerIsAdmin={isAdmin}
+                currentUserPubkey={user?.pubkey}
+                onRemove={(pubkey) => removeUser.mutate({ pubkey })}
+                onSetRole={(pubkey, roles) => putUser.mutate({ pubkey, roles })}
+              />
+            </div>
+          </div>
         </div>
       </main>
 

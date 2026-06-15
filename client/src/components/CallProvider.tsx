@@ -1,6 +1,6 @@
 import { LiveKitRoom, RoomAudioRenderer } from "@livekit/components-react";
 import { Loader2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 
@@ -29,10 +29,12 @@ function PersistentVoiceRoom({
   call,
   onLeave,
   slots,
+  exiting,
 }: {
   call: ActiveCall;
   onLeave: () => void;
   slots: HTMLElement[];
+  exiting: boolean;
 }) {
   const navigate = useNavigate();
   const { data: tokenData, error, isLoading } = useLivekitToken(call.relayUrl, call.groupId, true);
@@ -50,11 +52,34 @@ function PersistentVoiceRoom({
   // Place content in: the fixed bottom bar (mobile main view), and every
   // registered sidebar slot (desktop pane + mobile drawer, above their account
   // pill). `desktop` defaults to `mobile` when not given (loading/error).
+  // The bars slide+fade in on join and out on leave (driven by `exiting`).
   const placeBar = (mobile: React.ReactNode, desktop?: React.ReactNode) => (
     <>
-      <div className="fixed bottom-0 inset-x-0 z-40 px-2 pb-safe sidebar:hidden">{mobile}</div>
+      <div
+        className={cn(
+          "fixed bottom-0 inset-x-0 z-40 px-2 pb-safe sidebar:hidden",
+          exiting
+            ? "animate-out fade-out-0 slide-out-to-bottom-4 duration-200 fill-mode-forwards"
+            : "animate-in fade-in-0 slide-in-from-bottom-4 duration-300",
+        )}
+      >
+        {mobile}
+      </div>
       {slots.map((el, i) =>
-        createPortal(<div className="px-1 pb-1">{desktop ?? mobile}</div>, el, `call-slot-${i}`),
+        createPortal(
+          <div
+            className={cn(
+              "px-1 pb-1",
+              exiting
+                ? "animate-out fade-out-0 slide-out-to-bottom-2 duration-200 fill-mode-forwards"
+                : "animate-in fade-in-0 slide-in-from-bottom-2 duration-300",
+            )}
+          >
+            {desktop ?? mobile}
+          </div>,
+          el,
+          `call-slot-${i}`,
+        ),
       )}
     </>
   );
@@ -121,13 +146,35 @@ function PersistentVoiceRoom({
 export function CallProvider({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+  const [exiting, setExiting] = useState(false);
   const [slots, setSlots] = useState<HTMLElement[]>([]);
+  const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const joinCall = useCallback((relayUrl: string, groupId: string) => {
+    if (exitTimer.current) {
+      clearTimeout(exitTimer.current);
+      exitTimer.current = null;
+    }
+    setExiting(false);
     setActiveCall({ relayUrl, groupId });
   }, []);
 
-  const leaveCall = useCallback(() => setActiveCall(null), []);
+  // Trigger the exit animation, then tear down the room once it finishes. The
+  // LiveKit connection lives in PersistentVoiceRoom, so we keep it mounted for
+  // the brief slide-out before unmounting (which disconnects).
+  const leaveCall = useCallback(() => {
+    setExiting(true);
+    if (exitTimer.current) clearTimeout(exitTimer.current);
+    exitTimer.current = setTimeout(() => {
+      setActiveCall(null);
+      setExiting(false);
+      exitTimer.current = null;
+    }, 200);
+  }, []);
+
+  useEffect(() => () => {
+    if (exitTimer.current) clearTimeout(exitTimer.current);
+  }, []);
 
   const registerCallBarSlot = useCallback((el: HTMLElement) => {
     setSlots((prev) => (prev.includes(el) ? prev : [...prev, el]));
@@ -154,6 +201,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             call={activeCall}
             onLeave={leaveCall}
             slots={slots}
+            exiting={exiting}
           />
         )}
       </div>

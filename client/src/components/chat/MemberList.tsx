@@ -1,7 +1,7 @@
 import { AtSign, Copy, Crown, MoreVertical, Shield, ShieldOff, UserMinus } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
+import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -11,7 +11,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { requestMention } from "@/hooks/useMentionBus";
 import { toast } from "@/hooks/useToast";
@@ -68,23 +67,21 @@ function MemberRow({
 
   return (
     <div className="gutter-tick group flex items-center gap-2.5 pl-3 pr-2 py-2 transition-colors hover:text-foreground">
-      <Avatar shape={getAvatarShape(metadata)} className="size-8 shrink-0">
-        <AvatarImage src={metadata?.picture} alt={displayName} />
-        <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
-          {displayName[0]?.toUpperCase()}
-        </AvatarFallback>
-      </Avatar>
-      <span className="text-sm truncate flex-1">{displayName}</span>
-      {roles && roles.length > 0 && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge variant="secondary" className="gap-1 text-[10px] px-1.5">
-              <Crown className="size-2.5" /> {roles[0]}
-            </Badge>
-          </TooltipTrigger>
-          <TooltipContent>{roles.join(", ")}</TooltipContent>
-        </Tooltip>
-      )}
+      <ProfilePreviewCard pubkey={pubkey}>
+        <button type="button" className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <Avatar shape={getAvatarShape(metadata)} className="size-8 cursor-pointer transition-opacity hover:opacity-90">
+            <AvatarImage src={metadata?.picture} alt={displayName} />
+            <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+              {displayName[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+        </button>
+      </ProfilePreviewCard>
+      <ProfilePreviewCard pubkey={pubkey}>
+        <button type="button" className="text-sm truncate flex-1 text-left hover:underline focus:outline-none">
+          {displayName}
+        </button>
+      </ProfilePreviewCard>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -200,7 +197,7 @@ export function MemberList({
       className={cn(
         // Floating roster: detached by a margin, cut-corner card, same recessed
         // chrome shade as the rail/console/header. No border.
-        "hidden lg:flex flex-col w-56 shrink-0 overflow-y-auto",
+        "hidden sidebar:flex flex-col w-64 shrink-0 overflow-y-auto",
         "my-2 mr-2 p-1.5 clip-corner-lg bg-black/30",
         className,
       )}
