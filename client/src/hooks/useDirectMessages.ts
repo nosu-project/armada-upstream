@@ -145,21 +145,25 @@ export function useDirectMessages(peer: string | undefined) {
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
 
-      const decrypted = await Promise.all(
-        events.map(async (event): Promise<DecryptedDM | null> => {
-          const counterparty = event.pubkey === self ? peer! : event.pubkey;
-          try {
-            const content = await nip04.decrypt(counterparty, event.content);
-            return { id: event.id, pubkey: event.pubkey, created_at: event.created_at, content };
-          } catch {
-            return null; // undecryptable (e.g. not actually for us) — drop
-          }
-        }),
-      );
+      // De-duplicate (relays in the group may each return the same event).
+      const byId = new Map<string, NostrEvent>();
+      for (const event of events) byId.set(event.id, event);
 
-      return decrypted
-        .filter((m): m is DecryptedDM => m !== null)
-        .sort((a, b) => a.created_at - b.created_at);
+      // Decrypt sequentially, not via Promise.all: NIP-07 extensions serialize
+      // (and may reject) concurrent nip04.decrypt calls, which would otherwise
+      // make every message fail and the thread look empty.
+      const decrypted: DecryptedDM[] = [];
+      for (const event of byId.values()) {
+        const counterparty = event.pubkey === self ? peer! : event.pubkey;
+        try {
+          const content = await nip04.decrypt(counterparty, event.content);
+          decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
+        } catch {
+          // undecryptable (not actually for us, or signer refused) — skip
+        }
+      }
+
+      return decrypted.sort((a, b) => a.created_at - b.created_at);
     },
     staleTime: 10_000,
   });
