@@ -1,4 +1,4 @@
-import { Plus, Settings } from "lucide-react";
+import { Headphones, Plus, Settings } from "lucide-react";
 import { useMemo, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useCall } from "@/hooks/useCall";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -20,62 +21,94 @@ function relayHost(url: string): string {
   }
 }
 
-function ServerButton({ url, onNavigate }: { url: string; onNavigate?: () => void }) {
+function ServerButton({
+  url,
+  onNavigate,
+  onSelect,
+  selected,
+  inCall,
+}: {
+  url: string;
+  onNavigate?: () => void;
+  /** When provided, selecting a server fires this instead of navigating. */
+  onSelect?: (url: string) => void;
+  /** Active state when driven by `onSelect` (controlled mode). */
+  selected?: boolean;
+  /** Whether the active voice call is on this server. */
+  inCall?: boolean;
+}) {
   const { data: info } = useRelayInfo(url);
   const host = relayHost(url);
   const name = info?.name || host;
   const initial = name.trim().charAt(0).toUpperCase() || "?";
 
+  const inner = (isActive: boolean) => (
+    <>
+      {/* Active marker: a thin neon blade in the gutter. */}
+      <span
+        className={cn(
+          "absolute -left-2 w-[3px] bg-primary transition-all",
+          isActive ? "h-9 opacity-100" : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-4",
+        )}
+      />
+      {/* Voice indicator: a headphones badge when a call is live on this server. */}
+      {inCall && (
+        <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
+          <Headphones className="size-2.5" />
+        </span>
+      )}
+      {/*
+        Angular crest. Glow lives on the wrapper as a drop-shadow so it
+        traces the fin silhouette (a box-shadow would be clipped away
+        by the child's clip-path). Restrained: one soft shadow.
+      */}
+      <span
+        className={cn(
+          "transition-all duration-150",
+          isActive
+            ? "[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]"
+            : "opacity-50 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
+        )}
+      >
+        <Avatar className="size-12 clip-corner-lg">
+          <AvatarImage src={info?.icon} alt={name} />
+          <AvatarFallback
+            className={cn(
+              "bg-secondary font-semibold",
+              isActive ? "text-primary" : "text-secondary-foreground",
+            )}
+          >
+            {initial}
+          </AvatarFallback>
+        </Avatar>
+      </span>
+    </>
+  );
+
+  const triggerClass = "group relative flex items-center justify-center";
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <NavLink
-          to={`/s/${relayToRouteParam(url)}`}
-          aria-label={name}
-          onClick={onNavigate}
-          className={({ isActive }) =>
-            cn(
-              "group relative flex items-center justify-center",
-              isActive && "is-active",
-            )}
-        >
-          {({ isActive }) => (
-            <>
-              {/* Active marker: a thin neon blade in the gutter. */}
-              <span
-                className={cn(
-                  "absolute -left-2 w-[3px] bg-primary transition-all",
-                  isActive ? "h-9 opacity-100" : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-4",
-                )}
-              />
-              {/*
-                Angular crest. Glow lives on the wrapper as a drop-shadow so it
-                traces the fin silhouette (a box-shadow would be clipped away
-                by the child's clip-path). Restrained: one soft shadow.
-              */}
-              <span
-                className={cn(
-                  "transition-all duration-150",
-                  isActive
-                    ? "[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]"
-                    : "opacity-50 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
-                )}
-              >
-                <Avatar className="size-12 clip-corner-lg">
-                  <AvatarImage src={info?.icon} alt={name} />
-                  <AvatarFallback
-                    className={cn(
-                      "bg-secondary font-semibold",
-                      isActive ? "text-primary" : "text-secondary-foreground",
-                    )}
-                  >
-                    {initial}
-                  </AvatarFallback>
-                </Avatar>
-              </span>
-            </>
-          )}
-        </NavLink>
+        {onSelect ? (
+          <button
+            type="button"
+            aria-label={name}
+            onClick={() => onSelect(url)}
+            className={cn(triggerClass, selected && "is-active")}
+          >
+            {inner(Boolean(selected))}
+          </button>
+        ) : (
+          <NavLink
+            to={`/s/${relayToRouteParam(url)}`}
+            aria-label={name}
+            onClick={onNavigate}
+            className={({ isActive }) => cn(triggerClass, isActive && "is-active")}
+          >
+            {({ isActive }) => inner(isActive)}
+          </NavLink>
+        )}
       </TooltipTrigger>
       <TooltipContent side="right" className="font-medium">
         {name}
@@ -89,9 +122,22 @@ function ServerButton({ url, onNavigate }: { url: string; onNavigate?: () => voi
  * Far-left vertical rail listing every server (relay): pinned platform
  * relays first, then user-added ones, then add-server and settings actions.
  */
-export function ServerRail({ onNavigate, className }: { onNavigate?: () => void; className?: string }) {
+export function ServerRail({
+  onNavigate,
+  onServerSelect,
+  selectedServer,
+  className,
+}: {
+  onNavigate?: () => void;
+  /** When set, tapping a server fires this instead of navigating (drawer mode). */
+  onServerSelect?: (url: string) => void;
+  /** The currently-selected server in drawer mode. */
+  selectedServer?: string;
+  className?: string;
+}) {
   const { config } = useAppContext();
   const navigate = useNavigate();
+  const { activeCall } = useCall();
   const [addOpen, setAddOpen] = useState(false);
 
   const servers = useMemo(() => {
@@ -112,7 +158,16 @@ export function ServerRail({ onNavigate, className }: { onNavigate?: () => void;
         className,
       )}
     >
-      {servers.map((url) => <ServerButton key={url} url={url} onNavigate={onNavigate} />)}
+      {servers.map((url) => (
+        <ServerButton
+          key={url}
+          url={url}
+          onNavigate={onNavigate}
+          onSelect={onServerSelect}
+          selected={onServerSelect ? selectedServer === url : undefined}
+          inCall={activeCall?.relayUrl === url}
+        />
+      ))}
 
       <div className="w-7 h-px bg-white/10" />
 

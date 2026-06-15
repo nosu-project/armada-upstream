@@ -1,7 +1,5 @@
 import {
   DisconnectButton,
-  LiveKitRoom,
-  RoomAudioRenderer,
   useConnectionState,
   useLocalParticipant,
   useParticipants,
@@ -9,7 +7,6 @@ import {
 } from "@livekit/components-react";
 import { ConnectionState, Track } from "livekit-client";
 import { Headphones, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
-import { useCallback } from "react";
 
 import "@livekit/components-styles";
 
@@ -17,8 +14,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { pubkeyFromLivekitIdentity, useLivekitToken } from "@/hooks/useLivekit";
+import { pubkeyFromLivekitIdentity } from "@/hooks/useLivekit";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
@@ -49,8 +45,18 @@ function ParticipantAvatar({ pubkey, isSpeaking }: { pubkey: string; isSpeaking?
   );
 }
 
-/** In-call controls + live participant avatars (inside LiveKitRoom context). */
-function InCallView() {
+interface InCallViewProps {
+  /** Optional label (e.g. the channel name) shown before the participants. */
+  label?: React.ReactNode;
+  /** When set, the label becomes a button (e.g. to jump to the channel). */
+  onLabelClick?: () => void;
+}
+
+/**
+ * In-call controls + live participant avatars. Must be rendered inside a
+ * LiveKitRoom context (uses room hooks).
+ */
+export function InCallView({ label, onLabelClick }: InCallViewProps) {
   const participants = useParticipants();
   const connectionState = useConnectionState();
   const { localParticipant } = useLocalParticipant();
@@ -72,6 +78,19 @@ function InCallView() {
   return (
     <div className="flex items-center gap-2 px-3 py-2">
       <Headphones className="size-4 text-success shrink-0" />
+      {label && (
+        onLabelClick ? (
+          <button
+            type="button"
+            onClick={onLabelClick}
+            className="text-xs font-medium text-foreground truncate max-w-40 shrink-0 hover:underline text-left"
+          >
+            {label}
+          </button>
+        ) : (
+          <span className="text-xs font-medium text-muted-foreground truncate max-w-40 shrink-0">{label}</span>
+        )
+      )}
       <div className="flex -space-x-1.5 flex-1 min-w-0 overflow-hidden">
         {participants.map((p) => (
           <ParticipantAvatar
@@ -93,70 +112,6 @@ function InCallView() {
       <DisconnectButton className="inline-flex items-center justify-center rounded-md size-8 bg-destructive text-destructive-foreground hover:bg-destructive/90">
         <PhoneOff className="size-3.5" />
       </DisconnectButton>
-    </div>
-  );
-}
-
-interface VoiceBarProps {
-  relayUrl: string;
-  groupId: string;
-  /** Whether the local user wants to be in the call. Controlled by the parent. */
-  active: boolean;
-  /** Called when the call ends (disconnect / error back). */
-  onLeave: () => void;
-}
-
-/**
- * Active voice call bar for a NIP-29 group with the `livekit` tag.
- *
- * Renders nothing unless `active` is true. When active, it fetches a LiveKit
- * JWT from the relay's NIP-29 token endpoint (NIP-98 signed) and connects
- * audio-only. The "Join voice" affordance lives in the channel header.
- */
-export function VoiceBar({ relayUrl, groupId, active, onLeave }: VoiceBarProps) {
-  const { user } = useCurrentUser();
-  const { data: tokenData, error: tokenError, isLoading } = useLivekitToken(relayUrl, groupId, active);
-
-  const handleDisconnected = useCallback(() => onLeave(), [onLeave]);
-
-  if (!user || !active) return null;
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center gap-2 mx-2 mt-2 px-3 py-2 clip-corner-lg bg-black/30 min-h-12">
-        <Loader2 className="size-4 animate-spin text-muted-foreground" />
-        <span className="text-sm text-muted-foreground">Requesting voice access…</span>
-      </div>
-    );
-  }
-
-  if (tokenError || !tokenData) {
-    return (
-      <div className="flex items-center gap-2 mx-2 mt-2 px-3 py-2 clip-corner-lg bg-black/30 min-h-12">
-        <span className="text-sm text-destructive flex-1">
-          Could not join voice{tokenError instanceof Error ? `: ${tokenError.message}` : "."}
-        </span>
-        <Button className="h-8 px-3 text-sm" variant="outline" onClick={onLeave}>
-          Back
-        </Button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="mx-2 mt-2 clip-corner-lg bg-black/30">
-      <LiveKitRoom
-        serverUrl={tokenData.url}
-        token={tokenData.token}
-        connect
-        audio
-        video={false}
-        onDisconnected={handleDisconnected}
-        data-lk-theme="default"
-      >
-        <RoomAudioRenderer />
-        <InCallView />
-      </LiveKitRoom>
     </div>
   );
 }

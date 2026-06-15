@@ -1,4 +1,4 @@
-import { Hash, Loader2, Lock, Plus, Volume2 } from "lucide-react";
+import { Hash, Headphones, Loader2, Lock, Plus, Volume2 } from "lucide-react";
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
 
@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useCall } from "@/hooks/useCall";
+import { useLivekitParticipants } from "@/hooks/useLivekit";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -18,7 +20,17 @@ import { cn } from "@/lib/utils";
 import type { Nip29Group } from "@/lib/nip29";
 
 function ChannelLink({ group, onNavigate }: { group: Nip29Group; onNavigate?: () => void }) {
+  const { activeCall } = useCall();
   const Icon = group.hasLivekit ? Volume2 : Hash;
+  const inCall = activeCall?.relayUrl === group.relay && activeCall?.groupId === group.id;
+  // Live presence (kind 39004) so we can show when others are in voice here,
+  // even if we haven't joined. Only worth querying for voice-capable groups.
+  const { data: participants } = useLivekitParticipants(
+    group.hasLivekit ? group.relay : undefined,
+    group.hasLivekit ? group.id : undefined,
+  );
+  const othersInVoice = !inCall && (participants?.length ?? 0) > 0;
+
   return (
     <NavLink
       to={`/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`}
@@ -35,6 +47,26 @@ function ChannelLink({ group, onNavigate }: { group: Nip29Group; onNavigate?: ()
     >
       <Icon className="size-4 shrink-0" />
       <span className="truncate flex-1">{group.name}</span>
+      {inCall ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Headphones className="size-3.5 shrink-0 text-success" aria-label="Voice active" />
+          </TooltipTrigger>
+          <TooltipContent>You're in voice here</TooltipContent>
+        </Tooltip>
+      ) : othersInVoice ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="flex items-center gap-0.5 shrink-0 text-success/80" aria-label="Others in voice">
+              <Headphones className="size-3.5" />
+              <span className="text-[10px] tabular-nums">{participants!.length}</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {participants!.length} in voice
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
       {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
     </NavLink>
   );

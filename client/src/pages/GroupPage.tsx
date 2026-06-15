@@ -4,7 +4,6 @@ import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
 import { GroupChat } from "@/components/chat/GroupChat";
 import { MemberList } from "@/components/chat/MemberList";
-import { VoiceBar } from "@/components/chat/VoiceBar";
 import { GroupSettingsDialog } from "@/components/dialogs/GroupSettingsDialog";
 import { InvitePeopleDialog } from "@/components/dialogs/InvitePeopleDialog";
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
@@ -22,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useCall } from "@/hooks/useCall";
 import { useGroup } from "@/hooks/useGroup";
 import { useGroupMembership, useJoinGroup, useLeaveGroup } from "@/hooks/useGroupMembership";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
@@ -97,11 +97,13 @@ export function GroupPage() {
   const leave = useLeaveGroup(relayUrl ?? "", groupId ?? "");
   const { removeUser, putUser } = useGroupModeration(relayUrl ?? "", groupId ?? "");
   const { mutateAsync: updateList } = useUpdateUserGroupList();
+  const { activeCall, joinCall } = useCall();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const [channelsOpen, setChannelsOpen] = useState(false);
-  const [inCall, setInCall] = useState(false);
+  /** Server whose channels are shown in the mobile drawer (defaults to current). */
+  const [drawerServer, setDrawerServer] = useState(relayUrl ?? "");
 
   const isAdmin = useMemo(
     () => Boolean(user && details?.admins.some((a) => a.pubkey === user.pubkey)),
@@ -122,14 +124,10 @@ export function GroupPage() {
   // does), so gate the composer on membership.
   const canWrite = Boolean(user) && isMember;
   // Voice is available when the group is tagged `livekit` or the relay
-  // advertises the NIP-29 LiveKit extension for all its groups. Make it sticky:
-  // once we've seen voice support, never flip back to false on a transient
-  // query refetch — otherwise the VoiceBar (and its LiveKitRoom) would unmount
-  // and tear down an active call, reconnecting every refetch cycle.
-  const rawHasVoice = Boolean(group?.hasLivekit || relayHasLivekit);
-  const hasVoiceRef = useRef(false);
-  if (rawHasVoice) hasVoiceRef.current = true;
-  const hasVoice = rawHasVoice || hasVoiceRef.current;
+  // advertises the NIP-29 LiveKit extension for all its groups.
+  const hasVoice = Boolean(group?.hasLivekit || relayHasLivekit);
+  // Whether the active app-level call is this channel's room.
+  const inThisCall = activeCall?.relayUrl === relayUrl && activeCall?.groupId === groupId;
 
   const handleLeave = async () => {
     try {
@@ -185,7 +183,7 @@ export function GroupPage() {
               <TooltipContent>Private — only members can read</TooltipContent>
             </Tooltip>
           )}
-          {hasVoice && !inCall && (
+          {hasVoice && !inThisCall && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -193,7 +191,7 @@ export function GroupPage() {
                   size="icon"
                   aria-label="Join voice"
                   className="size-8 text-muted-foreground hover:text-success"
-                  onClick={() => setInCall(true)}
+                  onClick={() => joinCall(relayUrl, groupId)}
                 >
                   <Phone className="size-4" />
                 </Button>
@@ -262,16 +260,8 @@ export function GroupPage() {
           <JoinBanner relayUrl={relayUrl} groupId={groupId} isClosed={Boolean(group?.isClosed)} />
         )}
 
-        {/* Voice — keep mounted while a call is active even if `hasVoice`
-            briefly flickers on a query refetch, so the call isn't torn down. */}
-        {(hasVoice || inCall) && (
-          <VoiceBar
-            relayUrl={relayUrl}
-            groupId={groupId}
-            active={inCall}
-            onLeave={() => setInCall(false)}
-          />
-        )}
+        {/* The active voice call (if any) renders as a persistent docked bar in
+            MainLayout, so it survives navigation between channels/servers. */}
 
         {/* Chat + members (member panel desktop-only; mobile uses the sheet) */}
         <div className="flex flex-1 min-h-0">
@@ -294,7 +284,12 @@ export function GroupPage() {
       </main>
 
       {/* Mobile channel list drawer (server rail + channels) */}
-      <Sheet open={channelsOpen} onOpenChange={setChannelsOpen}>
+      <Sheet
+        open={channelsOpen}
+        onOpenChange={(open) => {
+          setChannelsOpen(open);
+          if (open) setDrawerServer(relayUrl);        }}
+      >
         <SheetContent
           side="left"
           className="flex w-[min(20rem,85vw)] gap-0 p-0 sidebar:hidden [&>button]:hidden"
@@ -302,9 +297,12 @@ export function GroupPage() {
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <div className="flex h-full w-full safe-area-top">
-            <ServerRail onNavigate={() => setChannelsOpen(false)} />
+            <ServerRail
+              selectedServer={drawerServer}
+              onServerSelect={setDrawerServer}
+            />
             <ChannelSidebar
-              relayUrl={relayUrl}
+              relayUrl={drawerServer}
               onNavigate={() => setChannelsOpen(false)}
               className="flex-1"
             />
