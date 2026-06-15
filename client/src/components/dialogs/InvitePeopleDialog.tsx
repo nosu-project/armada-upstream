@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
+import { useRelayClaim } from "@/hooks/useRelayMembership";
 import { toast } from "@/hooks/useToast";
 import { relayToRouteParam } from "@/lib/platform";
 
@@ -38,22 +39,36 @@ function buildInviteUrl(relayUrl: string, groupId: string, code: string): string
  */
 export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: InvitePeopleDialogProps) {
   const { createInvite } = useGroupModeration(relayUrl, group.id);
+  const { mutateAsync: fetchRelayClaim } = useRelayClaim();
   const [url, setUrl] = useState<string | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
   const generate = useCallback(async () => {
     setError(false);
-    const newCode = randomInviteCode();
+    setGenerating(true);
     try {
-      await createInvite.mutateAsync({ code: newCode });
-      setCode(newCode);
-      setUrl(buildInviteUrl(relayUrl, group.id, newCode));
+      // On community relays that gate access at the relay level (zooid/Coracle),
+      // the invite must be a relay-issued `claim` (kind 28935) so the recipient
+      // can become a relay member. Prefer that claim when the relay issues one;
+      // fall back to a self-minted NIP-29 group invite code (kind 9009) for
+      // relays that scope invites per group (e.g. Armada's own relay).
+      const relayClaim = await fetchRelayClaim(relayUrl);
+      let inviteCode = relayClaim;
+      if (!inviteCode) {
+        inviteCode = randomInviteCode();
+        await createInvite.mutateAsync({ code: inviteCode });
+      }
+      setCode(inviteCode);
+      setUrl(buildInviteUrl(relayUrl, group.id, inviteCode));
     } catch {
       setError(true);
+    } finally {
+      setGenerating(false);
     }
-  }, [createInvite, relayUrl, group.id]);
+  }, [createInvite, fetchRelayClaim, relayUrl, group.id]);
 
   // Mint an invite as soon as the dialog opens (the silly-easy part).
   useEffect(() => {
@@ -149,9 +164,9 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
                   type="button"
                   className="hover:text-foreground inline-flex items-center gap-1"
                   onClick={generate}
-                  disabled={createInvite.isPending}
+                  disabled={generating}
                 >
-                  <RefreshCw className={createInvite.isPending ? "size-3 animate-spin" : "size-3"} />
+                  <RefreshCw className={generating ? "size-3 animate-spin" : "size-3"} />
                   New
                 </button>
               </div>

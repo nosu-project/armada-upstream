@@ -35,7 +35,8 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   const join = useJoinGroup(relayUrl, groupId);
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const [searchParams] = useSearchParams();
-  const inviteCode = searchParams.get("code") ?? "";
+  // Accept both Armada's `?code=` and Flotilla/Coracle's `?c=` invite param.
+  const inviteCode = searchParams.get("code") ?? searchParams.get("c") ?? "";
   const [code, setCode] = useState(inviteCode);
   const autoJoined = useRef(false);
 

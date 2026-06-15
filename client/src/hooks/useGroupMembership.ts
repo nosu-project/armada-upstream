@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { useJoinRelay } from "@/hooks/useRelayMembership";
 import {
   KIND_JOIN_REQUEST,
   KIND_LEAVE_REQUEST,
@@ -46,10 +47,21 @@ export function useGroupMembership(relayUrl: string | undefined, groupId: string
 /** Send a kind 9021 join request to the group's host relay. */
 export function useJoinGroup(relayUrl: string, groupId: string) {
   const { mutateAsync: publishEvent } = useNostrPublish();
+  const { mutateAsync: joinRelay } = useJoinRelay();
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async ({ code, reason }: { code?: string; reason?: string } = {}) => {
+      // Some community relays (zooid/Coracle, used by Flotilla & Soapbox) gate
+      // ALL writes behind *relay-level* membership and reject non-members with
+      // "you are not a member of this relay" — before the NIP-29 group join is
+      // even considered. So first attempt the relay-join handshake (ephemeral
+      // kind 28934 carrying the invite as a `claim`). This no-ops on relays
+      // that don't implement the scheme (e.g. Armada's own relay).
+      await joinRelay({ relayUrl, claim: code });
+
+      // Then the NIP-29 group join. The same invite is carried as a `code` tag
+      // for relays that scope invites per-group (e.g. Armada's relay).
       const tags: string[][] = [["h", groupId]];
       if (code) tags.push(["code", code]);
       return publishEvent({

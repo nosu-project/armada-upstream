@@ -36,6 +36,24 @@ export const KIND_JOIN_REQUEST = 9021;
 /** User: request to leave a group. */
 export const KIND_LEAVE_REQUEST = 9022;
 
+// ── Relay membership (zooid / Coracle "relay access", NIP-43-ish) ────────────
+//
+// Some community relays (e.g. zooid, which backs Flotilla/Soapbox) gate ALL
+// reads and writes behind *relay-level* membership, separate from per-group
+// NIP-29 membership. A non-member is rejected with "restricted: you are not a
+// member of this relay" before any group join is even considered. To become a
+// relay member you publish an ephemeral RELAY_JOIN carrying a `claim` tag whose
+// value was minted by the relay as a RELAY_INVITE event. These kinds are not
+// part of NIP-29 proper; they are the de-facto Coracle/zooid relay-access
+// protocol that we implement for cross-relay interop.
+
+/** User: ephemeral request to join the *relay* (carries a `claim` tag). */
+export const KIND_RELAY_JOIN = 28934;
+/** Relay-signed: an invite "claim" usable with KIND_RELAY_JOIN. */
+export const KIND_RELAY_INVITE = 28935;
+/** User: ephemeral request to leave the *relay*. */
+export const KIND_RELAY_LEAVE = 28936;
+
 /** Relay-signed: group metadata (addressable, `d` = group id). */
 export const KIND_GROUP_METADATA = 39000;
 /** Relay-signed: group admins. */
