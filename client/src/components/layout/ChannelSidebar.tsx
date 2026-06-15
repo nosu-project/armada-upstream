@@ -4,6 +4,8 @@ import { NavLink } from "react-router-dom";
 
 import { CreateGroupDialog } from "@/components/dialogs/CreateGroupDialog";
 import { LoginArea } from "@/components/auth/LoginArea";
+import LoginDialog from "@/components/auth/LoginDialog";
+import SignupDialog from "@/components/auth/SignupDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -52,6 +54,8 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const { data: groups, isLoading, relayInfo } = useRelayGroups(relayUrl);
   const { user } = useCurrentUser();
   const [createOpen, setCreateOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [signupOpen, setSignupOpen] = useState(false);
 
   return (
     <aside
@@ -120,9 +124,31 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       </div>
 
       {/* Account area */}
-      <div className="px-1 shrink-0 bg-background/40">
-        <LoginArea className="w-full flex" />
+      <div className="px-1 pb-safe shrink-0 bg-background/40">
+        {user ? (
+          <LoginArea className="w-full flex" />
+        ) : (
+          <div className="p-2 flex justify-center">
+            <Button
+              onClick={() => setJoinOpen(true)}
+              className="w-full max-w-xs rounded-full font-medium"
+            >
+              Join
+            </Button>
+          </div>
+        )}
       </div>
+
+      <LoginDialog
+        isOpen={joinOpen}
+        onClose={() => setJoinOpen(false)}
+        onLogin={() => setJoinOpen(false)}
+        onSignupClick={() => {
+          setJoinOpen(false);
+          setSignupOpen(true);
+        }}
+      />
+      <SignupDialog isOpen={signupOpen} onClose={() => setSignupOpen(false)} />
 
       <CreateGroupDialog relayUrl={relayUrl} open={createOpen} onOpenChange={setCreateOpen} />
     </aside>

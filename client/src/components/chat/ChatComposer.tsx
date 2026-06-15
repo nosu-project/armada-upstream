@@ -551,7 +551,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const charCount = content.length;
 
   return (
-    <div className="shrink-0">
+    <div className="shrink-0 pb-safe">
       {/* Reply banner */}
       {replyTo && <ReplyBanner event={replyTo} onCancel={onCancelReply} />}
 
@@ -718,7 +718,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   placeholder={mode === "poll" ? "Ask a question…" : "Message the channel…"}
                   rows={1}
                   maxLength={MAX_CHARS}
-                  className="w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto"
+                  className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto align-middle"
                   disabled={isSending}
                 />
                 <MentionAutocomplete

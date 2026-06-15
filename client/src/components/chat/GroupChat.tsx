@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { PollCard } from "@/components/chat/PollCard";
+import LoginDialog from "@/components/auth/LoginDialog";
+import SignupDialog from "@/components/auth/SignupDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -155,6 +157,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupCha
   const { data: messages = [], isLoading } = useGroupMessages(relayUrl, groupId);
   const { deleteEvent } = useGroupModeration(relayUrl, groupId);
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
+  const [joinDialogOpen, setJoinDialogOpen] = useState(false);
+  const [signupDialogOpen, setSignupDialogOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
 
@@ -229,12 +233,39 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate }: GroupCha
           onSent={handleSent}
         />
       ) : (
-        <div className="border-t p-3 shrink-0">
-          <p className="text-xs text-muted-foreground text-center py-1">
-            {user ? "Join this channel to send messages." : "Log in to participate in the chat."}
-          </p>
+        <div className="border-t p-3 shrink-0 pb-safe">
+          {user ? (
+            <p className="text-xs text-muted-foreground text-center py-1">
+              Join this channel to send messages.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center py-1 flex items-center justify-center gap-1.5 flex-wrap">
+              <Button
+                size="sm"
+                onClick={() => setJoinDialogOpen(true)}
+                className="rounded-full h-7 px-4"
+              >
+                Join
+              </Button>
+              <span>to be a part of the chat</span>
+            </p>
+          )}
         </div>
       )}
+
+      <LoginDialog
+        isOpen={joinDialogOpen}
+        onClose={() => setJoinDialogOpen(false)}
+        onLogin={() => setJoinDialogOpen(false)}
+        onSignupClick={() => {
+          setJoinDialogOpen(false);
+          setSignupDialogOpen(true);
+        }}
+      />
+      <SignupDialog
+        isOpen={signupDialogOpen}
+        onClose={() => setSignupDialogOpen(false)}
+      />
     </div>
   );
 }
