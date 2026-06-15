@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -141,6 +142,7 @@ export function ServerRail({
   const { config } = useAppContext();
   const navigate = useNavigate();
   const { activeCall } = useCall();
+  const { user } = useCurrentUser();
   const [addOpen, setAddOpen] = useState(false);
 
   const servers = useMemo(() => {
@@ -161,38 +163,41 @@ export function ServerRail({
         className,
       )}
     >
-      {/* Direct messages — account-level, above the servers (Discord-style). */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <NavLink
-            to="/dms"
-            aria-label="Direct messages"
-            onClick={onNavigate}
-            className="group relative flex items-center justify-center"
-          >
-            <span
-              className={cn(
-                "relative block size-12 transition-all duration-150",
-                "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
-              )}
+      {/* Direct messages — account-level, above the servers (Discord-style).
+          Only shown when signed in (DMs require an account). */}
+      {user && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <NavLink
+              to="/dms"
+              aria-label="Direct messages"
+              onClick={onNavigate}
+              className="group relative flex items-center justify-center"
             >
               <span
                 className={cn(
-                  "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
-                  "bg-muted text-primary opacity-50 saturate-50",
-                  "group-hover:opacity-100 group-hover:saturate-100",
-                  "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                  "relative block size-12 transition-all duration-150",
+                  "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
                 )}
               >
-                <MessageSquare className="size-5" />
+                <span
+                  className={cn(
+                    "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                    "bg-muted text-primary opacity-50 saturate-50",
+                    "group-hover:opacity-100 group-hover:saturate-100",
+                    "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                  )}
+                >
+                  <MessageSquare className="size-5" />
+                </span>
               </span>
-            </span>
-          </NavLink>
-        </TooltipTrigger>
-        <TooltipContent side="right" className="font-medium">
-          Direct messages
-        </TooltipContent>
-      </Tooltip>
+            </NavLink>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="font-medium">
+            Direct messages
+          </TooltipContent>
+        </Tooltip>
+      )}
 
       {servers.map((url) => (
         <ServerButton

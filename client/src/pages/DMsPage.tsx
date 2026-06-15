@@ -1,4 +1,4 @@
-import { Loader2, MessageSquare, Plus, X } from "lucide-react";
+import { ArrowLeft, Loader2, MessageSquare, Plus, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -120,7 +120,7 @@ function MessageBubble({
   );
 }
 
-function Conversation({ peer }: { peer: string }) {
+function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { user } = useCurrentUser();
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
@@ -150,7 +150,18 @@ function Conversation({ peer }: { peer: string }) {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <header className="h-12 mx-2 mt-3 px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+      <header className="h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+        {/* Mobile back → returns to the rail + conversation list (the shared
+            DM-list view), the same panes that are persistently rendered. */}
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Back to conversations"
+          className="size-9 shrink-0 sidebar:hidden"
+          onClick={onBack}
+        >
+          <ArrowLeft className="size-5" />
+        </Button>
         <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-7">
           <AvatarImage src={author.data?.metadata?.picture} alt={name} />
           <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
@@ -248,6 +259,91 @@ function ProfilePick({ pubkey, onPick }: { pubkey: string; onPick: (pubkey: stri
 }
 
 /**
+ * The DM conversation-list pane: header, conversation rows, and the
+ * new-message dialog. Reused by both the desktop aside and the mobile drawer.
+ */
+function ConversationList({
+  rows,
+  previews,
+  activePeer,
+  dmSupported,
+  isLoading,
+  composing,
+  setComposing,
+  openPeer,
+  className,
+}: {
+  rows: { peer: string; latest: NostrEvent }[];
+  previews: Record<string, string>;
+  activePeer: string | undefined;
+  dmSupported: boolean;
+  isLoading: boolean;
+  composing: boolean;
+  setComposing: (value: boolean) => void;
+  openPeer: (pubkey: string) => void;
+  className?: string;
+}) {
+  return (
+    <aside
+      className={cn(
+        "relative flex flex-col min-w-0 shrink-0 bg-chrome safe-area-top",
+        className,
+      )}
+    >
+      <header className="relative pl-5 pr-3 pt-5 pb-3 flex flex-col justify-center shrink-0">
+        <h1 className="font-semibold truncate leading-tight tracking-wide text-sm pr-8">Direct Messages</h1>
+        <span className="text-[11px] text-muted-foreground truncate leading-tight">
+          Message your friends.
+        </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="New message"
+          className="absolute right-3 bottom-3 size-8"
+          onClick={() => setComposing(true)}
+        >
+          <Plus className="size-5" />
+        </Button>
+      </header>
+
+      {/* Divider between the header and the conversation list. */}
+      <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
+
+      <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+        {!dmSupported ? (
+          <p className="text-sm text-muted-foreground p-3">
+            Your signer doesn't support encryption, so direct messages are unavailable.
+          </p>
+        ) : isLoading ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground p-3">
+            No conversations yet. Start one with the + button.
+          </p>
+        ) : (
+          rows.map((c) => (
+            <ConversationRow
+              key={c.peer}
+              peer={c.peer}
+              preview={c.latest}
+              previewText={previews[c.peer]}
+              active={c.peer === activePeer}
+              onClick={() => openPeer(c.peer)}
+            />
+          ))
+        )}
+      </div>
+
+      {composing && (
+        <NewDMDialog onPick={openPeer} onClose={() => setComposing(false)} />
+      )}
+    </aside>
+  );
+}
+
+/**
  * Top-level Direct Messages surface (Discord-style: DMs live at the account
  * layer, not inside any server). A conversation list on the left, the active
  * thread on the right. DMs are NIP-04 kind-4 events on the Armada relay.
@@ -261,6 +357,20 @@ export function DMsPage() {
   const [composing, setComposing] = useState(false);
 
   const activePeer = rawPeer ? resolvePubkey(rawPeer) : undefined;
+
+  // The peer whose thread is mounted. It lags behind `activePeer` so the thread
+  // stays rendered while it slides out on mobile (back navigation), then it's
+  // cleared once the slide-out finishes. Opening a peer updates it immediately.
+  const [renderedPeer, setRenderedPeer] = useState(activePeer);
+  useEffect(() => {
+    if (activePeer) {
+      setRenderedPeer(activePeer);
+      return;
+    }
+    // No active peer: keep the last thread mounted for the slide-out, then drop.
+    const timer = setTimeout(() => setRenderedPeer(undefined), 250);
+    return () => clearTimeout(timer);
+  }, [activePeer]);
 
   // Conversations plus the active peer if it's a brand-new thread.
   const rows = useMemo(() => {
@@ -285,75 +395,45 @@ export function DMsPage() {
 
   return (
     <>
-      <ServerRail className="hidden sidebar:flex" />
+      {/* Leftmost rail + conversation list — the persistent DM-list view. On
+          mobile they stay in place underneath while the thread slides over
+          them, so going back is a smooth slide-out (not a hard cut). */}
+      <ServerRail className={cn(activePeer && "hidden sidebar:flex")} />
 
-      {/* Conversation list pane — full screen on mobile when no peer selected. */}
-      <aside
+      <ConversationList
+        rows={rows}
+        previews={previews}
+        activePeer={activePeer}
+        dmSupported={dmSupported}
+        isLoading={isLoading}
+        composing={composing}
+        setComposing={setComposing}
+        openPeer={openPeer}
         className={cn(
-          "relative flex flex-col w-full sidebar:w-60 shrink-0 bg-chrome safe-area-top",
+          "flex-1 sidebar:flex-none sidebar:w-60",
           activePeer && "hidden sidebar:flex",
         )}
-      >
-        <header className="relative pl-5 pr-3 pt-5 pb-3 flex flex-col justify-center shrink-0">
-          <h1 className="font-semibold truncate leading-tight tracking-wide text-sm pr-8">Direct Messages</h1>
-          <span className="text-[11px] text-muted-foreground truncate leading-tight">
-            Message your friends.
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="New message"
-            className="absolute right-3 bottom-3 size-8"
-            onClick={() => setComposing(true)}
-          >
-            <Plus className="size-5" />
-          </Button>
-        </header>
+      />
 
-        {/* Divider between the header and the conversation list. */}
-        <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
-
-        <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-          {!dmSupported ? (
-            <p className="text-sm text-muted-foreground p-3">
-              Your signer doesn't support encryption, so direct messages are unavailable.
-            </p>
-          ) : isLoading ? (
-            <div className="flex justify-center py-8">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground p-3">
-              No conversations yet. Start one with the + button.
-            </p>
-          ) : (
-            rows.map((c) => (
-              <ConversationRow
-                key={c.peer}
-                peer={c.peer}
-                preview={c.latest}
-                previewText={previews[c.peer]}
-                active={c.peer === activePeer}
-                onClick={() => openPeer(c.peer)}
-              />
-            ))
-          )}
-        </div>
-
-        {composing && (
-          <NewDMDialog onPick={openPeer} onClose={() => setComposing(false)} />
-        )}
-      </aside>
-
-      {/* Thread pane */}
+      {/* Thread pane. On mobile it's an overlay that slides in from the right
+          when a peer is active and slides out on back; on desktop it's a static
+          side-by-side pane. */}
       <main
         className={cn(
-          "flex-1 min-w-0 flex flex-col safe-area-top",
-          !activePeer && "hidden sidebar:flex",
+          "flex flex-col safe-area-top bg-background",
+          // Mobile: full-screen overlay that slides horizontally.
+          "absolute inset-0 z-10 transition-transform duration-200 ease-out",
+          activePeer ? "translate-x-0" : "translate-x-full",
+          // Desktop: static pane, no transform/overlay.
+          "sidebar:static sidebar:z-auto sidebar:flex-1 sidebar:min-w-0 sidebar:translate-x-0 sidebar:transition-none",
         )}
       >
-        {activePeer ? (
-          <Conversation key={activePeer} peer={activePeer} />
+        {renderedPeer ? (
+          <Conversation
+            key={renderedPeer}
+            peer={renderedPeer}
+            onBack={() => navigate("/dms")}
+          />
         ) : (
           <div className="flex flex-1 items-center justify-center text-muted-foreground">
             <div className="flex flex-col items-center gap-3">
