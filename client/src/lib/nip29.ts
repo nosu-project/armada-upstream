@@ -33,6 +33,14 @@ export const KIND_DELETE_GROUP = 9008;
 /** Moderation: create invite code. */
 export const KIND_CREATE_INVITE = 9009;
 
+/**
+ * Armada extension: a group's set of pinned messages. Addressable
+ * (`d` = group id) so the newest event per group is the authoritative list.
+ * Each pinned message is an `e` tag; the relay restricts writes to admins.
+ * Not part of NIP-29 proper.
+ */
+export const KIND_GROUP_PINS = 39041;
+
 /** User: request to join a group. */
 export const KIND_JOIN_REQUEST = 9021;
 /** User: request to leave a group. */
@@ -192,6 +200,36 @@ export function parseGroupParticipants(event: NostrEvent): string[] {
   return event.tags
     .filter(([n, v]) => n === "participant" && HEX64.test(v ?? ""))
     .map(([, pubkey]) => pubkey);
+}
+
+/**
+ * Parse a kind 39041 group-pins event into the list of pinned message ids,
+ * newest-pinned first (the order the admin pinned them — preserved as authored).
+ */
+export function parseGroupPins(event: NostrEvent): string[] {
+  if (event.kind !== KIND_GROUP_PINS) return [];
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const [n, v] of event.tags) {
+    if (n === "e" && HEX64.test(v ?? "") && !seen.has(v)) {
+      seen.add(v);
+      ids.push(v);
+    }
+  }
+  return ids;
+}
+
+/** Build the tags for a kind 39041 group-pins event from a list of message ids. */
+export function buildGroupPinsTags(groupId: string, pinnedIds: string[]): string[][] {
+  const tags: string[][] = [["d", groupId], ["h", groupId]];
+  const seen = new Set<string>();
+  for (const id of pinnedIds) {
+    if (HEX64.test(id) && !seen.has(id)) {
+      seen.add(id);
+      tags.push(["e", id]);
+    }
+  }
+  return tags;
 }
 
 /** Parse a kind 10009 user-groups list into group references (public tags only). */

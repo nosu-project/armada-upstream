@@ -1,4 +1,4 @@
-import { AlertCircle, Hash, Loader2, MessagesSquare, Pencil, Reply, Search, Trash2 } from "lucide-react";
+import { AlertCircle, Hash, Loader2, MessagesSquare, Pencil, Pin, PinOff, Reply, Search, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -20,6 +20,7 @@ import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useGroupSearch } from "@/hooks/useGroupSearch";
 import { useDeleteOwnMessage, useEditMessage } from "@/hooks/useEditMessage";
+import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useReactions } from "@/hooks/useReactions";
 import { useReplyCount } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";import { channelReadKey, useReadState } from "@/hooks/useReadState";
@@ -85,8 +86,12 @@ interface ChatMessageProps {
   highlight?: string;
   /** Whether this message is currently being edited inline. */
   isEditing?: boolean;
+  /** Whether this message is currently pinned (admins only see the control). */
+  isPinned?: boolean;
   onRetry?: () => void;
   onDiscard?: () => void;
+  /** Pin or unpin this message (admins/moderators only). */
+  onTogglePin?: (event: NostrEvent) => void;
   /** Delete this message. Self-deletes publish NIP-09 (kind 5); moderator
    *  deletes of others' messages use the NIP-29 moderation event. */
   onDelete: (event: NostrEvent) => void;
@@ -101,7 +106,7 @@ interface ChatMessageProps {
   onEditCancel?: () => void;
 }
 
-function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, onRetry, onDiscard, onDelete, onReply, onOpenThread, onEdit, onEditSubmit, onEditCancel }: ChatMessageProps) {
+function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, isPinned, onRetry, onDiscard, onTogglePin, onDelete, onReply, onOpenThread, onEdit, onEditSubmit, onEditCancel }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
@@ -122,6 +127,8 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   // The author can delete their own confirmed message (NIP-09 kind 5);
   // moderators can delete anyone's (NIP-29 moderation event).
   const canDelete = (isOwn && !isPending && !isFailed) || canModerate;
+  // Admins/moderators can pin any confirmed message.
+  const canPin = canModerate && !isPending && !isFailed;
   const wasEdited = event.tags.some(([name]) => name === "edited");
   const [editText, setEditText] = useState(event.content);
   // Two-step delete: the first click arms (highlights) the trash button, the
@@ -174,9 +181,11 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
       onMouseLeave={disarmDelete}
       onClick={handleRowClick}
       data-active={active || undefined}
+      data-event-id={event.id}
       className={cn(
         "group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
         active && "bg-secondary/40",
+        isPinned && "bg-amber-500/5",
         mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
         isPending && "opacity-60",
         isFailed && "bg-destructive/5",
@@ -259,6 +268,28 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Edit message</TooltipContent>
+              </Tooltip>
+            )}
+            {canPin && !isEditing && onTogglePin && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={isPinned ? "Unpin message" : "Pin message"}
+                    aria-pressed={isPinned}
+                    className={cn(
+                      "size-7",
+                      isPinned
+                        ? "text-primary hover:text-primary"
+                        : "text-muted-foreground hover:text-primary",
+                    )}
+                    onClick={() => onTogglePin(event)}
+                  >
+                    {isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{isPinned ? "Unpin message" : "Pin message"}</TooltipContent>
               </Tooltip>
             )}
             {canDelete && !isEditing && (
@@ -377,6 +408,12 @@ interface GroupChatProps {
    * messages (filtered in-place in the chat area, not a separate view).
    */
   searchQuery?: string;
+  /**
+   * Populated by GroupChat with a function that scrolls a message into view by
+   * id (used by the header's pinned-messages popover). The ref's `.current` is
+   * assigned on mount and cleared on unmount.
+   */
+  scrollToMessageRef?: React.MutableRefObject<((id: string) => void) | null>;
 }
 
 /**
@@ -384,7 +421,7 @@ interface GroupChatProps {
  * (and kind 1068 polls) with the `h` tag and NIP-29 `previous` timeline
  * references, published only to the group's host relay.
  */
-export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuery = "" }: GroupChatProps) {
+export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuery = "", scrollToMessageRef }: GroupChatProps) {
   const { user } = useCurrentUser();
   const {
     data: messages = [],
@@ -396,6 +433,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     removeOptimistic,
   } = useGroupMessages(relayUrl, groupId);
   const { deleteEvent, removeUser } = useGroupModeration(relayUrl, groupId);
+  const { isPinned, pin, unpin } = usePinnedMessages(relayUrl, groupId);
   const { mutateAsync: republish } = useRepublish();
   const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);
   const { mutate: deleteOwnMessage } = useDeleteOwnMessage(relayUrl, groupId);
@@ -528,8 +566,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
 
   // Delete a message: the author's own posts go out as NIP-09 kind 5 deletions;
   // moderators deleting others' posts use the NIP-29 moderation event.
-  const handleDelete = useCallback(
-    (event: NostrEvent) => {
+  const handleDelete = useCallback(    (event: NostrEvent) => {
       if (user?.pubkey === event.pubkey) {
         deleteOwnMessage({ event });
       } else {
@@ -538,6 +575,49 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     },
     [user?.pubkey, deleteOwnMessage, deleteEvent],
   );
+
+  // Pin/unpin a message (admins/moderators). Publishes the updated 39041 set;
+  // the relay rejects the write from non-admins.
+  const handleTogglePin = useCallback(
+    async (event: NostrEvent) => {
+      const pinned = isPinned(event.id);
+      try {
+        if (pinned) await unpin(event.id);
+        else await pin(event.id);
+      } catch {
+        toast({
+          title: pinned ? "Couldn't unpin" : "Couldn't pin",
+          description: "The relay rejected the change.",
+          variant: "destructive",
+        });
+      }
+    },
+    [isPinned, pin, unpin],
+  );
+
+  // Scroll a (pinned) message into view and flash it. No-op if it's not in the
+  // currently-loaded timeline.
+  const scrollToMessage = useCallback((id: string) => {
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
+    if (!el) {
+      toast({ title: "Message not loaded", description: "Scroll up to load older messages." });
+      return;
+    }
+    isAutoScrollRef.current = false;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("ring-2", "ring-amber-400", "ring-inset");
+    setTimeout(() => el.classList.remove("ring-2", "ring-amber-400", "ring-inset"), 1600);
+  }, []);
+
+  // Expose scrollToMessage to the parent (the channel header's pinned-messages
+  // popover jumps to a message by calling through this ref).
+  useEffect(() => {
+    if (!scrollToMessageRef) return;
+    scrollToMessageRef.current = scrollToMessage;
+    return () => {
+      scrollToMessageRef.current = null;
+    };
+  }, [scrollToMessageRef, scrollToMessage]);
 
   // Submit an inline edit: delete the original + republish at its timestamp,
   // optimistically swapping the original message for the edited one.
@@ -603,6 +683,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
                     canWrite={Boolean(user && canWrite)}
                     canModerate={canModerate}
                     highlight={searchQuery}
+                    isPinned={isPinned(msg.id)}
+                    onTogglePin={handleTogglePin}
                     onDelete={handleDelete}
                     onReply={setReplyTo}
                   />
@@ -638,6 +720,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
               canModerate={canModerate}
               sendStatus={sendStatus[msg.id]}
               isEditing={editingId === msg.id}
+              isPinned={isPinned(msg.id)}
+              onTogglePin={handleTogglePin}
               onRetry={() => handleRetry(msg)}
               onDiscard={() => removeOptimistic(msg.id)}
               onDelete={handleDelete}

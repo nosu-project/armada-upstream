@@ -69,6 +69,17 @@ func isAdmin(group *relay29.Group, pubkey string) bool {
 	return false
 }
 
+// canModerate reports whether pubkey holds a role permitted to moderate the
+// group (admin or moderator). Mirrors the client's moderation gate.
+func canModerate(group *relay29.Group, pubkey string) bool {
+	for _, role := range group.Members[pubkey] {
+		if role == adminRole || role == moderatorRole {
+			return true
+		}
+	}
+	return false
+}
+
 // setupSingleGroup provisions the default group on startup, seeds its admins
 // (add-only), and restricts creation of additional groups to configured admins.
 func setupSingleGroup() {

@@ -1,9 +1,10 @@
-import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
+import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
 import { GroupChat } from "@/components/chat/GroupChat";
 import { MemberList } from "@/components/chat/MemberList";
+import { PinnedMessagesBar } from "@/components/chat/PinnedMessagesBar";
 import { GroupSettingsDialog } from "@/components/dialogs/GroupSettingsDialog";
 import { InvitePeopleDialog } from "@/components/dialogs/InvitePeopleDialog";
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
@@ -26,6 +27,7 @@ import { useGroup } from "@/hooks/useGroup";
 import { useGroupMembership, useJoinGroup, useLeaveGroup } from "@/hooks/useGroupMembership";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
+import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { toast } from "@/hooks/useToast";
 import { routeParamToRelay } from "@/lib/platform";
@@ -109,6 +111,8 @@ export function GroupPage() {
   /** Whether the header search bar is expanded, and its current query text. */
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  /** Whether the pinned-messages bar is expanded below the header. */
+  const [pinsOpen, setPinsOpen] = useState(false);
   /** Server whose channels are shown in the mobile drawer (defaults to current). */
   const [drawerServer, setDrawerServer] = useState(relayUrl ?? "");
 
@@ -117,11 +121,21 @@ export function GroupPage() {
     [user, details?.admins],
   );
 
+  const { pinnedIds, unpin } = usePinnedMessages(relayUrl, groupId);
+  const hasPins = pinnedIds.length > 0;
+
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Lets the pinned-messages bar jump to a message in the timeline; GroupChat
+  // assigns the scroll function into this ref.
+  const scrollToMessageRef = useRef<((id: string) => void) | null>(null);
   // Focus the search field when it expands.
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus();
   }, [searchOpen]);
+  // Collapse the pinned bar if everything gets unpinned while it's open.
+  useEffect(() => {
+    if (pinsOpen && !hasPins) setPinsOpen(false);
+  }, [pinsOpen, hasPins]);
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
     setSearchQuery("");
@@ -231,6 +245,24 @@ export function GroupPage() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Join voice</TooltipContent>
+            </Tooltip>
+          )}
+          {/* Pinned messages — toggles the browse bar below the header. */}
+          {hasPins && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Pinned messages"
+                  aria-pressed={pinsOpen}
+                  className={cn("size-8 text-muted-foreground", pinsOpen && "text-foreground")}
+                  onClick={() => setPinsOpen((v) => !v)}
+                >
+                  <Pin className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Pinned messages</TooltipContent>
             </Tooltip>
           )}
           {/* Search messages in this channel — expands inline below. */}
@@ -373,6 +405,17 @@ export function GroupPage() {
           </div>
         </header>
 
+        {/* Pinned messages bar — slides open below the header. */}
+        <PinnedMessagesBar
+          open={pinsOpen}
+          pinnedIds={pinnedIds}
+          relayUrl={relayUrl}
+          canModerate={isAdmin}
+          onJump={(id) => scrollToMessageRef.current?.(id)}
+          onUnpin={(id) => { void unpin(id); }}
+          onClose={() => setPinsOpen(false)}
+        />
+
         {/* Join banner */}
         {user && !isMember && !isLoading && (
           <JoinBanner relayUrl={relayUrl} groupId={groupId} isClosed={Boolean(group?.isClosed)} />
@@ -391,6 +434,7 @@ export function GroupPage() {
             canWrite={canWrite}
             canModerate={isAdmin}
             searchQuery={searchOpen ? searchQuery : ""}
+            scrollToMessageRef={scrollToMessageRef}
           />
           <div
             className={cn(

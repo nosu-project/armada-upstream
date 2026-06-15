@@ -129,12 +129,16 @@ func main() {
 	// Work around relay29's inverted `closed` flag handling. See fixes.go.
 	setupClosedFlagFix()
 
+	// Admin-pinned messages (kind 39041). See pins.go.
+	setupPinnedMessages()
+
 	relay.RejectEvent = append(relay.RejectEvent,
 		policies.PreventLargeTags(64),
 		// Rich chat messages legitimately stack indexable tags: `h` + NIP-10
 		// reply `e` tags + mention `p` tags + hashtag `t` tags + quote `q`
-		// tags. 12 leaves headroom without allowing tag-spam.
-		policies.PreventTooManyIndexableTags(12, []int{9005}, nil),
+		// tags. 12 leaves headroom without allowing tag-spam. Kind 39041
+		// (pinned messages) is exempt: it carries one `e` tag per pin.
+		policies.PreventTooManyIndexableTags(12, []int{9005, 39041}, nil),
 		policies.RestrictToSpecifiedKinds(true,
 			// group content
 			9, 10, 11, 12, 1111,
@@ -150,6 +154,8 @@ func main() {
 			// moderation + membership
 			9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009,
 			9021, 9022,
+			// Armada extension: admin-pinned messages (addressable on group id).
+			39041,
 			// unmanaged kinds (profiles, NIP-04 DMs, user group lists)
 			0, 4, 10009,
 		),
