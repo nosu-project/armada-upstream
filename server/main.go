@@ -30,10 +30,10 @@ type Settings struct {
 	RelayIcon        string `envconfig:"RELAY_ICON"`
 	DatabasePath     string `envconfig:"DATABASE_PATH" default:"./data/db"`
 
-	// Single-community model: this relay hosts exactly one NIP-29 group,
-	// provisioned on startup. See group.go.
+	// Admin-managed channels: a default NIP-29 group is provisioned on
+	// startup; admins may create more at runtime. See group.go.
 	GroupID     string `envconfig:"GROUP_ID" default:"armada"`
-	GroupName   string `envconfig:"GROUP_NAME" default:"Armada"`
+	GroupName   string `envconfig:"GROUP_NAME" default:"general"`
 	AdminPubkey string `envconfig:"ADMIN_PUBKEY" required:"true"` // comma-separated npub/hex
 
 	// LiveKit (optional). When unset the relay reports no AV support.

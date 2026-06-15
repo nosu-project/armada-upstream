@@ -10,12 +10,12 @@ import (
 	"github.com/nbd-wtf/go-nostr/nip19"
 )
 
-// Single-community model.
+// Admin-managed multi-channel model.
 //
-// This relay hosts exactly ONE NIP-29 group, identified by GROUP_ID. It is
-// provisioned automatically on startup (no in-app "create group" flow) and the
-// admins listed in ADMIN_PUBKEY are seeded into it. Any attempt by a user to
-// create another group (kind 9007) is rejected.
+// This relay provisions a default NIP-29 group (channel) on startup, identified
+// by GROUP_ID, and seeds the admins listed in ADMIN_PUBKEY into it. Additional
+// channels (kind 9007 create-group) may be created at runtime, but ONLY by a
+// configured admin pubkey; create-group events from anyone else are rejected.
 //
 // Admin seeding is ADD-ONLY: on every boot we ensure each configured pubkey
 // holds the admin role, but we never demote anyone. Admins added later at
@@ -69,13 +69,18 @@ func isAdmin(group *relay29.Group, pubkey string) bool {
 	return false
 }
 
-// setupSingleGroup provisions the one group on startup, seeds its admins
-// (add-only), and rejects creation of any other group.
+// setupSingleGroup provisions the default group on startup, seeds its admins
+// (add-only), and restricts creation of additional groups to configured admins.
 func setupSingleGroup() {
 	ctx := context.Background()
 
-	// Reject any user-published create-group event. Internal provisioning
-	// (state.CreateGroup) sets the internal-call context key and is allowed.
+	// Restrict create-group to configured admins. Internal provisioning
+	// (state.CreateGroup) sets the internal-call context key and is allowed;
+	// runtime kind 9007 events are only accepted from an ADMIN_PUBKEY.
+	adminSet := make(map[string]bool, len(s.AdminPubkeys))
+	for _, pubkey := range s.AdminPubkeys {
+		adminSet[pubkey] = true
+	}
 	relay.RejectEvent = append(relay.RejectEvent, func(ctx context.Context, event *nostr.Event) (bool, string) {
 		if event.Kind != nostr.KindSimpleGroupCreateGroup {
 			return false, ""
@@ -83,7 +88,10 @@ func setupSingleGroup() {
 		if relay29.IsInternalCall(ctx) {
 			return false, ""
 		}
-		return true, "blocked: this relay hosts a single group; group creation is disabled"
+		if adminSet[event.PubKey] {
+			return false, ""
+		}
+		return true, "blocked: only relay admins may create channels"
 	})
 
 	// Provision the group if it doesn't already exist. The first admin is the
