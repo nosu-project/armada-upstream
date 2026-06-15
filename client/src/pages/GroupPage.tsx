@@ -1,4 +1,4 @@
-import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Settings2, UserPlus, Users, Volume2 } from "lucide-react";
+import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Search, Settings2, UserPlus, Users, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -105,6 +105,8 @@ export function GroupPage() {
   /** Whether the desktop member roster is shown (toggled from the header). */
   const [membersVisible, setMembersVisible] = useState(true);
   const [channelsOpen, setChannelsOpen] = useState(false);
+  /** Whether the in-channel message search panel is open. */
+  const [searchOpen, setSearchOpen] = useState(false);
   /** Server whose channels are shown in the mobile drawer (defaults to current). */
   const [drawerServer, setDrawerServer] = useState(relayUrl ?? "");
 
@@ -202,6 +204,22 @@ export function GroupPage() {
               <TooltipContent>Join voice</TooltipContent>
             </Tooltip>
           )}
+          {/* Search messages in this channel. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Search messages"
+                aria-pressed={searchOpen}
+                className={cn("size-8 text-muted-foreground", searchOpen && "text-foreground")}
+                onClick={() => setSearchOpen((v) => !v)}
+              >
+                <Search className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Search messages</TooltipContent>
+          </Tooltip>
           {/* Mobile members button → opens the member sheet. */}
           <Button
             variant="ghost"
@@ -292,6 +310,8 @@ export function GroupPage() {
             groupId={groupId}
             canWrite={canWrite}
             canModerate={isAdmin}
+            searchOpen={searchOpen}
+            onCloseSearch={() => setSearchOpen(false)}
           />
           <div
             className={cn(

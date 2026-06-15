@@ -1,4 +1,4 @@
-import { ArrowLeft, Loader2, MessageSquare, Plus, X } from "lucide-react";
+import { ArrowLeft, Loader2, MessageSquare, Plus, Search, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -44,6 +44,7 @@ function ConversationRow({
   preview,
   previewText,
   unread,
+  query,
   active,
   onClick,
 }: {
@@ -51,12 +52,22 @@ function ConversationRow({
   preview: NostrEvent | undefined;
   previewText: string | undefined;
   unread: boolean;
+  query: string;
   active: boolean;
   onClick: () => void;
 }) {
   const author = useAuthor(peer);
   const metadata = author.data?.metadata;
   const name = getDisplayName(metadata, peer);
+
+  // When searching, hide rows that match neither the contact name nor the
+  // (decrypted) last-message preview. DMs are NIP-04 encrypted, so deeper
+  // full-text search isn't possible relay-side.
+  const q = query.trim().toLowerCase();
+  if (q) {
+    const haystack = `${name} ${metadata?.nip05 ?? ""} ${previewText ?? ""}`.toLowerCase();
+    if (!haystack.includes(q)) return null;
+  }
 
   return (
     <button
@@ -308,6 +319,7 @@ function ConversationList({
 }) {
   const { user } = useCurrentUser();
   const { getLastRead } = useReadState();
+  const [search, setSearch] = useState("");
   return (
     <aside
       className={cn(
@@ -330,6 +342,19 @@ function ConversationList({
           <Plus className="size-5" />
         </Button>
       </header>
+
+      {/* Search conversations by contact name or last message. */}
+      <div className="px-3 pb-2 shrink-0">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search conversations…"
+            className="h-8 pl-8 text-sm"
+          />
+        </div>
+      </div>
 
       {/* Divider between the header and the conversation list. */}
       <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
@@ -354,6 +379,7 @@ function ConversationList({
               peer={c.peer}
               preview={c.latest}
               previewText={previews[c.peer]}
+              query={search}
               unread={
                 Boolean(c.latest) &&
                 c.latest.pubkey !== user?.pubkey &&
