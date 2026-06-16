@@ -241,7 +241,18 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           // sidebar slot, so no reservation is needed.
           user && activeCall && "max-sidebar:pb-[var(--call-bar-h)]",
         )}
-        style={user && activeCall ? ({ "--call-bar-h": "3.25rem" } as React.CSSProperties) : undefined}
+        style={
+          user && activeCall
+            ? ({
+                // Reserve the bar's full height: content (3.25rem) + the bar's
+                // own pb-safe bottom inset (0.75rem + the home-indicator inset).
+                // A flat 3.25rem under-reserves on devices with a safe-area
+                // inset, letting the fixed bar creep over the composer.
+                "--call-bar-h":
+                  "calc(3.25rem + 0.75rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))",
+              } as React.CSSProperties)
+            : undefined
+        }
       >
         {children}
         {user && activeCall && (
