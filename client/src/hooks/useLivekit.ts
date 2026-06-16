@@ -84,7 +84,13 @@ async function fetchLivekitToken(
   signer: NostrSigner,
 ): Promise<LivekitTokenResponse> {
   const path = isDmRoomId(roomId) ? "livekit-dm" : "livekit";
-  const endpointUrl = `${relayToHttpUrl(relayUrl)}/.well-known/nip29/${path}/${encodeURIComponent(roomId)}`;
+  // Do NOT percent-encode the id: the relay reconstructs the expected NIP-98
+  // `u` URL from the decoded request path, so an encoded `u` tag (e.g. the
+  // colons in `dm:a:b` → `%3A`) would never match and auth would 401. Colons
+  // and hex are legal in a path segment; only escape characters that would
+  // break the path structure (`/`, `?`, `#`, whitespace).
+  const safeId = roomId.replace(/[/?#\s]/g, (c) => encodeURIComponent(c));
+  const endpointUrl = `${relayToHttpUrl(relayUrl)}/.well-known/nip29/${path}/${safeId}`;
 
   const event = await signer.signEvent({
     kind: KIND_HTTP_AUTH,
