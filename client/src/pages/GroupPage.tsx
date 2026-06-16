@@ -33,6 +33,7 @@ import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { toast } from "@/hooks/useToast";
 import { routeParamToRelay } from "@/lib/platform";
+import { relayRejectionMessage } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
 
 function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId: string; isClosed: boolean }) {
@@ -51,8 +52,8 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
       toast({ title: "Join request sent", description: "The relay will admit you automatically or after review." });
     } catch (e) {
       toast({
-        title: "Join failed",
-        description: e instanceof Error ? e.message : "The relay rejected the request.",
+        title: "Couldn't join",
+        description: relayRejectionMessage(e),
         variant: "destructive",
       });
     }
@@ -173,7 +174,7 @@ export function GroupPage() {
     } catch (e) {
       toast({
         title: "Leave failed",
-        description: e instanceof Error ? e.message : "The relay rejected the request.",
+        description: relayRejectionMessage(e),
         variant: "destructive",
       });
     }
@@ -190,7 +191,7 @@ export function GroupPage() {
     } catch (e) {
       toast({
         title: "Delete failed",
-        description: e instanceof Error ? e.message : "The relay rejected the request.",
+        description: relayRejectionMessage(e),
         variant: "destructive",
       });
     }

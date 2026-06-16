@@ -16,22 +16,14 @@ import { KIND_RELAY_INVITE, KIND_RELAY_JOIN, KIND_RELAY_LEAVE } from "@/lib/nip2
  * `attemptRelayAccess` for the reference implementation.
  *
  * This is intentionally relay-agnostic: relays that don't implement the scheme
- * (e.g. Armada's own relay) simply ignore the unknown ephemeral kind, so it is
- * always safe to attempt before a NIP-29 group join.
+ * (e.g. Armada's own relay) simply ignore — or reject — the unknown ephemeral
+ * kind. Either way the relay-join is a *speculative, best-effort* step: it can
+ * help a relay that gates on relay membership, but its failure must never block
+ * the NIP-29 group join (the group join is the source of truth — if relay
+ * membership actually matters, the group join itself reports "restricted: you
+ * are not a member of this relay", which the caller handles). So this never
+ * throws.
  */
-
-/** Relay responses that mean "the relay-join is effectively satisfied". */
-function isBenignRelayJoinError(message: string): boolean {
-  const m = message.toLowerCase();
-  return (
-    m.includes("duplicate") || // already a member
-    m.includes("already") ||
-    // Relays that don't implement relay-join may reject the unknown ephemeral
-    // kind outright; that's fine — they don't gate on relay membership.
-    m.includes("not accepted") ||
-    m.includes("invalid: this event's kind")
-  );
-}
 
 /**
  * Fetch a fresh invite claim from a relay. Relays that support the scheme issue
@@ -61,12 +53,14 @@ export function useRelayClaim() {
 
 /**
  * Ensure the current user is a member of the given relay by publishing an
- * ephemeral KIND_RELAY_JOIN with the supplied claim. No-ops gracefully on
- * relays that don't implement relay-level membership.
+ * ephemeral KIND_RELAY_JOIN with the supplied claim.
  *
- * Resolves on success (or benign "already a member"); rejects only when the
- * relay actively refuses the join with a non-benign reason (e.g. a bad/missing
- * claim on a closed relay).
+ * This is a speculative, best-effort handshake (see the file header): it helps
+ * relays that gate on relay-level membership, and no-ops on every other relay.
+ * It NEVER throws — a relay that doesn't implement the scheme will reject the
+ * unknown ephemeral kind (e.g. relay29 rejects it for lacking an `h` tag), and
+ * that rejection is meaningless here. Whether relay membership actually matters
+ * is decided by the subsequent NIP-29 group join, not by this pre-step.
  */
 export function useJoinRelay() {
   const { nostr } = useNostr();
@@ -74,24 +68,22 @@ export function useJoinRelay() {
 
   return useMutation({
     mutationFn: async ({ relayUrl, claim }: { relayUrl: string; claim?: string }) => {
-      if (!user) throw new Error("User is not logged in");
+      if (!user) return;
 
       const tags: string[][] = [];
       if (claim) tags.push(["claim", claim]);
 
-      const event = await user.signer.signEvent({
-        kind: KIND_RELAY_JOIN,
-        content: "",
-        tags,
-        created_at: Math.floor(Date.now() / 1000),
-      });
-
       try {
+        const event = await user.signer.signEvent({
+          kind: KIND_RELAY_JOIN,
+          content: "",
+          tags,
+          created_at: Math.floor(Date.now() / 1000),
+        });
         await nostr.relay(relayUrl).event(event, { signal: AbortSignal.timeout(8000) });
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        if (isBenignRelayJoinError(message)) return;
-        throw e;
+      } catch {
+        // Best-effort: any failure (unsupported kind, timeout, h-tag policy,
+        // bad claim) is non-fatal here. The group join reports the real outcome.
       }
     },
   });

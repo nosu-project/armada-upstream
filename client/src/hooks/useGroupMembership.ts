@@ -56,20 +56,32 @@ export function useJoinGroup(relayUrl: string, groupId: string) {
       // ALL writes behind *relay-level* membership and reject non-members with
       // "you are not a member of this relay" — before the NIP-29 group join is
       // even considered. So first attempt the relay-join handshake (ephemeral
-      // kind 28934 carrying the invite as a `claim`). This no-ops on relays
-      // that don't implement the scheme (e.g. Armada's own relay).
+      // kind 28934 carrying the invite as a `claim`). It's best-effort and never
+      // throws: it no-ops on relays that don't implement the scheme (e.g.
+      // Armada's own relay29, which rejects the unknown kind). The group join
+      // below is the source of truth.
       await joinRelay({ relayUrl, claim: code });
 
       // Then the NIP-29 group join. The same invite is carried as a `code` tag
       // for relays that scope invites per-group (e.g. Armada's relay).
       const tags: string[][] = [["h", groupId]];
       if (code) tags.push(["code", code]);
-      return publishEvent({
-        kind: KIND_JOIN_REQUEST,
-        content: reason ?? "",
-        tags,
-        relay: relayUrl,
-      });
+      try {
+        return await publishEvent({
+          kind: KIND_JOIN_REQUEST,
+          content: reason ?? "",
+          tags,
+          relay: relayUrl,
+        });
+      } catch (e) {
+        // relay29 rejects a join from an existing member with "already a
+        // member" — from the user's perspective that's success, not an error.
+        const message = (e instanceof Error ? e.message : String(e)).toLowerCase();
+        if (message.includes("already a member") || message.includes("already")) {
+          return;
+        }
+        throw e;
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["nip29", "membership", relayUrl, groupId] });
