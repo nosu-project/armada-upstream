@@ -89,6 +89,9 @@ services:
         VITE_PLATFORM_RELAYS: ${PLATFORM_RELAYS:-ws://localhost:5577}
         VITE_APP_RELAYS: ${APP_RELAYS:-wss://relay.ditto.pub,wss://relay.dreamith.to}
         VITE_SEARCH_RELAYS: ${SEARCH_RELAYS:-wss://relay.ditto.pub,wss://relay.dreamith.to}
+        VITE_DEFAULT_NOISE_SUPPRESSION: ${DEFAULT_NOISE_SUPPRESSION:-true}
+        VITE_DEFAULT_ECHO_CANCELLATION: ${DEFAULT_ECHO_CANCELLATION:-true}
+        VITE_DEFAULT_AUTO_GAIN_CONTROL: ${DEFAULT_AUTO_GAIN_CONTROL:-true}
     restart: unless-stopped
     ports:
       - "${CLIENT_PORT:-8080}:80"

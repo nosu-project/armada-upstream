@@ -1,5 +1,5 @@
-import { LiveKitRoom, RoomAudioRenderer } from "@livekit/components-react";
-import { DisconnectReason, type RoomOptions } from "livekit-client";
+import { LiveKitRoom, RoomAudioRenderer, useRoomContext } from "@livekit/components-react";
+import { ConnectionState, DisconnectReason, RoomEvent, type RoomOptions } from "livekit-client";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -17,9 +17,41 @@ import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { CallContext, type ActiveCall } from "@/contexts/CallContext";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
-import { getPreferredMicId } from "@/lib/voiceDevices";
+import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
+import { getAudioProcessing, getPreferredMicId } from "@/lib/voiceDevices";
 import { cn } from "@/lib/utils";
 import { nip19 } from "nostr-tools";
+
+/**
+ * Plays a short chirp when you join the call, when another participant joins,
+ * and when someone leaves. Must render inside a `LiveKitRoom`.
+ */
+function CallSoundEffects() {
+  const room = useRoomContext();
+
+  useEffect(() => {
+    const onJoin = () => playJoinSound();
+    const onLeave = () => playLeaveSound();
+    // Your own join: RoomEvent.Connected fires once the local participant has
+    // joined. If the room is already connected by the time this mounts (e.g. a
+    // fast reconnect), play it immediately so you always get audible feedback.
+    if (room.state === ConnectionState.Connected) {
+      playJoinSound();
+    } else {
+      room.on(RoomEvent.Connected, onJoin);
+    }
+    // Other participants joining/leaving after you're in.
+    room.on(RoomEvent.ParticipantConnected, onJoin);
+    room.on(RoomEvent.ParticipantDisconnected, onLeave);
+    return () => {
+      room.off(RoomEvent.Connected, onJoin);
+      room.off(RoomEvent.ParticipantConnected, onJoin);
+      room.off(RoomEvent.ParticipantDisconnected, onLeave);
+    };
+  }, [room]);
+
+  return null;
+}
 
 /**
  * The persistent voice room. Mounted once by `CallProvider` (which lives in the
@@ -66,14 +98,23 @@ function PersistentVoiceRoom({
     [onLeave],
   );
 
-  // Apply the user's remembered microphone so a call opens on their chosen
-  // input device. Recomputed per mount (rooms remount on channel switch).
+  // Apply the user's remembered microphone and audio-processing choices so a
+  // call opens on their chosen input device with their preferred noise
+  // suppression / echo cancellation / auto-gain. These are capture-time
+  // constraints, so they're read per mount (rooms remount on channel switch);
+  // changing them live re-publishes the track (see VoiceBar's DeviceMenu).
   const roomOptions = useMemo<RoomOptions>(() => {
     const micId = getPreferredMicId();
+    const processing = getAudioProcessing();
     return {
       adaptiveStream: true,
       dynacast: true,
-      audioCaptureDefaults: micId ? { deviceId: micId } : undefined,
+      audioCaptureDefaults: {
+        ...(micId ? { deviceId: micId } : {}),
+        noiseSuppression: processing.noiseSuppression,
+        echoCancellation: processing.echoCancellation,
+        autoGainControl: processing.autoGainControl,
+      },
     };
   }, []);
 
@@ -175,6 +216,7 @@ function PersistentVoiceRoom({
       style={{ display: "contents" }}
     >
       <RoomAudioRenderer />
+      <CallSoundEffects />
       {placeBar(mobileBar, desktopBar)}
     </LiveKitRoom>
   );
@@ -211,7 +253,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   // Trigger the exit animation, then tear down the room once it finishes. The
   // LiveKit connection lives in PersistentVoiceRoom, so we keep it mounted for
-  // the brief slide-out before unmounting (which disconnects).
+  // the brief slide-out before unmounting (which disconnects). The leave chirp
+  // is played by the hangup button's onClick (in VoiceBar), inside the user
+  // gesture and before teardown — playing it here would be too late and get cut.
   const leaveCall = useCallback(() => {
     setExiting(true);
     if (exitTimer.current) clearTimeout(exitTimer.current);

@@ -4,16 +4,31 @@ import {
   useLocalParticipant,
   useMediaDeviceSelect,
   useParticipants,
+  useRemoteParticipants,
   useSpeakingParticipants,
 } from "@livekit/components-react";
-import { ConnectionState } from "livekit-client";
-import { Check, Headphones, Loader2, Mic, MicOff, PhoneOff, Settings2, Volume2 } from "lucide-react";
+import { ConnectionState, LocalAudioTrack, Track } from "livekit-client";
+import type { RemoteParticipant } from "livekit-client";
+import {
+  Check,
+  Headphones,
+  Loader2,
+  Mic,
+  MicOff,
+  PhoneOff,
+  Settings2,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 
 import "@livekit/components-styles";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import type { CSSProperties } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,7 +40,15 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { pubkeyFromLivekitIdentity } from "@/hooks/useLivekit";
-import { rememberVoiceDevice } from "@/lib/voiceDevices";
+import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
+import {
+  getAudioProcessing,
+  getUserVolume,
+  rememberUserVolume,
+  rememberVoiceDevice,
+  setAudioProcessing,
+  type AudioProcessingPrefs,
+} from "@/lib/voiceDevices";
 import {
   getAvatarShape,
   shapedAvatarBorderStyle,
@@ -34,7 +57,16 @@ import {
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
-function ParticipantAvatar({ pubkey, isSpeaking }: { pubkey: string; isSpeaking?: boolean }) {
+function ParticipantAvatar({
+  pubkey,
+  isSpeaking,
+  participant,
+}: {
+  pubkey: string;
+  isSpeaking?: boolean;
+  /** When set (remote participant), the avatar opens a per-user volume control. */
+  participant?: RemoteParticipant;
+}) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, pubkey);
@@ -57,29 +89,119 @@ function ParticipantAvatar({ pubkey, isSpeaking }: { pubkey: string; isSpeaking?
       }
     : undefined;
 
+  const avatar = (
+    // Wrapper keeps the indicator outside the (overflow-hidden / masked)
+    // Avatar so it never gets cropped.
+    <div
+      className={cn(
+        "rounded-full transition-shadow",
+        !hasCustomShape && "ring-2 ring-background",
+        !hasCustomShape && isSpeaking && "ring-success shadow-[0_0_0_2px_hsl(var(--success))]",
+      )}
+      style={wrapperStyle}
+    >
+      <Avatar shape={shape} className="size-7">
+        <AvatarImage src={metadata?.picture} alt={displayName} />
+        <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+          {displayName[0]?.toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+    </div>
+  );
+
+  // Local participant (no `participant` prop): plain avatar with a name tooltip.
+  if (!participant) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{avatar}</TooltipTrigger>
+        <TooltipContent>{displayName}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  // Remote participant: clicking opens a per-user volume control.
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        {/* Wrapper keeps the indicator outside the (overflow-hidden / masked)
-            Avatar so it never gets cropped. */}
-        <div
-          className={cn(
-            "rounded-full transition-shadow",
-            !hasCustomShape && "ring-2 ring-background",
-            !hasCustomShape && isSpeaking && "ring-success shadow-[0_0_0_2px_hsl(var(--success))]",
-          )}
-          style={wrapperStyle}
-        >
-          <Avatar shape={shape} className="size-7">
-            <AvatarImage src={metadata?.picture} alt={displayName} />
-            <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
-              {displayName[0]?.toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
+    <ParticipantVolumeMenu participant={participant} pubkey={pubkey} displayName={displayName}>
+      {avatar}
+    </ParticipantVolumeMenu>
+  );
+}
+
+/**
+ * A dropdown anchored on a remote participant's avatar with a playback-volume
+ * slider (0–200%). The chosen volume is applied live via LiveKit's
+ * `RemoteParticipant.setVolume` and persisted per pubkey so it sticks across
+ * calls. This is the per-user volume control (à la Discord).
+ */
+function ParticipantVolumeMenu({
+  participant,
+  pubkey,
+  displayName,
+  children,
+}: {
+  participant: RemoteParticipant;
+  pubkey: string;
+  displayName: string;
+  children: React.ReactNode;
+}) {
+  const [volume, setVolume] = useState(() => getUserVolume(pubkey));
+
+  // Re-apply the remembered volume whenever this participant (re)joins or their
+  // track changes, since LiveKit resets to 1 on a fresh subscription.
+  useEffect(() => {
+    participant.setVolume(volume);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participant]);
+
+  const apply = useCallback(
+    (next: number) => {
+      setVolume(next);
+      participant.setVolume(next);
+      rememberUserVolume(pubkey, next);
+    },
+    [participant, pubkey],
+  );
+
+  const muted = volume === 0;
+  const pct = Math.round(volume * 100);
+
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <button type="button" aria-label={`Volume for ${displayName}`} className="shrink-0">
+              {children}
+            </button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent>{displayName}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="start" className="w-56 p-3">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <span className="text-sm font-medium truncate">{displayName}</span>
+          <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
         </div>
-      </TooltipTrigger>
-      <TooltipContent>{displayName}</TooltipContent>
-    </Tooltip>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label={muted ? "Unmute user" : "Mute user"}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={() => apply(muted ? 1 : 0)}
+          >
+            {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+          </button>
+          <Slider
+            value={[volume]}
+            min={0}
+            max={2}
+            step={0.05}
+            aria-label={`Volume for ${displayName}`}
+            onValueChange={([v]) => apply(v)}
+          />
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -133,6 +255,42 @@ function DeviceSelectGroup({
 
 /** A gear button opening a mic (and, when supported, speaker) device picker. */
 function DeviceMenu() {
+  const { localParticipant } = useLocalParticipant();
+  const [processing, setProcessing] = useState<AudioProcessingPrefs>(() => getAudioProcessing());
+
+  // Apply a processing change live: persist it, then restart the published mic
+  // track with the new capture constraints so it takes effect this call (not
+  // just the next one). audioCaptureDefaults only applies at track creation, so
+  // an explicit restartTrack is required to re-acquire the mic with the new
+  // noise-suppression / echo-cancellation / auto-gain constraints.
+  const update = useCallback(
+    (patch: Partial<AudioProcessingPrefs>) => {
+      setProcessing((prev) => {
+        const next = { ...prev, ...patch };
+        setAudioProcessing(next);
+        const pub = localParticipant.getTrackPublication(Track.Source.Microphone);
+        const track = pub?.audioTrack;
+        if (track instanceof LocalAudioTrack) {
+          void track
+            .restartTrack({
+              noiseSuppression: next.noiseSuppression,
+              echoCancellation: next.echoCancellation,
+              autoGainControl: next.autoGainControl,
+            })
+            .catch((err) => console.warn("failed to apply audio processing", err));
+        }
+        return next;
+      });
+    },
+    [localParticipant],
+  );
+
+  const toggles: { key: keyof AudioProcessingPrefs; label: string }[] = [
+    { key: "noiseSuppression", label: "Noise suppression" },
+    { key: "echoCancellation", label: "Echo cancellation" },
+    { key: "autoGainControl", label: "Auto gain control" },
+  ];
+
   return (
     <DropdownMenu>
       <Tooltip>
@@ -157,6 +315,22 @@ function DeviceMenu() {
             />
           </>
         )}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-xs">Processing</DropdownMenuLabel>
+        {toggles.map(({ key, label }) => (
+          <label
+            key={key}
+            className="flex items-center justify-between gap-3 px-2 py-1.5 text-sm cursor-pointer"
+            // Keep the menu open while toggling.
+            onPointerDown={(e) => e.preventDefault()}
+          >
+            <span>{label}</span>
+            <Switch
+              checked={processing[key]}
+              onCheckedChange={(checked) => update({ [key]: checked })}
+            />
+          </label>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -177,6 +351,7 @@ interface InCallViewProps {
  */
 export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
   const participants = useParticipants();
+  const remoteParticipants = useRemoteParticipants();
   const connectionState = useConnectionState();
   const { localParticipant } = useLocalParticipant();
   // `useSpeakingParticipants` subscribes to the room's ActiveSpeakersChanged
@@ -186,6 +361,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
   const speakingParticipants = useSpeakingParticipants();
 
   const speaking = new Set(speakingParticipants.map((p) => p.identity));
+  const remoteByIdentity = new Map(remoteParticipants.map((p) => [p.identity, p]));
 
   if (connectionState === ConnectionState.Connecting) {
     return (
@@ -233,6 +409,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
           key={p.identity}
           pubkey={pubkeyFromLivekitIdentity(p.identity)}
           isSpeaking={speaking.has(p.identity)}
+          participant={remoteByIdentity.get(p.identity)}
         />
       ))}
     </div>
@@ -244,14 +421,28 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
       size="icon"
       className="size-8 shrink-0"
       aria-label={localParticipant.isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
-      onClick={() => localParticipant.setMicrophoneEnabled(!localParticipant.isMicrophoneEnabled)}
+      onClick={() => {
+        const enabling = !localParticipant.isMicrophoneEnabled;
+        // Self-only feedback, played on the click gesture (AudioContext is
+        // unlocked) so you hear a blip even though no roster change occurs.
+        if (enabling) playUnmuteSound();
+        else playMuteSound();
+        localParticipant.setMicrophoneEnabled(enabling);
+      }}
     >
       {localParticipant.isMicrophoneEnabled ? <Mic className="size-3.5" /> : <MicOff className="size-3.5" />}
     </Button>
   );
 
   const hangupBtn = (
-    <DisconnectButton className="inline-flex items-center justify-center rounded-md size-8 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90">
+    <DisconnectButton
+      // Play the leave chirp on the click itself, before LiveKit disconnects.
+      // Doing it in CallProvider's leaveCall is too late: the disconnect tears
+      // down the room's audio around the same tick and the sound gets cut off.
+      // This fires inside the user's gesture, so the AudioContext is unlocked.
+      onClick={() => playLeaveSound()}
+      className="inline-flex items-center justify-center rounded-md size-8 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
+    >
       <PhoneOff className="size-3.5" />
     </DisconnectButton>
   );

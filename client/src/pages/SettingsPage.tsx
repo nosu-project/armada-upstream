@@ -1,10 +1,12 @@
 import { ArrowLeft } from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { ThemeSelector } from "@/components/ThemeSelector";
+import { VoiceDeviceSettings } from "@/components/VoiceDeviceSettings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -13,6 +15,11 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { APP_NAME, APP_RELAYS, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import {
+  getAudioProcessing,
+  setAudioProcessing,
+  type AudioProcessingPrefs,
+} from "@/lib/voiceDevices";
 
 import type { EncryptedSettings } from "@/lib/schemas";
 
@@ -23,6 +30,21 @@ export function SettingsPage() {
   const { user } = useCurrentUser();
   const { updateSettings, hasNip44Support } = useEncryptedSettings();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
+
+  // Voice mic-processing prefs are device-local (stored in localStorage, not
+  // synced AppConfig — a setting right for a laptop mic is wrong on a phone).
+  // Mirror the in-call gear menu; changes apply to the next captured mic track
+  // (and live mid-call, since the gear menu restarts the track on change).
+  const [voiceProcessing, setVoiceProcessing] = useState<AudioProcessingPrefs>(() =>
+    getAudioProcessing(),
+  );
+  const setVoiceToggle = (key: keyof AudioProcessingPrefs) => (value: boolean) => {
+    setVoiceProcessing((prev) => {
+      const next = { ...prev, [key]: value };
+      setAudioProcessing(next);
+      return next;
+    });
+  };
 
   /**
    * Update a relay field locally and sync to encrypted settings when logged in.
@@ -198,6 +220,45 @@ export function SettingsPage() {
                 placeholder="wss://dm-relay.example.com"
               />
             )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Voice</CardTitle>
+            <CardDescription>
+              Choose and test your microphone and speaker, and set the mic processing
+              applied to your captured audio in calls. These are device-local (they don't
+              sync across your devices) and can also be changed from the gear menu while in
+              a call.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <VoiceDeviceSettings />
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold text-muted-foreground">Microphone processing</h3>
+              <label className="flex items-center justify-between gap-4 cursor-pointer">
+                <span className="text-sm font-medium">Noise suppression</span>
+                <Switch
+                  checked={voiceProcessing.noiseSuppression}
+                  onCheckedChange={setVoiceToggle("noiseSuppression")}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-4 cursor-pointer">
+                <span className="text-sm font-medium">Echo cancellation</span>
+                <Switch
+                  checked={voiceProcessing.echoCancellation}
+                  onCheckedChange={setVoiceToggle("echoCancellation")}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-4 cursor-pointer">
+                <span className="text-sm font-medium">Auto gain control</span>
+                <Switch
+                  checked={voiceProcessing.autoGainControl}
+                  onCheckedChange={setVoiceToggle("autoGainControl")}
+                />
+              </label>
+            </div>
           </CardContent>
         </Card>
       </div>

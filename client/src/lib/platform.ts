@@ -78,3 +78,38 @@ export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "w
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
+
+/**
+ * Parse a build-time boolean env var. Vite env vars are always strings (or
+ * undefined when unset), so we treat "true"/"1" as true, "false"/"0" as false,
+ * and fall back to `dflt` when unset/unrecognised.
+ */
+function envBool(value: string | undefined, dflt: boolean): boolean {
+  if (value === undefined || value === "") return dflt;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  return dflt;
+}
+
+/**
+ * Default mic audio-processing toggles for voice calls. These seed the
+ * per-user voice preferences (`getAudioProcessing` in `voiceDevices.ts`) the
+ * first time a user opens the in-call audio settings; the user can override
+ * each toggle afterwards. Operators set the platform defaults at build time.
+ *
+ * All three default to `true`, matching LiveKit/browser defaults — good
+ * general-purpose noise/echo handling. Operators targeting e.g. music or
+ * push-to-talk setups may want to disable some via these env vars.
+ */
+export const DEFAULT_NOISE_SUPPRESSION: boolean = envBool(
+  import.meta.env.VITE_DEFAULT_NOISE_SUPPRESSION,
+  true,
+);
+export const DEFAULT_ECHO_CANCELLATION: boolean = envBool(
+  import.meta.env.VITE_DEFAULT_ECHO_CANCELLATION,
+  true,
+);
+export const DEFAULT_AUTO_GAIN_CONTROL: boolean = envBool(
+  import.meta.env.VITE_DEFAULT_AUTO_GAIN_CONTROL,
+  true,
+);
