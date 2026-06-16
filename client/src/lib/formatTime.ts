@@ -7,3 +7,12 @@ export function formatTime(seconds: number): string {
   if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
+
+/** Format a unix-seconds timestamp into a short relative string ("now"/"5m"/"3h"/"2d"). */
+export function shortTimeAgo(timestamp: number): string {
+  const diff = Math.floor(Date.now() / 1000) - timestamp;
+  if (diff < 60) return "now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
+}

@@ -4,17 +4,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
+import { ChatContent } from "@/components/chat/ChatContent";
+import { MessageRow } from "@/components/chat/MessageRow";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   useDMConversations,
   useDirectMessages,
   useDMSupport,
+  type DecryptedDM,
 } from "@/hooks/useDirectMessages";
 import { useSearchProfiles } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
@@ -101,47 +105,33 @@ function ConversationRow({
   );
 }
 
-function formatDmTime(seconds: number): string {
-  const date = new Date(seconds * 1000);
-  const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-  const time = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  if (sameDay) return time;
-  const dayMs = 86_400_000;
-  const yesterday = new Date(now.getTime() - dayMs).toDateString() === date.toDateString();
-  if (yesterday) return `Yesterday ${time}`;
-  const date_ = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return `${date_} ${time}`;
-}
+/**
+ * A single direct message, rendered with the same flat row layout as group
+ * chat messages (shared `MessageRow` + rich `ChatContent` body). DMs carry no
+ * tags, so we adapt the decrypted message into a minimal event for rendering.
+ */
+function DMMessage({ message }: { message: DecryptedDM }) {
+  const event = useMemo<NostrEvent>(
+    () => ({
+      id: message.id,
+      pubkey: message.pubkey,
+      created_at: message.created_at,
+      kind: 4,
+      content: message.content,
+      tags: [],
+      sig: "",
+    }),
+    [message],
+  );
 
-function MessageBubble({
-  mine,
-  content,
-  createdAt,
-}: {
-  mine: boolean;
-  content: string;
-  createdAt: number;
-}) {
   return (
-    <div className={cn("flex flex-col", mine ? "items-end" : "items-start")}>
-      <div
-        className={cn(
-          "max-w-[75%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words",
-          mine ? "bg-primary text-primary-foreground" : "bg-secondary",
-        )}
-      >
-        {content}
-      </div>
-      <span className="text-[10px] text-muted-foreground mt-0.5 px-1 select-none">
-        {formatDmTime(createdAt)}
-      </span>
-    </div>
+    <MessageRow pubkey={message.pubkey} createdAt={message.created_at}>
+      <ChatContent event={event} className="text-[15px]" />
+    </MessageRow>
   );
 }
 
 function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
-  const { user } = useCurrentUser();
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
   const { messages, isLoading, send } = useDirectMessages(peer);
@@ -205,25 +195,27 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         <h1 className="font-semibold truncate">{name}</h1>
       </header>
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-2">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-3 py-4 space-y-1">
         {isLoading ? (
-          <div className="flex justify-center py-8">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          <div className="space-y-3 p-2">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="flex items-start gap-3">
+                <Skeleton className="size-10 rounded-full shrink-0" />
+                <div className="space-y-1 flex-1">
+                  <Skeleton className="h-3 w-24" />
+                  <Skeleton className="h-3 w-2/3" />
+                </div>
+              </div>
+            ))}
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
-            <MessageSquare className="size-10 opacity-40 mb-3" />
-            <p className="text-sm">No messages yet. Say hello.</p>
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <MessageSquare className="size-10 text-muted-foreground/40 mb-3" />
+            <p className="text-sm text-muted-foreground">No messages yet</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">Say hello to {name}!</p>
           </div>
         ) : (
-          messages.map((m) => (
-            <MessageBubble
-              key={m.id}
-              mine={m.pubkey === user?.pubkey}
-              content={m.content}
-              createdAt={m.created_at}
-            />
-          ))
+          messages.map((m) => <DMMessage key={m.id} message={m} />)
         )}
       </div>
 

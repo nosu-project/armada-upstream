@@ -9,6 +9,7 @@ import { useAddrEvent, useEvent, type AddrCoords } from "@/hooks/useEvent";
 import { useAuthor } from "@/hooks/useAuthor";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getCustomEmojiUrl, isCustomEmoji } from "@/lib/customEmoji";
+import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
@@ -22,15 +23,6 @@ interface EmbeddedNoteProps {
   /** Optional author pubkey hint from the nevent1 identifier. */
   authorHint?: string;
   className?: string;
-}
-
-/** Short relative timestamp. */
-function shortTimeAgo(timestamp: number): string {
-  const diff = Math.floor(Date.now() / 1000) - timestamp;
-  if (diff < 60) return "now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
 }
 
 /** Human-readable label for non-text kinds rendered in a quoted card. */

@@ -3,13 +3,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
+import { MessageRow } from "@/components/chat/MessageRow";
 import { PollCard } from "@/components/chat/PollCard";
-import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import LoginDialog from "@/components/auth/LoginDialog";
 import SignupDialog from "@/components/auth/SignupDialog";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -25,7 +24,6 @@ import { useReactions } from "@/hooks/useReactions";
 import { useReplyCount } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
-import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { isMeAction, meActionText, type SlashAction } from "@/lib/slashCommands";
@@ -37,15 +35,6 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 /** NIP-88 poll kind. */
 const KIND_POLL = 1068;
-
-/** Format seconds-ago into a short time string. */
-function shortTimeAgo(timestamp: number): string {
-  const diff = Math.floor(Date.now() / 1000) - timestamp;
-  if (diff < 60) return "now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
-}
 
 /** Extract the id of the message this event replies to (NIP-10 marked e tags). */
 function getReplyToId(event: NostrEvent): string | undefined {
@@ -109,8 +98,7 @@ interface ChatMessageProps {
 function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, isPinned, onRetry, onDiscard, onTogglePin, onDelete, onReply, onOpenThread, onEdit, onEditSubmit, onEditCancel }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const author = useAuthor(event.pubkey);
-  const metadata = author.data?.metadata;
-  const displayName = getDisplayName(metadata, event.pubkey);
+  const displayName = getDisplayName(author.data?.metadata, event.pubkey);
   const replyToId = getReplyToId(event);
   const { tallies, react } = useReactions(event, relayUrl, groupId);
   const replyCount = useReplyCount(event.id, relayUrl);
@@ -176,52 +164,9 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
     setActive((v) => !v);
   }, []);
 
-  return (
-    <div
-      onMouseLeave={disarmDelete}
-      onClick={handleRowClick}
-      data-active={active || undefined}
-      data-event-id={event.id}
-      className={cn(
-        "group flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors",
-        active && "bg-secondary/40",
-        isPinned && "bg-amber-500/5",
-        mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
-        isPending && "opacity-60",
-        isFailed && "bg-destructive/5",
-      )}
-    >
-      <ProfilePreviewCard pubkey={event.pubkey}>
-        <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
-            <AvatarImage src={metadata?.picture} alt={displayName} />
-            <AvatarFallback className="bg-primary/20 text-primary text-sm">
-              {displayName[0]?.toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
-        </button>
-      </ProfilePreviewCard>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2">
-          <ProfilePreviewCard pubkey={event.pubkey}>
-            <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
-              {displayName}
-            </button>
-          </ProfilePreviewCard>
-          <span className="text-[11px] text-muted-foreground/70 shrink-0">
-            {shortTimeAgo(event.created_at)}
-          </span>
-          {wasEdited && !isEditing && (
-            <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
-          )}
-          {isPending && (
-            <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
-          )}
-          {/* Inline action toolbar, right-aligned on the header row. Negative
-              vertical margins keep the taller icon buttons from increasing the
-              header row's height. */}
-          <div className="ml-auto -my-1.5 flex items-center gap-0.5 self-center opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity">
-            {canWrite && !isEditing && <ReactionPicker onReact={react} />}
+  const toolbar = (
+    <>
+      {canWrite && !isEditing && <ReactionPicker onReact={react} />}
             {canWrite && !isEditing && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -314,9 +259,11 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
                 <TooltipContent>{deleteArmed ? "Click again to delete" : "Delete message"}</TooltipContent>
               </Tooltip>
             )}
-          </div>
-        </div>
-        {replyToId && <ReplyContext eventId={replyToId} relayUrl={relayUrl} />}
+    </>
+  );
+
+  const body = (
+    <>
         {isEditing ? (
           <div className="mt-0.5">
             <textarea
@@ -368,6 +315,11 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
         ) : (
           <ChatContent event={event} className="text-[15px]" highlight={highlight} />
         )}
+    </>
+  );
+
+  const afterBody = (
+    <>
         {!isEditing && <ReactionBar tallies={tallies} canReact={canWrite} onReact={react} />}
         {!isEditing && replyCount > 0 && onOpenThread && (
           <button
@@ -391,8 +343,34 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
             </button>
           </div>
         )}
-      </div>
-    </div>
+    </>
+  );
+
+  return (
+    <MessageRow
+      pubkey={event.pubkey}
+      createdAt={event.created_at}
+      pending={isPending}
+      edited={wasEdited && !isEditing}
+      actions={toolbar}
+      beforeBody={replyToId && <ReplyContext eventId={replyToId} relayUrl={relayUrl} />}
+      afterBody={afterBody}
+      className={cn(
+        active && "bg-secondary/40",
+        isPinned && "bg-amber-500/5",
+        mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
+        isPending && "opacity-60",
+        isFailed && "bg-destructive/5",
+      )}
+      containerProps={{
+        onMouseLeave: disarmDelete,
+        onClick: handleRowClick,
+        "data-active": active || undefined,
+        "data-event-id": event.id,
+      } as React.HTMLAttributes<HTMLDivElement>}
+    >
+      {body}
+    </MessageRow>
   );
 }
 
