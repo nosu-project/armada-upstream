@@ -2,6 +2,7 @@ import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
+import { ProfileSettings } from "@/components/ProfileSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { ThemeSelector } from "@/components/ThemeSelector";
 import { Button } from "@/components/ui/button";
@@ -87,6 +88,21 @@ export function SettingsPage() {
             <LoginArea className="w-full flex" />
           </CardContent>
         </Card>
+
+        {user && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Profile</CardTitle>
+              <CardDescription>
+                Customize how others see you: name, bio, avatar, banner, and custom fields.
+                Changes publish to your Nostr profile (kind 0).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ProfileSettings />
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>
