@@ -2,10 +2,12 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { useToast } from "@/hooks/useToast";
 import {
   buildGroupPinsTags,
   KIND_GROUP_PINS,
   parseGroupPins,
+  relayRejectionMessage,
 } from "@/lib/nip29";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -29,6 +31,7 @@ export function usePinnedMessages(relayUrl: string | undefined, groupId: string 
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const { mutateAsync: publishEvent } = useNostrPublish();
+  const { toast } = useToast();
 
   const queryKey = ["nip29", "pins", relayUrl, groupId];
 
@@ -72,7 +75,14 @@ export function usePinnedMessages(relayUrl: string | undefined, groupId: string 
         },
       });
     },
-    onError: () => {
+    onError: (err) => {
+      // Surface the relay's rejection reason instead of silently rolling back
+      // (e.g. "restricted: only admins may pin").
+      toast({
+        title: "Pin update failed",
+        description: relayRejectionMessage(err),
+        variant: "destructive",
+      });
       // Roll back to the relay's truth on failure.
       queryClient.invalidateQueries({ queryKey });
     },

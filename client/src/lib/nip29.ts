@@ -5,6 +5,25 @@ import type { NostrEvent } from "@nostrify/nostrify";
  * https://github.com/nostr-protocol/nips/blob/master/29.md
  */
 
+/**
+ * Turn a publish error into a human-readable, user-facing reason. Nostrify's
+ * NRelay1 throws the relay's `OK: false` machine reason as the Error message
+ * (e.g. "blocked: ...", "restricted: ..."), so we strip the leading
+ * machine-readable prefix and fall back to a generic message when there's
+ * nothing useful (timeouts, network errors).
+ */
+export function relayRejectionMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "The relay rejected the message.";
+  // NIP-01 OK reasons are "<machine-prefix>: <human message>". Show the human
+  // part when present; otherwise show the whole thing.
+  const m = trimmed.match(/^(blocked|restricted|invalid|error|rate-limited|duplicate|pow):\s*(.+)$/i);
+  const message = m ? m[2] : trimmed;
+  // Keep it short for a toast.
+  return message.length > 200 ? message.slice(0, 197) + "…" : message;
+}
+
 // ── Kinds ────────────────────────────────────────────────────────────────────
 
 /** NIP-09 event deletion request. */
@@ -283,23 +302,6 @@ export function buildGroupListTags(list: UserGroupList): string[][] {
 /** Get the group id (`h` tag) of a group-scoped event. */
 export function getGroupId(event: NostrEvent): string | undefined {
   return tag(event, "h")?.[1];
-}
-
-/**
- * Build NIP-29 timeline references (`previous` tag values): the first 8 hex
- * chars of recently-seen events in the group, excluding the user's own.
- */
-export function buildPreviousRefs(events: NostrEvent[], selfPubkey: string | undefined, count = 3): string[] {
-  const pool = events
-    .filter((e) => e.pubkey !== selfPubkey)
-    .sort((a, b) => b.created_at - a.created_at)
-    .slice(0, 50);
-  const picked = new Set<string>();
-  for (const event of pool) {
-    picked.add(event.id.slice(0, 8));
-    if (picked.size >= count) break;
-  }
-  return [...picked];
 }
 
 /**

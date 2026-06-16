@@ -39,7 +39,7 @@ import { formatTime } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { extractHashtags } from "@/lib/hashtag";
 import { IMETA_MEDIA_URL_REGEX, IMETA_MEDIA_URL_TEST_REGEX, mimeFromExt } from "@/lib/mediaUrls";
-import { buildPreviousRefs, KIND_GROUP_CHAT } from "@/lib/nip29";
+import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
 import { parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
@@ -575,9 +575,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   /** Build the common NIP-29 + content-derived tags for an outgoing message. */
   const buildMessageTags = useCallback((finalContent: string): string[][] => {
+    // NOTE: we deliberately do NOT emit NIP-29 `previous` timeline tags.
+    // relay29's CheckPreviousTag rejects any event whose first `previous` ref
+    // isn't in the group's in-memory last-50 ring. We can only pick refs from a
+    // local (and own-excluded) message snapshot, which routinely drifts out of
+    // that window — especially when replying to older messages — causing the
+    // relay to silently drop legitimate messages/replies. `previous` is
+    // optional in NIP-29 and only guards against relay-fork attacks, which
+    // don't apply to this single-host-per-group deployment.
     const tags: string[][] = [
       ["h", groupId],
-      ...buildPreviousRefs(messages, user?.pubkey ?? "").map((ref) => ["previous", ref]),
     ];
 
     // Hashtags → t tags
@@ -662,7 +669,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
 
     return tags;
-  }, [groupId, messages, user, replyTo, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
+  }, [groupId, user, replyTo, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
 
   /** Publish a finalized message body via the active send path. */
   const publishMessage = useCallback(async (finalText: string) => {
@@ -693,15 +700,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             },
           });
           if (signedId) onOptimisticSent?.(signedId);
-        } catch {
+        } catch (err) {
+          // Surface the relay's rejection reason (NRelay1 throws OK:false
+          // reasons as the Error message) instead of failing silently — a
+          // message that "sends" then vanishes with no explanation is the
+          // worst failure mode.
           if (signedId) onOptimisticFailed?.(signedId);
-          else {
-            toast({
-              title: "Message not sent",
-              description: "Could not sign the message.",
-              variant: "destructive",
-            });
-          }
+          toast({
+            title: "Message not sent",
+            description: relayRejectionMessage(err),
+            variant: "destructive",
+          });
         }
       } else {
         await createEvent({
@@ -713,10 +722,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         resetComposeState();
         onSent?.();
       }
-    } catch {
+    } catch (err) {
       toast({
         title: "Message not sent",
-        description: "The relay rejected the message.",
+        description: relayRejectionMessage(err),
         variant: "destructive",
       });
     }
