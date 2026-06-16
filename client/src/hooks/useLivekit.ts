@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { isDmRoomId } from "@/lib/dmVoice";
 import { KIND_GROUP_PARTICIPANTS, parseGroupParticipants } from "@/lib/nip29";
 import { relayToHttpUrl } from "@/lib/platform";
 
@@ -42,15 +43,48 @@ export function useRelayLivekitSupport(relayUrl: string | undefined) {
 }
 
 /**
+ * Find the first relay in `relayUrls` that supports the NIP-29 LiveKit
+ * extension (HTTP 204 at /.well-known/nip29/livekit). DMs may route over
+ * several app relays; a DM voice room must be hosted on one that speaks
+ * LiveKit. Returns the chosen relay URL, or null if none support it.
+ */
+export function useDmVoiceRelay(relayUrls: string[]) {
+  const key = relayUrls.join(",");
+  return useQuery<string | null>({
+    queryKey: ["nip29", "dm-voice-relay", key],
+    queryFn: async ({ signal }) => {
+      for (const relayUrl of relayUrls) {
+        try {
+          const res = await fetch(`${relayToHttpUrl(relayUrl)}/.well-known/nip29/livekit`, {
+            signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+          });
+          if (res.status === 204 || res.ok) return relayUrl;
+        } catch {
+          // try the next relay
+        }
+      }
+      return null;
+    },
+    enabled: relayUrls.length > 0,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/**
  * Fetch a LiveKit JWT from the relay's NIP-29 token endpoint using a
  * NIP-98 Authorization event signed by the user's signer.
+ *
+ * `roomId` is either a NIP-29 group id (token endpoint: `…/livekit/<id>`) or a
+ * DM voice room id (`dm:<a>:<b>` → `…/livekit-dm/<id>`, authorized by
+ * participant pubkey instead of group membership).
  */
 async function fetchLivekitToken(
   relayUrl: string,
-  groupId: string,
+  roomId: string,
   signer: NostrSigner,
 ): Promise<LivekitTokenResponse> {
-  const endpointUrl = `${relayToHttpUrl(relayUrl)}/.well-known/nip29/livekit/${encodeURIComponent(groupId)}`;
+  const path = isDmRoomId(roomId) ? "livekit-dm" : "livekit";
+  const endpointUrl = `${relayToHttpUrl(relayUrl)}/.well-known/nip29/${path}/${encodeURIComponent(roomId)}`;
 
   const event = await signer.signEvent({
     kind: KIND_HTTP_AUTH,
@@ -82,15 +116,15 @@ async function fetchLivekitToken(
   return { token, url };
 }
 
-/** Request a LiveKit token for a group's AV room (only when `enabled`). */
-export function useLivekitToken(relayUrl: string, groupId: string, enabled: boolean) {
+/** Request a LiveKit token for a group or DM voice room (only when `enabled`). */
+export function useLivekitToken(relayUrl: string, roomId: string, enabled: boolean) {
   const { user } = useCurrentUser();
 
   return useQuery({
-    queryKey: ["nip29", "livekit-token", relayUrl, groupId, user?.pubkey],
+    queryKey: ["nip29", "livekit-token", relayUrl, roomId, user?.pubkey],
     queryFn: async () => {
       if (!user) throw new Error("Not logged in");
-      return fetchLivekitToken(relayUrl, groupId, user.signer);
+      return fetchLivekitToken(relayUrl, roomId, user.signer);
     },
     enabled: enabled && Boolean(user),
     // The token must stay STABLE for the lifetime of a call. Each mint embeds a

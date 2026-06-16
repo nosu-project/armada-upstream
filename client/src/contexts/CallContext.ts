@@ -1,9 +1,16 @@
 import { createContext } from "react";
 
-/** Identifies a single NIP-29 voice room. */
+/** Identifies a single voice room (a NIP-29 group, or a 1:1 DM room). */
 export interface ActiveCall {
   relayUrl: string;
+  /** The LiveKit room id: a NIP-29 group id, or a `dm:<a>:<b>` DM room id. */
   groupId: string;
+  /**
+   * For DM calls, the peer's hex pubkey. Set drives DM-specific labeling and
+   * navigation (back to the conversation rather than a channel). Absent for
+   * group calls.
+   */
+  dmPeer?: string;
 }
 
 export interface CallContextType {
@@ -11,6 +18,12 @@ export interface CallContextType {
   activeCall: ActiveCall | null;
   /** Connect to a group's voice room (replaces any current call). */
   joinCall: (relayUrl: string, groupId: string) => void;
+  /**
+   * Connect to a 1:1 DM voice room with `peer` (replaces any current call).
+   * `roomId` is the shared `dm:<a>:<b>` id; `relayUrl` is a LiveKit-capable
+   * relay that hosts the room.
+   */
+  joinDmCall: (relayUrl: string, roomId: string, peer: string) => void;
   /** Disconnect from the current call. */
   leaveCall: () => void;
   /**

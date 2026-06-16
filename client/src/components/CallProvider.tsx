@@ -9,14 +9,17 @@ import "@livekit/components-styles";
 
 import { InCallView } from "@/components/chat/VoiceBar";
 import { Button } from "@/components/ui/button";
+import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useGroup } from "@/hooks/useGroup";
 import { useLivekitToken } from "@/hooks/useLivekit";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { CallContext, type ActiveCall } from "@/contexts/CallContext";
+import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { getPreferredMicId } from "@/lib/voiceDevices";
 import { cn } from "@/lib/utils";
+import { nip19 } from "nostr-tools";
 
 /**
  * The persistent voice room. Mounted once by `CallProvider` (which lives in the
@@ -39,11 +42,14 @@ function PersistentVoiceRoom({
   exiting: boolean;
 }) {
   const navigate = useNavigate();
+  const isDm = Boolean(call.dmPeer);
   const { data: tokenData, error, isLoading } = useLivekitToken(call.relayUrl, call.groupId, true);
-  const { data: details } = useGroup(call.relayUrl, call.groupId);
+  const { data: details } = useGroup(call.relayUrl, isDm ? undefined : call.groupId);
   const { data: relayInfo } = useRelayInfo(call.relayUrl);
-  const channelName = details?.group?.name ?? "voice";
-  const serverName = relayInfo?.name ?? call.relayUrl.replace(/^wss?:\/\//, "");
+  const peerAuthor = useAuthor(isDm ? call.dmPeer : undefined);
+  const peerName = getDisplayName(peerAuthor.data?.metadata, call.dmPeer ?? "");
+  const channelName = isDm ? peerName : details?.group?.name ?? "voice";
+  const serverName = isDm ? "Direct message" : relayInfo?.name ?? call.relayUrl.replace(/^wss?:\/\//, "");
 
   const handleDisconnected = useCallback(
     (reason?: DisconnectReason) => {
@@ -72,6 +78,10 @@ function PersistentVoiceRoom({
   }, []);
 
   const goToChannel = () => {
+    if (isDm && call.dmPeer) {
+      navigate(`/dms/${nip19.npubEncode(call.dmPeer)}`);
+      return;
+    }
     navigate(`/s/${relayToRouteParam(call.relayUrl)}/${encodeURIComponent(call.groupId)}`);
   };
 
@@ -132,7 +142,11 @@ function PersistentVoiceRoom({
     );
   }
 
-  const label = <><span className="text-muted-foreground/70">{serverName}</span>{" "}#{channelName}</>;
+  const label = isDm ? (
+    <span className="truncate">{channelName}</span>
+  ) : (
+    <><span className="text-muted-foreground/70">{serverName}</span>{" "}#{channelName}</>
+  );
 
   const mobileBar = (
     <div className="clip-corner-lg bg-chrome-deep shadow-lg">
@@ -186,6 +200,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setActiveCall({ relayUrl, groupId });
   }, []);
 
+  const joinDmCall = useCallback((relayUrl: string, roomId: string, peer: string) => {
+    if (exitTimer.current) {
+      clearTimeout(exitTimer.current);
+      exitTimer.current = null;
+    }
+    setExiting(false);
+    setActiveCall({ relayUrl, groupId: roomId, dmPeer: peer });
+  }, []);
+
   // Trigger the exit animation, then tear down the room once it finishes. The
   // LiveKit connection lives in PersistentVoiceRoom, so we keep it mounted for
   // the brief slide-out before unmounting (which disconnects).
@@ -209,7 +232,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <CallContext.Provider value={{ activeCall, joinCall, leaveCall, registerCallBarSlot }}>
+    <CallContext.Provider value={{ activeCall, joinCall, joinDmCall, leaveCall, registerCallBarSlot }}>
       <div
         className={cn(
           "relative flex h-full w-full overflow-hidden",

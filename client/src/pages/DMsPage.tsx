@@ -1,4 +1,4 @@
-import { ArrowLeft, Loader2, MessageSquare, Plus, Search, X } from "lucide-react";
+import { ArrowLeft, Loader2, MessageSquare, Phone, Plus, Search, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -12,7 +12,10 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   useDMConversations,
@@ -20,10 +23,13 @@ import {
   useDMSupport,
   type DecryptedDM,
 } from "@/hooks/useDirectMessages";
+import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useToast } from "@/hooks/useToast";
+import { effectiveDmRelays } from "@/contexts/AppContext";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { deriveDmRoomId } from "@/lib/dmVoice";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
@@ -137,7 +143,24 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { messages, isLoading, send } = useDirectMessages(peer);
   const { markRead } = useReadState();
   const { toast } = useToast();
+  const { user } = useCurrentUser();
+  const { config } = useAppContext();
+  const { activeCall, joinDmCall } = useCall();
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Voice: derive the shared DM room id and find a LiveKit-capable DM relay.
+  const roomId = user ? deriveDmRoomId(user.pubkey, peer) : undefined;
+  const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
+  const { data: voiceRelay } = useDmVoiceRelay(dmRelays);
+  const hasVoice = Boolean(roomId && voiceRelay);
+  const inThisCall = Boolean(roomId && activeCall?.groupId === roomId);
+
+  // Live presence in the DM room (kind 39004), so both peers see who's in.
+  const { data: participants } = useLivekitParticipants(
+    hasVoice ? voiceRelay! : undefined,
+    hasVoice ? roomId : undefined,
+  );
+  const inCallCount = participants?.length ?? 0;
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -192,7 +215,28 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             {name[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
-        <h1 className="font-semibold truncate">{name}</h1>
+        <h1 className="font-semibold truncate flex-1 min-w-0">{name}</h1>
+        {hasVoice && !inThisCall && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Start voice call"
+                className="relative size-8 shrink-0 text-muted-foreground hover:text-success"
+                onClick={() => joinDmCall(voiceRelay!, roomId!, peer)}
+              >
+                <Phone className="size-4" />
+                {inCallCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-success" aria-hidden />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {inCallCount > 0 ? "Join voice call (active)" : "Start voice call"}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </header>
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-3 py-4 space-y-1">

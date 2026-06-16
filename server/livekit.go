@@ -33,6 +33,10 @@ var (
 func setupLivekit() {
 	router := relay.Router()
 	router.HandleFunc("/.well-known/nip29/livekit", handleLivekitCapability)
+	// DM voice rooms are not NIP-29 groups; they live at a separate path and
+	// authorize by participant pubkey rather than group membership. Register
+	// the more specific prefix first so it isn't shadowed by the group route.
+	router.HandleFunc("/.well-known/nip29/livekit-dm/", handleLivekitDMToken)
 	router.HandleFunc("/.well-known/nip29/livekit/", handleLivekitToken)
 	router.HandleFunc("/livekit/webhook", handleLivekitWebhook)
 
@@ -158,17 +162,114 @@ func handleLivekitToken(w http.ResponseWriter, r *http.Request) {
 	}
 	identity := pubkey + "-" + hex.EncodeToString(suffix)
 
+	jwt, err := mintLivekitToken(identity, groupId)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to mint livekit token")
+		http.Error(w, "failed to mint token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"token": jwt,
+		"url":   s.LivekitURL,
+	})
+}
+
+// mintLivekitToken issues a 6h LiveKit JWT granting join access to `room` for
+// the given identity. NIP-29 requires identities to start with the 64-char hex
+// pubkey followed by a random suffix (so a user can join from multiple tabs).
+func mintLivekitToken(identity, room string) (string, error) {
 	token := auth.NewAccessToken(s.LivekitAPIKey, s.LivekitAPISecret).
 		SetIdentity(identity).
 		SetValidFor(6 * time.Hour).
 		SetVideoGrant(&auth.VideoGrant{
 			RoomJoin: true,
-			Room:     groupId,
+			Room:     room,
 		})
+	return token.ToJWT()
+}
 
-	jwt, err := token.ToJWT()
+// parseDMRoomID validates a DM voice room id of the form
+// "dm:<pubkeyA>:<pubkeyB>" where both are 64-char lowercase hex pubkeys sorted
+// ascending. It returns the two pubkeys and whether the id is well-formed. The
+// canonical (sorted) form means both peers derive the same room id, and we can
+// authorize a caller simply by checking membership in this pair.
+func parseDMRoomID(roomId string) (a, b string, ok bool) {
+	rest, found := strings.CutPrefix(roomId, "dm:")
+	if !found {
+		return "", "", false
+	}
+	parts := strings.Split(rest, ":")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	a, b = parts[0], parts[1]
+	if !isHex64(a) || !isHex64(b) {
+		return "", "", false
+	}
+	// Must be canonical: distinct and sorted ascending.
+	if a >= b {
+		return "", "", false
+	}
+	return a, b, true
+}
+
+func isHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// handleLivekitDMToken mints a LiveKit token for a 1:1 DM voice room. Unlike
+// group rooms there is no NIP-29 group to check; authorization is "the
+// NIP-98-authenticated caller is one of the two pubkeys encoded in the room
+// id". Presence (kind 39004) reuses the same webhook-driven `rooms` registry,
+// keyed by the DM room id.
+func handleLivekitDMToken(w http.ResponseWriter, r *http.Request) {
+	corsHeaders(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	roomId := strings.TrimPrefix(r.URL.Path, "/.well-known/nip29/livekit-dm/")
+	a, b, ok := parseDMRoomID(roomId)
+	if !ok {
+		http.Error(w, "invalid dm room id", http.StatusBadRequest)
+		return
+	}
+
+	expectedURL := s.PublicBaseURL + "/.well-known/nip29/livekit-dm/" + roomId
+	pubkey, ok := verifyNip98(r, expectedURL)
+	if !ok {
+		http.Error(w, "invalid NIP-98 authorization", http.StatusUnauthorized)
+		return
+	}
+
+	// Access control: the caller must be one of the two DM participants.
+	if pubkey != a && pubkey != b {
+		http.Error(w, "restricted: not a participant of this conversation", http.StatusForbidden)
+		return
+	}
+
+	suffix := make([]byte, 4)
+	if _, err := randRead(suffix); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	identity := pubkey + "-" + hex.EncodeToString(suffix)
+
+	jwt, err := mintLivekitToken(identity, roomId)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to mint livekit token")
+		log.Error().Err(err).Msg("failed to mint dm livekit token")
 		http.Error(w, "failed to mint token", http.StatusInternalServerError)
 		return
 	}
