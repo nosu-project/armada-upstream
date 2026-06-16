@@ -633,7 +633,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-3 py-4 space-y-1"
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4 space-y-1"
       >
         {searching ? (
           searchLoading ? (

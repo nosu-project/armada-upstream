@@ -247,7 +247,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         )}
       </header>
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-3 py-4 space-y-1">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4 space-y-1">
         {isLoading ? (
           <div className="space-y-3 p-2">
             {Array.from({ length: 8 }).map((_, i) => (

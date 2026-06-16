@@ -83,7 +83,7 @@ export function ThreadPanel({ root, relayUrl, groupId, canWrite, autoFocus = fal
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain space-y-1">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable space-y-1">
         <ThreadMessage event={root} />
         <div className="flex items-center gap-2 px-3 py-1">
           <div className="h-px flex-1 bg-border/60" />
