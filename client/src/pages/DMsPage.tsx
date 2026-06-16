@@ -363,7 +363,19 @@ function ConversationList({
 }) {
   const { user } = useCurrentUser();
   const { getLastRead } = useReadState();
+  const { registerCallBarSlot } = useCall();
   const [search, setSearch] = useState("");
+
+  // Register this pane's slot so the persistent call bar portals above the
+  // account pill on desktop (mirrors ChannelSidebar). The mobile fixed bottom
+  // bar is handled separately by CallProvider.
+  const callBarRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = callBarRef.current;
+    if (!el) return;
+    return registerCallBarSlot(el);
+  }, [registerCallBarSlot]);
+
   return (
     <aside
       className={cn(
@@ -440,6 +452,9 @@ function ConversationList({
       {composing && (
         <NewDMDialog onPick={openPeer} onClose={() => setComposing(false)} />
       )}
+
+      {/* Voice call bar slot — the persistent call UI portals here on desktop. */}
+      <div ref={callBarRef} className="empty:hidden shrink-0" />
 
       {/* Account switcher pinned to the bottom, matching the server channel
           sidebar (DMs require an account, so the user is always present). */}
