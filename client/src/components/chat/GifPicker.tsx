@@ -10,15 +10,26 @@ interface GifPickerProps {
   onSelect: (gif: GifResult) => void;
 }
 
-/** A single GIF thumbnail with lazy loading and hover animation. */
+/** Reference column width used to derive thumbnail heights from aspect ratios. */
+const THUMB_REF_WIDTH = 170;
+
+/**
+ * Compute a thumbnail's display height from its true aspect ratio, clamping the
+ * ratio so very wide/tall GIFs aren't forced into an ultrawide/sliver shape.
+ */
+function thumbHeight(gif: GifResult): number {
+  const rawRatio = gif.width && gif.height ? gif.width / gif.height : 1;
+  const aspectRatio = Math.min(Math.max(rawRatio, 0.6), 1.5);
+  return Math.round(THUMB_REF_WIDTH / aspectRatio);
+}
+
 function GifThumbnail({ gif, onClick }: { gif: GifResult; onClick: (gif: GifResult) => void }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
 
-  // Calculate the aspect ratio for the thumbnail to prevent layout shifts
-  const aspectRatio = gif.width && gif.height ? gif.width / gif.height : 1;
-  const displayHeight = Math.round(150 / aspectRatio);
+  // Calculate the height from the (clamped) aspect ratio to prevent layout shifts
+  const displayHeight = thumbHeight(gif);
 
   return (
     <button
@@ -72,20 +83,25 @@ function GifThumbnail({ gif, onClick }: { gif: GifResult; onClick: (gif: GifResu
   );
 }
 
-/** Masonry-style two-column grid for GIF results. */
+/** Number of columns in the masonry grid. */
+const GRID_COLUMNS = 3;
+
+/** Masonry-style multi-column grid for GIF results. */
 function GifGrid({ results, onSelect }: { results: GifResult[]; onSelect: (gif: GifResult) => void }) {
-  // Split results into two columns for a masonry-like layout
-  const columns: [GifResult[], GifResult[]] = [[], []];
-  const columnHeights = [0, 0];
+  // Split results across columns for a masonry-like layout
+  const columns: GifResult[][] = Array.from({ length: GRID_COLUMNS }, () => []);
+  const columnHeights = new Array<number>(GRID_COLUMNS).fill(0);
 
   for (const gif of results) {
-    const aspectRatio = gif.width && gif.height ? gif.width / gif.height : 1;
-    const height = Math.round(150 / aspectRatio);
-    
-    // Add to the shorter column
-    const shorter = columnHeights[0] <= columnHeights[1] ? 0 : 1;
-    columns[shorter].push(gif);
-    columnHeights[shorter] += height + 8; // 8px gap
+    const height = thumbHeight(gif);
+
+    // Add to the shortest column
+    let shortest = 0;
+    for (let i = 1; i < GRID_COLUMNS; i++) {
+      if (columnHeights[i] < columnHeights[shortest]) shortest = i;
+    }
+    columns[shortest].push(gif);
+    columnHeights[shortest] += height + 8; // 8px gap
   }
 
   return (
@@ -158,13 +174,13 @@ export function GifPicker({ onSelect }: GifPickerProps) {
         {isLoading ? (
           <div className="px-2 pb-2">
             <div className="flex gap-2">
-              {[0, 1].map((col) => (
+              {Array.from({ length: GRID_COLUMNS }).map((_, col) => (
                 <div key={col} className="flex-1 flex flex-col gap-2">
                   {Array.from({ length: 4 }).map((_, i) => (
                     <Skeleton
                       key={i}
                       className="w-full rounded-lg"
-                      style={{ height: 80 + Math.random() * 60 }}
+                      style={{ height: 60 + Math.random() * 50 }}
                     />
                   ))}
                 </div>
