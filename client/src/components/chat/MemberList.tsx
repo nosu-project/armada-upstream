@@ -193,7 +193,13 @@ export function MemberList({
   className,
 }: MemberListProps) {
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
-  const regulars = members.filter((pubkey) => !adminMap.has(pubkey));
+  // NIP-29 relays don't guarantee a stable order for the `p` tags in the
+  // members/admins events, so each 30s refetch could otherwise reshuffle the
+  // roster. Sort by pubkey for a stable, deterministic display order.
+  const sortedAdmins = [...admins].sort((a, b) => a.pubkey.localeCompare(b.pubkey));
+  const regulars = members
+    .filter((pubkey) => !adminMap.has(pubkey))
+    .sort((a, b) => a.localeCompare(b));
 
   return (
     <aside
@@ -220,7 +226,7 @@ export function MemberList({
           <h3 className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Admins · {admins.length}
           </h3>
-          {admins.map((admin) => (
+          {sortedAdmins.map((admin) => (
             <MemberRow
               key={admin.pubkey}
               pubkey={admin.pubkey}
