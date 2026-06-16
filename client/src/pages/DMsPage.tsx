@@ -1,4 +1,4 @@
-import { ArrowLeft, Loader2, MessageSquare, Phone, Plus, Search, X } from "lucide-react";
+import { ArrowLeft, Headphones, Loader2, MessageSquare, Phone, Plus, Search, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -8,6 +8,7 @@ import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageRow } from "@/components/chat/MessageRow";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
+import { VoicePresence } from "@/components/VoicePresence";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,6 +56,9 @@ function ConversationRow({
   preview,
   previewText,
   unread,
+  inCall,
+  selfPubkey,
+  voiceRelay,
   query,
   active,
   onClick,
@@ -63,6 +67,9 @@ function ConversationRow({
   preview: NostrEvent | undefined;
   previewText: string | undefined;
   unread: boolean;
+  inCall: boolean;
+  selfPubkey: string | undefined;
+  voiceRelay: string | undefined;
   query: string;
   active: boolean;
   onClick: () => void;
@@ -70,6 +77,20 @@ function ConversationRow({
   const author = useAuthor(peer);
   const metadata = author.data?.metadata;
   const name = getDisplayName(metadata, peer);
+
+  // Live voice presence for this DM (kind 39004), so we can show when the peer
+  // is waiting in a call even if we haven't joined — mirroring the channel
+  // list. Gated on a resolved LiveKit-capable relay (same relay-level
+  // capability the call button uses).
+  const roomId = selfPubkey ? deriveDmRoomId(selfPubkey, peer) : undefined;
+  const { data: participants } = useLivekitParticipants(
+    voiceRelay && roomId ? voiceRelay : undefined,
+    voiceRelay && roomId ? roomId : undefined,
+  );
+  // Others in the DM room (exclude ourselves; our own presence is shown by
+  // `inCall`). For a 1:1 DM this is just the peer.
+  const others = (participants ?? []).filter((pk) => pk !== selfPubkey);
+  const othersInVoice = !inCall && others.length > 0;
 
   // When searching, hide rows that match neither the contact name nor the
   // (decrypted) last-message preview. DMs are NIP-04 encrypted, so deeper
@@ -105,9 +126,18 @@ function ConversationRow({
           </div>
         )}
       </div>
-      {unread && (
+      {inCall ? (
+        <span
+          className="shrink-0 flex size-5 items-center justify-center rounded-full bg-success text-success-foreground"
+          aria-label="Voice call in progress"
+        >
+          <Headphones className="size-3" />
+        </span>
+      ) : othersInVoice ? (
+        <VoicePresence participants={others} className="text-success/90" />
+      ) : unread ? (
         <span className="shrink-0 size-2 rounded-full bg-primary" aria-label="Unread messages" />
-      )}
+      ) : null}
     </button>
   );
 }
@@ -169,6 +199,12 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
     hasVoice ? roomId : undefined,
   );
   const inCallCount = participants?.length ?? 0;
+  // Others (exclude us) currently in this DM's voice room — for the presence
+  // avatar stack in the header.
+  const dmOthersInVoice = useMemo(
+    () => (participants ?? []).filter((pk) => pk !== user?.pubkey),
+    [participants, user?.pubkey],
+  );
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -224,6 +260,11 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           </AvatarFallback>
         </Avatar>
         <h1 className="font-semibold truncate flex-1 min-w-0">{name}</h1>
+        {/* Who's in this DM's voice room (others, not us) — shown whether or
+            not we've joined, so the peer waiting in a call is visible. */}
+        {dmOthersInVoice.length > 0 && (
+          <VoicePresence participants={dmOthersInVoice} className="text-success/90" />
+        )}
         {hasVoice && !inThisCall && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -363,8 +404,20 @@ function ConversationList({
 }) {
   const { user } = useCurrentUser();
   const { getLastRead } = useReadState();
-  const { registerCallBarSlot } = useCall();
+  const { registerCallBarSlot, activeCall } = useCall();
+  const { config } = useAppContext();
   const [search, setSearch] = useState("");
+
+  // The shared DM voice relay (same derivation as the open conversation): a
+  // LiveKit-capable relay from the platform list, then the user's DM relays.
+  // Computed once here so each row can query its peer's voice presence without
+  // re-resolving the relay per row.
+  const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
+  const voiceCandidates = useMemo(
+    () => [...PLATFORM_RELAYS, ...dmRelays.filter((r) => !PLATFORM_RELAYS.includes(r))],
+    [dmRelays],
+  );
+  const { data: voiceRelay } = useDmVoiceRelay(voiceCandidates);
 
   // Register this pane's slot so the persistent call bar portals above the
   // account pill on desktop (mirrors ChannelSidebar). The mobile fixed bottom
@@ -443,6 +496,9 @@ function ConversationList({
                 c.peer !== activePeer
               }
               active={c.peer === activePeer}
+              inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.peer}
+              selfPubkey={user?.pubkey}
+              voiceRelay={voiceRelay ?? undefined}
               onClick={() => openPeer(c.peer)}
             />
           ))

@@ -504,6 +504,12 @@ export function ServerRail({
                 >
                   <MessageSquare className="size-5" />
                 </span>
+                {/* Voice indicator: a headphones badge when a DM call is live. */}
+                {activeCall?.dmPeer && (
+                  <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
+                    <Headphones className="size-2.5" />
+                  </span>
+                )}
                 {/* Unread DM indicator (hidden on the active DMs view). */}
                 {hasUnreadDMs && (
                   <span
@@ -527,7 +533,7 @@ export function ServerRail({
           onNavigate={onNavigate}
           onSelect={onServerSelect}
           selected={onServerSelect ? selectedServer === url : undefined}
-          inCall={activeCall?.relayUrl === url}
+          inCall={!activeCall?.dmPeer && activeCall?.relayUrl === url}
           draggable={servers.length > 1}
           dragging={dragUrl === url}
           shiftY={shiftFor(url)}
