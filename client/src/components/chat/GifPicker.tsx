@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useGifSearch, type GifResult } from '@/hooks/useGifSearch';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
 
 interface GifPickerProps {
@@ -83,21 +84,18 @@ function GifThumbnail({ gif, onClick }: { gif: GifResult; onClick: (gif: GifResu
   );
 }
 
-/** Number of columns in the masonry grid. */
-const GRID_COLUMNS = 3;
-
 /** Masonry-style multi-column grid for GIF results. */
-function GifGrid({ results, onSelect }: { results: GifResult[]; onSelect: (gif: GifResult) => void }) {
+function GifGrid({ results, columns: columnCount, onSelect }: { results: GifResult[]; columns: number; onSelect: (gif: GifResult) => void }) {
   // Split results across columns for a masonry-like layout
-  const columns: GifResult[][] = Array.from({ length: GRID_COLUMNS }, () => []);
-  const columnHeights = new Array<number>(GRID_COLUMNS).fill(0);
+  const columns: GifResult[][] = Array.from({ length: columnCount }, () => []);
+  const columnHeights = new Array<number>(columnCount).fill(0);
 
   for (const gif of results) {
     const height = thumbHeight(gif);
 
     // Add to the shortest column
     let shortest = 0;
-    for (let i = 1; i < GRID_COLUMNS; i++) {
+    for (let i = 1; i < columnCount; i++) {
       if (columnHeights[i] < columnHeights[shortest]) shortest = i;
     }
     columns[shortest].push(gif);
@@ -120,6 +118,8 @@ function GifGrid({ results, onSelect }: { results: GifResult[]; onSelect: (gif: 
 export function GifPicker({ onSelect }: GifPickerProps) {
   const { query, setQuery, clearQuery, results, isLoading, isError, isSearching } = useGifSearch();
   const inputRef = useRef<HTMLInputElement>(null);
+  const isMobile = useIsMobile();
+  const columnCount = isMobile ? 2 : 3;
 
   // Auto-focus the search input on mount
   useEffect(() => {
@@ -174,7 +174,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
         {isLoading ? (
           <div className="px-2 pb-2">
             <div className="flex gap-2">
-              {Array.from({ length: GRID_COLUMNS }).map((_, col) => (
+              {Array.from({ length: columnCount }).map((_, col) => (
                 <div key={col} className="flex-1 flex flex-col gap-2">
                   {Array.from({ length: 4 }).map((_, i) => (
                     <Skeleton
@@ -199,7 +199,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
             <p className="text-xs mt-1">Try a different search term</p>
           </div>
         ) : (
-          <GifGrid results={results} onSelect={handleSelect} />
+          <GifGrid results={results} columns={columnCount} onSelect={handleSelect} />
         )}
       </ScrollArea>
     </div>
