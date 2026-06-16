@@ -6,19 +6,24 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-// preventTimestampsInThePast rejects events whose created_at is more than a
-// minute in the past — EXCEPT editable content kinds (chat messages, polls),
-// which clients edit by deleting the original (NIP-09) and republishing a new
-// event carrying the ORIGINAL created_at, so the edit keeps its place in the
-// timeline. Without this exemption that republish would be rejected as "too
-// old". Self-authorship of the delete is still enforced by khatru's NIP-09
-// handling, and future timestamps are still rejected separately.
+// preventTimestampsInThePast rejects events whose created_at is too far in the
+// past — EXCEPT editable content kinds (chat messages, polls), which clients
+// edit by deleting the original (NIP-09) and republishing a new event carrying
+// the ORIGINAL created_at, so the edit keeps its place in the timeline. Without
+// this exemption that republish would be rejected as "too old". Self-authorship
+// of the delete is still enforced by khatru's NIP-09 handling, and future
+// timestamps are still bounded separately (PreventTimestampsInTheFuture).
+//
+// The window is generous (5 minutes) on purpose: it only needs to stop stale
+// replays, not to police ordinary device clock skew (phones drift, VMs
+// suspend/resume). A tight window bounces legitimate joins from a slow client
+// clock with "event too old".
 func preventTimestampsInThePast(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
 	switch event.Kind {
 	case 9, 1068: // group chat, polls — may be republished as an edit
 		return false, ""
 	}
-	const tooOld = 60 // seconds
+	const tooOld = 300 // seconds (5 minutes)
 	if nostr.Now()-event.CreatedAt > tooOld {
 		return true, "event too old"
 	}

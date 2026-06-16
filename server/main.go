@@ -161,7 +161,12 @@ func main() {
 			0, 4, 1985, 10009,
 		),
 		preventTimestampsInThePast,
-		policies.PreventTimestampsInTheFuture(30*time.Second),
+		// Reject only *far*-future timestamps (the abuse case: pinning an event
+		// to the top of timelines forever). A tight window punishes ordinary
+		// device clock skew — phones drift, VMs suspend/resume — and bounces
+		// legitimate joins/messages with "event too much in the future". 5
+		// minutes absorbs real-world skew while still blocking far-future spam.
+		policies.PreventTimestampsInTheFuture(5*time.Minute),
 	)
 
 	// LiveKit voice/video endpoints (NIP-29 AV spaces). See livekit.go.
