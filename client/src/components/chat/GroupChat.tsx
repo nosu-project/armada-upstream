@@ -18,6 +18,7 @@ import { useEvent } from "@/hooks/useEvent";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useGroupSearch } from "@/hooks/useGroupSearch";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useDeleteOwnMessage, useEditMessage } from "@/hooks/useEditMessage";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useReactions } from "@/hooks/useReactions";
@@ -93,10 +94,15 @@ interface ChatMessageProps {
   onEditSubmit?: (event: NostrEvent, content: string) => void;
   /** Cancel an in-progress inline edit. */
   onEditCancel?: () => void;
+  /** Whether this message's tap-to-reveal toolbar is active (mobile only). */
+  active?: boolean;
+  /** Toggle this message's active state (mobile tap-to-reveal toolbar). */
+  onToggleActive?: (id: string) => void;
 }
 
-function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, isPinned, onRetry, onDiscard, onTogglePin, onDelete, onReply, onOpenThread, onEdit, onEditSubmit, onEditCancel }: ChatMessageProps) {
+function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, isPinned, onRetry, onDiscard, onTogglePin, onDelete, onReply, onOpenThread, onEdit, onEditSubmit, onEditCancel, active = false, onToggleActive }: ChatMessageProps) {
   const { user } = useCurrentUser();
+  const isMobile = useIsMobile();
   const author = useAuthor(event.pubkey);
   const displayName = getDisplayName(author.data?.metadata, event.pubkey);
   const replyToId = getReplyToId(event);
@@ -127,7 +133,8 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   // Touch devices have no hover, so the action toolbar (reply/react/thread/…)
   // would never appear. Tapping the message toggles it "active" to keep the
   // toolbar open for interaction; tapping again (or another message) closes it.
-  const [active, setActive] = useState(false);
+  // Desktop has hover, so the tap-toggle (and its highlight) is mobile-only and
+  // the active id lives in the parent so only one row is active at a time.
 
   const disarmDelete = useCallback(() => {
     if (disarmTimer.current) clearTimeout(disarmTimer.current);
@@ -156,13 +163,14 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
     if (isEditing) setEditText(event.content);
   }, [isEditing, event.content]);
 
-  // Toggle the toolbar on tap, but ignore taps that land on interactive
-  // children (buttons, links, inputs, mention chips) so those still act
-  // normally instead of being swallowed by the toggle.
+  // Toggle the toolbar on tap (mobile only — desktop reveals it on hover), but
+  // ignore taps that land on interactive children (buttons, links, inputs,
+  // mention chips) so those still act normally instead of being swallowed.
   const handleRowClick = useCallback((e: React.MouseEvent) => {
+    if (!isMobile) return;
     if ((e.target as HTMLElement).closest("button, a, input, textarea, [role='button']")) return;
-    setActive((v) => !v);
-  }, []);
+    onToggleActive?.(event.id);
+  }, [isMobile, onToggleActive, event.id]);
 
   const toolbar = (
     <>
@@ -422,6 +430,13 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     searchQuery,
   );
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
+  // The single message whose tap-to-reveal toolbar is open (mobile only).
+  // Lifted here so tapping one message closes any other — only one at a time.
+  const [activeId, setActiveId] = useState<string | undefined>(undefined);
+  const toggleActive = useCallback(
+    (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
+    [],
+  );
   const [threadRoot, setThreadRoot] = useState<NostrEvent | undefined>(undefined);
   // Focus the thread reply input when the panel opens via /thread (vs. just
   // clicking a "N replies" badge to browse).
@@ -708,6 +723,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
               onEdit={(e) => setEditingId(e.id)}
               onEditSubmit={handleEditSubmit}
               onEditCancel={() => setEditingId(undefined)}
+              active={activeId === msg.id}
+              onToggleActive={toggleActive}
             />
           ))
         )}

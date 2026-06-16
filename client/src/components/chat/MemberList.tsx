@@ -66,7 +66,7 @@ function MemberRow({
   };
 
   return (
-    <div className="gutter-tick group flex items-center gap-2.5 pl-3 pr-2 py-2 transition-colors hover:text-foreground">
+    <div className="gutter-tick group flex items-center gap-2.5 pl-3 pr-2 py-2 clip-corner-lg transition-colors hover:bg-accent/50 hover:text-foreground">
       <ProfilePreviewCard pubkey={pubkey}>
         <button type="button" className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <Avatar shape={getAvatarShape(metadata)} className="size-8 cursor-pointer transition-opacity hover:opacity-90">
@@ -78,7 +78,7 @@ function MemberRow({
         </button>
       </ProfilePreviewCard>
       <ProfilePreviewCard pubkey={pubkey}>
-        <button type="button" className="text-sm truncate flex-1 text-left hover:underline focus:outline-none">
+        <button type="button" className="text-sm truncate flex-1 text-left focus:outline-none">
           {displayName}
         </button>
       </ProfilePreviewCard>

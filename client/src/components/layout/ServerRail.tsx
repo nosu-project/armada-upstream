@@ -121,7 +121,7 @@ function ServerButton({
       <span
         className={cn(
           "absolute -left-2 w-[3px] bg-primary transition-all",
-          isActive ? "h-9 opacity-100" : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-4",
+          isActive ? "h-12 opacity-100" : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
         )}
       />
       {/*
