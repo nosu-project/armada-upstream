@@ -739,7 +739,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
               <Button
                 size="sm"
                 onClick={() => setJoinDialogOpen(true)}
-                className="rounded-full h-7 px-4"
+                className="clip-corner-lg h-7 px-4"
               >
                 Join
               </Button>

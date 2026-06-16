@@ -210,7 +210,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           <div className="p-2 flex justify-center">
             <Button
               onClick={() => setJoinOpen(true)}
-              className="w-full max-w-xs rounded-full font-medium"
+              className="w-full max-w-xs clip-corner-lg font-medium"
             >
               Join
             </Button>
