@@ -143,11 +143,17 @@ function ConversationRow({
 }
 
 /**
+ * Max gap between two same-author DMs for the later one to render as a compact
+ * continuation (no repeated avatar/name/timestamp). 5 minutes.
+ */
+const DM_CONTINUATION_WINDOW_SECONDS = 5 * 60;
+
+/**
  * A single direct message, rendered with the same flat row layout as group
  * chat messages (shared `MessageRow` + rich `ChatContent` body). DMs carry no
  * tags, so we adapt the decrypted message into a minimal event for rendering.
  */
-function DMMessage({ message }: { message: DecryptedDM }) {
+function DMMessage({ message, continuation }: { message: DecryptedDM; continuation?: boolean }) {
   const event = useMemo<NostrEvent>(
     () => ({
       id: message.id,
@@ -162,7 +168,7 @@ function DMMessage({ message }: { message: DecryptedDM }) {
   );
 
   return (
-    <MessageRow pubkey={message.pubkey} createdAt={message.created_at}>
+    <MessageRow pubkey={message.pubkey} createdAt={message.created_at} continuation={continuation}>
       <ChatContent event={event} className="text-[15px]" />
     </MessageRow>
   );
@@ -288,7 +294,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         )}
       </header>
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4 space-y-1">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4">
         {isLoading ? (
           <div className="space-y-3 p-2">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -308,7 +314,14 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             <p className="text-xs text-muted-foreground/60 mt-1">Say hello to {name}!</p>
           </div>
         ) : (
-          messages.map((m) => <DMMessage key={m.id} message={m} />)
+          messages.map((m, i) => {
+            const prev = messages[i - 1];
+            const continuation =
+              !!prev &&
+              prev.pubkey === m.pubkey &&
+              m.created_at - prev.created_at < DM_CONTINUATION_WINDOW_SECONDS;
+            return <DMMessage key={m.id} message={m} continuation={continuation} />;
+          })
         )}
       </div>
 

@@ -37,6 +37,12 @@ import type { NostrEvent } from "@nostrify/nostrify";
 /** NIP-88 poll kind. */
 const KIND_POLL = 1068;
 
+/**
+ * Max gap between two same-author messages for the later one to render as a
+ * compact continuation (no repeated avatar/name/timestamp). 5 minutes.
+ */
+const CONTINUATION_WINDOW_SECONDS = 5 * 60;
+
 /** Extract the id of the message this event replies to (NIP-10 marked e tags). */
 function getReplyToId(event: NostrEvent): string | undefined {
   const replyTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "reply");
@@ -98,9 +104,11 @@ interface ChatMessageProps {
   active?: boolean;
   /** Toggle this message's active state (mobile tap-to-reveal toolbar). */
   onToggleActive?: (id: string) => void;
+  /** Render compactly as a continuation of the previous same-author message. */
+  continuation?: boolean;
 }
 
-function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, isPinned, onRetry, onDiscard, onTogglePin, onDelete, onReply, onOpenThread, onEdit, onEditSubmit, onEditCancel, active = false, onToggleActive }: ChatMessageProps) {
+function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, isPinned, onRetry, onDiscard, onTogglePin, onDelete, onReply, onOpenThread, onEdit, onEditSubmit, onEditCancel, active = false, onToggleActive, continuation = false }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const isMobile = useIsMobile();
   const author = useAuthor(event.pubkey);
@@ -363,6 +371,11 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
       actions={toolbar}
       beforeBody={replyToId && <ReplyContext eventId={replyToId} relayUrl={relayUrl} />}
       afterBody={afterBody}
+      continuation={
+        // Collapse into the previous message only for plain consecutive chats;
+        // a reply line, edit field, pin or mention needs the full header.
+        continuation && !replyToId && !isEditing && !isPinned && !mentionsMe
+      }
       className={cn(
         active && "bg-secondary/40",
         isPinned && "bg-amber-500/5",
@@ -648,7 +661,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4 space-y-1"
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
       >
         {searching ? (
           searchLoading ? (
@@ -703,30 +716,40 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
             <p className="text-xs text-muted-foreground/60 mt-1">Be the first to say something!</p>
           </div>
         ) : (
-          messages.map((msg) => (
-            <ChatMessage
-              key={msg.id}
-              event={msg}
-              relayUrl={relayUrl}
-              groupId={groupId}
-              canWrite={Boolean(user && canWrite)}
-              canModerate={canModerate}
-              sendStatus={sendStatus[msg.id]}
-              isEditing={editingId === msg.id}
-              isPinned={isPinned(msg.id)}
-              onTogglePin={handleTogglePin}
-              onRetry={() => handleRetry(msg)}
-              onDiscard={() => removeOptimistic(msg.id)}
-              onDelete={handleDelete}
-              onReply={setReplyTo}
-              onOpenThread={openThread}
-              onEdit={(e) => setEditingId(e.id)}
-              onEditSubmit={handleEditSubmit}
-              onEditCancel={() => setEditingId(undefined)}
-              active={activeId === msg.id}
-              onToggleActive={toggleActive}
-            />
-          ))
+          messages.map((msg, i) => {
+            // Collapse consecutive messages from the same author sent within a
+            // short window into a continuation (no repeated avatar/name/time).
+            const prev = messages[i - 1];
+            const continuation =
+              !!prev &&
+              prev.pubkey === msg.pubkey &&
+              msg.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
+            return (
+              <ChatMessage
+                key={msg.id}
+                event={msg}
+                relayUrl={relayUrl}
+                groupId={groupId}
+                canWrite={Boolean(user && canWrite)}
+                canModerate={canModerate}
+                sendStatus={sendStatus[msg.id]}
+                isEditing={editingId === msg.id}
+                isPinned={isPinned(msg.id)}
+                onTogglePin={handleTogglePin}
+                onRetry={() => handleRetry(msg)}
+                onDiscard={() => removeOptimistic(msg.id)}
+                onDelete={handleDelete}
+                onReply={setReplyTo}
+                onOpenThread={openThread}
+                onEdit={(e) => setEditingId(e.id)}
+                onEditSubmit={handleEditSubmit}
+                onEditCancel={() => setEditingId(undefined)}
+                active={activeId === msg.id}
+                onToggleActive={toggleActive}
+                continuation={continuation}
+              />
+            );
+          })
         )}
       </div>
 

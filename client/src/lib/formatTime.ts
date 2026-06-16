@@ -16,3 +16,11 @@ export function shortTimeAgo(timestamp: number): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
   return `${Math.floor(diff / 86400)}d`;
 }
+
+/** Format a unix-seconds timestamp as a short local clock time ("3:07 PM"). */
+export function shortClockTime(timestamp: number): string {
+  return new Date(timestamp * 1000).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
