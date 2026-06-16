@@ -25,7 +25,7 @@ import { useReactions } from "@/hooks/useReactions";
 import { useReplyCount } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
-import { getDisplayName } from "@/lib/getDisplayName";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { isMeAction, meActionText, type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
@@ -49,10 +49,10 @@ function getReplyToId(event: NostrEvent): string | undefined {
 function ReplyContext({ eventId, relayUrl }: { eventId: string; relayUrl: string }) {
   const { data: event } = useEvent(eventId, [relayUrl]);
   const author = useAuthor(event?.pubkey);
+  const displayName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
 
   if (!event) return null;
 
-  const displayName = getDisplayName(author.data?.metadata, event.pubkey);
   const preview = event.content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
 
   return (
@@ -104,7 +104,7 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   const { user } = useCurrentUser();
   const isMobile = useIsMobile();
   const author = useAuthor(event.pubkey);
-  const displayName = getDisplayName(author.data?.metadata, event.pubkey);
+  const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
   const replyToId = getReplyToId(event);
   const { tallies, react } = useReactions(event, relayUrl, groupId);
   const replyCount = useReplyCount(event.id, relayUrl, groupId);

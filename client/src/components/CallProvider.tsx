@@ -15,6 +15,7 @@ import { useGroup } from "@/hooks/useGroup";
 import { useLivekitToken } from "@/hooks/useLivekit";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { CallContext, type ActiveCall } from "@/contexts/CallContext";
+import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
@@ -190,15 +191,19 @@ function PersistentVoiceRoom({
   );
 
   const mobileBar = (
-    <div className="clip-corner-lg bg-chrome-deep shadow-lg">
-      <InCallView label={label} onLabelClick={goToChannel} />
-    </div>
+    <ServerScopeProvider relayUrl={isDm ? undefined : call.relayUrl}>
+      <div className="clip-corner-lg bg-chrome-deep shadow-lg">
+        <InCallView label={label} onLabelClick={goToChannel} />
+      </div>
+    </ServerScopeProvider>
   );
 
   const desktopBar = (
-    <div className="clip-corner-lg bg-chrome-deep shadow-lg">
-      <InCallView label={label} onLabelClick={goToChannel} stacked />
-    </div>
+    <ServerScopeProvider relayUrl={isDm ? undefined : call.relayUrl}>
+      <div className="clip-corner-lg bg-chrome-deep shadow-lg">
+        <InCallView label={label} onLabelClick={goToChannel} stacked />
+      </div>
+    </ServerScopeProvider>
   );
 
   return (

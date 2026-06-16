@@ -97,6 +97,46 @@ export const KIND_GROUP_PARTICIPANTS = 39004;
 /** NIP-51: user's list of groups. */
 export const KIND_USER_GROUPS = 10009;
 
+/** NIP-32 label event. Used here for per-server self-labels (nickname/label). */
+export const KIND_LABEL = 1985;
+
+// ── Per-server self-labels (NIP-32) ──────────────────────────────────────────
+//
+// Armada lets a user set a per-server nickname and a per-server label that
+// apply ONLY within a given relay (server). These are NIP-32 kind-1985 label
+// events the user authors about *their own* pubkey, namespaced under `armada`
+// and scoped to a single relay via an `r` tag.
+//
+// Enforcement is a *client convention*, not a cryptographic guarantee: a
+// signed kind-1985 event is public, so we can't stop another client (or the
+// relay) from re-serving it. What this client guarantees is:
+//   1. the event is published ONLY to its target relay (never fanned out),
+//   2. it is queried ONLY from that relay, and
+//   3. the nickname/label is rendered ONLY where the event's `r` tag matches
+//      the relay currently being viewed.
+// So within *our* client the value never manifests outside its server.
+
+/** NIP-32 label namespace for Armada self-labels. */
+export const SERVER_PROFILE_NAMESPACE = "armada";
+/** Label mark identifying a per-server nickname value. */
+export const SERVER_NICKNAME_MARK = "armada/nickname";
+/** Label mark identifying a per-server label value. */
+export const SERVER_LABEL_MARK = "armada/label";
+/** Label mark identifying a per-server username color (CSS hex like `#ff8800`). */
+export const SERVER_COLOR_MARK = "armada/color";
+
+/** A user's per-server self-profile (nickname + label + color) for one relay. */
+export interface ServerProfile {
+  /** The relay (server) this profile applies to. */
+  relay: string;
+  /** The user's chosen nickname on this server, if any. */
+  nickname?: string;
+  /** The user's chosen label on this server, if any. */
+  label?: string;
+  /** The user's chosen username color on this server (CSS hex), if any. */
+  color?: string;
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface Nip29Group {
@@ -297,6 +337,79 @@ export function buildGroupListTags(list: UserGroupList): string[][] {
     ...list.servers.map((url) => ["r", url]),
     ...list.groups.map((g) => ["group", g.id, g.relay]),
   ];
+}
+
+/**
+ * Parse a kind-1985 self-label event into a {@link ServerProfile}, scoped to a
+ * relay. Returns `undefined` when the event isn't an Armada per-server
+ * self-label authored by `pubkey` for `relay`.
+ *
+ * Expected shape:
+ *   ["L", "armada"]
+ *   ["l", "<nickname>", "armada/nickname"]   (optional)
+ *   ["l", "<label>",    "armada/label"]      (optional)
+ *   ["l", "<#rrggbb>",  "armada/color"]      (optional)
+ *   ["p", "<pubkey>"]                        (self-label target)
+ *   ["r", "<relay>"]                         (server scope)
+ */
+export function parseServerProfile(
+  event: NostrEvent,
+  pubkey: string,
+  relay: string,
+): ServerProfile | undefined {
+  if (event.kind !== KIND_LABEL) return undefined;
+  if (event.pubkey !== pubkey) return undefined;
+
+  // Must be namespaced as an Armada label, self-targeted, and scoped to relay.
+  const namespaces = event.tags.filter(([n]) => n === "L").map(([, v]) => v);
+  if (!namespaces.includes(SERVER_PROFILE_NAMESPACE)) return undefined;
+
+  const targetsSelf = event.tags.some(([n, v]) => n === "p" && v === pubkey);
+  if (!targetsSelf) return undefined;
+
+  const scopedToRelay = event.tags.some(([n, v]) => n === "r" && v === relay);
+  if (!scopedToRelay) return undefined;
+
+  let nickname: string | undefined;
+  let label: string | undefined;
+  let color: string | undefined;
+  for (const [n, value, mark] of event.tags) {
+    if (n !== "l") continue;
+    if (mark === SERVER_NICKNAME_MARK && value) nickname = value;
+    else if (mark === SERVER_LABEL_MARK && value) label = value;
+    else if (mark === SERVER_COLOR_MARK && isHexColor(value)) color = value;
+  }
+
+  if (nickname === undefined && label === undefined && color === undefined) return undefined;
+  return { relay, nickname, label, color };
+}
+
+/** True when `value` is a 3- or 6-digit CSS hex color (e.g. `#f80`, `#ff8800`). */
+export function isHexColor(value: string | undefined): value is string {
+  return typeof value === "string" && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value);
+}
+
+/**
+ * Build the tags for a per-server self-label (kind 1985). Empty/blank values
+ * are omitted so clearing a field removes it from the published event.
+ */
+export function buildServerProfileTags(
+  pubkey: string,
+  relay: string,
+  profile: { nickname?: string; label?: string; color?: string },
+): string[][] {
+  const tags: string[][] = [
+    ["L", SERVER_PROFILE_NAMESPACE],
+    ["p", pubkey],
+    ["r", relay],
+  ];
+  const nickname = profile.nickname?.trim();
+  const label = profile.label?.trim();
+  const color = profile.color?.trim();
+  if (nickname) tags.push(["l", nickname, SERVER_NICKNAME_MARK]);
+  if (label) tags.push(["l", label, SERVER_LABEL_MARK]);
+  if (isHexColor(color)) tags.push(["l", color, SERVER_COLOR_MARK]);
+  return tags;
 }
 
 /** Get the group id (`h` tag) of a group-scoped event. */

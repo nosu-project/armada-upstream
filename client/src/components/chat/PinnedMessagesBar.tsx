@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useEvent } from "@/hooks/useEvent";
-import { getDisplayName } from "@/lib/getDisplayName";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { cn } from "@/lib/utils";
 
 /** One row in the pinned-messages bar: a clickable preview + optional unpin. */
@@ -23,7 +23,8 @@ function PinnedRow({
 }) {
   const { data: event } = useEvent(eventId, [relayUrl]);
   const author = useAuthor(event?.pubkey);
-  const displayName = event ? getDisplayName(author.data?.metadata, event.pubkey) : "";
+  const scopedName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
+  const displayName = event ? scopedName : "";
   const preview = event
     ? event.content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎"
     : "Pinned message";

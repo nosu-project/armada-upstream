@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { getDisplayName } from "@/lib/getDisplayName";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { cn } from "@/lib/utils";
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
@@ -45,7 +45,7 @@ function ReactionGlyph({ tally, className }: { tally: ReactionTally; className?:
 function ReactorRow({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  const displayName = getDisplayName(metadata, pubkey);
+  const displayName = useScopedDisplayName(pubkey, metadata);
   return (
     <div className="flex items-center gap-2 px-2 py-1">
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">

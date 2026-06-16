@@ -6,9 +6,9 @@ import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useThread } from "@/hooks/useThread";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { getDisplayName } from "@/lib/getDisplayName";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -16,7 +16,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 function ThreadMessage({ event }: { event: NostrEvent }) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
-  const displayName = getDisplayName(metadata, event.pubkey);
+  const displayName = useScopedDisplayName(event.pubkey, metadata);
   const when = new Date(event.created_at * 1000);
 
   return (

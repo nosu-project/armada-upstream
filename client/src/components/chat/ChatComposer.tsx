@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useGroup } from "@/hooks/useGroup";
@@ -36,7 +37,6 @@ import { useToast } from "@/hooks/useToast";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { formatTime } from "@/lib/formatTime";
-import { getDisplayName } from "@/lib/getDisplayName";
 import { extractHashtags } from "@/lib/hashtag";
 import { IMETA_MEDIA_URL_REGEX, IMETA_MEDIA_URL_TEST_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
@@ -1434,7 +1434,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 /** Compact banner above the composer showing the message being replied to. */
 function ReplyBanner({ event, onCancel }: { event: NostrEvent; onCancel?: () => void }) {
   const author = useAuthor(event.pubkey);
-  const displayName = getDisplayName(author.data?.metadata, event.pubkey);
+  const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
 
   // Strip media URLs for a compact text preview.
   const preview = event.content.replace(new RegExp(IMETA_MEDIA_URL_TEST_REGEX.source, "gi"), "📎").trim();

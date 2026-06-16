@@ -1,4 +1,4 @@
-import { AtSign, Copy, Crown, MoreVertical, Shield, ShieldOff, UserMinus, X } from "lucide-react";
+import { AtSign, Copy, Crown, IdCard, MoreVertical, Shield, ShieldOff, UserMinus, X } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
@@ -12,10 +12,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { requestMention } from "@/hooks/useMentionBus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +34,8 @@ interface MemberRowProps {
   currentUserPubkey?: string;
   onRemove?: (pubkey: string) => void;
   onSetRole?: (pubkey: string, roles: string[]) => void;
+  /** Open the per-server nickname/label editor (shown only on the viewer's own row). */
+  onEditProfile?: () => void;
 }
 
 function MemberRow({
@@ -44,10 +46,11 @@ function MemberRow({
   currentUserPubkey,
   onRemove,
   onSetRole,
+  onEditProfile,
 }: MemberRowProps) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  const displayName = getDisplayName(metadata, pubkey);
+  const { displayName, color } = useScopedIdentity(pubkey, metadata);
 
   const roleSet = new Set((roles ?? []).map((r) => r.toLowerCase()));
   const isAdmin = roleSet.has(ROLE_ADMIN);
@@ -78,7 +81,11 @@ function MemberRow({
         </button>
       </ProfilePreviewCard>
       <ProfilePreviewCard pubkey={pubkey}>
-        <button type="button" className="text-sm truncate flex-1 text-left focus:outline-none">
+        <button
+          type="button"
+          className="text-sm truncate flex-1 text-left focus:outline-none"
+          style={color ? { color } : undefined}
+        >
           {displayName}
         </button>
       </ProfilePreviewCard>
@@ -102,6 +109,13 @@ function MemberRow({
             <Copy className="size-4" />
             Copy npub
           </DropdownMenuItem>
+
+          {isSelf && onEditProfile && (
+            <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={onEditProfile}>
+              <IdCard className="size-4" />
+              Server identity
+            </DropdownMenuItem>
+          )}
 
           {canActOnUser && (onSetRole || onRemove) && (
             <>
@@ -176,6 +190,8 @@ interface MemberListProps {
   onSetRole?: (pubkey: string, roles: string[]) => void;
   /** Close the panel (mobile overlay close button). */
   onClose?: () => void;
+  /** Open the per-server nickname/label editor for the current user. */
+  onEditProfile?: () => void;
   /** Override the default desktop panel chrome (e.g. for the mobile drawer). */
   className?: string;
 }
@@ -190,6 +206,7 @@ export function MemberList({
   onRemove,
   onSetRole,
   onClose,
+  onEditProfile,
   className,
 }: MemberListProps) {
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
@@ -236,6 +253,7 @@ export function MemberList({
               currentUserPubkey={currentUserPubkey}
               onRemove={onRemove}
               onSetRole={onSetRole}
+              onEditProfile={onEditProfile}
             />
           ))}
         </>
@@ -258,6 +276,7 @@ export function MemberList({
             currentUserPubkey={currentUserPubkey}
             onRemove={onRemove}
             onSetRole={onSetRole}
+            onEditProfile={onEditProfile}
           />
         ))
       )}

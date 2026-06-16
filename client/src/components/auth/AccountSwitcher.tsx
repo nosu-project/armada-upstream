@@ -2,7 +2,7 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import { useState } from 'react';
-import { ChevronDown, LogOut, UserIcon, UserPlus } from 'lucide-react';
+import { ChevronDown, IdCard, LogOut, UserIcon, UserPlus } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,6 +14,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.tsx'
 import { getAvatarShape } from '@/lib/avatarShape';
 import { Skeleton } from '@/components/ui/skeleton.tsx';
 import { useLoggedInAccounts, type Account } from '@/hooks/useLoggedInAccounts';
+import { useServerScope } from '@/contexts/ServerScopeContext';
+import { ServerProfileDialog } from '@/components/dialogs/ServerProfileDialog';
 
 interface AccountSwitcherProps {
   onAddAccountClick: () => void;
@@ -22,6 +24,10 @@ interface AccountSwitcherProps {
 export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const { currentUser, otherUsers, isLoading, setLogin, removeLogin } = useLoggedInAccounts();
   const [isOpen, setIsOpen] = useState(false);
+  // The server (relay) currently being viewed, if any. Drives the optional
+  // "Server identity" item (per-server nickname/label/color).
+  const serverScope = useServerScope();
+  const [serverIdentityOpen, setServerIdentityOpen] = useState(false);
 
   if (!currentUser) return null;
 
@@ -39,6 +45,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   }
 
   return (
+    <>
     <DropdownMenu modal={false} open={isOpen} onOpenChange={setIsOpen}>
       <DropdownMenuTrigger asChild>
         <button className='flex items-center gap-3 p-2 clip-corner-lg bg-accent/50 hover:bg-accent transition-all w-full text-foreground'>
@@ -79,6 +86,15 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
+        {serverScope && (
+          <DropdownMenuItem
+            onClick={() => setServerIdentityOpen(true)}
+            className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
+          >
+            <IdCard className='w-4 h-4' />
+            <span>Server identity</span>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem
           onClick={onAddAccountClick}
           className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
@@ -95,5 +111,13 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    {serverScope && (
+      <ServerProfileDialog
+        relayUrl={serverScope}
+        open={serverIdentityOpen}
+        onOpenChange={setServerIdentityOpen}
+      />
+    )}
+    </>
   );
 }

@@ -1,8 +1,11 @@
-import { Hash, Link2, MoreVertical, Trash2, Volume2 } from "lucide-react";
+import { Hash, IdCard, Link2, MoreVertical, Trash2, Volume2 } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { useState } from "react";
 
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
+import { ServerScopeProvider } from "@/components/ServerScopeProvider";
+import { ServerProfileDialog } from "@/components/dialogs/ServerProfileDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +35,7 @@ export function ServerPage() {
   const { user } = useCurrentUser();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const relayUrl = server ? routeParamToRelay(server) : undefined;
+  const [profileOpen, setProfileOpen] = useState(false);
 
   const { data: groups, isLoading, relayInfo } = useRelayGroups(relayUrl);
 
@@ -65,7 +69,7 @@ export function ServerPage() {
   };
 
   return (
-    <>
+    <ServerScopeProvider relayUrl={relayUrl}>
       <ServerRail />
       {/* Mobile: channel list fills the screen. Desktop: fixed-width sidebar. */}
       <ChannelSidebar relayUrl={relayUrl} className="flex-1 sidebar:flex-none" />
@@ -107,6 +111,12 @@ export function ServerPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56 p-2">
+                {user && (
+                  <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setProfileOpen(true)}>
+                    <IdCard className="size-4" />
+                    Server identity
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={handleCopyLink}>
                   <Link2 className="size-4" />
                   Copy link
@@ -180,6 +190,14 @@ export function ServerPage() {
           </section>
         </div>
       </main>
-    </>
+
+      {relayUrl && (
+        <ServerProfileDialog
+          relayUrl={relayUrl}
+          open={profileOpen}
+          onOpenChange={setProfileOpen}
+        />
+      )}
+    </ServerScopeProvider>
   );
 }

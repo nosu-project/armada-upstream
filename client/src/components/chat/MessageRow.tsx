@@ -2,10 +2,11 @@ import { Loader2 } from "lucide-react";
 
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
-import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
@@ -52,7 +53,7 @@ export function MessageRow({
 }: MessageRowProps) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  const displayName = getDisplayName(metadata, pubkey);
+  const { displayName, color, label } = useScopedIdentity(pubkey, metadata);
 
   return (
     <div
@@ -76,10 +77,19 @@ export function MessageRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
           <ProfilePreviewCard pubkey={pubkey}>
-            <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
+            <button
+              type="button"
+              className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none"
+              style={color ? { color } : undefined}
+            >
               {displayName}
             </button>
           </ProfilePreviewCard>
+          {label && (
+            <Badge variant="secondary" className="text-[10px] font-medium shrink-0">
+              {label}
+            </Badge>
+          )}
           <span className="text-[11px] text-muted-foreground/70 shrink-0">
             {shortTimeAgo(createdAt)}
           </span>

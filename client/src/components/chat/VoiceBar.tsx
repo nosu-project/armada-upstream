@@ -54,7 +54,7 @@ import {
   shapedAvatarBorderStyle,
   shapedAvatarSpeakingStyle,
 } from "@/lib/avatarShape";
-import { getDisplayName } from "@/lib/getDisplayName";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { cn } from "@/lib/utils";
 
 function ParticipantAvatar({
@@ -69,7 +69,7 @@ function ParticipantAvatar({
 }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  const displayName = getDisplayName(metadata, pubkey);
+  const displayName = useScopedDisplayName(pubkey, metadata);
   const shape = getAvatarShape(metadata);
   const hasCustomShape = !!shape;
 

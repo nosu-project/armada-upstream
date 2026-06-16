@@ -1,4 +1,4 @@
-import { DoorOpen, Hash, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
+import { DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -7,6 +7,7 @@ import { MemberList } from "@/components/chat/MemberList";
 import { PinnedMessagesBar } from "@/components/chat/PinnedMessagesBar";
 import { GroupSettingsDialog } from "@/components/dialogs/GroupSettingsDialog";
 import { InvitePeopleDialog } from "@/components/dialogs/InvitePeopleDialog";
+import { ServerProfileDialog } from "@/components/dialogs/ServerProfileDialog";
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
 import { useGroup } from "@/hooks/useGroup";
@@ -113,6 +115,7 @@ export function GroupPage() {
   const [searchQuery, setSearchQuery] = useState("");
   /** Whether the pinned-messages bar is expanded below the header. */
   const [pinsOpen, setPinsOpen] = useState(false);
+  const [serverProfileOpen, setServerProfileOpen] = useState(false);
   /** Server whose channels are shown in the mobile drawer (defaults to current). */
   const [drawerServer, setDrawerServer] = useState(relayUrl ?? "");
 
@@ -194,7 +197,7 @@ export function GroupPage() {
   };
 
   return (
-    <>
+    <ServerScopeProvider relayUrl={relayUrl}>
       {/* Desktop panes (hidden on mobile — the chat is the full screen). */}
       <ServerRail className="hidden sidebar:flex" />
       <ChannelSidebar relayUrl={relayUrl} className="hidden sidebar:flex" />
@@ -329,6 +332,12 @@ export function GroupPage() {
                 <DropdownMenuLabel className="text-[11px] uppercase tracking-wide text-muted-foreground/80">
                   {group?.name ?? "Channel"}
                 </DropdownMenuLabel>
+                {user && (
+                  <DropdownMenuItem className="px-3 py-2" onClick={() => setServerProfileOpen(true)}>
+                    <IdCard className="size-4" />
+                    Server identity
+                  </DropdownMenuItem>
+                )}
                 {isAdmin && (
                   <DropdownMenuItem className="px-3 py-2" onClick={() => setInviteOpen(true)}>
                     <UserPlus className="size-4" />
@@ -472,6 +481,7 @@ export function GroupPage() {
                 currentUserPubkey={user?.pubkey}
                 onRemove={(pubkey) => removeUser.mutate({ pubkey })}
                 onSetRole={(pubkey, roles) => putUser.mutate({ pubkey, roles })}
+                onEditProfile={() => setServerProfileOpen(true)}
                 onClose={() => setMembersOpen(false)}
               />
             </div>
@@ -522,6 +532,11 @@ export function GroupPage() {
           onOpenChange={setInviteOpen}
         />
       )}
-    </>
+      <ServerProfileDialog
+        relayUrl={relayUrl}
+        open={serverProfileOpen}
+        onOpenChange={setServerProfileOpen}
+      />
+    </ServerScopeProvider>
   );
 }

@@ -10,6 +10,7 @@ import { LinkEmbed } from "@/components/chat/LinkEmbed";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
@@ -754,8 +755,10 @@ function ImageGrid({ images, onOpen }: { images: string[]; onOpen: (index: numbe
 /** Mention chip resolving the profile's display name. */
 function NostrMention({ pubkey, noAtPrefix = false }: { pubkey: string; noAtPrefix?: boolean }) {
   const author = useAuthor(pubkey);
-  const hasRealName = !!(author.data?.metadata?.name || author.data?.metadata?.display_name);
-  const displayName = getDisplayName(author.data?.metadata, pubkey);
+  const scopedName = useScopedDisplayName(pubkey, author.data?.metadata);
+  const hasRealName = !!(author.data?.metadata?.name || author.data?.metadata?.display_name)
+    || scopedName !== getDisplayName(author.data?.metadata, pubkey);
+  const displayName = scopedName;
 
   return (
     <span
