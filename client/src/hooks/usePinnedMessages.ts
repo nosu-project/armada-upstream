@@ -39,7 +39,13 @@ export function usePinnedMessages(relayUrl: string | undefined, groupId: string 
     queryKey,
     queryFn: async ({ signal }) => {
       const events = await nostr.relay(relayUrl!).query(
-        [{ kinds: [KIND_GROUP_PINS], "#d": [groupId!], limit: 20 }],
+        // `#h` is REQUIRED, not just `#d`: relay29's NormalEventQuery only
+        // serves filters carrying an `h`/`e`/`a`/`ids` selector. Kind 39041 is
+        // our own addressable kind (relay29 has no handler for it), so a
+        // `#d`-only query matches none of those branches and the relay returns
+        // nothing — pins are stored but never read back. The group `h` tag
+        // routes the query straight to the DB (with the `#d` constraint kept).
+        [{ kinds: [KIND_GROUP_PINS], "#d": [groupId!], "#h": [groupId!], limit: 20 }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
       // Newest event wins (any admin author).

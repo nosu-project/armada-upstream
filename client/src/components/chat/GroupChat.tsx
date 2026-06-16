@@ -101,7 +101,7 @@ function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStat
   const displayName = getDisplayName(author.data?.metadata, event.pubkey);
   const replyToId = getReplyToId(event);
   const { tallies, react } = useReactions(event, relayUrl, groupId);
-  const replyCount = useReplyCount(event.id, relayUrl);
+  const replyCount = useReplyCount(event.id, relayUrl, groupId);
   const isPending = sendStatus === "pending";
   const isFailed = sendStatus === "failed";
   const isOwn = user?.pubkey === event.pubkey;

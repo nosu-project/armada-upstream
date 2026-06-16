@@ -26,7 +26,12 @@ export function useThread(root: NostrEvent | undefined, relayUrl: string, groupI
     queryKey,
     queryFn: async ({ signal }) => {
       return await nostr.relay(relayUrl).query(
-        [{ kinds: [KIND_COMMENT], "#E": [root!.id], limit: 500 }],
+        // The `#h` group tag is REQUIRED here, not just `#E`: relay29's
+        // NormalEventQuery only serves filters carrying an `h`/`e`/`a`/`ids`
+        // selector (uppercase `#E` alone matches none), so without `#h` the
+        // relay accepts the kind-1111 replies on write but returns nothing on
+        // read — replies silently never load.
+        [{ kinds: [KIND_COMMENT], "#E": [root!.id], "#h": [groupId], limit: 500 }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
     },
@@ -72,14 +77,15 @@ export function useThread(root: NostrEvent | undefined, relayUrl: string, groupI
  * badge. A lightweight count-only query per message (one request each, as with
  * reactions) so the badge can render without opening the thread panel.
  */
-export function useReplyCount(eventId: string, relayUrl: string) {
+export function useReplyCount(eventId: string, relayUrl: string, groupId: string) {
   const { nostr } = useNostr();
 
   const { data = 0 } = useQuery({
     queryKey: ["thread-count", relayUrl, eventId],
     queryFn: async ({ signal }) => {
       const events = await nostr.relay(relayUrl).query(
-        [{ kinds: [KIND_COMMENT], "#E": [eventId], limit: 500 }],
+        // `#h` is required for relay29 to serve the query (see useThread).
+        [{ kinds: [KIND_COMMENT], "#E": [eventId], "#h": [groupId], limit: 500 }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
       return new Set(events.map((e) => e.id)).size;
