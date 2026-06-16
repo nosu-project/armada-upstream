@@ -4,15 +4,16 @@ import {
   useLocalParticipant,
   useMediaDeviceSelect,
   useParticipants,
-  useTracks,
+  useSpeakingParticipants,
 } from "@livekit/components-react";
-import { ConnectionState, Track } from "livekit-client";
+import { ConnectionState } from "livekit-client";
 import { Check, Headphones, Loader2, Mic, MicOff, PhoneOff, Settings2, Volume2 } from "lucide-react";
 
 import "@livekit/components-styles";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import type { CSSProperties } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,7 +26,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAuthor } from "@/hooks/useAuthor";
 import { pubkeyFromLivekitIdentity } from "@/hooks/useLivekit";
 import { rememberVoiceDevice } from "@/lib/voiceDevices";
-import { getAvatarShape } from "@/lib/avatarShape";
+import {
+  getAvatarShape,
+  shapedAvatarBorderStyle,
+  shapedAvatarSpeakingStyle,
+} from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
@@ -33,22 +38,45 @@ function ParticipantAvatar({ pubkey, isSpeaking }: { pubkey: string; isSpeaking?
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, pubkey);
+  const shape = getAvatarShape(metadata);
+  const hasCustomShape = !!shape;
+
+  // The speaking indicator + background separator border are drawn on a
+  // wrapper, never on the <Avatar> itself. For emoji-shaped avatars the
+  // Avatar carries a CSS mask, which would clip any ring/box-shadow to the
+  // emoji silhouette — so we use drop-shadow filters that hug the shape. For
+  // circular avatars a plain ring + box-shadow looks crisper.
+  const wrapperStyle: CSSProperties | undefined = hasCustomShape
+    ? {
+        // When speaking, a tight solid green outline hugs the emoji silhouette
+        // on its own (no wide white separator pushing it out). Otherwise just
+        // the background separator border.
+        filter: isSpeaking
+          ? shapedAvatarSpeakingStyle.filter
+          : shapedAvatarBorderStyle.filter,
+      }
+    : undefined;
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Avatar
-          shape={getAvatarShape(metadata)}
+        {/* Wrapper keeps the indicator outside the (overflow-hidden / masked)
+            Avatar so it never gets cropped. */}
+        <div
           className={cn(
-            "size-7 ring-2 ring-background transition-shadow",
-            isSpeaking && "ring-success shadow-[0_0_0_2px_hsl(var(--success))]",
+            "rounded-full transition-shadow",
+            !hasCustomShape && "ring-2 ring-background",
+            !hasCustomShape && isSpeaking && "ring-success shadow-[0_0_0_2px_hsl(var(--success))]",
           )}
+          style={wrapperStyle}
         >
-          <AvatarImage src={metadata?.picture} alt={displayName} />
-          <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
-            {displayName[0]?.toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
+          <Avatar shape={shape} className="size-7">
+            <AvatarImage src={metadata?.picture} alt={displayName} />
+            <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+              {displayName[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+        </div>
       </TooltipTrigger>
       <TooltipContent>{displayName}</TooltipContent>
     </Tooltip>
@@ -151,11 +179,13 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
   const participants = useParticipants();
   const connectionState = useConnectionState();
   const { localParticipant } = useLocalParticipant();
-  const micTracks = useTracks([Track.Source.Microphone], { onlySubscribed: false });
+  // `useSpeakingParticipants` subscribes to the room's ActiveSpeakersChanged
+  // events (which include the LOCAL participant) and re-renders on every
+  // change — unlike deriving from useTracks(), which only updates on track
+  // publish/mute and so missed `isSpeaking` toggles (notably one's own voice).
+  const speakingParticipants = useSpeakingParticipants();
 
-  const speaking = new Set(
-    micTracks.filter((t) => t.participant.isSpeaking).map((t) => t.participant.identity),
-  );
+  const speaking = new Set(speakingParticipants.map((p) => p.identity));
 
   if (connectionState === ConnectionState.Connecting) {
     return (
@@ -194,7 +224,10 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
   );
 
   const participantsEl = (
-    <div className="flex -space-x-1.5 flex-1 min-w-0 overflow-hidden">
+    // No `overflow-hidden` here: it would crop the speaking ring/glow off the
+    // edge avatars. Padding gives the ring room; `min-w-0` still lets the row
+    // shrink. Avatars overlap via negative spacing.
+    <div className="flex -space-x-1.5 flex-1 min-w-0 px-0.5 py-1">
       {participants.map((p) => (
         <ParticipantAvatar
           key={p.identity}

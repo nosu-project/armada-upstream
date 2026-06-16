@@ -71,6 +71,27 @@ export const shapedAvatarBorderStyle: React.CSSProperties = {
 /** @deprecated Use shapedAvatarBorderStyle instead */
 export const emojiAvatarBorderStyle = shapedAvatarBorderStyle;
 
+/**
+ * CSS filter that draws a crisp, solid green "speaking" outline that tightly
+ * hugs the silhouette of a shaped avatar (emoji). Like
+ * {@link shapedAvatarBorderStyle}, this must be applied to a **wrapper** around
+ * the masked `<Avatar>` — a ring/box-shadow on the masked element itself would
+ * be clipped to the emoji's alpha shape and never appear. Eight 1px offset
+ * copies (orthogonal + diagonal) give an even, solid outline snug against the
+ * shape, rather than a soft/detached blur.
+ */
+export const shapedAvatarSpeakingStyle: React.CSSProperties = {
+  filter:
+    'drop-shadow(1px 0 0 hsl(var(--success)))' +
+    ' drop-shadow(-1px 0 0 hsl(var(--success)))' +
+    ' drop-shadow(0 1px 0 hsl(var(--success)))' +
+    ' drop-shadow(0 -1px 0 hsl(var(--success)))' +
+    ' drop-shadow(1px 1px 0 hsl(var(--success)))' +
+    ' drop-shadow(1px -1px 0 hsl(var(--success)))' +
+    ' drop-shadow(-1px 1px 0 hsl(var(--success)))' +
+    ' drop-shadow(-1px -1px 0 hsl(var(--success)))',
+};
+
 // ── Emoji mask generation ──────────────────────────────────────────────────
 
 /** In-memory cache: emoji string → data-URL. */
