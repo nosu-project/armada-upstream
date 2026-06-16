@@ -1,10 +1,15 @@
-import { Check, Copy } from "lucide-react";
+import { AtSign, Check, Copy, MessageSquare } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { requestMention } from "@/hooks/useMentionBus";
+import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
@@ -16,14 +21,17 @@ interface ProfilePreviewCardProps {
   children: React.ReactNode;
 }
 
-/** The body of the profile preview — banner, avatar, name, npub, and bio. */
-function ProfilePreviewBody({ pubkey }: { pubkey: string }) {
+/** The body of the profile preview — banner, avatar, name, npub, bio, actions. */
+function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: () => void }) {
   const author = useAuthor(pubkey);
+  const navigate = useNavigate();
+  const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, pubkey);
   const avatarShape = getAvatarShape(metadata);
   const npub = tryNpubEncode(pubkey);
   const [copied, setCopied] = useState(false);
+  const isSelf = user?.pubkey === pubkey;
 
   const copyNpub = () => {
     if (!npub) return;
@@ -31,6 +39,20 @@ function ProfilePreviewBody({ pubkey }: { pubkey: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
+  };
+
+  const message = () => {
+    if (!npub) return;
+    onAction?.();
+    navigate(`/dms/${npub}`);
+  };
+
+  const mention = () => {
+    if (requestMention(pubkey)) {
+      onAction?.();
+    } else {
+      toast({ title: "Open a channel to mention someone" });
+    }
   };
 
   const shortNpub = npub ? `${npub.slice(0, 12)}…${npub.slice(-6)}` : "";
@@ -83,6 +105,25 @@ function ProfilePreviewBody({ pubkey }: { pubkey: string }) {
             {metadata.about}
           </p>
         )}
+
+        {/* Actions */}
+        {!isSelf && (
+          <div className="mt-3 flex items-center gap-2">
+            <Button size="sm" className="flex-1 clip-corner-lg h-8" onClick={message}>
+              <MessageSquare className="size-3.5 mr-1.5" />
+              Message
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="flex-1 clip-corner-lg h-8"
+              onClick={mention}
+            >
+              <AtSign className="size-3.5 mr-1.5" />
+              Mention
+            </Button>
+          </div>
+        )}
       </div>
     </>
   );
@@ -106,7 +147,7 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
         className="w-72 p-0 rounded-2xl overflow-hidden border border-border shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {open && <ProfilePreviewBody pubkey={pubkey} />}
+        {open && <ProfilePreviewBody pubkey={pubkey} onAction={() => setOpen(false)} />}
       </PopoverContent>
     </Popover>
   );
