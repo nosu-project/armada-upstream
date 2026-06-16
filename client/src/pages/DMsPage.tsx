@@ -177,13 +177,16 @@ function DMMessage({ message, continuation }: { message: DecryptedDM; continuati
 function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
-  const { messages, isLoading, send } = useDirectMessages(peer);
+  const { messages, isLoading, send, loadOlder, hasMore, isLoadingOlder } = useDirectMessages(peer);
   const { markRead } = useReadState();
   const { toast } = useToast();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { activeCall, joinDmCall } = useCall();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Pre-prepend scroll metrics, used to hold the reading position when older
+  // messages are backfilled above the viewport.
+  const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
 
   // Voice: derive the shared DM room id and find a LiveKit-capable relay to
   // host the call. DMs are stored on general app relays (which usually don't
@@ -213,8 +216,28 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   );
 
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (!el) return;
+    const restore = restoreScrollRef.current;
+    if (restore) {
+      restoreScrollRef.current = null;
+      el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+      return;
+    }
+    el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  // Backfill older history when the user scrolls near the top.
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (hasMore && !isLoadingOlder && el.scrollTop < 200) {
+      restoreScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
+      void loadOlder().then((added) => {
+        if (added === 0) restoreScrollRef.current = null;
+      });
+    }
+  }, [hasMore, isLoadingOlder, loadOlder]);
 
   // Mark the thread read up to the newest message while it's visible.
   useEffect(() => {
@@ -294,7 +317,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         )}
       </header>
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4">
         {isLoading ? (
           <div className="space-y-3 p-2">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -314,14 +337,21 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             <p className="text-xs text-muted-foreground/60 mt-1">Say hello to {name}!</p>
           </div>
         ) : (
-          messages.map((m, i) => {
-            const prev = messages[i - 1];
-            const continuation =
-              !!prev &&
-              prev.pubkey === m.pubkey &&
-              m.created_at - prev.created_at < DM_CONTINUATION_WINDOW_SECONDS;
-            return <DMMessage key={m.id} message={m} continuation={continuation} />;
-          })
+          <>
+            {isLoadingOlder && (
+              <div className="flex justify-center py-3">
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              </div>
+            )}
+            {messages.map((m, i) => {
+              const prev = messages[i - 1];
+              const continuation =
+                !!prev &&
+                prev.pubkey === m.pubkey &&
+                m.created_at - prev.created_at < DM_CONTINUATION_WINDOW_SECONDS;
+              return <DMMessage key={m.id} message={m} continuation={continuation} />;
+            })}
+          </>
         )}
       </div>
 

@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
@@ -66,8 +66,34 @@ export function useReactions(target: NostrEvent, relayUrl: string, groupId: stri
       );
     },
     staleTime: 15_000,
-    refetchInterval: 30_000,
   });
+
+  // Live subscription: stream new reactions into the cache instead of polling
+  // every 30s. Scoped to this one message's id with a short `since` so it only
+  // delivers reactions posted after the initial load.
+  useEffect(() => {
+    const controller = new AbortController();
+    const targetId = target.id;
+
+    (async () => {
+      try {
+        for await (const msg of nostr.relay(relayUrl).req(
+          [{ kinds: [KIND_REACTION], "#e": [targetId], since: Math.floor(Date.now() / 1000) - 5 }],
+          { signal: controller.signal },
+        )) {
+          if (msg[0] !== "EVENT") continue;
+          const event = msg[2] as NostrEvent;
+          queryClient.setQueryData<NostrEvent[]>(["reactions", relayUrl, targetId], (old = []) =>
+            old.some((e) => e.id === event.id) ? old : [...old, event],
+          );
+        }
+      } catch {
+        // Subscription ended (abort or relay closed).
+      }
+    })();
+
+    return () => controller.abort();
+  }, [nostr, relayUrl, target.id, queryClient]);
 
   // One reaction per (pubkey, key); the latest event wins.
   const tallies = useMemo<ReactionTally[]>(() => {

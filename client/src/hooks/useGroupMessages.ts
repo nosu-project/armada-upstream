@@ -1,7 +1,8 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useEventStore } from "@/hooks/useEventStore";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -15,6 +16,16 @@ const KIND_DELETE = 5;
 const TIMELINE_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
 /** Kinds the live subscription watches (timeline + deletions). */
 const LIVE_KINDS = [KIND_GROUP_CHAT, KIND_POLL, KIND_DELETE];
+
+/** How many messages to fetch per page (initial load and each backfill). */
+const PAGE_SIZE = 50;
+
+/**
+ * Largest gap (seconds) between the cursor message and the next-oldest before
+ * we treat it as a stale-relay outlier and don't trust it as a cursor. Mirrors
+ * Ditto's `getPaginationCursor` gap guard. 6 hours.
+ */
+const MAX_GAP_SECONDS = 6 * 60 * 60;
 
 /** Delivery status of an optimistically-inserted (locally-published) message. */
 export type SendStatus = "pending" | "failed";
@@ -30,9 +41,43 @@ function statusKey(relayUrl: string | undefined, groupId: string | undefined) {
   return ["nip29", "msg-status", relayUrl, groupId] as const;
 }
 
+/** Sort ascending (oldest-first) and de-duplicate a message list by id. */
+function sortDedupe(events: NostrEvent[]): NostrEvent[] {
+  const byId = new Map<string, NostrEvent>();
+  for (const e of events) byId.set(e.id, e);
+  return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
+}
+
+/**
+ * Pick a safe `until` cursor for backfilling older messages from a page of
+ * events. Returns the oldest event's `created_at - 1`, unless the oldest event
+ * is separated from the rest of the page by a suspiciously large time gap (a
+ * stale relay returning an ancient straggler) — in which case we step in to the
+ * second-oldest so the cursor doesn't leap past real history. Mirrors Ditto's
+ * gap-aware cursor.
+ */
+function paginationCursor(events: NostrEvent[]): number | undefined {
+  if (events.length === 0) return undefined;
+  const ascending = [...events].sort((a, b) => a.created_at - b.created_at);
+  const oldest = ascending[0].created_at;
+  const next = ascending[1]?.created_at;
+  if (next !== undefined && next - oldest > MAX_GAP_SECONDS) {
+    return next - 1;
+  }
+  return oldest - 1;
+}
+
 /**
  * Chat messages (kind 9) and polls (kind 1068) for a NIP-29 group, with a
- * live subscription that appends incoming messages into the query cache.
+ * live subscription that appends incoming messages into the query cache and
+ * scroll-up pagination that backfills older history on demand.
+ *
+ * The full timeline lives in a single TanStack cache entry (oldest-first).
+ * - Initial load fetches the newest {@link PAGE_SIZE} messages.
+ * - {@link loadOlder} fetches the next older page using an `until` cursor
+ *   (Ditto's `useInfiniteQuery` pattern, flattened into one growing list since
+ *   chat is bottom-anchored rather than top-anchored).
+ * - The live `req` appends new messages as they arrive.
  *
  * Supports optimistic publishing: locally-signed messages can be inserted
  * immediately with a `pending` status (and later reconciled to confirmed when
@@ -40,25 +85,78 @@ function statusKey(relayUrl: string | undefined, groupId: string | undefined) {
  * sign locally, the optimistic event shares its final id with the relay echo,
  * so de-duplication is automatic.
  *
- * Ported from Ditto's LiveStreamChat pattern (kind 1311/`#a` → kind 9/`#h`),
- * targeted at the group's host relay only.
+ * Ported from Ditto's LiveStreamChat + useInfiniteQuery patterns, targeted at
+ * the group's host relay only.
  */
 export function useGroupMessages(relayUrl: string | undefined, groupId: string | undefined) {
   const { nostr } = useNostr();
+  const eventStore = useEventStore();
   const queryClient = useQueryClient();
+
+  // Backfill state. `cursor` is the next `until` to request; `hasMore` is false
+  // once a page comes back short (the relay has no older history left).
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const cursorRef = useRef<number | undefined>(undefined);
+  const loadingRef = useRef(false);
 
   const query = useQuery<NostrEvent[]>({
     queryKey: messagesKey(relayUrl, groupId),
     queryFn: async ({ signal }) => {
       const events = await nostr.relay(relayUrl!).query(
-        [{ kinds: TIMELINE_KINDS, "#h": [groupId!], limit: 200 }],
+        [{ kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
-      return events.sort((a, b) => a.created_at - b.created_at);
+      // A short first page means there's nothing older to backfill.
+      setHasMore(events.length >= PAGE_SIZE);
+      cursorRef.current = paginationCursor(events);
+      return sortDedupe(events);
     },
     enabled: Boolean(relayUrl && groupId),
     staleTime: 10_000,
+    // Keep showing the previous channel's messages while the next loads, so
+    // switching channels never flashes the skeleton (cache-first feel).
+    placeholderData: (prev) => prev,
   });
+
+  // Cache-first seed: while the network query is in flight, hydrate the cache
+  // from IndexedDB so a channel we've visited renders instantly. The store only
+  // indexes by id, so we read back the message ids we previously persisted for
+  // this group (kept in a sibling cache entry) and resolve them locally.
+  useEffect(() => {
+    if (!relayUrl || !groupId) return;
+    let cancelled = false;
+    void (async () => {
+      const idsKey = ["nip29", "msg-ids", relayUrl, groupId] as const;
+      const ids = queryClient.getQueryData<string[]>(idsKey);
+      if (!ids || ids.length === 0) return;
+      // Don't clobber a network result that already landed.
+      if ((queryClient.getQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId)) ?? []).length > 0) {
+        return;
+      }
+      const store = await eventStore;
+      const cached = await store.query([{ ids }]);
+      if (cancelled || cached.length === 0) return;
+      queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old) =>
+        old && old.length > 0 ? old : sortDedupe(cached),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [relayUrl, groupId, eventStore, queryClient]);
+
+  // Persist the set of loaded message ids so a future visit can seed from the
+  // IndexedDB cache (which the NostrBatcher already mirrors every event into).
+  useEffect(() => {
+    if (!relayUrl || !groupId) return;
+    const data = query.data;
+    if (!data || data.length === 0) return;
+    queryClient.setQueryData<string[]>(
+      ["nip29", "msg-ids", relayUrl, groupId],
+      data.map((e) => e.id),
+    );
+  }, [query.data, relayUrl, groupId, queryClient]);
 
   // Send-status for optimistic messages (kept in its own cache entry).
   const { data: status = {} } = useQuery<SendStatusMap>({
@@ -73,11 +171,54 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     (event: NostrEvent) => {
       queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) => {
         if (old.some((e) => e.id === event.id)) return old;
-        return [...old, event].sort((a, b) => a.created_at - b.created_at);
+        return sortDedupe([...old, event]);
       });
     },
     [queryClient, relayUrl, groupId],
   );
+
+  /**
+   * Fetch the next older page of history (scroll-up pagination). Resolves to
+   * the number of messages prepended (0 when there's nothing older), so the
+   * caller can preserve scroll position around the inserted rows.
+   */
+  const loadOlder = useCallback(async (): Promise<number> => {
+    if (!relayUrl || !groupId) return 0;
+    if (loadingRef.current || !hasMore) return 0;
+    const until = cursorRef.current;
+    if (until === undefined) return 0;
+
+    loadingRef.current = true;
+    setIsLoadingOlder(true);
+    try {
+      const older = await nostr.relay(relayUrl).query(
+        [{ kinds: TIMELINE_KINDS, "#h": [groupId], until, limit: PAGE_SIZE }],
+        { signal: AbortSignal.timeout(8000) },
+      );
+
+      // Anything genuinely new to us (the cursor boundary can re-return events).
+      const existing = queryClient.getQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId)) ?? [];
+      const existingIds = new Set(existing.map((e) => e.id));
+      const fresh = older.filter((e) => !existingIds.has(e.id));
+
+      if (older.length < PAGE_SIZE) setHasMore(false);
+      // Advance the cursor from the raw page (pre-dedupe) so a page that's all
+      // boundary-overlap still moves us backwards in time.
+      cursorRef.current = paginationCursor(older) ?? until - 1;
+
+      if (fresh.length === 0) return 0;
+
+      queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) =>
+        sortDedupe([...fresh, ...old]),
+      );
+      return fresh.length;
+    } catch {
+      return 0;
+    } finally {
+      loadingRef.current = false;
+      setIsLoadingOlder(false);
+    }
+  }, [nostr, relayUrl, groupId, hasMore, queryClient]);
 
   const setStatus = useCallback(
     (id: string, value: SendStatus | undefined) => {
@@ -157,8 +298,17 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   }, [nostr, relayUrl, groupId, upsertMessage, setStatus, removeOptimistic]);
 
   const helpers = useMemo(
-    () => ({ status, insertOptimistic, markSent, markFailed, removeOptimistic }),
-    [status, insertOptimistic, markSent, markFailed, removeOptimistic],
+    () => ({
+      status,
+      insertOptimistic,
+      markSent,
+      markFailed,
+      removeOptimistic,
+      loadOlder,
+      hasMore,
+      isLoadingOlder,
+    }),
+    [status, insertOptimistic, markSent, markFailed, removeOptimistic, loadOlder, hasMore, isLoadingOlder],
   );
 
   return { ...query, ...helpers };

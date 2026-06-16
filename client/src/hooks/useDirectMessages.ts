@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -179,7 +179,10 @@ export function useDirectMessages(peer: string | undefined) {
   const relayKey = relays.join(",");
 
   const self = user?.pubkey;
-  const queryKey = ["dm", "thread", self, peer, relayKey];
+  const queryKey = useMemo(
+    () => ["dm", "thread", self, peer, relayKey] as const,
+    [self, peer, relayKey],
+  );
 
   const query = useQuery<DecryptedDM[]>({
     queryKey,
@@ -277,6 +280,84 @@ export function useDirectMessages(peer: string | undefined) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, self, peer, user?.signer.nip04, relayKey, queryClient]);
 
+  // Backfill older history for this conversation. Because relays only serve
+  // your own DMs (self-scoped filters), we page the global self-DM stream with
+  // an `until` cursor and narrow to this peer client-side. `hasMore` flips off
+  // once a page comes back short.
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const oldestRef = useRef<number | undefined>(undefined);
+  const loadingRef = useRef(false);
+
+  // Reset the cursor when the peer/relays change.
+  useEffect(() => {
+    oldestRef.current = undefined;
+    setHasMore(true);
+  }, [self, peer, relayKey]);
+
+  const loadOlder = useCallback(async (): Promise<number> => {
+    if (!self || !peer || !user?.signer.nip04) return 0;
+    if (loadingRef.current || !hasMore) return 0;
+
+    const nip04 = user.signer.nip04;
+    // First backfill starts from the oldest message currently rendered.
+    const current = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
+    const until =
+      oldestRef.current ??
+      (current.length > 0 ? current[0].created_at - 1 : Math.floor(Date.now() / 1000));
+
+    loadingRef.current = true;
+    setIsLoadingOlder(true);
+    try {
+      const events = await nostr.group(relays).query(
+        [
+          { kinds: [KIND_DM], authors: [self], until, limit: 500 },
+          { kinds: [KIND_DM], "#p": [self], until, limit: 500 },
+        ],
+        { signal: AbortSignal.timeout(8000) },
+      );
+
+      if (events.length === 0) {
+        setHasMore(false);
+        return 0;
+      }
+
+      // Advance the cursor from the raw page (oldest event minus one second).
+      const oldestEvent = Math.min(...events.map((e) => e.created_at));
+      oldestRef.current = oldestEvent - 1;
+      if (events.length < 500) setHasMore(false);
+
+      const inThread = events.filter((e) => dmCounterparty(e, self) === peer);
+      const existing = new Set(current.map((m) => m.id));
+
+      const decrypted: DecryptedDM[] = [];
+      for (const event of inThread) {
+        if (existing.has(event.id)) continue;
+        const counterparty = event.pubkey === self ? peer : event.pubkey;
+        try {
+          const content = await nip04.decrypt(counterparty, event.content);
+          decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
+        } catch (err) {
+          console.warn("DM backfill decrypt failed", { id: event.id, counterparty, err });
+        }
+      }
+
+      if (decrypted.length === 0) return 0;
+
+      queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) => {
+        const byId = new Map<string, DecryptedDM>();
+        for (const m of [...decrypted, ...old]) byId.set(m.id, m);
+        return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
+      });
+      return decrypted.length;
+    } catch {
+      return 0;
+    } finally {
+      loadingRef.current = false;
+      setIsLoadingOlder(false);
+    }
+  }, [self, peer, user?.signer.nip04, hasMore, queryClient, queryKey, nostr, relays]);
+
   const send = useMutation({
     mutationFn: async (text: string) => {
       if (!user?.signer.nip04) throw new Error("NIP-04 encryption not supported by signer");
@@ -314,5 +395,8 @@ export function useDirectMessages(peer: string | undefined) {
     error: query.error,
     send: send.mutateAsync,
     isSending: send.isPending,
+    loadOlder,
+    hasMore,
+    isLoadingOlder,
   };
 }

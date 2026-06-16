@@ -430,6 +430,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     markSent,
     markFailed,
     removeOptimistic,
+    loadOlder,
+    hasMore,
+    isLoadingOlder,
   } = useGroupMessages(relayUrl, groupId);
   const { deleteEvent, removeUser } = useGroupModeration(relayUrl, groupId);
   const { isPinned, pin, unpin } = usePinnedMessages(relayUrl, groupId);
@@ -463,6 +466,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
+  // When backfilling older messages, the scroll height grows above the
+  // viewport. We capture the pre-prepend scroll metrics so we can restore the
+  // user's reading position (anchor it to the same message) afterwards.
+  const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
 
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {
@@ -493,9 +500,21 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
   }, [user, messages, relayUrl, groupId, markRead]);
 
   // Auto-scroll to bottom when new messages arrive (unless user scrolled up).
+  // When older history was just prepended (backfill), instead restore the
+  // reading position by keeping the same content under the viewport.
   useEffect(() => {
-    if (isAutoScrollRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (!el) return;
+    const restore = restoreScrollRef.current;
+    if (restore) {
+      restoreScrollRef.current = null;
+      // New content was added above; offset scrollTop by the height delta so
+      // the message the user was looking at stays put.
+      el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+      return;
+    }
+    if (isAutoScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
 
@@ -520,7 +539,18 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     const el = scrollRef.current;
     if (!el) return;
     isAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-  }, []);
+    // Near the top: backfill older history. Capture the current metrics first
+    // so the post-prepend effect can hold the reading position steady. Skip
+    // while showing search results (the timeline isn't on screen).
+    if (!searching && hasMore && !isLoadingOlder && el.scrollTop < 200) {
+      restoreScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
+      void loadOlder().then((added) => {
+        // Nothing was prepended — drop the stale restore snapshot so a later
+        // bottom auto-scroll isn't suppressed.
+        if (added === 0) restoreScrollRef.current = null;
+      });
+    }
+  }, [searching, hasMore, isLoadingOlder, loadOlder]);
 
   const handleSent = useCallback(() => {
     setReplyTo(undefined);
@@ -716,7 +746,13 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
             <p className="text-xs text-muted-foreground/60 mt-1">Be the first to say something!</p>
           </div>
         ) : (
-          messages.map((msg, i) => {
+          <>
+            {isLoadingOlder && (
+              <div className="flex justify-center py-3">
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              </div>
+            )}
+            {messages.map((msg, i) => {
             // Collapse consecutive messages from the same author sent within a
             // short window into a continuation (no repeated avatar/name/time).
             const prev = messages[i - 1];
@@ -749,7 +785,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
                 continuation={continuation}
               />
             );
-          })
+          })}
+          </>
         )}
       </div>
 
