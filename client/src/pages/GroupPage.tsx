@@ -128,9 +128,11 @@ export function GroupPage() {
   // Lets the pinned-messages bar jump to a message in the timeline; GroupChat
   // assigns the scroll function into this ref.
   const scrollToMessageRef = useRef<((id: string) => void) | null>(null);
-  // Focus the search field when it expands.
+  // Focus the search field when it expands. `preventScroll` is essential: the
+  // input starts off-screen (left-full) and slides in, so a default focus()
+  // makes the browser scroll the whole page to reveal it — a visible jolt.
   useEffect(() => {
-    if (searchOpen) searchInputRef.current?.focus();
+    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
   }, [searchOpen]);
   // Collapse the pinned bar if everything gets unpinned while it's open.
   useEffect(() => {
@@ -371,15 +373,17 @@ export function GroupPage() {
 
           {/* Inline search bar: smoothly expands across the header (covering the
               title and actions) when open. On mobile it leaves the menu button
-              visible; on desktop it covers the full bar. An X dismisses it. */}
+              visible; on desktop it covers the full bar. An X dismisses it.
+              Slides via GPU-composited transform (not `left`) so it animates on
+              the compositor and never forces a per-frame reflow / jitter. */}
           <div
             className={cn(
-              "absolute inset-y-0 right-0 z-10 flex items-center gap-1.5 px-2 sidebar:px-3",
+              "absolute inset-y-0 right-0 left-10 sidebar:left-0 z-10 flex items-center gap-1.5 px-2 sidebar:px-3",
               "bg-chrome clip-corner-lg overflow-hidden",
-              "transition-[left] duration-300 ease-in-out",
+              "transition-transform duration-300 ease-in-out",
               searchOpen
-                ? "left-10 sidebar:left-0 pointer-events-auto"
-                : "left-full pointer-events-none",
+                ? "translate-x-0 pointer-events-auto"
+                : "translate-x-full pointer-events-none",
             )}
           >
             <Search className="size-4 text-muted-foreground shrink-0" />
