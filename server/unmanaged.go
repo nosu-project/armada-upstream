@@ -12,13 +12,15 @@ import (
 //
 //   - kind 0:     user profiles (display names and avatars in the client)
 //   - kind 4:     NIP-04 encrypted direct messages (relay-scoped DMs)
+//   - kind 1985:  NIP-32 per-server self-labels (Armada nickname/label/color),
+//                 scoped to this relay via an `r` tag rather than a group `h`
 //   - kind 10009: the user's NIP-51 list of joined groups
 //
 // relay29's policies reject everything without an `h` tag, so we wrap them
 // to skip these kinds, and add our own guard requiring NIP-42 auth so only
 // the key owner can publish them.
 func isUnmanagedKind(kind int) bool {
-	return kind == 0 || kind == 4 || kind == 10009
+	return kind == 0 || kind == 4 || kind == 1985 || kind == 10009
 }
 
 // isDMKind reports whether the kind is a relay-scoped direct message (NIP-04).

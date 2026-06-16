@@ -156,8 +156,9 @@ func main() {
 			9021, 9022,
 			// Armada extension: admin-pinned messages (addressable on group id).
 			39041,
-			// unmanaged kinds (profiles, NIP-04 DMs, user group lists)
-			0, 4, 10009,
+			// unmanaged kinds (profiles, NIP-04 DMs, per-server self-labels,
+			// user group lists)
+			0, 4, 1985, 10009,
 		),
 		preventTimestampsInThePast,
 		policies.PreventTimestampsInTheFuture(30*time.Second),
