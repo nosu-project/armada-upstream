@@ -31,6 +31,7 @@ import { effectiveDmRelays } from "@/contexts/AppContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { PLATFORM_RELAYS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -148,10 +149,17 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { activeCall, joinDmCall } = useCall();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Voice: derive the shared DM room id and find a LiveKit-capable DM relay.
+  // Voice: derive the shared DM room id and find a LiveKit-capable relay to
+  // host the call. DMs are stored on general app relays (which usually don't
+  // run LiveKit); the Armada platform relays do, and both peers share that
+  // pinned list — so prefer them, falling back to the DM relays.
   const roomId = user ? deriveDmRoomId(user.pubkey, peer) : undefined;
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
-  const { data: voiceRelay } = useDmVoiceRelay(dmRelays);
+  const voiceCandidates = useMemo(
+    () => [...PLATFORM_RELAYS, ...dmRelays.filter((r) => !PLATFORM_RELAYS.includes(r))],
+    [dmRelays],
+  );
+  const { data: voiceRelay } = useDmVoiceRelay(voiceCandidates);
   const hasVoice = Boolean(roomId && voiceRelay);
   const inThisCall = Boolean(roomId && activeCall?.groupId === roomId);
 
