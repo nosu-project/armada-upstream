@@ -6,3 +6,9 @@ dist/
 data/
 server/armada-relay
 .tsbuildinfo
+
+# Android signing material — never commit. Injected via CI/CD variables.
+**/key.properties
+*.jks
+*.keystore
+client/android/app/google-services.json
