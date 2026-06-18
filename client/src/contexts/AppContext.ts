@@ -32,7 +32,7 @@ export interface AppConfig {
    * This is a fast/offline **cache** of the user's NIP-29 server list, which
    * lives canonically in their kind 10009 event (`r` tags, NIP-51, NIP-44
    * encrypted to self). NostrSync hydrates this from the 10009 list on login;
-   * AddServerDialog / ServerPage / Settings write through to both.
+   * AddDialog / ServerPage / Settings write through to both.
    */
   addedRelays: string[];
   /**

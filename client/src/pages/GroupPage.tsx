@@ -232,9 +232,9 @@ export function GroupPage() {
           {group?.isPrivate && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Lock className="size-4 text-muted-foreground" aria-label="Private channel" />
+                <Lock className="size-4 text-muted-foreground" aria-label="Members-only channel" />
               </TooltipTrigger>
-              <TooltipContent>Private — only members can read</TooltipContent>
+              <TooltipContent>Members-only — only members can read</TooltipContent>
             </Tooltip>
           )}
           {hasVoice && !inThisCall && (

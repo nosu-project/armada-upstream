@@ -1,6 +1,7 @@
 import { Outlet } from "react-router-dom";
 
 import { CallProvider } from "@/components/CallProvider";
+import { ConcordInvitesPrompt } from "@/components/ConcordInvitesPrompt";
 
 /**
  * Application frame. Desktop renders the multi-pane Discord layout (server
@@ -17,6 +18,7 @@ export function MainLayout() {
   return (
     <CallProvider>
       <Outlet />
+      <ConcordInvitesPrompt />
     </CallProvider>
   );
 }

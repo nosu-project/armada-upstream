@@ -1,15 +1,16 @@
-import { Headphones, MessageSquare, Plus, Settings } from "lucide-react";
+import { Headphones, MessageSquare, Plus, Settings, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
 import type React from "react";
 
-import { AddServerDialog } from "@/components/dialogs/AddServerDialog";
+import { AddDialog } from "@/components/dialogs/AddDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
+import { useConcordList } from "@/hooks/useConcordList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
@@ -248,6 +249,58 @@ function ServerButton({
 }
 
 /**
+ * A rail button for an end-to-end-encrypted Concord community. Visually
+ * distinguished from NIP-29 servers by the shield accent (different trust model).
+ */
+function ConcordButton({
+  communityId,
+  name,
+  onNavigate,
+}: {
+  communityId: string;
+  name: string;
+  onNavigate?: () => void;
+}) {
+  const initials = name.trim().slice(0, 2).toUpperCase() || "··";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <NavLink
+          to={`/c/${encodeURIComponent(communityId)}`}
+          aria-label={name}
+          onClick={onNavigate}
+          className="group relative flex items-center justify-center"
+        >
+          {({ isActive }) => (
+            <span className="relative block size-12">
+              <span
+                className={cn(
+                  "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                  "bg-muted text-success opacity-60 saturate-75",
+                  "group-hover:opacity-100 group-hover:saturate-100",
+                  isActive && "opacity-100 saturate-100 is-active",
+                )}
+              >
+                <span className="text-sm font-semibold">{initials}</span>
+              </span>
+              {/* Shield sits in the lower-left corner, OUTSIDE the clipped box so
+                  the corner-clip can't crop it. */}
+              <span className="absolute -bottom-1 -left-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
+                <ShieldCheck className="size-2.5" />
+              </span>
+            </span>
+          )}
+        </NavLink>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="font-medium">
+        {name}
+        <span className="block text-xs text-success">End-to-end encrypted</span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
  * Far-left vertical rail listing every server (relay): pinned platform
  * relays first, then user-added ones, then add-server and settings actions.
  */
@@ -270,6 +323,7 @@ export function ServerRail({
   const { user } = useCurrentUser();
   const hasUnreadDMs = useHasUnreadDMs();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
+  const { data: concord } = useConcordList();
   const [addOpen, setAddOpen] = useState(false);
 
   // Build the full rail list (pinned platform relays + user-added ones),
@@ -545,19 +599,35 @@ export function ServerRail({
 
       <div className="w-7 h-px bg-chrome-divider" />
 
+      {/* End-to-end-encrypted Concord communities (distinct trust model from the
+          relay-hosted servers above; rendered from the encrypted membership list). */}
+      {user && concord && concord.list.entries.length > 0 && (
+        <>
+          {concord.list.entries.map((entry) => (
+            <ConcordButton
+              key={entry.communityId}
+              communityId={entry.communityId}
+              name={entry.current.name}
+              onNavigate={onNavigate}
+            />
+          ))}
+          <div className="w-7 h-px bg-chrome-divider" />
+        </>
+      )}
+
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             variant="secondary"
             size="icon"
-            aria-label="Add server"
+            aria-label="Add a server or encrypted chat"
             className="size-12 clip-corner-lg transition-all text-success hover:bg-success hover:text-success-foreground"
             onClick={() => setAddOpen(true)}
           >
             <Plus className="size-5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="right">Add a server</TooltipContent>
+        <TooltipContent side="right">Add a server or chat</TooltipContent>
       </Tooltip>
 
       <div className="flex-1" />
@@ -580,7 +650,7 @@ export function ServerRail({
         <TooltipContent side="right">Settings</TooltipContent>
       </Tooltip>
 
-      <AddServerDialog open={addOpen} onOpenChange={setAddOpen} />
+      <AddDialog open={addOpen} onOpenChange={setAddOpen} />
 
       {/* Floating ghost that follows the pointer during a drag. */}
       {dragUrl && dragPos && <DragGhost url={dragUrl} x={dragPos.x} y={dragPos.y} />}
