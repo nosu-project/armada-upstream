@@ -13,6 +13,7 @@ import {
 
 const MIC_KEY = "armada:voice:micDeviceId";
 const SPEAKER_KEY = "armada:voice:speakerDeviceId";
+const CAMERA_KEY = "armada:voice:cameraDeviceId";
 const PROCESSING_KEY = "armada:voice:processing";
 const VOLUME_KEY = "armada:voice:userVolumes";
 
@@ -47,10 +48,16 @@ export function getPreferredSpeakerId(): string | undefined {
   return read(SPEAKER_KEY);
 }
 
+/** The remembered preferred camera (video input) deviceId, if any. */
+export function getPreferredCameraId(): string | undefined {
+  return read(CAMERA_KEY);
+}
+
 /** Persist the user's device choice for the given kind. */
 export function rememberVoiceDevice(kind: MediaDeviceKind, deviceId: string): void {
   if (kind === "audioinput") write(MIC_KEY, deviceId);
   else if (kind === "audiooutput") write(SPEAKER_KEY, deviceId);
+  else if (kind === "videoinput") write(CAMERA_KEY, deviceId);
 }
 
 /**

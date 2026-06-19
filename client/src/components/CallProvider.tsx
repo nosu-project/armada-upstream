@@ -1,5 +1,11 @@
 import { LiveKitRoom, RoomAudioRenderer, useRoomContext } from "@livekit/components-react";
-import { ConnectionState, DisconnectReason, RoomEvent, type RoomOptions } from "livekit-client";
+import {
+  ConnectionState,
+  DisconnectReason,
+  RoomEvent,
+  VideoPresets,
+  type RoomOptions,
+} from "livekit-client";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -8,6 +14,7 @@ import { useNavigate } from "react-router-dom";
 import "@livekit/components-styles";
 
 import { InCallView } from "@/components/chat/VoiceBar";
+import { VideoStage } from "@/components/chat/VideoStage";
 import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -19,7 +26,7 @@ import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
-import { getAudioProcessing, getPreferredMicId } from "@/lib/voiceDevices";
+import { getAudioProcessing, getPreferredCameraId, getPreferredMicId } from "@/lib/voiceDevices";
 import { cn } from "@/lib/utils";
 import { nip19 } from "nostr-tools";
 
@@ -106,6 +113,7 @@ function PersistentVoiceRoom({
   // changing them live re-publishes the track (see VoiceBar's DeviceMenu).
   const roomOptions = useMemo<RoomOptions>(() => {
     const micId = getPreferredMicId();
+    const cameraId = getPreferredCameraId();
     const processing = getAudioProcessing();
     return {
       adaptiveStream: true,
@@ -115,6 +123,18 @@ function PersistentVoiceRoom({
         noiseSuppression: processing.noiseSuppression,
         echoCancellation: processing.echoCancellation,
         autoGainControl: processing.autoGainControl,
+      },
+      // Camera/screenshare are published on demand (not on join); these are the
+      // capture + encoding defaults used when the user toggles them on. 720p is
+      // a sensible cap for a chat call — `dynacast` + `adaptiveStream` then scale
+      // down per-subscriber so we don't over-send.
+      videoCaptureDefaults: {
+        ...(cameraId ? { deviceId: cameraId } : {}),
+        resolution: VideoPresets.h720.resolution,
+      },
+      publishDefaults: {
+        videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
+        screenShareEncoding: VideoPresets.h1080.encoding,
       },
     };
   }, []);
@@ -222,6 +242,7 @@ function PersistentVoiceRoom({
     >
       <RoomAudioRenderer />
       <CallSoundEffects />
+      <VideoStage callLabel={label} />
       {placeBar(mobileBar, desktopBar)}
     </LiveKitRoom>
   );

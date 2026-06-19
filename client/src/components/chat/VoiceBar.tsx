@@ -15,8 +15,12 @@ import {
   Loader2,
   Mic,
   MicOff,
+  MonitorOff,
+  MonitorUp,
   PhoneOff,
   Settings2,
+  Video,
+  VideoOff,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -209,6 +213,11 @@ function ParticipantVolumeMenu({
 const supportsSpeakerSelection =
   typeof document !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 
+/** Whether this browser can capture the screen (absent on most mobile). */
+const supportsScreenShare =
+  typeof navigator !== "undefined" &&
+  typeof navigator.mediaDevices?.getDisplayMedia === "function";
+
 function DeviceSelectGroup({
   kind,
   label,
@@ -316,6 +325,8 @@ function DeviceMenu() {
           </>
         )}
         <DropdownMenuSeparator />
+        <DeviceSelectGroup kind="videoinput" label="Camera" icon={<Video className="size-3.5" />} />
+        <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-xs">Processing</DropdownMenuLabel>
         {toggles.map(({ key, label }) => (
           <label
@@ -353,7 +364,10 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
   const participants = useParticipants();
   const remoteParticipants = useRemoteParticipants();
   const connectionState = useConnectionState();
-  const { localParticipant } = useLocalParticipant();
+  // These flags are reactive (the hook re-renders on the local participant's
+  // track publish/mute), so the toggle buttons reflect live publish state.
+  const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } =
+    useLocalParticipant();
   // `useSpeakingParticipants` subscribes to the room's ActiveSpeakersChanged
   // events (which include the LOCAL participant) and re-renders on every
   // change — unlike deriving from useTracks(), which only updates on track
@@ -417,12 +431,12 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
 
   const micBtn = (
     <Button
-      variant={localParticipant.isMicrophoneEnabled ? "default" : "outline"}
+      variant={isMicrophoneEnabled ? "default" : "outline"}
       size="icon"
       className="size-8 shrink-0"
-      aria-label={localParticipant.isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
+      aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
       onClick={() => {
-        const enabling = !localParticipant.isMicrophoneEnabled;
+        const enabling = !isMicrophoneEnabled;
         // Self-only feedback, played on the click gesture (AudioContext is
         // unlocked) so you hear a blip even though no roster change occurs.
         if (enabling) playUnmuteSound();
@@ -430,7 +444,51 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
         localParticipant.setMicrophoneEnabled(enabling);
       }}
     >
-      {localParticipant.isMicrophoneEnabled ? <Mic className="size-3.5" /> : <MicOff className="size-3.5" />}
+      {isMicrophoneEnabled ? <Mic className="size-3.5" /> : <MicOff className="size-3.5" />}
+    </Button>
+  );
+
+  const cameraBtn = (
+    <Button
+      variant={isCameraEnabled ? "default" : "outline"}
+      size="icon"
+      className="size-8 shrink-0"
+      aria-label={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
+      onClick={() => {
+        void localParticipant
+          .setCameraEnabled(!isCameraEnabled)
+          .catch((err) => console.warn("failed to toggle camera", err));
+      }}
+    >
+      {isCameraEnabled ? <Video className="size-3.5" /> : <VideoOff className="size-3.5" />}
+    </Button>
+  );
+
+  const screenShareBtn = (
+    <Button
+      variant={isScreenShareEnabled ? "default" : "outline"}
+      size="icon"
+      className="size-8 shrink-0"
+      aria-label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
+      onClick={() => {
+        // Screenshare publishes its own track regardless of the camera; the
+        // browser shows its native picker. Audio capture of the shared tab is
+        // requested too (best-effort — not all sources provide it).
+        void localParticipant
+          .setScreenShareEnabled(!isScreenShareEnabled, { audio: true })
+          .catch((err) => {
+            // The user cancelling the OS picker rejects with NotAllowedError —
+            // that's expected, not an error worth surfacing.
+            if (err instanceof Error && err.name === "NotAllowedError") return;
+            console.warn("failed to toggle screen share", err);
+          });
+      }}
+    >
+      {isScreenShareEnabled ? (
+        <MonitorOff className="size-3.5" />
+      ) : (
+        <MonitorUp className="size-3.5" />
+      )}
     </Button>
   );
 
@@ -454,6 +512,8 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
         <div className="flex items-center gap-2">
           {participantsEl}
           {micBtn}
+          {cameraBtn}
+          {supportsScreenShare && screenShareBtn}
           <DeviceMenu />
           {hangupBtn}
         </div>
@@ -466,6 +526,8 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
       {labelEl && <span className="shrink-0 max-w-40 truncate">{labelEl}</span>}
       {participantsEl}
       {micBtn}
+      {cameraBtn}
+      {supportsScreenShare && screenShareBtn}
       <DeviceMenu />
       {hangupBtn}
     </div>
