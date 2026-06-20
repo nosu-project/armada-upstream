@@ -1,0 +1,410 @@
+import { AlertCircle, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { ChatContent } from "@/components/chat/ChatContent";
+import { MessageRow } from "@/components/chat/MessageRow";
+import { PollCard } from "@/components/chat/PollCard";
+import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAuthor } from "@/hooks/useAuthor";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useIsMobile } from "@/hooks/useIsMobile";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { isMeAction, meActionText } from "@/lib/slashCommands";
+import { cn } from "@/lib/utils";
+
+import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
+import type { ReactNode } from "react";
+
+/** NIP-88 poll kind. */
+const KIND_POLL = 1068;
+
+/** Extract the id of the message this event replies to (NIP-10 marked e tags). */
+export function getReplyToId(event: ChatMsg): string | undefined {
+  const replyTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "reply");
+  if (replyTag) return replyTag[1];
+  const rootTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "root");
+  return rootTag?.[1];
+}
+
+export interface ChatMessageProps {
+  event: ChatMsg;
+  canWrite: boolean;
+  canModerate: boolean;
+  /**
+   * Context for rendering/voting on NIP-88 polls in this message. Only NIP-29
+   * group chat carries polls (kind 1068); transports without polls omit this
+   * and a poll kind would never appear in their timeline.
+   */
+  pollContext?: { relayUrl: string; groupId: string };
+  /** Resolved reaction tallies + toggle for this message. */
+  reactions?: MessageReactions;
+  /** Optimistic send status, if this message is locally-published & unconfirmed. */
+  sendStatus?: SendStatus;
+  /** Search term to highlight in the message body (search-results mode). */
+  highlight?: string;
+  /** Whether this message is currently being edited inline. */
+  isEditing?: boolean;
+  /** Whether this message is currently pinned (moderators only see the control). */
+  isPinned?: boolean;
+  /** Threaded-reply count, for the inline "N replies" badge. */
+  replyCount?: number;
+  /**
+   * A rendered "replying to …" context line, shown above the body. The
+   * transport owns resolving the referenced message (different per protocol),
+   * so it's passed in as a node rather than computed here.
+   */
+  replyContext?: ReactNode;
+  onRetry?: () => void;
+  onDiscard?: () => void;
+  /** Pin or unpin this message (moderators only; hidden when absent). */
+  onTogglePin?: (event: ChatMsg) => void;
+  /** Delete this message (hidden when absent). */
+  onDelete?: (event: ChatMsg) => void;
+  /** Begin a reply to this message (hidden when absent). */
+  onReply?: (event: ChatMsg) => void;
+  /** Open the threaded-replies side panel (hidden when absent). */
+  onOpenThread?: (event: ChatMsg) => void;
+  /** Begin editing this message (own, non-poll messages only; hidden when absent). */
+  onEdit?: (event: ChatMsg) => void;
+  /** Submit an inline edit with new content. */
+  onEditSubmit?: (event: ChatMsg, content: string) => void;
+  /** Cancel an in-progress inline edit. */
+  onEditCancel?: () => void;
+  /** Whether this message's tap-to-reveal toolbar is active (mobile only). */
+  active?: boolean;
+  /** Toggle this message's active state (mobile tap-to-reveal toolbar). */
+  onToggleActive?: (id: string) => void;
+  /** Render compactly as a continuation of the previous same-author message. */
+  continuation?: boolean;
+}
+
+/**
+ * Transport-agnostic presentational shell for a single chat message: the action
+ * toolbar (react/reply/thread/edit/pin/delete), inline edit field, reaction bar,
+ * reply-context line and send-status — all driven purely by props. NIP-29 group
+ * chat and Concord communities both render through this component; the data and
+ * mutations come from a {@link ChatTransport}, never from a relay hook here.
+ *
+ * Capabilities are presence-gated: a control renders only when its callback is
+ * supplied (e.g. no `onTogglePin` ⇒ no pin button), so a transport that can't
+ * do a thing shows no dead control for it.
+ */
+export function ChatMessage({
+  event,
+  canWrite,
+  canModerate,
+  pollContext,
+  reactions,
+  sendStatus,
+  highlight,
+  isEditing,
+  isPinned,
+  replyCount = 0,
+  replyContext,
+  onRetry,
+  onDiscard,
+  onTogglePin,
+  onDelete,
+  onReply,
+  onOpenThread,
+  onEdit,
+  onEditSubmit,
+  onEditCancel,
+  active = false,
+  onToggleActive,
+  continuation = false,
+}: ChatMessageProps) {
+  const { user } = useCurrentUser();
+  const isMobile = useIsMobile();
+  const author = useAuthor(event.pubkey);
+  const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
+  const replyToId = getReplyToId(event);
+  const isPending = sendStatus === "pending";
+  const isFailed = sendStatus === "failed";
+  const isOwn = user?.pubkey === event.pubkey;
+  // Highlight messages that mention you or reply to you: both add a `p` tag for
+  // the current user (NIP-27 mention / NIP-10 reply). Not your own messages.
+  const mentionsMe = Boolean(
+    user && !isOwn && event.tags.some(([name, value]) => name === "p" && value === user.pubkey),
+  );
+  // Only plain chat messages are editable (polls carry structured tags).
+  const canEdit = isOwn && event.kind === KIND_GROUP_CHAT && !isPending && !isFailed && Boolean(onEdit);
+  // The author can delete their own confirmed message; moderators can delete
+  // anyone's. The transport decides how (NIP-09 vs NIP-29 vs Concord delete).
+  const canDelete = Boolean(onDelete) && ((isOwn && !isPending && !isFailed) || canModerate);
+  // Moderators can pin any confirmed message.
+  const canPin = Boolean(onTogglePin) && canModerate && !isPending && !isFailed;
+  const wasEdited = event.tags.some(([name]) => name === "edited");
+  const [editText, setEditText] = useState(event.content);
+  // Two-step delete: the first click arms (highlights) the trash button, the
+  // second click within the timeout actually deletes. Prevents fat-finger
+  // deletes from a single misclick.
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const disarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const disarmDelete = useCallback(() => {
+    if (disarmTimer.current) clearTimeout(disarmTimer.current);
+    disarmTimer.current = null;
+    setDeleteArmed(false);
+  }, []);
+
+  const handleDeleteClick = useCallback(() => {
+    if (deleteArmed) {
+      disarmDelete();
+      onDelete?.(event);
+    } else {
+      setDeleteArmed(true);
+      if (disarmTimer.current) clearTimeout(disarmTimer.current);
+      disarmTimer.current = setTimeout(() => setDeleteArmed(false), 3000);
+    }
+  }, [deleteArmed, disarmDelete, onDelete, event]);
+
+  // Clean up the disarm timer on unmount.
+  useEffect(() => () => {
+    if (disarmTimer.current) clearTimeout(disarmTimer.current);
+  }, []);
+
+  // Reset the draft whenever an edit (re)starts.
+  useEffect(() => {
+    if (isEditing) setEditText(event.content);
+  }, [isEditing, event.content]);
+
+  // Toggle the toolbar on tap (mobile only — desktop reveals it on hover), but
+  // ignore taps that land on interactive children (buttons, links, inputs,
+  // mention chips) so those still act normally instead of being swallowed.
+  const handleRowClick = useCallback((e: React.MouseEvent) => {
+    if (!isMobile) return;
+    if ((e.target as HTMLElement).closest("button, a, input, textarea, [role='button']")) return;
+    onToggleActive?.(event.id);
+  }, [isMobile, onToggleActive, event.id]);
+
+  const toolbar = (
+    <>
+      {canWrite && !isEditing && reactions && <ReactionPicker onReact={reactions.react} />}
+      {canWrite && !isEditing && onReply && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Reply"
+              className="size-7 text-muted-foreground hover:text-primary"
+              onClick={() => onReply(event)}
+            >
+              <Reply className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Reply</TooltipContent>
+        </Tooltip>
+      )}
+      {canWrite && !isEditing && onOpenThread && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Reply in thread"
+              className="size-7 text-muted-foreground hover:text-primary"
+              onClick={() => onOpenThread(event)}
+            >
+              <MessagesSquare className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Reply in thread</TooltipContent>
+        </Tooltip>
+      )}
+      {canEdit && !isEditing && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Edit message"
+              className="size-7 text-muted-foreground hover:text-primary"
+              onClick={() => onEdit?.(event)}
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Edit message</TooltipContent>
+        </Tooltip>
+      )}
+      {canPin && !isEditing && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={isPinned ? "Unpin message" : "Pin message"}
+              aria-pressed={isPinned}
+              className={cn(
+                "size-7",
+                isPinned
+                  ? "text-primary hover:text-primary"
+                  : "text-muted-foreground hover:text-primary",
+              )}
+              onClick={() => onTogglePin?.(event)}
+            >
+              {isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{isPinned ? "Unpin message" : "Pin message"}</TooltipContent>
+        </Tooltip>
+      )}
+      {canDelete && !isEditing && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={deleteArmed ? "Confirm delete message" : "Delete message"}
+              aria-pressed={deleteArmed}
+              className={cn(
+                "size-7 transition-colors",
+                deleteArmed
+                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  : "text-muted-foreground hover:text-destructive",
+              )}
+              onClick={handleDeleteClick}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{deleteArmed ? "Click again to delete" : "Delete message"}</TooltipContent>
+        </Tooltip>
+      )}
+    </>
+  );
+
+  const body = (
+    <>
+      {isEditing ? (
+        <div className="mt-0.5">
+          <textarea
+            autoFocus
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                onEditSubmit?.(event, editText);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                onEditCancel?.();
+              }
+            }}
+            rows={Math.min(6, Math.max(1, editText.split("\n").length))}
+            className="w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+          <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+            <button
+              type="button"
+              className="font-semibold text-primary hover:underline"
+              onClick={() => onEditSubmit?.(event, editText)}
+            >
+              Save
+            </button>
+            <button type="button" className="hover:text-foreground" onClick={() => onEditCancel?.()}>
+              Cancel
+            </button>
+            <span className="opacity-70">escape to cancel · enter to save</span>
+          </div>
+        </div>
+      ) : event.kind === KIND_POLL ? (
+        <>
+          <ChatContent event={event} className="text-[15px]" highlight={highlight} />
+          {pollContext && (
+            <PollCard
+              event={event}
+              relayUrl={pollContext.relayUrl}
+              groupId={pollContext.groupId}
+              canVote={canWrite}
+            />
+          )}
+        </>
+      ) : isMeAction(event) ? (
+        <div className="text-[15px] italic text-muted-foreground">
+          <span className="font-semibold not-italic text-primary">{displayName}</span>{" "}
+          <ChatContent
+            event={event}
+            contentOverride={meActionText(event)}
+            className="inline italic"
+            highlight={highlight}
+            noMentionAtPrefix
+          />
+        </div>
+      ) : (
+        <ChatContent event={event} className="text-[15px]" highlight={highlight} />
+      )}
+    </>
+  );
+
+  const afterBody = (
+    <>
+      {!isEditing && reactions && (
+        <ReactionBar tallies={reactions.tallies} canReact={canWrite} onReact={reactions.react} />
+      )}
+      {!isEditing && replyCount > 0 && onOpenThread && (
+        <button
+          type="button"
+          onClick={() => onOpenThread(event)}
+          className="mt-0.5 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10 transition-colors"
+        >
+          <MessagesSquare className="size-3.5" />
+          {replyCount} {replyCount === 1 ? "reply" : "replies"}
+        </button>
+      )}
+      {isFailed && (
+        <div className="flex items-center gap-2 mt-1 text-[11px] text-destructive">
+          <AlertCircle className="size-3.5 shrink-0" />
+          <span>Failed to send.</span>
+          {onRetry && (
+            <button type="button" className="font-semibold underline hover:no-underline" onClick={onRetry}>
+              Retry
+            </button>
+          )}
+          {onDiscard && (
+            <button type="button" className="text-muted-foreground hover:text-foreground" onClick={onDiscard}>
+              Discard
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <MessageRow
+      pubkey={event.pubkey}
+      createdAt={event.created_at}
+      pending={isPending}
+      edited={wasEdited && !isEditing}
+      actions={toolbar}
+      beforeBody={replyToId && replyContext}
+      afterBody={afterBody}
+      continuation={
+        // Collapse into the previous message only for plain consecutive chats;
+        // a reply line, edit field, pin or mention needs the full header.
+        continuation && !replyToId && !isEditing && !isPinned && !mentionsMe
+      }
+      className={cn(
+        active && "bg-secondary/40",
+        isPinned && "bg-amber-500/5",
+        mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
+        isPending && "opacity-60",
+        isFailed && "bg-destructive/5",
+      )}
+      containerProps={{
+        onMouseLeave: disarmDelete,
+        onClick: handleRowClick,
+        "data-active": active || undefined,
+        "data-event-id": event.id,
+      } as React.HTMLAttributes<HTMLDivElement>}
+    >
+      {body}
+    </MessageRow>
+  );
+}

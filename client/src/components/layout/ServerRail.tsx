@@ -176,7 +176,7 @@ function ServerButton({
     </>
   );
 
-  const triggerClass = "group relative flex items-center justify-center touch-none";
+  const triggerClass = "group relative flex items-center justify-center shrink-0 touch-none";
 
   const dragClass = cn(
     draggable && "cursor-grab",
@@ -269,7 +269,7 @@ function ConcordButton({
           to={`/c/${encodeURIComponent(communityId)}`}
           aria-label={name}
           onClick={onNavigate}
-          className="group relative flex items-center justify-center"
+          className="group relative flex items-center justify-center shrink-0"
         >
           {({ isActive }) => (
             <span className="relative block size-12">
@@ -540,7 +540,7 @@ export function ServerRail({
               to="/dms"
               aria-label="Direct messages"
               onClick={onNavigate}
-              className="group relative flex items-center justify-center"
+              className="group relative flex items-center justify-center shrink-0"
             >
               <span
                 className={cn(
@@ -597,7 +597,7 @@ export function ServerRail({
         />
       ))}
 
-      <div className="w-7 h-px bg-chrome-divider" />
+      <div className="w-7 h-px bg-chrome-divider shrink-0" />
 
       {/* End-to-end-encrypted Concord communities (distinct trust model from the
           relay-hosted servers above; rendered from the encrypted membership list). */}
@@ -611,7 +611,7 @@ export function ServerRail({
               onNavigate={onNavigate}
             />
           ))}
-          <div className="w-7 h-px bg-chrome-divider" />
+          <div className="w-7 h-px bg-chrome-divider shrink-0" />
         </>
       )}
 
@@ -621,7 +621,7 @@ export function ServerRail({
             variant="secondary"
             size="icon"
             aria-label="Add a server or encrypted chat"
-            className="size-12 clip-corner-lg transition-all text-success hover:bg-success hover:text-success-foreground"
+            className="size-12 shrink-0 clip-corner-lg transition-all text-success hover:bg-success hover:text-success-foreground"
             onClick={() => setAddOpen(true)}
           >
             <Plus className="size-5" />
@@ -630,7 +630,7 @@ export function ServerRail({
         <TooltipContent side="right">Add a server or chat</TooltipContent>
       </Tooltip>
 
-      <div className="flex-1" />
+      <div className="flex-1 min-h-2" />
 
       <Tooltip>
         <TooltipTrigger asChild>
@@ -638,7 +638,7 @@ export function ServerRail({
             variant="secondary"
             size="icon"
             aria-label="Settings"
-            className="size-12 clip-corner-lg transition-all"
+            className="size-12 shrink-0 clip-corner-lg transition-all"
             onClick={() => {
               onNavigate?.();
               navigate("/settings");

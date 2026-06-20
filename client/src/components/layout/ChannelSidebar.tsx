@@ -1,4 +1,4 @@
-import { Hash, Headphones, Loader2, Lock, Plus, Volume2 } from "lucide-react";
+import { Hash, Headphones, Loader2, Lock, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
@@ -7,6 +7,7 @@ import { LoginArea } from "@/components/auth/LoginArea";
 import LoginDialog from "@/components/auth/LoginDialog";
 import { VoicePresence } from "@/components/VoicePresence";
 import SignupDialog from "@/components/auth/SignupDialog";
+import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -131,108 +132,72 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   }, [registerCallBarSlot]);
 
   return (
-    <aside
-      className={cn(
-        // Chrome plane — recessed, darker than the deck, identical to the rail,
-        // header, and roster so they read as one frame around the bright chat.
-        "relative flex flex-col w-60 shrink-0 bg-chrome",
-        className,
-      )}
-    >
-      {/* Server header — aligned with the channel rows' text gutter below
-          (container px-1 + row pl-4 = pl-5 here) so the grid lines up. */}
-      <div className="pl-5 pr-3 pt-5 pb-3 flex flex-col justify-center">
-        <h2 className="font-semibold truncate leading-tight tracking-wide text-sm">
-          {relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "")}
-        </h2>
-        <span className="text-[11px] text-muted-foreground truncate leading-tight">
-          {relayUrl.replace(/^wss?:\/\//, "").replace(/\/$/, "")}
-        </span>
-        {relayInfo?.limitation?.auth_required && (
+    <ChannelSidebarView
+      className={className}
+      title={relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "")}
+      subtitle={relayUrl.replace(/^wss?:\/\//, "").replace(/\/$/, "")}
+      badge={
+        relayInfo?.limitation?.auth_required ? (
           <Badge variant="secondary" className="mt-0.5 w-fit text-[10px] px-1.5 py-0">AUTH required</Badge>
-        )}
-      </div>
+        ) : undefined
+      }
+      addChannelLabel={user ? "Create channel" : undefined}
+      onAddChannel={user ? () => setCreateOpen(true) : undefined}
+      footer={
+        <>
+          {/* Voice call bar slot — the persistent call UI portals here. */}
+          <div ref={callBarRef} className="empty:hidden shrink-0" />
 
-      {/* Divider between the server header and the channel list. */}
-      <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
-
-      {/* Channels */}
-      <div className="flex-1 overflow-y-auto px-1 pt-[11px] pb-2 space-y-0.5">
-        <div className="flex items-center justify-between pl-4 pr-2 py-1">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Channels
-          </span>
-          {user && (
-            <Tooltip>
-              <TooltipTrigger asChild>
+          {/* Account area */}
+          <div className="px-3 pb-safe shrink-0">
+            {user ? (
+              <LoginArea className="w-full flex" />
+            ) : (
+              <div className="p-2 flex justify-center">
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-5"
-                  aria-label="Create channel"
-                  onClick={() => setCreateOpen(true)}
+                  onClick={() => setJoinOpen(true)}
+                  className="w-full max-w-xs clip-corner-lg font-medium"
                 >
-                  <Plus className="size-4" />
+                  Join
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent>Create channel</TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-
-        {isLoading ? (
-          <div className="space-y-2 px-2 py-1">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-7 w-full" />
-            ))}
-          </div>
-        ) : groups && groups.length > 0 ? (
-          groups.map((group) => (
-            <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
-          ))
-        ) : (
-          <div className="px-2 py-8 text-center text-sm text-muted-foreground">
-            {groups ? "No channels yet." : (
-              <span className="inline-flex items-center gap-2">
-                <Loader2 className="size-4 animate-spin" /> Connecting…
-              </span>
+              </div>
             )}
           </div>
-        )}
-      </div>
 
-      {/* Voice call bar slot — the persistent call UI portals here on desktop. */}
-      {/* Voice call bar slot — the persistent call UI portals here. */}
-      <div ref={callBarRef} className="empty:hidden shrink-0" />
+          <LoginDialog
+            isOpen={joinOpen}
+            onClose={() => setJoinOpen(false)}
+            onLogin={() => setJoinOpen(false)}
+            onSignupClick={() => {
+              setJoinOpen(false);
+              setSignupOpen(true);
+            }}
+          />
+          <SignupDialog isOpen={signupOpen} onClose={() => setSignupOpen(false)} />
 
-      {/* Account area */}
-      <div className="px-3 pb-safe shrink-0">
-        {user ? (
-          <LoginArea className="w-full flex" />
-        ) : (
-          <div className="p-2 flex justify-center">
-            <Button
-              onClick={() => setJoinOpen(true)}
-              className="w-full max-w-xs clip-corner-lg font-medium"
-            >
-              Join
-            </Button>
-          </div>
-        )}
-      </div>
-
-      <LoginDialog
-        isOpen={joinOpen}
-        onClose={() => setJoinOpen(false)}
-        onLogin={() => setJoinOpen(false)}
-        onSignupClick={() => {
-          setJoinOpen(false);
-          setSignupOpen(true);
-        }}
-      />
-      <SignupDialog isOpen={signupOpen} onClose={() => setSignupOpen(false)} />
-
-      <CreateGroupDialog relayUrl={relayUrl} open={createOpen} onOpenChange={setCreateOpen} />
-    </aside>
+          <CreateGroupDialog relayUrl={relayUrl} open={createOpen} onOpenChange={setCreateOpen} />
+        </>
+      }
+    >
+      {isLoading ? (
+        <div className="space-y-2 px-2 py-1">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-7 w-full" />
+          ))}
+        </div>
+      ) : groups && groups.length > 0 ? (
+        groups.map((group) => (
+          <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
+        ))
+      ) : (
+        <div className="px-2 py-8 text-center text-sm text-muted-foreground">
+          {groups ? "No channels yet." : (
+            <span className="inline-flex items-center gap-2">
+              <Loader2 className="size-4 animate-spin" /> Connecting…
+            </span>
+          )}
+        </div>
+      )}
+    </ChannelSidebarView>
   );
 }

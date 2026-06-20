@@ -9,7 +9,7 @@ import {
   sealWithSignedInner,
   type OpenedMessage,
 } from "@/lib/concord/envelope";
-import { KIND_COMMUNITY_MESSAGE } from "@/lib/concord/kinds";
+import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/lib/concord/kinds";
 import type { Channel, Community } from "@/lib/concord/types";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
@@ -49,7 +49,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
         relays.map((url) =>
           nostr
             .relay(url)
-            .query([{ kinds: [KIND_COMMUNITY_MESSAGE], "#z": zs, limit: 500 }], {
+            .query([{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": zs, limit: 500 }], {
               signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
             })
             .catch(() => [] as NostrEvent[]),
@@ -57,13 +57,29 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       );
 
       const byId = new Map<string, OpenedMessage>();
+      // Tombstones: target message id → set of pubkeys that authored a delete
+      // for it. A delete only takes effect for the original author's own
+      // message (cooperative self-delete), mirroring Vector's hide model.
+      const deletes = new Map<string, Set<string>>();
       for (const ev of results.flat()) {
         try {
           const opened = openMessageMulti(ev, channel!.id, epochKeys);
+          if (opened.kind === KIND_COMMUNITY_DELETE) {
+            const target = opened.tags.find((t) => t[0] === "e")?.[1];
+            if (!target) continue;
+            let authors = deletes.get(target);
+            if (!authors) deletes.set(target, (authors = new Set()));
+            authors.add(opened.author);
+            continue;
+          }
           byId.set(opened.messageId, opened);
         } catch {
           // NoHeldEpoch / splice / bad-sig → not ours or invalid; skip.
         }
+      }
+      // Drop any message its own author deleted.
+      for (const [id, msg] of byId) {
+        if (deletes.get(id)?.has(msg.author)) byId.delete(id);
       }
       return [...byId.values()].sort((a, b) => a.ms - b.ms);
     },

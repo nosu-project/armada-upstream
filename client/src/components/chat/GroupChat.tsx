@@ -1,57 +1,34 @@
-import { AlertCircle, Hash, Loader2, MessagesSquare, Pencil, Pin, PinOff, Reply, Search, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Hash, Loader2, Reply, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatContent } from "@/components/chat/ChatContent";
-import { MessageRow } from "@/components/chat/MessageRow";
-import { PollCard } from "@/components/chat/PollCard";
-import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
+import { ChatMessage, getReplyToId } from "@/components/chat/ChatMessage";
+import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import LoginDialog from "@/components/auth/LoginDialog";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEvent } from "@/hooks/useEvent";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useGroupSearch } from "@/hooks/useGroupSearch";
-import { useIsMobile } from "@/hooks/useIsMobile";
 import { useDeleteOwnMessage, useEditMessage } from "@/hooks/useEditMessage";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useReactions } from "@/hooks/useReactions";
 import { useReplyCount } from "@/hooks/useThread";
-import { useRepublish } from "@/hooks/useNostrPublish";import { channelReadKey, useReadState } from "@/hooks/useReadState";
+import { useRepublish } from "@/hooks/useNostrPublish";
+import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { KIND_GROUP_CHAT } from "@/lib/nip29";
-import { isMeAction, meActionText, type SlashAction } from "@/lib/slashCommands";
+import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
-import type { SendStatus } from "@/hooks/useGroupMessages";
-
+import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** NIP-88 poll kind. */
-const KIND_POLL = 1068;
-
-/**
- * Max gap between two same-author messages for the later one to render as a
- * compact continuation (no repeated avatar/name/timestamp). 5 minutes.
- */
-const CONTINUATION_WINDOW_SECONDS = 5 * 60;
-
-/** Extract the id of the message this event replies to (NIP-10 marked e tags). */
-function getReplyToId(event: NostrEvent): string | undefined {
-  const replyTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "reply");
-  if (replyTag) return replyTag[1];
-  const rootTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "root");
-  return rootTag?.[1];
-}
-
-/** Compact "replying to" context line shown above a reply message. */
+/** Compact "replying to" context line shown above a NIP-29 reply message. */
 function ReplyContext({ eventId, relayUrl }: { eventId: string; relayUrl: string }) {
   const { data: event } = useEvent(eventId, [relayUrl]);
   const author = useAuthor(event?.pubkey);
@@ -70,328 +47,72 @@ function ReplyContext({ eventId, relayUrl }: { eventId: string; relayUrl: string
   );
 }
 
-interface ChatMessageProps {
-  event: NostrEvent;
+interface Nip29ChatMessageProps {
+  event: ChatMsg;
   relayUrl: string;
   groupId: string;
-  canWrite: boolean;
-  canModerate: boolean;
-  /** Optimistic send status, if this message is locally-published & unconfirmed. */
-  sendStatus?: SendStatus;
-  /** Search term to highlight in the message body (search-results mode). */
+  transport: ChatTransport;
+  isEditing: boolean;
   highlight?: string;
-  /** Whether this message is currently being edited inline. */
-  isEditing?: boolean;
-  /** Whether this message is currently pinned (admins only see the control). */
-  isPinned?: boolean;
-  onRetry?: () => void;
-  onDiscard?: () => void;
-  /** Pin or unpin this message (admins/moderators only). */
-  onTogglePin?: (event: NostrEvent) => void;
-  /** Delete this message. Self-deletes publish NIP-09 (kind 5); moderator
-   *  deletes of others' messages use the NIP-29 moderation event. */
-  onDelete: (event: NostrEvent) => void;
-  onReply: (event: NostrEvent) => void;
-  /** Open the threaded-replies side panel for this message. */
-  onOpenThread?: (event: NostrEvent) => void;
-  /** Begin editing this message (own, non-poll messages only). */
-  onEdit?: (event: NostrEvent) => void;
-  /** Submit an inline edit with new content. */
-  onEditSubmit?: (event: NostrEvent, content: string) => void;
-  /** Cancel an in-progress inline edit. */
-  onEditCancel?: () => void;
-  /** Whether this message's tap-to-reveal toolbar is active (mobile only). */
   active?: boolean;
-  /** Toggle this message's active state (mobile tap-to-reveal toolbar). */
   onToggleActive?: (id: string) => void;
-  /** Render compactly as a continuation of the previous same-author message. */
-  continuation?: boolean;
+  continuation: boolean;
+  onReply: (event: ChatMsg) => void;
+  onEdit: (event: ChatMsg) => void;
+  onEditSubmit: (event: ChatMsg, content: string) => void;
+  onEditCancel: () => void;
 }
 
-function ChatMessage({ event, relayUrl, groupId, canWrite, canModerate, sendStatus, highlight, isEditing, isPinned, onRetry, onDiscard, onTogglePin, onDelete, onReply, onOpenThread, onEdit, onEditSubmit, onEditCancel, active = false, onToggleActive, continuation = false }: ChatMessageProps) {
-  const { user } = useCurrentUser();
-  const isMobile = useIsMobile();
-  const author = useAuthor(event.pubkey);
-  const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
-  const replyToId = getReplyToId(event);
+/**
+ * NIP-29 binding for a single message: resolves this message's reactions and
+ * threaded-reply count from the group's host relay, then renders the shared
+ * presentational {@link ChatMessage}. This is the only place per-message NIP-29
+ * relay hooks are called; everything below it is transport-agnostic.
+ */
+function Nip29ChatMessage({
+  event,
+  relayUrl,
+  groupId,
+  transport,
+  isEditing,
+  highlight,
+  active,
+  onToggleActive,
+  continuation,
+  onReply,
+  onEdit,
+  onEditSubmit,
+  onEditCancel,
+}: Nip29ChatMessageProps) {
   const { tallies, react } = useReactions(event, relayUrl, groupId);
   const replyCount = useReplyCount(event.id, relayUrl, groupId);
-  const isPending = sendStatus === "pending";
-  const isFailed = sendStatus === "failed";
-  const isOwn = user?.pubkey === event.pubkey;
-  // Highlight messages that mention you or reply to you: both add a `p` tag for
-  // the current user (NIP-27 mention / NIP-10 reply). Not your own messages.
-  const mentionsMe = Boolean(
-    user && !isOwn && event.tags.some(([name, value]) => name === "p" && value === user.pubkey),
-  );
-  // Only plain chat messages are editable (polls carry structured tags).
-  const canEdit = isOwn && event.kind === KIND_GROUP_CHAT && !isPending && !isFailed;
-  // The author can delete their own confirmed message (NIP-09 kind 5);
-  // moderators can delete anyone's (NIP-29 moderation event).
-  const canDelete = (isOwn && !isPending && !isFailed) || canModerate;
-  // Admins/moderators can pin any confirmed message.
-  const canPin = canModerate && !isPending && !isFailed;
-  const wasEdited = event.tags.some(([name]) => name === "edited");
-  const [editText, setEditText] = useState(event.content);
-  // Two-step delete: the first click arms (highlights) the trash button, the
-  // second click within the timeout actually deletes. Prevents fat-finger
-  // deletes from a single misclick.
-  const [deleteArmed, setDeleteArmed] = useState(false);
-  const disarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Touch devices have no hover, so the action toolbar (reply/react/thread/…)
-  // would never appear. Tapping the message toggles it "active" to keep the
-  // toolbar open for interaction; tapping again (or another message) closes it.
-  // Desktop has hover, so the tap-toggle (and its highlight) is mobile-only and
-  // the active id lives in the parent so only one row is active at a time.
-
-  const disarmDelete = useCallback(() => {
-    if (disarmTimer.current) clearTimeout(disarmTimer.current);
-    disarmTimer.current = null;
-    setDeleteArmed(false);
-  }, []);
-
-  const handleDeleteClick = useCallback(() => {
-    if (deleteArmed) {
-      disarmDelete();
-      onDelete(event);
-    } else {
-      setDeleteArmed(true);
-      if (disarmTimer.current) clearTimeout(disarmTimer.current);
-      disarmTimer.current = setTimeout(() => setDeleteArmed(false), 3000);
-    }
-  }, [deleteArmed, disarmDelete, onDelete, event]);
-
-  // Clean up the disarm timer on unmount.
-  useEffect(() => () => {
-    if (disarmTimer.current) clearTimeout(disarmTimer.current);
-  }, []);
-
-  // Reset the draft whenever an edit (re)starts.
-  useEffect(() => {
-    if (isEditing) setEditText(event.content);
-  }, [isEditing, event.content]);
-
-  // Toggle the toolbar on tap (mobile only — desktop reveals it on hover), but
-  // ignore taps that land on interactive children (buttons, links, inputs,
-  // mention chips) so those still act normally instead of being swallowed.
-  const handleRowClick = useCallback((e: React.MouseEvent) => {
-    if (!isMobile) return;
-    if ((e.target as HTMLElement).closest("button, a, input, textarea, [role='button']")) return;
-    onToggleActive?.(event.id);
-  }, [isMobile, onToggleActive, event.id]);
-
-  const toolbar = (
-    <>
-      {canWrite && !isEditing && <ReactionPicker onReact={react} />}
-            {canWrite && !isEditing && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Reply"
-                    className="size-7 text-muted-foreground hover:text-primary"
-                    onClick={() => onReply(event)}
-                  >
-                    <Reply className="size-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Reply</TooltipContent>
-              </Tooltip>
-            )}
-            {canWrite && !isEditing && onOpenThread && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Reply in thread"
-                    className="size-7 text-muted-foreground hover:text-primary"
-                    onClick={() => onOpenThread(event)}
-                  >
-                    <MessagesSquare className="size-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Reply in thread</TooltipContent>
-              </Tooltip>
-            )}
-            {canEdit && !isEditing && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Edit message"
-                    className="size-7 text-muted-foreground hover:text-primary"
-                    onClick={() => onEdit?.(event)}
-                  >
-                    <Pencil className="size-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Edit message</TooltipContent>
-              </Tooltip>
-            )}
-            {canPin && !isEditing && onTogglePin && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={isPinned ? "Unpin message" : "Pin message"}
-                    aria-pressed={isPinned}
-                    className={cn(
-                      "size-7",
-                      isPinned
-                        ? "text-primary hover:text-primary"
-                        : "text-muted-foreground hover:text-primary",
-                    )}
-                    onClick={() => onTogglePin(event)}
-                  >
-                    {isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{isPinned ? "Unpin message" : "Pin message"}</TooltipContent>
-              </Tooltip>
-            )}
-            {canDelete && !isEditing && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={deleteArmed ? "Confirm delete message" : "Delete message"}
-                    aria-pressed={deleteArmed}
-                    className={cn(
-                      "size-7 transition-colors",
-                      deleteArmed
-                        ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        : "text-muted-foreground hover:text-destructive",
-                    )}
-                    onClick={handleDeleteClick}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{deleteArmed ? "Click again to delete" : "Delete message"}</TooltipContent>
-              </Tooltip>
-            )}
-    </>
-  );
-
-  const body = (
-    <>
-        {isEditing ? (
-          <div className="mt-0.5">
-            <textarea
-              autoFocus
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  onEditSubmit?.(event, editText);
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  onEditCancel?.();
-                }
-              }}
-              rows={Math.min(6, Math.max(1, editText.split("\n").length))}
-              className="w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-            <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
-              <button
-                type="button"
-                className="font-semibold text-primary hover:underline"
-                onClick={() => onEditSubmit?.(event, editText)}
-              >
-                Save
-              </button>
-              <button type="button" className="hover:text-foreground" onClick={() => onEditCancel?.()}>
-                Cancel
-              </button>
-              <span className="opacity-70">escape to cancel · enter to save</span>
-            </div>
-          </div>
-        ) : event.kind === KIND_POLL ? (
-          <>
-            <ChatContent event={event} className="text-[15px]" highlight={highlight} />
-            <PollCard event={event} relayUrl={relayUrl} groupId={groupId} canVote={canWrite} />
-          </>
-        ) : isMeAction(event) ? (
-          <div className="text-[15px] italic text-muted-foreground">
-            <span className="font-semibold not-italic text-primary">{displayName}</span>{" "}
-            <ChatContent
-              event={event}
-              contentOverride={meActionText(event)}
-              className="inline italic"
-              highlight={highlight}
-              noMentionAtPrefix
-            />
-          </div>
-        ) : (
-          <ChatContent event={event} className="text-[15px]" highlight={highlight} />
-        )}
-    </>
-  );
-
-  const afterBody = (
-    <>
-        {!isEditing && <ReactionBar tallies={tallies} canReact={canWrite} onReact={react} />}
-        {!isEditing && replyCount > 0 && onOpenThread && (
-          <button
-            type="button"
-            onClick={() => onOpenThread(event)}
-            className="mt-0.5 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10 transition-colors"
-          >
-            <MessagesSquare className="size-3.5" />
-            {replyCount} {replyCount === 1 ? "reply" : "replies"}
-          </button>
-        )}
-        {isFailed && (
-          <div className="flex items-center gap-2 mt-1 text-[11px] text-destructive">
-            <AlertCircle className="size-3.5 shrink-0" />
-            <span>Failed to send.</span>
-            <button type="button" className="font-semibold underline hover:no-underline" onClick={onRetry}>
-              Retry
-            </button>
-            <button type="button" className="text-muted-foreground hover:text-foreground" onClick={onDiscard}>
-              Discard
-            </button>
-          </div>
-        )}
-    </>
-  );
 
   return (
-    <MessageRow
-      pubkey={event.pubkey}
-      createdAt={event.created_at}
-      pending={isPending}
-      edited={wasEdited && !isEditing}
-      actions={toolbar}
-      beforeBody={replyToId && <ReplyContext eventId={replyToId} relayUrl={relayUrl} />}
-      afterBody={afterBody}
-      continuation={
-        // Collapse into the previous message only for plain consecutive chats;
-        // a reply line, edit field, pin or mention needs the full header.
-        continuation && !replyToId && !isEditing && !isPinned && !mentionsMe
-      }
-      className={cn(
-        active && "bg-secondary/40",
-        isPinned && "bg-amber-500/5",
-        mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
-        isPending && "opacity-60",
-        isFailed && "bg-destructive/5",
-      )}
-      containerProps={{
-        onMouseLeave: disarmDelete,
-        onClick: handleRowClick,
-        "data-active": active || undefined,
-        "data-event-id": event.id,
-      } as React.HTMLAttributes<HTMLDivElement>}
-    >
-      {body}
-    </MessageRow>
+    <ChatMessage
+      event={event}
+      canWrite={transport.canWrite}
+      canModerate={transport.canModerate}
+      pollContext={{ relayUrl, groupId }}
+      reactions={{ tallies, react }}
+      sendStatus={transport.sendStatusFor?.(event.id)}
+      highlight={highlight}
+      isEditing={isEditing}
+      isPinned={transport.isPinned?.(event.id)}
+      replyCount={replyCount}
+      replyContext={<ReplyContext eventId={getReplyToId(event) ?? ""} relayUrl={relayUrl} />}
+      onRetry={() => transport.retry?.(event)}
+      onDiscard={() => transport.discard?.(event.id)}
+      onTogglePin={transport.togglePin}
+      onDelete={transport.deleteMessage}
+      onReply={onReply}
+      onOpenThread={transport.openThread ? (e) => transport.openThread!(e) : undefined}
+      onEdit={onEdit}
+      onEditSubmit={onEditSubmit}
+      onEditCancel={onEditCancel}
+      active={active}
+      onToggleActive={onToggleActive}
+      continuation={continuation}
+    />
   );
 }
 
@@ -409,16 +130,17 @@ interface GroupChatProps {
   searchQuery?: string;
   /**
    * Populated by GroupChat with a function that scrolls a message into view by
-   * id (used by the header's pinned-messages popover). The ref's `.current` is
-   * assigned on mount and cleared on unmount.
+   * id (used by the header's pinned-messages popover).
    */
   scrollToMessageRef?: React.MutableRefObject<((id: string) => void) | null>;
 }
 
 /**
  * The message timeline + composer for a NIP-29 group. Messages are kind 9
- * (and kind 1068 polls) with the `h` tag and NIP-29 `previous` timeline
- * references, published only to the group's host relay.
+ * (and kind 1068 polls) with the `h` tag, published only to the group's host
+ * relay. NIP-29 data + mutations are assembled here into a {@link ChatTransport}
+ * and rendered through the shared {@link MessageTimeline}/{@link ChatMessage}/
+ * {@link ChatComposer}, the same components Concord uses.
  */
 export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuery = "", scrollToMessageRef }: GroupChatProps) {
   const { user } = useCurrentUser();
@@ -447,29 +169,18 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
   );
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   // The single message whose tap-to-reveal toolbar is open (mobile only).
-  // Lifted here so tapping one message closes any other — only one at a time.
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
   const toggleActive = useCallback(
     (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
     [],
   );
   const [threadRoot, setThreadRoot] = useState<NostrEvent | undefined>(undefined);
-  // Focus the thread reply input when the panel opens via /thread (vs. just
-  // clicking a "N replies" badge to browse).
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
-  // The root kept mounted through the panel's slide-out close animation. It
-  // tracks threadRoot when open and lingers (so content stays put) while
-  // closing; cleared a beat after threadRoot becomes undefined.
   const [lastThreadRoot, setLastThreadRoot] = useState<NostrEvent | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const isAutoScrollRef = useRef(true);
-  // When backfilling older messages, the scroll height grows above the
-  // viewport. We capture the pre-prepend scroll metrics so we can restore the
-  // user's reading position (anchor it to the same message) afterwards.
-  const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
+  const timelineRef = useRef<MessageTimelineHandle | null>(null);
 
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {
@@ -481,9 +192,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     return () => clearTimeout(t);
   }, [threadRoot]);
 
-  // Mark the channel read up to the newest message while it's on screen. Only
-  // when the document is visible so a backgrounded tab doesn't silently clear
-  // unread. Re-runs on focus and as new messages stream in.
+  // Mark the channel read up to the newest message while it's on screen.
   useEffect(() => {
     if (!user || messages.length === 0) return;
     const latest = messages[messages.length - 1]?.created_at ?? 0;
@@ -499,73 +208,30 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [user, messages, relayUrl, groupId, markRead]);
 
-  // Auto-scroll to bottom when new messages arrive (unless user scrolled up).
-  // When older history was just prepended (backfill), instead restore the
-  // reading position by keeping the same content under the viewport.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const restore = restoreScrollRef.current;
-    if (restore) {
-      restoreScrollRef.current = null;
-      // New content was added above; offset scrollTop by the height delta so
-      // the message the user was looking at stays put.
-      el.scrollTop = restore.top + (el.scrollHeight - restore.height);
-      return;
-    }
-    if (isAutoScrollRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages]);
-
   // Opening/closing the thread panel reflows the message column (its width
-  // animates over ~200ms), which would otherwise let the bottom-anchored view
-  // drift. While the panel animates, keep the scroll pinned to the bottom if
-  // the user was already there.
+  // animates over ~200ms). While it animates, keep the scroll pinned to the
+  // bottom if the user was already there.
   useEffect(() => {
-    if (!isAutoScrollRef.current) return;
     let raf = 0;
     const start = performance.now();
     const pin = (now: number) => {
-      const el = scrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      timelineRef.current?.maintainBottom();
       if (now - start < 260) raf = requestAnimationFrame(pin);
     };
     raf = requestAnimationFrame(pin);
     return () => cancelAnimationFrame(raf);
   }, [threadRoot]);
 
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    isAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-    // Near the top: backfill older history. Capture the current metrics first
-    // so the post-prepend effect can hold the reading position steady. Skip
-    // while showing search results (the timeline isn't on screen).
-    if (!searching && hasMore && !isLoadingOlder && el.scrollTop < 200) {
-      restoreScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
-      void loadOlder().then((added) => {
-        // Nothing was prepended — drop the stale restore snapshot so a later
-        // bottom auto-scroll isn't suppressed.
-        if (added === 0) restoreScrollRef.current = null;
-      });
-    }
-  }, [searching, hasMore, isLoadingOlder, loadOlder]);
-
   const handleSent = useCallback(() => {
     setReplyTo(undefined);
-    isAutoScrollRef.current = true;
+    timelineRef.current?.pinToBottom();
   }, []);
 
-  // Open the thread panel for a message. `focusReply` focuses the reply input
-  // (used by /thread); badge/button clicks just browse without stealing focus.
   const openThread = useCallback((event: NostrEvent, focusReply = false) => {
     setThreadAutoFocus(focusReply);
     setThreadRoot(event);
   }, []);
 
-  // Run a slash command delegated by the composer (/thread, /kick, /ban). The
-  // composer resolves any target pubkey and resets itself.
   const handleSlashAction = useCallback(
     async (action: SlashAction) => {
       if (action.kind === "openThread") {
@@ -585,11 +251,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     [removeUser, messages, openThread],
   );
 
-  // Retry a failed optimistic message: re-publish the already-signed event
-  // (id preserved) and reconcile status on the result.
   const handleRetry = useCallback(
     async (event: NostrEvent) => {
-      markFailed(event.id); // keep it visible; flip back to pending below
+      markFailed(event.id);
       try {
         await republish({ event, relay: relayUrl });
         markSent(event.id);
@@ -600,9 +264,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     [republish, relayUrl, markSent, markFailed],
   );
 
-  // Delete a message: the author's own posts go out as NIP-09 kind 5 deletions;
-  // moderators deleting others' posts use the NIP-29 moderation event.
-  const handleDelete = useCallback(    (event: NostrEvent) => {
+  const handleDelete = useCallback(
+    (event: NostrEvent) => {
       if (user?.pubkey === event.pubkey) {
         deleteOwnMessage({ event });
       } else {
@@ -612,8 +275,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     [user?.pubkey, deleteOwnMessage, deleteEvent],
   );
 
-  // Pin/unpin a message (admins/moderators). Publishes the updated 39041 set;
-  // the relay rejects the write from non-admins.
   const handleTogglePin = useCallback(
     async (event: NostrEvent) => {
       const pinned = isPinned(event.id);
@@ -631,32 +292,15 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     [isPinned, pin, unpin],
   );
 
-  // Scroll a (pinned) message into view and flash it. No-op if it's not in the
-  // currently-loaded timeline.
-  const scrollToMessage = useCallback((id: string) => {
-    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
-    if (!el) {
-      toast({ title: "Message not loaded", description: "Scroll up to load older messages." });
-      return;
-    }
-    isAutoScrollRef.current = false;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    el.classList.add("ring-2", "ring-amber-400", "ring-inset");
-    setTimeout(() => el.classList.remove("ring-2", "ring-amber-400", "ring-inset"), 1600);
-  }, []);
-
-  // Expose scrollToMessage to the parent (the channel header's pinned-messages
-  // popover jumps to a message by calling through this ref).
+  // Expose scrollToMessage to the parent (the pinned-messages popover).
   useEffect(() => {
     if (!scrollToMessageRef) return;
-    scrollToMessageRef.current = scrollToMessage;
+    scrollToMessageRef.current = (id: string) => timelineRef.current?.scrollToMessage(id);
     return () => {
       scrollToMessageRef.current = null;
     };
-  }, [scrollToMessageRef, scrollToMessage]);
+  }, [scrollToMessageRef]);
 
-  // Submit an inline edit: delete the original + republish at its timestamp,
-  // optimistically swapping the original message for the edited one.
   const handleEditSubmit = useCallback(
     async (original: NostrEvent, content: string) => {
       const trimmed = content.trim();
@@ -667,7 +311,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
       setEditingId(undefined);
       try {
         const edited = await editMessage({ original, content: trimmed });
-        // Swap the original for the edited event (which keeps its timestamp).
         if (edited.id !== original.id) {
           removeOptimistic(original.id);
           insertOptimistic(edited);
@@ -684,166 +327,173 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     [editMessage, removeOptimistic, insertOptimistic, markSent],
   );
 
+  // Assemble the NIP-29 transport: the shared timeline/message components read
+  // capabilities from here. Every method maps onto the existing NIP-29 hooks.
+  const transport = useMemo<ChatTransport>(
+    () => ({
+      messages,
+      isLoading,
+      canWrite: Boolean(user && canWrite),
+      canModerate,
+      loadOlder,
+      hasMore,
+      isLoadingOlder,
+      sendStatusFor: (id) => sendStatus[id],
+      retry: handleRetry,
+      discard: removeOptimistic,
+      deleteMessage: handleDelete,
+      editMessage: async (original, content) => handleEditSubmit(original, content),
+      isPinned,
+      togglePin: handleTogglePin,
+      replyCountFor: undefined, // resolved per-row by useReplyCount
+      openThread,
+    }),
+    [
+      messages,
+      isLoading,
+      user,
+      canWrite,
+      canModerate,
+      loadOlder,
+      hasMore,
+      isLoadingOlder,
+      sendStatus,
+      handleRetry,
+      removeOptimistic,
+      handleDelete,
+      handleEditSubmit,
+      isPinned,
+      handleTogglePin,
+      openThread,
+    ],
+  );
+
   return (
     <div className="relative flex flex-1 min-h-0 min-w-0">
       <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
-      {/* Messages (or search results, filtered in-place) */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
-      >
+        {/* Search results replace the timeline in-place when searching. */}
         {searching ? (
-          searchLoading ? (
-            <div className="flex justify-center py-10">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : searchResults.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <Search className="size-9 text-muted-foreground/40 mb-3" />
-              <p className="text-sm text-muted-foreground">No messages found</p>
-            </div>
-          ) : (
-            <>
-              <p className="px-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
-                {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
-              </p>
-              {[...searchResults]
-                .sort((a, b) => a.created_at - b.created_at)
-                .map((msg) => (
-                  <ChatMessage
-                    key={msg.id}
-                    event={msg}
-                    relayUrl={relayUrl}
-                    groupId={groupId}
-                    canWrite={Boolean(user && canWrite)}
-                    canModerate={canModerate}
-                    highlight={searchQuery}
-                    isPinned={isPinned(msg.id)}
-                    onTogglePin={handleTogglePin}
-                    onDelete={handleDelete}
-                    onReply={setReplyTo}
-                  />
-                ))}
-            </>
-          )
-        ) : isLoading ? (
-          <div className="space-y-3 p-2">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <Skeleton className="size-10 rounded-full shrink-0" />
-                <div className="space-y-1 flex-1">
-                  <Skeleton className="h-3 w-24" />
-                  <Skeleton className="h-3 w-2/3" />
-                </div>
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4">
+            {searchLoading ? (
+              <div className="flex justify-center py-10">
+                <Loader2 className="size-5 animate-spin text-muted-foreground" />
               </div>
-            ))}
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <Hash className="size-10 text-muted-foreground/40 mb-3" />
-            <p className="text-sm text-muted-foreground">No messages yet</p>
-            <p className="text-xs text-muted-foreground/60 mt-1">Be the first to say something!</p>
+            ) : searchResults.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Search className="size-9 text-muted-foreground/40 mb-3" />
+                <p className="text-sm text-muted-foreground">No messages found</p>
+              </div>
+            ) : (
+              <>
+                <p className="px-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                  {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
+                </p>
+                {[...searchResults]
+                  .sort((a, b) => a.created_at - b.created_at)
+                  .map((msg) => (
+                    <Nip29ChatMessage
+                      key={msg.id}
+                      event={msg}
+                      relayUrl={relayUrl}
+                      groupId={groupId}
+                      transport={transport}
+                      isEditing={false}
+                      highlight={searchQuery}
+                      continuation={false}
+                      onReply={setReplyTo}
+                      onEdit={(e) => setEditingId(e.id)}
+                      onEditSubmit={handleEditSubmit}
+                      onEditCancel={() => setEditingId(undefined)}
+                    />
+                  ))}
+              </>
+            )}
           </div>
         ) : (
-          <>
-            {isLoadingOlder && (
-              <div className="flex justify-center py-3">
-                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          <MessageTimeline
+            transport={transport}
+            handleRef={timelineRef}
+            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
+            emptyState={
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Hash className="size-10 text-muted-foreground/40 mb-3" />
+                <p className="text-sm text-muted-foreground">No messages yet</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">Be the first to say something!</p>
               </div>
-            )}
-            {messages.map((msg, i) => {
-            // Collapse consecutive messages from the same author sent within a
-            // short window into a continuation (no repeated avatar/name/time).
-            const prev = messages[i - 1];
-            const continuation =
-              !!prev &&
-              prev.pubkey === msg.pubkey &&
-              msg.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
-            return (
-              <ChatMessage
+            }
+            renderMessage={(msg, continuation) => (
+              <Nip29ChatMessage
                 key={msg.id}
                 event={msg}
                 relayUrl={relayUrl}
                 groupId={groupId}
-                canWrite={Boolean(user && canWrite)}
-                canModerate={canModerate}
-                sendStatus={sendStatus[msg.id]}
+                transport={transport}
                 isEditing={editingId === msg.id}
-                isPinned={isPinned(msg.id)}
-                onTogglePin={handleTogglePin}
-                onRetry={() => handleRetry(msg)}
-                onDiscard={() => removeOptimistic(msg.id)}
-                onDelete={handleDelete}
-                onReply={setReplyTo}
-                onOpenThread={openThread}
-                onEdit={(e) => setEditingId(e.id)}
-                onEditSubmit={handleEditSubmit}
-                onEditCancel={() => setEditingId(undefined)}
                 active={activeId === msg.id}
                 onToggleActive={toggleActive}
                 continuation={continuation}
+                onReply={setReplyTo}
+                onEdit={(e) => setEditingId(e.id)}
+                onEditSubmit={handleEditSubmit}
+                onEditCancel={() => setEditingId(undefined)}
               />
-            );
-          })}
-          </>
+            )}
+          />
         )}
-      </div>
 
-      {/* Composer — hidden while showing search results. */}
-      {searching ? null : user && canWrite ? (
-        <ChatComposer
-          relayUrl={relayUrl}
-          groupId={groupId}
-          messages={messages}
-          replyTo={replyTo}
-          onCancelReply={() => setReplyTo(undefined)}
-          onSent={handleSent}
-          onOptimisticInsert={insertOptimistic}
-          onOptimisticSent={markSent}
-          onOptimisticFailed={markFailed}
-          canModerate={canModerate}
-          onSlashAction={handleSlashAction}
+        {/* Composer — hidden while showing search results. */}
+        {searching ? null : user && canWrite ? (
+          <ChatComposer
+            relayUrl={relayUrl}
+            groupId={groupId}
+            messages={messages}
+            replyTo={replyTo}
+            onCancelReply={() => setReplyTo(undefined)}
+            onSent={handleSent}
+            onOptimisticInsert={insertOptimistic}
+            onOptimisticSent={markSent}
+            onOptimisticFailed={markFailed}
+            canModerate={canModerate}
+            onSlashAction={handleSlashAction}
+          />
+        ) : (
+          <div className="border-t p-3 shrink-0 pb-safe">
+            {user ? (
+              <p className="text-xs text-muted-foreground text-center py-1">
+                Join this channel to send messages.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground text-center py-1 flex items-center justify-center gap-1.5 flex-wrap">
+                <Button
+                  size="sm"
+                  onClick={() => setJoinDialogOpen(true)}
+                  className="clip-corner-lg h-7 px-4"
+                >
+                  Join
+                </Button>
+                <span>to be a part of the chat</span>
+              </p>
+            )}
+          </div>
+        )}
+
+        <LoginDialog
+          isOpen={joinDialogOpen}
+          onClose={() => setJoinDialogOpen(false)}
+          onLogin={() => setJoinDialogOpen(false)}
+          onSignupClick={() => {
+            setJoinDialogOpen(false);
+            setSignupDialogOpen(true);
+          }}
         />
-      ) : (
-        <div className="border-t p-3 shrink-0 pb-safe">
-          {user ? (
-            <p className="text-xs text-muted-foreground text-center py-1">
-              Join this channel to send messages.
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground text-center py-1 flex items-center justify-center gap-1.5 flex-wrap">
-              <Button
-                size="sm"
-                onClick={() => setJoinDialogOpen(true)}
-                className="clip-corner-lg h-7 px-4"
-              >
-                Join
-              </Button>
-              <span>to be a part of the chat</span>
-            </p>
-          )}
-        </div>
-      )}
-
-      <LoginDialog
-        isOpen={joinDialogOpen}
-        onClose={() => setJoinDialogOpen(false)}
-        onLogin={() => setJoinDialogOpen(false)}
-        onSignupClick={() => {
-          setJoinDialogOpen(false);
-          setSignupDialogOpen(true);
-        }}
-      />
-      <SignupDialog
-        isOpen={signupDialogOpen}
-        onClose={() => setSignupDialogOpen(false)}
-      />
+        <SignupDialog
+          isOpen={signupDialogOpen}
+          onClose={() => setSignupDialogOpen(false)}
+        />
       </div>
 
-      {/* Thread panel. On desktop it's an in-flow sibling whose width animates
-          open (0 → fixed). On mobile it overlays the chat (absolute) so the
-          message list never reflows/animates when the thread opens or closes. */}
+      {/* Thread panel. Desktop: in-flow sibling whose width animates open.
+          Mobile: overlays the chat (absolute). */}
       <div
         className={cn(
           "overflow-hidden",
@@ -852,8 +502,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
           threadRoot ? "sidebar:w-[23rem]" : "pointer-events-none sidebar:pointer-events-auto",
         )}
       >
-        {/* Mobile backdrop: fades in/out in sync with the panel slide so the
-            chat is blocked once the panel is in view (not before). */}
         <div
           className={cn(
             "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
