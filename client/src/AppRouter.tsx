@@ -4,6 +4,7 @@ import { MainLayout } from "@/components/layout/MainLayout";
 import { ConcordPage } from "@/pages/ConcordPage";
 import { DMsPage } from "@/pages/DMsPage";
 import { GroupPage } from "@/pages/GroupPage";
+import { InvitePage } from "@/pages/InvitePage";
 import { NotFound } from "@/pages/NotFound";
 import { ServerPage } from "@/pages/ServerPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -20,6 +21,7 @@ export function AppRouter() {
           <Route path="/s/:server" element={<ServerPage />} />
           <Route path="/s/:server/:groupId" element={<GroupPage />} />
           <Route path="/c/:communityId" element={<ConcordPage />} />
+          <Route path="/invite" element={<InvitePage />} />
           <Route path="/dms" element={<DMsPage />} />
           <Route path="/dms/:peer" element={<DMsPage />} />
           <Route path="/settings" element={<SettingsPage />} />

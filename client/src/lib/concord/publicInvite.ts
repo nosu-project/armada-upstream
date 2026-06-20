@@ -23,7 +23,19 @@ import { buildInvite, type CommunityInvite } from "@/lib/concord/invite";
 import { KIND_APPLICATION_SPECIFIC } from "@/lib/concord/kinds";
 import { random32, type Community } from "@/lib/concord/types";
 
-export const INVITE_URL_BASE = "https://armada.invite/invite";
+/** Path the invite link lands on (consumed client-side; the fragment never hits the relay). */
+export const INVITE_URL_PATH = "/invite";
+
+/**
+ * The shareable invite link's base (`<origin>/invite`). Derives from the actual
+ * deployment origin so the link resolves to *this* app (a fixed placeholder host
+ * like `armada.invite` does not exist and 404s). Falls back to a bare path when
+ * there's no `window` (SSR/tests).
+ */
+export function inviteUrlBase(): string {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  return `${origin}${INVITE_URL_PATH}`;
+}
 const MAX_URL_RELAYS = 32;
 const TAG_VERSION = "v";
 const TAG_SUBKIND = "vsk";
@@ -211,7 +223,7 @@ export function encodeInviteUrl(relays: string[], token: Uint8Array): string {
     for (let i = 0; i < s.length; i++) payload.push(s.charCodeAt(i) & 0xff);
   }
   for (const b of token) payload.push(b);
-  return `${INVITE_URL_BASE}#${base64urlEncode(new Uint8Array(payload))}`;
+  return `${inviteUrlBase()}#${base64urlEncode(new Uint8Array(payload))}`;
 }
 
 /** Parse a shareable invite URL (or bare fragment) back to `{ relays, token }`. */
