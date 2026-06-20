@@ -40,6 +40,11 @@ func setupLivekit() {
 	router.HandleFunc("/.well-known/nip29/livekit/", handleLivekitToken)
 	router.HandleFunc("/livekit/webhook", handleLivekitWebhook)
 
+	// Concord voice: a blind, community-agnostic LiveKit broker for serverless
+	// E2E communities. Authorizes by channel-key-possession proof, not NIP-29
+	// membership; gated on the same LiveKit config as the NIP-29 endpoints.
+	setupConcordVoice()
+
 	// Serve kind 39004 (participants) queries from the in-memory room state.
 	relay.QueryEvents = append(relay.QueryEvents, func(ctx context.Context, filter nostr.Filter) (chan *nostr.Event, error) {
 		ch := make(chan *nostr.Event, 1)

@@ -2,6 +2,7 @@ import { Mic, MicOff, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -10,10 +11,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  getPreferredConcordVoiceServer,
   getPreferredMicId,
   getPreferredSpeakerId,
   rememberVoiceDevice,
+  setPreferredConcordVoiceServer,
 } from "@/lib/voiceDevices";
+import { CONCORD_VOICE_SERVERS } from "@/lib/platform";
 
 /** Whether this browser can route audio output to a chosen device. */
 const supportsSpeakerSelection =
@@ -38,6 +42,7 @@ export function VoiceDeviceSettings() {
   const [micId, setMicId] = useState<string>(() => getPreferredMicId() ?? "default");
   const [speakerId, setSpeakerId] = useState<string>(() => getPreferredSpeakerId() ?? "default");
   const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [concordServer, setConcordServer] = useState<string>(() => getPreferredConcordVoiceServer());
 
   // Mic-test state.
   const [testing, setTesting] = useState(false);
@@ -284,6 +289,31 @@ export function VoiceDeviceSettings() {
           </Button>
         </div>
       )}
+
+      {/* Concord (encrypted community) voice server. Advanced: the blind LiveKit
+          broker your client uses to START a call in an empty channel. Once
+          anyone is in a call, everyone converges on whoever's already there, so
+          this only matters for cold-starting / running your own SFU. */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Encrypted voice server</label>
+        <Input
+          value={concordServer}
+          placeholder={CONCORD_VOICE_SERVERS[0] ?? "https://your-armada-host"}
+          onChange={(e) => setConcordServer(e.target.value)}
+          onBlur={() => {
+            setPreferredConcordVoiceServer(concordServer);
+            setConcordServer(getPreferredConcordVoiceServer());
+          }}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+        />
+        <p className="text-xs text-muted-foreground">
+          The LiveKit server your client uses to start a Concord voice call. When
+          others are already in a call, you’ll join wherever they are. Leave blank
+          to use this app’s default.
+        </p>
+      </div>
     </div>
   );
 }

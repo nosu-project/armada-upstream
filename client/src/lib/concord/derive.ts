@@ -41,6 +41,19 @@ const LABEL_DISSOLVED_LOCATOR = "vector-community/v1/dissolved-locator";
 const LABEL_DISSOLVED_PSEUDONYM = "vector-community/v1/dissolved-pseudonym";
 const LABEL_DISSOLVED_ENVELOPE = "vector-community/v1/dissolved-envelope-key";
 
+// Concord voice (armada extension — NOT part of Vector's shared format, hence
+// the distinct "armada-concord/v1/voice/…" prefix so a future Vector label can
+// never collide). All three are keyed by the per-channel key + channel id +
+// epoch, so every voice coordinate rolls automatically on a channel rekey:
+//   - signer : the secp256k1 key the community self-signs voice grants with;
+//              its x-only pubkey IS the LiveKit room name, so a blind broker
+//              binds "room name == grant signer" with no community knowledge.
+//   - e2ee   : the SFrame/insertable-streams media key fed to LiveKit's
+//              ExternalE2EEKeyProvider, so the SFU forwards ciphertext it can't
+//              decode (content-blind). Every member derives the same key.
+const LABEL_VOICE_SIGNER = "armada-concord/v1/voice/signer";
+const LABEL_VOICE_E2EE = "armada-concord/v1/voice/e2ee-key";
+
 const ZERO_ID32 = new Uint8Array(32);
 const ASCII = new TextEncoder();
 
@@ -240,6 +253,42 @@ function hkdfToSecretKey(ikm: Uint8Array, baseInfo: Uint8Array): Uint8Array {
     if (secp256k1.utils.isValidSecretKey(okm)) return okm;
   }
   throw new Error("secp256k1 scalar rejection 256 times running is impossible");
+}
+
+// ── Concord voice sub-keys (channel-key + channel-id + epoch derived) ────────
+
+/**
+ * The secp256k1 secret key a community self-signs LiveKit voice grants with.
+ * Its x-only pubkey is used directly as the LiveKit room name, so a blind
+ * token broker can verify "this grant was signed by the key whose pubkey is
+ * this room" without ever learning the community. Rolls with the channel epoch
+ * (a rekeyed-out member can no longer derive it → can no longer mint a grant).
+ * Returns the 32-byte secret key.
+ */
+export function voiceSigner(
+  channelKey: Uint8Array,
+  channelId: Uint8Array,
+  epoch: number | bigint,
+): Uint8Array {
+  assert32("channelKey", channelKey);
+  assert32("channelId", channelId);
+  return hkdfToSecretKey(channelKey, buildInfo(LABEL_VOICE_SIGNER, channelId, toEpoch(epoch)));
+}
+
+/**
+ * The 32-byte media key fed to LiveKit's ExternalE2EEKeyProvider, so the SFU
+ * forwards encrypted frames it cannot decode. Every member holding the channel
+ * key derives the identical key; on rekey the epoch bumps and a removed
+ * member's old key stops decoding the audio.
+ */
+export function voiceE2EEKey(
+  channelKey: Uint8Array,
+  channelId: Uint8Array,
+  epoch: number | bigint,
+): Uint8Array {
+  assert32("channelKey", channelKey);
+  assert32("channelId", channelId);
+  return hkdf32(channelKey, buildInfo(LABEL_VOICE_E2EE, channelId, toEpoch(epoch)));
 }
 
 // ── hex helper (re-exported for callers that address by hex `z` tag) ─────────

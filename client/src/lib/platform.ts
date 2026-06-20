@@ -80,6 +80,24 @@ export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "w
   .filter((url: string | undefined): url is string => Boolean(url));
 
 /**
+ * Default Concord voice servers: blind LiveKit token brokers (https origins)
+ * a new Concord community is seeded with. A member joins voice through the
+ * first that answers the capability probe. The broker authorizes by
+ * channel-key-possession proof (not membership), so it learns nothing about the
+ * community; armada's own relay hosts the broker endpoint, so the platform
+ * relays' HTTP origins are the natural default. Operators can override with
+ * `VITE_CONCORD_VOICE_SERVERS` (comma-separated https origins) or set it empty
+ * to disable Concord voice.
+ */
+export const CONCORD_VOICE_SERVERS: string[] = (
+  import.meta.env.VITE_CONCORD_VOICE_SERVERS ??
+  PLATFORM_RELAYS.map((url) => relayToHttpUrl(url)).join(",")
+)
+  .split(",")
+  .map((s: string) => s.trim())
+  .filter((s: string) => Boolean(s));
+
+/**
  * Parse a build-time boolean env var. Vite env vars are always strings (or
  * undefined when unset), so we treat "true"/"1" as true, "false"/"0" as false,
  * and fall back to `dflt` when unset/unrecognised.

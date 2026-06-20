@@ -12,6 +12,8 @@ import {
   publicInviteSigner,
   recipientPseudonym,
   rekeyPseudonym,
+  voiceE2EEKey,
+  voiceSigner,
 } from "@/lib/concord/derive";
 
 /**
@@ -164,5 +166,55 @@ describe("public-invite sub-keys golden vectors (token=[5;32])", () => {
     expect(hex(publicInviteKey(token))).not.toBe(hex(publicInviteSigner(token)));
     expect(hex(publicInviteKey(token))).not.toBe(hex(publicInviteKey(other)));
     expect(hex(publicInviteLocator(token))).not.toBe(hex(publicInviteLocator(other)));
+  });
+});
+
+describe("Concord voice sub-keys (armada extension)", () => {
+  // Pins produced by an independent re-implementation of the frozen HKDF
+  // construction (see scripts in the PR) using the standard test inputs.
+  it("voiceSigner is deterministic and pinned (epoch 0)", () => {
+    expect(hex(voiceSigner(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 0))).toBe(
+      "2d09400ad396a5ab878fad2b992a9818bedf85abbe2dce630587e3e032d87eb2",
+    );
+  });
+
+  it("voiceSigner rolls with the epoch (forward security on rekey)", () => {
+    expect(hex(voiceSigner(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 1))).toBe(
+      "4583f4f2b15a99307a66c928bb689255c65bbfd1b0e7d0238c3a236119b8ea51",
+    );
+    expect(hex(voiceSigner(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 0))).not.toBe(
+      hex(voiceSigner(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 1)),
+    );
+  });
+
+  it("voiceE2EEKey is deterministic and pinned (epoch 0)", () => {
+    expect(hex(voiceE2EEKey(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 0))).toBe(
+      "2237f8e3542a9f05cc02fd6f1b52223a662cce72e2cf8cd58c765b7496e3b40c",
+    );
+  });
+
+  it("voiceE2EEKey rolls with the epoch", () => {
+    expect(hex(voiceE2EEKey(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 1))).toBe(
+      "6ff9d88a4049e8be74fed5a09154c707d58a204f8755d17dadfee159ac30eb8d",
+    );
+    expect(hex(voiceE2EEKey(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 0))).not.toBe(
+      hex(voiceE2EEKey(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 1)),
+    );
+  });
+
+  it("signer and media key are domain-separated despite sharing IKM", () => {
+    expect(hex(voiceSigner(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 0))).not.toBe(
+      hex(voiceE2EEKey(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 0)),
+    );
+  });
+
+  it("a different channel id changes both sub-keys", () => {
+    const other = new Uint8Array(32).fill(0x42);
+    expect(hex(voiceSigner(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 0))).not.toBe(
+      hex(voiceSigner(TEST_CHANNEL_KEY, other, 0)),
+    );
+    expect(hex(voiceE2EEKey(TEST_CHANNEL_KEY, TEST_CHANNEL_ID, 0))).not.toBe(
+      hex(voiceE2EEKey(TEST_CHANNEL_KEY, other, 0)),
+    );
   });
 });
