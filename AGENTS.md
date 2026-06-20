@@ -54,7 +54,8 @@ LIVEKIT_PUBLIC_URL=wss://armada.example.com        # signaling; SDK appends /rtc
 ```
 
 Reverse-proxy split (reference: Caddy). Route by path + WS upgrade; everything
-else is the SPA:
+else is the SPA. A complete, copy-pasteable version lives in
+[`infra/Caddyfile.example`](infra/Caddyfile.example):
 
 ```caddyfile
 armada.example.com {
@@ -66,6 +67,12 @@ armada.example.com {
     }
     # Relay NIP-29 LiveKit token + capability endpoints (NIP-98 authed).
     handle /.well-known/nip29/* {
+        reverse_proxy RELAY_HOST:5577
+    }
+    # Concord serverless voice: blind LiveKit token broker + capability probe.
+    # Without this, the request falls through to the SPA (HTML 200) and the
+    # client fails with a JSON parse error reading the token.
+    handle /.well-known/concord/* {
         reverse_proxy RELAY_HOST:5577
     }
     handle /livekit/* {
@@ -227,6 +234,7 @@ Encrypt cert (as above) sidesteps that entirely.
 ### Verifying voice
 
 - `curl -o /dev/null -w '%{http_code}' https://armada.example.com/.well-known/nip29/livekit` → `204`
+- Concord serverless voice broker: `curl -o /dev/null -w '%{http_code}' https://armada.example.com/.well-known/concord/voice` → `204` (an HTML/`200` means the proxy is missing the `/.well-known/concord/*` route and the request is hitting the SPA).
 - TURN/TLS cert: `openssl s_client -connect turn.example.com:443 -servername turn.example.com` → cert CN matches.
 - Watch ICE selection: `docker logs -f infra-livekit-1 | grep -iE "participant active|connectionType|switched pair"`.
   Healthy = a stable selected pair (`connectionType: udp`/`relay`) without
