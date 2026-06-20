@@ -1,6 +1,6 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, ShieldCheck, UserPlus, Users, Volume2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -56,6 +56,22 @@ function ConcordReplyContext({ pubkey }: { pubkey: string | undefined }) {
 /** The reply target id for a Concord message (NIP-10 marked reply e-tag). */
 function replyTargetId(event: ChatMsg): string | undefined {
   return event.tags.find((t) => t[0] === "e" && t[3] === "reply")?.[1];
+}
+
+/**
+ * The persistent voice call bar portals here on the Concord page (desktop pane
+ * + mobile drawer each register their own slot, above the account area), so a
+ * live call shows its controls — mirroring the NIP-29 ChannelSidebar.
+ */
+function ConcordCallBarSlot() {
+  const { registerCallBarSlot } = useCall();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    return registerCallBarSlot(el);
+  }, [registerCallBarSlot]);
+  return <div ref={ref} className="empty:hidden shrink-0 px-2 pb-2" />;
 }
 
 /**
@@ -226,6 +242,7 @@ export function ConcordPage() {
       subtitle={<span className="text-success/80">End-to-end encrypted</span>}
       addChannelLabel={user && community ? "Add channel" : undefined}
       onAddChannel={user && community ? () => setCreatingChannel((v) => !v) : undefined}
+      footer={<ConcordCallBarSlot />}
       channelsHeaderExtra={
         creatingChannel ? (
           <form
