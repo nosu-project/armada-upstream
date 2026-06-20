@@ -5,6 +5,7 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
+import { LoginArea } from "@/components/auth/LoginArea";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline } from "@/components/chat/MessageTimeline";
 import { VoicePresence } from "@/components/VoicePresence";
@@ -59,11 +60,12 @@ function replyTargetId(event: ChatMsg): string | undefined {
 }
 
 /**
- * The persistent voice call bar portals here on the Concord page (desktop pane
- * + mobile drawer each register their own slot, above the account area), so a
- * live call shows its controls — mirroring the NIP-29 ChannelSidebar.
+ * The pinned footer for the Concord channel sidebar: the persistent voice
+ * call-bar slot (the call UI portals here) above the account area / account
+ * switcher — mirroring the NIP-29 ChannelSidebar footer. Each rendered instance
+ * (desktop pane + mobile drawer) registers its own call-bar slot.
  */
-function ConcordCallBarSlot() {
+function ConcordSidebarFooter() {
   const { registerCallBarSlot } = useCall();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -71,7 +73,16 @@ function ConcordCallBarSlot() {
     if (!el) return;
     return registerCallBarSlot(el);
   }, [registerCallBarSlot]);
-  return <div ref={ref} className="empty:hidden shrink-0 px-2 pb-2" />;
+  return (
+    <>
+      {/* Voice call bar slot — the persistent call UI portals here. */}
+      <div ref={ref} className="empty:hidden shrink-0 px-2 pb-2" />
+      {/* Account area / account switcher. */}
+      <div className="px-3 pb-safe shrink-0">
+        <LoginArea className="w-full flex" />
+      </div>
+    </>
+  );
 }
 
 /**
@@ -242,7 +253,7 @@ export function ConcordPage() {
       subtitle={<span className="text-success/80">End-to-end encrypted</span>}
       addChannelLabel={user && community ? "Add channel" : undefined}
       onAddChannel={user && community ? () => setCreatingChannel((v) => !v) : undefined}
-      footer={<ConcordCallBarSlot />}
+      footer={<ConcordSidebarFooter />}
       channelsHeaderExtra={
         creatingChannel ? (
           <form
