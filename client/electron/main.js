@@ -1,32 +1,101 @@
 // Armada desktop (Electron) main process.
 //
-// The desktop app is a thin Electron shell that loads the HOSTED Armada web
-// client over HTTPS (default https://armada.dreamith.to, override at build time
-// with ARMADA_APP_URL). Loading the live origin — rather than bundling the
-// dist/ over file:// — keeps everything that depends on a real https origin
-// working identically to the browser/PWA build:
+// Armada desktop is a SOVEREIGN, standalone client. It bundles the web build
+// (dist/, copied in by CI) and serves it over a custom **secure** scheme
+// (app://armada/…) rather than a hosted URL. This means:
 //
-//   • the service worker + Web Push notifications (Chromium refuses to register
-//     a service worker on file://),
-//   • window.location.origin for share / invite links,
-//   • the platform-relay HTTP-origin derivation.
+//   • The app is not tied to any one deployment/domain. The web build is
+//     compiled with EMPTY platform relays, so nothing is baked in — the user
+//     adds whatever servers they want. Clients are rogue.
+//   • A custom *secure* scheme is still a secure context, so the service worker
+//     and Web Push (PushManager) work, and per-relay push subscriptions (whose
+//     endpoints are the relays' own HTTPS origins) keep working.
 //
-// If the origin is unreachable on launch we show a small offline page and let
-// the user retry.
+// It also adds desktop-native behavior the web build can't: a system tray
+// (close-to-tray, Show/Quit, unread badge, launch-minimized) and screen-share
+// source selection (Electron has no built-in getDisplayMedia picker).
 
-const { app, BrowserWindow, shell, Menu } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  shell,
+  protocol,
+  net,
+  nativeImage,
+  ipcMain,
+  desktopCapturer,
+  session,
+} = require("electron");
+const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
-// The hosted client origin. Baked at build time via ARMADA_APP_URL; falls back
-// to the public deployment.
-const APP_URL = process.env.ARMADA_APP_URL || "https://armada.dreamith.to";
-const APP_ORIGIN = new URL(APP_URL).origin;
+// Where the bundled web build lives inside the packaged app.
+const DIST = path.join(__dirname, "dist");
+// Custom app scheme. Host segment "armada" keeps a stable origin
+// (app://armada) for the service worker + secure-context checks.
+const SCHEME = "app";
+const ORIGIN = `${SCHEME}://armada`;
+const START_URL = `${ORIGIN}/index.html`;
 
-// Dark background matching the app theme (index.html theme-color #100b15) so
-// there is no white flash before the page paints.
+// Dark background matching the app theme (index.html theme-color #100b15).
 const BACKGROUND = "#100b15";
+const ICON = path.join(__dirname, "build", "icon.png");
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
+/** @type {Tray | null} */
+let tray = null;
+// True once the user has actually chosen to quit (vs. closing to tray).
+let isQuitting = false;
+// Honour --hidden / --minimized (autostart "launch minimized to tray").
+const startHidden =
+  process.argv.includes("--hidden") || process.argv.includes("--minimized");
+
+// Register the custom scheme as privileged BEFORE app is ready. standard +
+// secure makes it a secure context that can host a service worker; the rest
+// give it normal fetch/stream/CSP behavior.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true,
+    },
+  },
+]);
+
+// ── Serving the bundled SPA over app:// ──────────────────────────────────────
+
+function registerAppProtocol() {
+  protocol.handle(SCHEME, (request) => {
+    const url = new URL(request.url);
+    // Strip query/hash, resolve within DIST, prevent path traversal.
+    let pathname = decodeURIComponent(url.pathname);
+    if (pathname === "/" || pathname === "") pathname = "/index.html";
+
+    let filePath = path.normalize(path.join(DIST, pathname));
+    if (!filePath.startsWith(DIST)) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    // SPA fallback: a request without a file extension (a client route like
+    // /s/<server>/<group>) serves index.html so the router can handle it.
+    if (!path.extname(filePath)) {
+      filePath = path.join(DIST, "index.html");
+    }
+
+    return net.fetch(pathToFileURL(filePath).toString()).catch(() =>
+      net.fetch(pathToFileURL(path.join(DIST, "index.html")).toString()),
+    );
+  });
+}
+
+// ── Window ───────────────────────────────────────────────────────────────────
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -34,12 +103,13 @@ function createWindow() {
     height: 832,
     minWidth: 480,
     minHeight: 600,
+    show: !startHidden,
     backgroundColor: BACKGROUND,
     autoHideMenuBar: true,
     title: "Armada",
+    icon: ICON,
     webPreferences: {
-      // No Node integration in the renderer: it loads remote web content, so
-      // the renderer must stay sandboxed and context-isolated.
+      preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -47,22 +117,20 @@ function createWindow() {
     },
   });
 
-  // Keep in-app navigation (same origin) in the window; send everything else
-  // (external links, other sites) to the user's default browser.
+  // External links (anything not on our app:// origin) open in the system
+  // browser; in-app navigation stays in the window.
   const isInternal = (target) => {
     try {
-      return new URL(target).origin === APP_ORIGIN;
+      return new URL(target).origin === ORIGIN;
     } catch {
       return false;
     }
   };
-
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isInternal(url)) return { action: "allow" };
     shell.openExternal(url);
     return { action: "deny" };
   });
-
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (!isInternal(url)) {
       event.preventDefault();
@@ -70,66 +138,193 @@ function createWindow() {
     }
   });
 
-  loadApp();
-
+  // Close → hide to tray instead of quitting (unless the user chose Quit).
+  mainWindow.on("close", (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+
+  mainWindow.loadURL(START_URL);
 }
 
-function loadApp() {
-  if (!mainWindow) return;
-  mainWindow.loadURL(APP_URL).catch(() => showOffline());
+function showWindow() {
+  if (!mainWindow) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
-function showOffline() {
-  if (!mainWindow) return;
-  const html = `<!doctype html><html><head><meta charset="utf-8">
-    <style>
-      html,body{height:100%;margin:0;background:${BACKGROUND};color:#e7e2ee;
-        font:16px/1.5 system-ui,sans-serif;display:flex;align-items:center;
-        justify-content:center;text-align:center}
-      .card{max-width:28rem;padding:2rem}
-      h1{font-size:1.25rem;margin:0 0 .5rem}
-      p{opacity:.7;margin:0 0 1.5rem}
-      button{background:#6d49cf;color:#fff;border:0;border-radius:.5rem;
-        padding:.6rem 1.2rem;font-size:1rem;cursor:pointer}
-    </style></head><body><div class="card">
-      <h1>Can&rsquo;t reach Armada</h1>
-      <p>${APP_ORIGIN} is unreachable. Check your connection and try again.</p>
-      <button onclick="location.reload()" id="retry">Retry</button>
-    </div>
-    </body></html>`;
-  mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
-  // Retry the real app after a short delay.
-  setTimeout(loadApp, 4000);
+// ── System tray ──────────────────────────────────────────────────────────────
+
+function createTray() {
+  let image = nativeImage.createFromPath(ICON);
+  if (!image.isEmpty()) {
+    image = image.resize({ width: 18, height: 18 });
+  }
+  tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
+  tray.setToolTip("Armada");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Show Armada", click: showWindow },
+      { type: "separator" },
+      {
+        label: "Quit",
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        },
+      },
+    ]),
+  );
+  // Left-click toggles the window (common desktop-chat behavior).
+  tray.on("click", () => {
+    if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
+      mainWindow.hide();
+    } else {
+      showWindow();
+    }
+  });
+}
+
+// ── Unread badge ─────────────────────────────────────────────────────────────
+//
+// The web app reports its unread/mention count through the preload bridge
+// (window.armadaDesktop.setBadge). We reflect it on the OS badge where
+// supported (macOS dock, some Linux DEs via Unity launcher) and always on the
+// tray tooltip + a small overlay dot.
+
+function setUnreadBadge(count) {
+  const n = Math.max(0, Number(count) || 0);
+
+  // Cross-platform-ish: dock badge on macOS, Unity count on supported Linux.
+  if (typeof app.setBadgeCount === "function") {
+    app.setBadgeCount(n);
+  }
+
+  if (tray) {
+    tray.setToolTip(n > 0 ? `Armada — ${n} unread` : "Armada");
+  }
+
+  // Windows taskbar overlay icon (a simple dot) when there are unread items.
+  if (mainWindow && process.platform === "win32") {
+    if (n > 0) {
+      const dot = nativeImage.createFromDataURL(UNREAD_OVERLAY_DATA_URL);
+      mainWindow.setOverlayIcon(dot, `${n} unread`);
+    } else {
+      mainWindow.setOverlayIcon(null, "");
+    }
+  }
+}
+
+// A tiny red dot PNG (16x16) for the Windows taskbar overlay.
+const UNREAD_OVERLAY_DATA_URL =
+  "data:image/svg+xml;base64," +
+  Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#e0245e"/></svg>',
+  ).toString("base64");
+
+// ── Screen share (getDisplayMedia) ──────────────────────────────────────────
+//
+// Electron has no native screen-picker, so getDisplayMedia() does nothing until
+// we install a request handler. We surface the available sources to the
+// renderer (preload exposes pickScreenShareSource) and let the in-app UI choose,
+// then hand the chosen source back to Electron.
+
+function installDisplayMediaHandler() {
+  // The renderer asks for the source list and returns the chosen id; we cache
+  // it for the duration of one getDisplayMedia call.
+  ipcMain.handle("armada:get-screen-sources", async () => {
+    const sources = await desktopCapturer.getSources({
+      types: ["screen", "window"],
+      thumbnailSize: { width: 320, height: 200 },
+      fetchWindowIcons: true,
+    });
+    return sources.map((s) => ({
+      id: s.id,
+      name: s.name,
+      thumbnail: s.thumbnail?.toDataURL() ?? "",
+      appIcon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : "",
+      isScreen: s.id.startsWith("screen:"),
+    }));
+  });
+
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (request, callback) => {
+      // Ask the renderer to pick a source via the in-app picker.
+      const pick = async () => {
+        try {
+          const chosenId = await mainWindow.webContents.executeJavaScript(
+            "window.__armadaPickScreenSource && window.__armadaPickScreenSource()",
+            true,
+          );
+          if (!chosenId) {
+            callback({}); // user cancelled
+            return;
+          }
+          const sources = await desktopCapturer.getSources({
+            types: ["screen", "window"],
+          });
+          const source = sources.find((s) => s.id === chosenId) || sources[0];
+          callback({ video: source, audio: "loopback" });
+        } catch {
+          callback({});
+        }
+      };
+      pick();
+    },
+    // useSystemPicker: true would defer to the OS picker on platforms that have
+    // one (Windows/macOS recents); we use our own picker for consistency.
+    { useSystemPicker: false },
+  );
+}
+
+// ── IPC from the renderer (preload bridge) ──────────────────────────────────
+
+function installIpc() {
+  ipcMain.on("armada:set-badge", (_event, count) => setUnreadBadge(count));
+  ipcMain.handle("armada:platform", () => ({
+    platform: process.platform,
+    version: app.getVersion(),
+  }));
 }
 
 // ── App lifecycle ────────────────────────────────────────────────────────────
 
-// Single-instance: focus the existing window instead of opening a second one.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
+  app.on("second-instance", () => showWindow());
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
+    registerAppProtocol();
+    installIpc();
+    installDisplayMediaHandler();
+    createTray();
     createWindow();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      else showWindow();
     });
   });
 
+  app.on("before-quit", () => {
+    isQuitting = true;
+  });
+
+  // With a tray, the app keeps running when all windows are closed.
   app.on("window-all-closed", () => {
-    // On macOS apps typically stay open until Cmd+Q.
-    if (process.platform !== "darwin") app.quit();
+    // Intentionally do nothing: the tray keeps the app alive. Quit is explicit
+    // (tray menu / Cmd+Q), which sets isQuitting and lets the app exit.
   });
 }

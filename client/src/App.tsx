@@ -5,9 +5,11 @@ import { NostrLoginProvider } from "@nostrify/react/login";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AppProvider } from "@/components/AppProvider";
+import { DesktopBadge } from "@/components/DesktopBadge";
 import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
 import { ReadStateProvider } from "@/components/ReadStateProvider";
+import { ScreenSharePicker } from "@/components/ScreenSharePicker";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -32,6 +34,8 @@ export function App() {
             <TooltipProvider>
               <ReadStateProvider>
                 <NostrSync />
+                <DesktopBadge />
+                <ScreenSharePicker />
                 <Toaster />
                 <AppRouter />
               </ReadStateProvider>

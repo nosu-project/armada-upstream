@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.2.0] - 2026-06-22
+
+The desktop app is now a true standalone client — it isn't tied to any single
+server. Add whatever servers you want; nothing is baked in. It also gains a
+system tray (close to tray, an unread badge, and launch-minimized) and screen
+sharing on desktop.
+
+### Added
+- Standalone desktop app: a fresh install starts with no servers and a welcome
+  screen to log in and add your own — your client, your servers.
+- System tray on desktop: closing the window keeps Armada running in the tray,
+  with a Show/Quit menu, an unread badge, and the option to launch minimized.
+
+### Fixed
+- Screen sharing now works in the desktop app, with a picker to choose which
+  screen or window to share.
+
 ## [0.1.2] - 2026-06-22
 
 A maintenance release fixing the Windows desktop build image in CI. No

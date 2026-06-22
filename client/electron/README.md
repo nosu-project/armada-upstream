@@ -1,57 +1,63 @@
 # Armada desktop (Electron)
 
-A thin Electron shell that loads the **hosted** Armada web client over HTTPS
-(default `https://armada.dreamith.to`). It deliberately does **not** bundle the
-web build over `file://` — loading the real origin keeps everything that needs a
-true https origin working exactly like the browser/PWA build:
+A **standalone, sovereign** Armada client. It bundles the web build (`dist/`,
+copied in by CI) and serves it over a custom **secure** scheme (`app://armada/…`)
+rather than loading a hosted URL. Consequences:
 
-- the service worker + **Web Push notifications** (Chromium won't register a
-  service worker on `file://`),
-- `window.location.origin` for share / invite links,
-- the platform-relay HTTP-origin derivation.
+- **Not tied to any domain.** The bundled web build is compiled with **empty
+  platform relays** (`VITE_PLATFORM_RELAYS=""`), so nothing is baked in — the
+  user adds whatever servers they want. Clients are rogue.
+- A custom *secure* scheme is still a secure context, so the **service worker**
+  and **Web Push** work, and per-relay push subscriptions (whose endpoints are
+  the relays' own HTTPS origins) keep working — unlike a plain `file://` bundle,
+  where Chromium refuses to register a service worker.
 
-If the origin is unreachable on launch, a small offline page is shown and the
-app retries.
+It also adds desktop-native behavior the web build can't:
 
-## Configure which origin it loads
+- **System tray** — close-to-tray, a Show / Quit menu, click-to-toggle, an
+  unread badge (tray tooltip + macOS dock + Windows taskbar overlay), and a
+  `--hidden`/`--minimized` flag to launch minimized (for autostart).
+- **Screen-share picker** — Electron has no built-in `getDisplayMedia` picker,
+  so the main process enumerates sources and the in-app `ScreenSharePicker`
+  dialog lets the user choose a screen/window.
 
-Set `ARMADA_APP_URL` when building (baked into `main.js` at runtime via env):
-
-```sh
-ARMADA_APP_URL=https://armada.example.com npm run dist:linux
-```
-
-Defaults to `https://armada.dreamith.to`.
+The web client talks to the shell through a small, explicit bridge
+(`window.armadaDesktop`, see `preload.js`); on the web that object is absent and
+every integration no-ops.
 
 ## Local build / run
 
 ```sh
-cd client/electron
+# 1. Build the standalone web bundle (no pinned relays) and stage it.
+cd client
+VITE_PLATFORM_RELAYS="" npx vite build
+rm -rf electron/dist && cp -r dist electron/dist
+
+# 2. Build / run the desktop app.
+cd electron
 npm install
+npm start            # run the bundled app
 
-# Run against the default (or a custom) origin without packaging:
-ARMADA_APP_URL=https://armada.dreamith.to npm start
-
-# Package installers (output in dist/):
+# Package installers (output in release/):
 npm run dist:linux   # AppImage + deb
 npm run dist:win     # NSIS installer + portable .exe (needs wine on Linux)
 npm run dist:mac     # .dmg (must run on macOS)
 ```
 
-The app icon is generated from `../public/logo.svg` into `build/icon.png`
-(1024×1024); electron-builder derives `.ico`/`.icns` from it. CI generates this;
-locally, create it yourself if you want a custom icon:
-
-```sh
-mkdir -p build && rsvg-convert -w 1024 -h 1024 ../public/logo.svg -o build/icon.png
-```
+The app icon lives at `build/icon.png` (1024×1024, committed); electron-builder
+derives `.ico`/`.icns` from it.
 
 ## CI
 
-`.gitlab-ci.yml` builds Linux + Windows desktop installers on version tags
-(`vX.Y.Z`), uploads them to the generic package registry, and links them on the
-GitLab Release — alongside the Android APK/AAB. macOS is a manual,
-`allow_failure` job that needs a runner tagged `macos`.
+`.gitlab-ci.yml`, on version tags (`vX.Y.Z`):
+
+- `build-desktop-web` builds the web bundle once (empty platform relays) and
+  passes `client/electron/dist/` to the platform jobs as an artifact.
+- `build-desktop-linux` / `build-desktop-windows` package the installers, upload
+  them to the generic package registry, and the `release` job links them on the
+  GitLab Release — alongside the Android APK/AAB.
+- `build-desktop-macos` is a manual, `allow_failure` job that needs a runner
+  tagged `macos`.
 
 ### macOS signing (optional)
 

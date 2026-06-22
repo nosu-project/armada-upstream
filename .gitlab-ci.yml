@@ -174,27 +174,61 @@ build-apk:
 
 # ── Desktop (Electron) builds on version tags ───────────────────────────────
 #
-# The desktop app (client/electron) is a thin Electron shell that loads the
-# hosted web client over HTTPS, so each build is tiny and needs no web bundle.
-# ARMADA_APP_URL overrides the origin it loads (defaults to the public deploy).
+# Armada desktop is a SOVEREIGN, standalone client: it bundles the web build and
+# serves it over a custom secure scheme (see client/electron/main.js). The web
+# build is compiled with EMPTY platform relays (VITE_PLATFORM_RELAYS="") so
+# nothing is baked in — the user adds whatever servers they want.
 #
-# The app icon is committed at client/electron/build/icon.png (1024x1024);
-# electron-builder derives the platform icon formats (.ico/.icns) from it.
+# build-desktop-web builds that web bundle ONCE; the per-platform jobs consume it
+# as an artifact and run electron-builder. The app icon is committed at
+# client/electron/build/icon.png (electron-builder derives .ico/.icns from it).
 
-.desktop-template: &desktop-template
+# Build the standalone web bundle (no pinned relays) and hand it to the
+# platform jobs at client/electron/dist/.
+build-desktop-web:
   stage: build
+  image: node:22
+  timeout: 15 minutes
   needs: []
-  timeout: 30 minutes
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
   variables:
-    # Origin the desktop shell loads. Override per-deploy in CI/CD variables.
-    ARMADA_APP_URL: ${ARMADA_APP_URL}
+    # No baked-in relays: a rogue client starts empty and the user adds servers.
+    VITE_PLATFORM_RELAYS: ""
+    # App relays still seed non-NIP-29 traffic (profiles/lists); user-editable.
+    VITE_APP_RELAYS: ${VITE_APP_RELAYS}
+  cache:
+    key:
+      files:
+        - client/package-lock.json
+    paths:
+      - client/node_modules/
+  script:
+    - cd client
+    - npm ci
+    - npx vite build -l error
+    - cp dist/index.html dist/404.html
+    # Stage the web bundle inside the electron app dir for packaging.
+    - rm -rf electron/dist
+    - cp -r dist electron/dist
+  artifacts:
+    paths:
+      - client/electron/dist/
+    expire_in: 1 day
+
+.desktop-template: &desktop-template
+  stage: build
+  timeout: 30 minutes
+  needs:
+    - job: build-desktop-web
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
   before_script:
     # Version from the tag (v2.1.0 -> 2.1.0).
     - export TAG="${CI_COMMIT_TAG#v}"
-    # Stamp the version into the Electron app's package.json.
     - cd client/electron
+    # Stamp the version into the Electron app's package.json.
     - 'sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json'
     - npm install --no-audit --no-fund
   cache:
@@ -210,8 +244,8 @@ build-desktop-linux:
     - cd ../..
     - mkdir -p artifacts
     # Collect the AppImage + deb under predictable names.
-    - cp client/electron/dist/*.AppImage "artifacts/Armada-${CI_COMMIT_TAG}-linux-x86_64.AppImage"
-    - cp client/electron/dist/*.deb "artifacts/Armada-${CI_COMMIT_TAG}-linux-amd64.deb"
+    - cp client/electron/release/*.AppImage "artifacts/Armada-${CI_COMMIT_TAG}-linux-x86_64.AppImage"
+    - cp client/electron/release/*.deb "artifacts/Armada-${CI_COMMIT_TAG}-linux-amd64.deb"
     - ls -lh artifacts/
     - |
       for f in artifacts/*; do
@@ -234,9 +268,9 @@ build-desktop-windows:
     - npx electron-builder --win --config electron-builder.yml --publish never
     - cd ../..
     - mkdir -p artifacts
-    - cp client/electron/dist/*Setup*.exe "artifacts/Armada-${CI_COMMIT_TAG}-Setup.exe"
+    - cp client/electron/release/*Setup*.exe "artifacts/Armada-${CI_COMMIT_TAG}-Setup.exe"
     # The portable build is the non-Setup .exe.
-    - cp $(ls client/electron/dist/*.exe | grep -iv setup | head -n1) "artifacts/Armada-${CI_COMMIT_TAG}-windows-portable.exe"
+    - cp $(ls client/electron/release/*.exe | grep -iv setup | head -n1) "artifacts/Armada-${CI_COMMIT_TAG}-windows-portable.exe"
     - ls -lh artifacts/
     - |
       for f in artifacts/Armada-${CI_COMMIT_TAG}-Setup.exe artifacts/Armada-${CI_COMMIT_TAG}-windows-portable.exe; do
@@ -273,7 +307,7 @@ build-desktop-macos:
     - npx electron-builder --mac --config electron-builder.yml --publish never
     - cd ../..
     - mkdir -p artifacts
-    - for f in client/electron/dist/*.dmg; do cp "$f" "artifacts/$(basename "$f")"; done
+    - for f in client/electron/release/*.dmg; do cp "$f" "artifacts/$(basename "$f")"; done
     - ls -lh artifacts/
     - |
       for f in artifacts/*.dmg; do

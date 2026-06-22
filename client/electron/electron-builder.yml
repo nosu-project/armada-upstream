@@ -1,8 +1,9 @@
 # electron-builder config for the Armada desktop app.
 #
-# The app source is this directory (electron/): main.js + package.json. There is
-# no bundled web build — the shell loads the hosted client over HTTPS (see
-# main.js), so the package is tiny.
+# The app SOURCE is this directory (electron/): main.js + preload.js + the
+# bundled web build (dist/, copied in by CI). The shell serves dist/ over a
+# custom secure scheme (see main.js), so the app is fully standalone — not tied
+# to any hosted domain.
 #
 # Built in CI on version tags; see ../../.gitlab-ci.yml (build-desktop-*).
 
@@ -11,14 +12,18 @@ productName: Armada
 copyright: Armada
 
 directories:
-  output: dist
+  # Installers are written here. (The bundled web build lives in ./dist, so the
+  # builder output must NOT be ./dist.)
+  output: release
   buildResources: build
 
-# Only the shell's own files ship inside the asar; node_modules/electron is the
-# runtime (provided by electron-builder) and must not be packed.
+# What ships inside the app: the shell's own files plus the bundled web build.
+# electron + node_modules are provided by the builder runtime and not listed.
 files:
   - main.js
+  - preload.js
   - package.json
+  - dist/**/*
   - "!**/*.map"
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
