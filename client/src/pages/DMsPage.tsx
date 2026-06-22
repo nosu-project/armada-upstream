@@ -3,6 +3,7 @@ import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
 
+import { CallStageSlot } from "@/components/chat/CallStage";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageRow } from "@/components/chat/MessageRow";
@@ -316,6 +317,9 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           </Tooltip>
         )}
       </header>
+
+      {/* Top-of-chat call stage portal target (active when this DM is in call). */}
+      <CallStageSlot active={inThisCall} />
 
       <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4">
         {isLoading ? (

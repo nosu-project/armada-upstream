@@ -3,6 +3,7 @@ import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Rep
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
+import { CallStageSlot } from "@/components/chat/CallStage";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
@@ -417,6 +418,10 @@ export function ConcordPage() {
             )}
           </div>
         </header>
+
+        {/* Top-of-chat call stage portal target (active when this channel is
+            the one in encrypted voice). */}
+        <CallStageSlot active={inThisVoice} />
 
         {/* Chat + members. Member panel mirrors the NIP-29 GroupPage. */}
         <div className="relative flex flex-1 min-h-0">

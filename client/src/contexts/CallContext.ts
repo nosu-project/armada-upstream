@@ -60,6 +60,20 @@ export interface CallContextType {
    * unregister function.
    */
   registerCallBarSlot: (el: HTMLElement) => () => void;
+  /**
+   * Register the top-of-chat DOM node into which the call stage (the
+   * dismissable box of participants + cameras/screenshares) should portal. Only
+   * the chat surface that matches the active call should register, so the stage
+   * appears at the top of the right conversation. Returns an unregister
+   * function.
+   */
+  registerCallStageSlot: (el: HTMLElement) => () => void;
+  /** Whether the call stage box is currently expanded. */
+  stageOpen: boolean;
+  /** Toggle the call stage open/closed (the corner call panel calls this). */
+  toggleStage: () => void;
+  /** Explicitly set the call stage open state (the stage's close button uses this). */
+  setStageOpen: (open: boolean) => void;
 }
 
 export const CallContext = createContext<CallContextType | undefined>(undefined);

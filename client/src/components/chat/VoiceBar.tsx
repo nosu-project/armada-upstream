@@ -11,6 +11,8 @@ import { ConnectionState, LocalAudioTrack, Track } from "livekit-client";
 import type { RemoteParticipant } from "livekit-client";
 import {
   Check,
+  ChevronDown,
+  ChevronUp,
   Headphones,
   Loader2,
   Mic,
@@ -43,6 +45,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCall } from "@/hooks/useCall";
 import { pubkeyFromLivekitIdentity } from "@/hooks/useLivekit";
 import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
 import {
@@ -406,6 +409,7 @@ interface InCallViewProps {
  * LiveKitRoom context (uses room hooks).
  */
 export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
+  const { stageOpen, toggleStage } = useCall();
   const participants = useParticipants();
   const remoteParticipants = useRemoteParticipants();
   const connectionState = useConnectionState();
@@ -462,9 +466,16 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
           Voice connected
         </span>
       )}
-      <span className="shrink-0 text-[11px] font-medium text-muted-foreground tabular-nums">
-        {participants.length}
-      </span>
+      <button
+        type="button"
+        onClick={toggleStage}
+        aria-label={stageOpen ? "Hide call stage" : "Show call stage"}
+        aria-pressed={stageOpen}
+        className="shrink-0 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+      >
+        <span className="tabular-nums">{participants.length}</span>
+        {stageOpen ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
+      </button>
     </div>
   );
 

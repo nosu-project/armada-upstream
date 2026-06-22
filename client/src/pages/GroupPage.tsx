@@ -2,6 +2,7 @@ import { DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, Menu, MoreVertical, Phon
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
+import { CallStageSlot } from "@/components/chat/CallStage";
 import { GroupChat } from "@/components/chat/GroupChat";
 import { MemberList } from "@/components/chat/MemberList";
 import { PinnedMessagesBar } from "@/components/chat/PinnedMessagesBar";
@@ -429,6 +430,11 @@ export function GroupPage() {
           onUnpin={(id) => { void unpin(id); }}
           onClose={() => setPinsOpen(false)}
         />
+
+        {/* Top-of-chat call stage: the active call's participants + video tiles
+            portal in here (dismissable, toggled from the corner call panel)
+            when this channel is the one in call. */}
+        <CallStageSlot active={inThisCall} />
 
         {/* Join banner */}
         {user && !isMember && !isLoading && (

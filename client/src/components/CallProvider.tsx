@@ -16,7 +16,7 @@ import { useNavigate } from "react-router-dom";
 import "@livekit/components-styles";
 
 import { InCallView } from "@/components/chat/VoiceBar";
-import { VideoStage } from "@/components/chat/VideoStage";
+import { CallStage } from "@/components/chat/CallStage";
 import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -159,6 +159,21 @@ function makePlaceBar(slots: HTMLElement[], exiting: boolean): PlaceBar {
   );
 }
 
+type PlaceStage = (stage: React.ReactNode) => React.ReactNode;
+
+/**
+ * Build the place-stage renderer: portal the call stage into every registered
+ * top-of-chat slot (in practice the single chat surface matching the active
+ * call). Returns null when no slot is registered yet.
+ */
+function makePlaceStage(slots: HTMLElement[]): PlaceStage {
+  return (stage) => (
+    <>
+      {slots.map((el, i) => createPortal(stage, el, `call-stage-slot-${i}`))}
+    </>
+  );
+}
+
 /**
  * The connected LiveKit room + its UI bars. Given a token, server url, room
  * options, and labels, renders the room context and the mobile/desktop bars.
@@ -172,6 +187,8 @@ function VoiceRoomShell({
   room,
   onDisconnected,
   placeBar,
+  placeStage,
+  stageOpen,
   label,
   scopeRelayUrl,
 }: {
@@ -182,6 +199,8 @@ function VoiceRoomShell({
   room?: Room;
   onDisconnected: (reason?: DisconnectReason) => void;
   placeBar: PlaceBar;
+  placeStage: PlaceStage;
+  stageOpen: boolean;
   label: React.ReactNode;
   /** Server scope for display names (NIP-29 relay url; undefined for DM/Concord). */
   scopeRelayUrl?: string;
@@ -216,7 +235,11 @@ function VoiceRoomShell({
     >
       <RoomAudioRenderer />
       <CallSoundEffects />
-      <VideoStage callLabel={label} />
+      {placeStage(
+        <ServerScopeProvider relayUrl={scopeRelayUrl}>
+          <CallStage callLabel={label} open={stageOpen} />
+        </ServerScopeProvider>,
+      )}
       {placeBar(mobileBar, desktopBar)}
     </LiveKitRoom>
   );
@@ -231,10 +254,14 @@ function Nip29VoiceRoom({
   call,
   onLeave,
   placeBar,
+  placeStage,
+  stageOpen,
 }: {
   call: ActiveCall;
   onLeave: () => void;
   placeBar: PlaceBar;
+  placeStage: PlaceStage;
+  stageOpen: boolean;
 }) {
   const navigate = useNavigate();
   const isDm = Boolean(call.dmPeer);
@@ -285,6 +312,8 @@ function Nip29VoiceRoom({
       options={options}
       onDisconnected={handleDisconnected}
       placeBar={placeBar}
+      placeStage={placeStage}
+      stageOpen={stageOpen}
       label={label}
       scopeRelayUrl={isDm ? undefined : call.relayUrl}
     />
@@ -301,10 +330,14 @@ function ConcordVoiceRoom({
   ctx,
   onLeave,
   placeBar,
+  placeStage,
+  stageOpen,
 }: {
   ctx: ConcordVoiceContext;
   onLeave: () => void;
   placeBar: PlaceBar;
+  placeStage: PlaceStage;
+  stageOpen: boolean;
 }) {
   const { community, channel, voiceServer } = ctx;
   const { data: tokenData, error, isLoading } = useConcordVoiceToken(community, channel, voiceServer, true);
@@ -406,6 +439,8 @@ function ConcordVoiceRoom({
       room={room.room}
       onDisconnected={handleDisconnected}
       placeBar={placeBar}
+      placeStage={placeStage}
+      stageOpen={stageOpen}
       label={label}
     />
   );
@@ -423,19 +458,40 @@ function PersistentVoiceRoom({
   call,
   onLeave,
   slots,
+  stageSlots,
+  stageOpen,
   exiting,
 }: {
   call: ActiveCall;
   onLeave: () => void;
   slots: HTMLElement[];
+  stageSlots: HTMLElement[];
+  stageOpen: boolean;
   exiting: boolean;
 }) {
   const placeBar = useMemo(() => makePlaceBar(slots, exiting), [slots, exiting]);
+  const placeStage = useMemo(() => makePlaceStage(stageSlots), [stageSlots]);
 
   if (call.concord) {
-    return <ConcordVoiceRoom ctx={call.concord} onLeave={onLeave} placeBar={placeBar} />;
+    return (
+      <ConcordVoiceRoom
+        ctx={call.concord}
+        onLeave={onLeave}
+        placeBar={placeBar}
+        placeStage={placeStage}
+        stageOpen={stageOpen}
+      />
+    );
   }
-  return <Nip29VoiceRoom call={call} onLeave={onLeave} placeBar={placeBar} />;
+  return (
+    <Nip29VoiceRoom
+      call={call}
+      onLeave={onLeave}
+      placeBar={placeBar}
+      placeStage={placeStage}
+      stageOpen={stageOpen}
+    />
+  );
 }
 
 /**
@@ -447,6 +503,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [exiting, setExiting] = useState(false);
   const [slots, setSlots] = useState<HTMLElement[]>([]);
+  const [stageSlots, setStageSlots] = useState<HTMLElement[]>([]);
+  const [stageOpen, setStageOpen] = useState(false);
   const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const joinCall = useCallback((relayUrl: string, groupId: string) => {
@@ -489,6 +547,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // gesture and before teardown — playing it here would be too late and get cut.
   const leaveCall = useCallback(() => {
     setExiting(true);
+    setStageOpen(false);
     if (exitTimer.current) clearTimeout(exitTimer.current);
     exitTimer.current = setTimeout(() => {
       setActiveCall(null);
@@ -506,8 +565,28 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     return () => setSlots((prev) => prev.filter((s) => s !== el));
   }, []);
 
+  const registerCallStageSlot = useCallback((el: HTMLElement) => {
+    setStageSlots((prev) => (prev.includes(el) ? prev : [...prev, el]));
+    return () => setStageSlots((prev) => prev.filter((s) => s !== el));
+  }, []);
+
+  const toggleStage = useCallback(() => setStageOpen((o) => !o), []);
+
   return (
-    <CallContext.Provider value={{ activeCall, joinCall, joinDmCall, joinConcordCall, leaveCall, registerCallBarSlot }}>
+    <CallContext.Provider
+      value={{
+        activeCall,
+        joinCall,
+        joinDmCall,
+        joinConcordCall,
+        leaveCall,
+        registerCallBarSlot,
+        registerCallStageSlot,
+        stageOpen,
+        toggleStage,
+        setStageOpen,
+      }}
+    >
       <div
         className={cn(
           "relative flex h-full w-full overflow-hidden",
@@ -542,6 +621,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             call={activeCall}
             onLeave={leaveCall}
             slots={slots}
+            stageSlots={stageSlots}
+            stageOpen={stageOpen}
             exiting={exiting}
           />
         )}
