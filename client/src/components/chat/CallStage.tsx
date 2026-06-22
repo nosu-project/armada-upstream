@@ -84,19 +84,22 @@ function VideoTile({
     <div
       className={cn(
         "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10",
-        focused ? "h-full w-full min-h-0" : "aspect-video",
+        focused ? "w-full" : "aspect-video",
       )}
     >
       {hasVideo ? (
         <VideoTrack
           trackRef={trackRef}
           // Mirror your own camera (not screenshare) so it reads naturally. In
-          // focus mode the video is constrained to the (bounded) tile so a tall
-          // screenshare letterboxes inside the panel instead of overflowing and
-          // being clipped by the panel's max-height.
+          // focus mode the video sizes itself (width-driven, height auto) and is
+          // capped by a viewport-relative max-height, so it never overflows the
+          // panel — no dependence on a definite flex/percentage height chain,
+          // which the panel's max-height can't provide.
           className={cn(
-            focused ? "max-h-full max-w-full" : "h-full w-full",
-            isScreenShare ? "object-contain" : "object-cover",
+            focused
+              ? "w-full h-auto max-h-[calc(60vh-8rem)] object-contain"
+              : "h-full w-full",
+            !focused && (isScreenShare ? "object-contain" : "object-cover"),
             isLocal && !isScreenShare && "-scale-x-100",
           )}
         />
@@ -354,13 +357,12 @@ export function CallStage({
           </button>
         </div>
         {focused ? (
-          // Spotlight: the focused tile fills the stage; the rest sit in a
-          // horizontally-scrolling thumbnail strip below (à la Discord). The
-          // video area is bounded by viewport height (not just flex-1, which
-          // wouldn't constrain against the panel's max-height), so a tall
-          // screenshare letterboxes rather than overflowing and being clipped.
-          <div className="flex-1 min-h-0 flex flex-col gap-2 p-3 pt-0">
-            <div className="flex-1 min-h-0 max-h-[calc(60vh-7rem)]">{focused.render(true)}</div>
+          // Spotlight: the focused tile (width-driven, capped height) sits at
+          // the top; the rest go in a horizontally-scrolling thumbnail strip
+          // below (à la Discord). The whole area scrolls if it still exceeds the
+          // panel, so nothing is clipped.
+          <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-2 p-3 pt-0">
+            <div className="shrink-0">{focused.render(true)}</div>
             {tiles.length > 1 && (
               <div className="shrink-0 flex gap-2 overflow-x-auto">
                 {tiles
