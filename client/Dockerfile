@@ -2,7 +2,7 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm install --silent
+RUN npm ci --silent
 COPY . .
 ARG VITE_APP_NAME=Armada
 ARG VITE_PLATFORM_RELAYS=ws://localhost:5577

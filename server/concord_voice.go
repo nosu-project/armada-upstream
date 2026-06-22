@@ -34,7 +34,7 @@ var hex64Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func setupConcordVoice() {
 	router := relay.Router()
 	router.HandleFunc("/.well-known/concord/voice", handleConcordVoiceCapability)
-	router.HandleFunc("/.well-known/concord/voice/", handleConcordVoiceToken)
+	router.HandleFunc("/.well-known/concord/voice/", tokenLimiter.limit(handleConcordVoiceToken))
 }
 
 // handleConcordVoiceCapability advertises that this broker speaks Concord voice
@@ -89,6 +89,14 @@ func verifyVoiceGrant(r *http.Request, room, expectedURL string) bool {
 	// Optional room tag, if present, must echo the room name.
 	roomTag := event.Tags.GetFirst([]string{"room", ""})
 	if roomTag != nil && (*roomTag)[1] != room {
+		return false
+	}
+	// Single-use: reject a grant whose id we've already honored within its
+	// freshness window (anti-replay). Use the computed id (not the wire `id`
+	// field, which the client controls and could omit/forge) so a replay can't
+	// dodge the cache by mutating only the id. Checked last so we only consume
+	// the id for an otherwise-valid grant.
+	if rememberGrant(event.GetID()) {
 		return false
 	}
 	return true

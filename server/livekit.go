@@ -28,6 +28,11 @@ var (
 	roomsMu sync.RWMutex
 	// groupId -> participant identity -> pubkey
 	rooms = map[string]map[string]string{}
+
+	// tokenLimiter caps per-IP request rate on the token + webhook endpoints.
+	// 1/s sustained with a burst of 10 is far above what a normal client needs
+	// (a handful of token fetches per call) while throttling abuse.
+	tokenLimiter = newRateLimiter(1, 10)
 )
 
 func setupLivekit() {
@@ -36,8 +41,12 @@ func setupLivekit() {
 	// DM voice rooms are not NIP-29 groups; they live at a separate path and
 	// authorize by participant pubkey rather than group membership. Register
 	// the more specific prefix first so it isn't shadowed by the group route.
-	router.HandleFunc("/.well-known/nip29/livekit-dm/", handleLivekitDMToken)
-	router.HandleFunc("/.well-known/nip29/livekit/", handleLivekitToken)
+	router.HandleFunc("/.well-known/nip29/livekit-dm/", tokenLimiter.limit(handleLivekitDMToken))
+	router.HandleFunc("/.well-known/nip29/livekit/", tokenLimiter.limit(handleLivekitToken))
+	// The webhook is authenticated by the LiveKit signing key (HMAC) and comes
+	// from the trusted SFU; rate-limiting it per-IP would drop legitimate
+	// participant events under load (and behind host networking every webhook
+	// shares the loopback IP), so it is intentionally not limited here.
 	router.HandleFunc("/livekit/webhook", handleLivekitWebhook)
 
 	// Concord voice: a blind, community-agnostic LiveKit broker for serverless
@@ -73,10 +82,23 @@ func setupLivekit() {
 	})
 }
 
+// corsHeaders sets CORS response headers restricted to the relay's own public
+// origin (the web client is served from the same origin). NIP-98/grant auth
+// lives in the Authorization header rather than cookies, so a wildcard origin
+// isn't directly exploitable, but scoping it to the known origin is tighter and
+// costs nothing. The OPTIONS preflight is answered by the individual handlers.
 func corsHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Origin", allowedOrigin())
+	w.Header().Set("Vary", "Origin")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Concord-Identity")
+}
+
+// allowedOrigin is the single origin permitted to call the token/capability
+// endpoints from a browser: the relay's configured public origin, which is the
+// same origin the SPA is served from in the single-domain deployment.
+func allowedOrigin() string {
+	return strings.TrimRight(s.PublicBaseURL, "/")
 }
 
 func handleLivekitCapability(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +108,30 @@ func handleLivekitCapability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// isWeakLivekitSecret flags obviously placeholder/low-entropy LiveKit API
+// secrets (e.g. "armada", "secret", a run of repeated characters) so a
+// misconfiguration is caught at startup rather than shipping a forgeable token
+// signer. It is a coarse sanity check, not a real entropy estimator.
+func isWeakLivekitSecret(secret string) bool {
+	switch strings.ToLower(secret) {
+	case "armada", "secret", "changeme", "password", "livekit", "devkey", "devsecret":
+		return true
+	}
+	// All-identical characters (e.g. "aaaa...") — no entropy. (Guard the
+	// trivial short cases so the helper is safe to call standalone.)
+	if len(secret) < 2 {
+		return true
+	}
+	allSame := true
+	for i := 1; i < len(secret); i++ {
+		if secret[i] != secret[0] {
+			allSame = false
+			break
+		}
+	}
+	return allSame
 }
 
 // verifyNip98 validates the `Authorization: Nostr <base64-event>` header for
@@ -119,6 +165,14 @@ func verifyNip98(r *http.Request, expectedURL string) (string, bool) {
 	}
 	methodTag := event.Tags.GetFirst([]string{"method", ""})
 	if methodTag != nil && !strings.EqualFold((*methodTag)[1], r.Method) {
+		return "", false
+	}
+	// Single-use: reject a grant whose id we've already honored within its
+	// freshness window (anti-replay). Use the computed id (not the wire `id`
+	// field, which the client controls and could omit/forge) so a replay can't
+	// dodge the cache by mutating only the id. Checked last so we only consume
+	// the id for an otherwise-valid grant.
+	if rememberGrant(event.GetID()) {
 		return "", false
 	}
 	return event.PubKey, true
@@ -220,6 +274,18 @@ func parseDMRoomID(roomId string) (a, b string, ok bool) {
 	return a, b, true
 }
 
+// pubkeyFromIdentity extracts the Nostr pubkey from a LiveKit participant
+// identity. Group/DM identities are "<64-hex-pubkey>-<random-suffix>"; Concord
+// identities are fully random (no embedded pubkey). It returns the leading
+// 64-hex segment only when it is a valid pubkey, otherwise the identity
+// unchanged — participantsEvent must not assume the result is a valid pubkey.
+func pubkeyFromIdentity(identity string) string {
+	if i := strings.IndexByte(identity, '-'); i == 64 && isHex64(identity[:64]) {
+		return identity[:64]
+	}
+	return identity
+}
+
 func isHex64(s string) bool {
 	if len(s) != 64 {
 		return false
@@ -306,10 +372,7 @@ func handleLivekitWebhook(w http.ResponseWriter, r *http.Request) {
 	switch event.Event {
 	case "participant_joined":
 		if roomName != "" && identity != "" {
-			pubkey := identity
-			if i := strings.IndexByte(identity, '-'); i == 64 {
-				pubkey = identity[:64]
-			}
+			pubkey := pubkeyFromIdentity(identity)
 			roomsMu.Lock()
 			if rooms[roomName] == nil {
 				rooms[roomName] = map[string]string{}
@@ -348,6 +411,12 @@ func participantsEvent(groupId string) *nostr.Event {
 
 	tags := nostr.Tags{nostr.Tag{"d", groupId}}
 	for pubkey := range participants {
+		// Skip identities whose leading segment isn't a valid pubkey (e.g.
+		// fully-random Concord identities). The relay signs this event, so it
+		// must not vouch for a malformed "pubkey".
+		if !isHex64(pubkey) {
+			continue
+		}
 		tags = append(tags, nostr.Tag{"participant", pubkey})
 	}
 

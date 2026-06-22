@@ -171,6 +171,19 @@ func main() {
 
 	// LiveKit voice/video endpoints (NIP-29 AV spaces). See livekit.go.
 	if s.LivekitURL != "" && s.LivekitAPIKey != "" && s.LivekitAPISecret != "" {
+		// The API secret authorizes minting a token for ANY room, bypassing
+		// every relay-side authorization check, so reject weak/guessable
+		// secrets. LiveKit itself requires >= 32 bytes; mirror that here so a
+		// misconfiguration fails loudly at startup instead of shipping a
+		// trivially forgeable token signer.
+		if len(s.LivekitAPISecret) < 32 {
+			log.Fatal().Msg("LIVEKIT_API_SECRET must be at least 32 characters (generate with `openssl rand -hex 32`)")
+			return
+		}
+		if isWeakLivekitSecret(s.LivekitAPISecret) {
+			log.Fatal().Msg("LIVEKIT_API_SECRET looks like a placeholder/low-entropy value; set a random secret (`openssl rand -hex 32`)")
+			return
+		}
 		setupLivekit()
 		log.Info().Str("livekit", s.LivekitURL).Msg("livekit AV support enabled")
 	} else {

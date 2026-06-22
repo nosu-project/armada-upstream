@@ -10,7 +10,8 @@
 #   ANDROID_KEYSTORE_BASE64  base64 of the JKS upload keystore (alias: upload)
 #   KEYSTORE_PASSWORD        keystore store password
 #   KEY_PASSWORD             upload key password (== store password; PKCS12 needs them equal)
-# See /tmp/armada-android-secrets (generated locally) for the values + a README.
+# These live ONLY in CI/CD variables — never commit the keystore, the passwords,
+# or any generated secrets file to the repo.
 
 stages:
   - test
@@ -39,6 +40,30 @@ test:
     - cd client
     - npm ci
     - npm run test
+    # Fail the pipeline on known-high/critical advisories in dependencies.
+    - npm audit --audit-level=high
+
+# ── Relay build + vulnerability scan ────────────────────────────────────────
+relay:
+  stage: test
+  image: golang:1.24
+  timeout: 10 minutes
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: never
+    - when: always
+  cache:
+    key: go-mod
+    paths:
+      - .gocache/
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.gocache
+  script:
+    - cd server
+    - go build ./...
+    - go vet ./...
+    - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 
 # ── Signed Android APK + AAB on version tags ────────────────────────────────
 build-apk:

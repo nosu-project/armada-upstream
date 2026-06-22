@@ -77,12 +77,16 @@ if [ ! -f .env ]; then
 
   RELAY_PRIVKEY=$(randhex)
   LIVEKIT_API_SECRET=$(randhex)
+  # The LiveKit API key is a non-secret identifier, but the default "armada" is
+  # guessable; pair it with the random secret by giving it a random suffix too.
+  LIVEKIT_API_KEY="armada$(randhex | cut -c1-12)"
   CLIENT_PORT=$(first_free_port 8080)
   [ "$CLIENT_PORT" != "8080" ] && say "port 8080 is busy; using $CLIENT_PORT for the client"
   # Escape characters that are special to sed's replacement (commas are fine).
   ADMIN_PUBKEY_ESC=$(printf '%s' "$ADMIN_PUBKEY" | sed 's/[&/\]/\\&/g')
   sed \
     -e "s/^RELAY_PRIVKEY=$/RELAY_PRIVKEY=$RELAY_PRIVKEY/" \
+    -e "s/^LIVEKIT_API_KEY=$/LIVEKIT_API_KEY=$LIVEKIT_API_KEY/" \
     -e "s/^LIVEKIT_API_SECRET=$/LIVEKIT_API_SECRET=$LIVEKIT_API_SECRET/" \
     -e "s/^ADMIN_PUBKEY=$/ADMIN_PUBKEY=$ADMIN_PUBKEY_ESC/" \
     -e "s/^CLIENT_PORT=8080$/CLIENT_PORT=$CLIENT_PORT/" \
