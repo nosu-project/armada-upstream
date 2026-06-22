@@ -27,6 +27,31 @@ const KIND_HTTP_AUTH = 27235;
 
 /** localStorage key for the user's notification preferences. */
 const PREFS_KEY = "armada:push-prefs";
+/**
+ * localStorage key for the user's push INTENT (the master on/off wish),
+ * separate from the per-type prefs. Defaults to on: push is opt-out. The
+ * browser still requires a user gesture to grant Notification permission the
+ * first time, but once granted we keep push enabled automatically.
+ */
+const INTENT_KEY = "armada:push-intent";
+
+function loadIntent(): boolean {
+  try {
+    const raw = localStorage.getItem(INTENT_KEY);
+    if (raw === null) return true; // on by default
+    return raw === "true";
+  } catch {
+    return true;
+  }
+}
+
+function saveIntent(on: boolean): void {
+  try {
+    localStorage.setItem(INTENT_KEY, String(on));
+  } catch {
+    // ignore
+  }
+}
 
 /** Discord-style per-type notification preferences. */
 export interface PushPrefs {
@@ -219,11 +244,28 @@ export function usePushNotifications(): UsePushNotificationsReturn {
       }
 
       await register(sub, prefs);
+      saveIntent(true);
       setEnabled(true);
     } finally {
       setBusy(false);
     }
   }, [supported, user, prefs, register]);
+
+  // Auto-enable: push is on by default (opt-out). When the user intends push,
+  // permission is already granted, and they're logged in, subscribe + register
+  // silently — no user gesture needed because permission already exists. (A
+  // brand-new user with permission "default" still has to click once to grant;
+  // we can't prompt without a gesture. Their intent stays on, so once granted
+  // it sticks across reloads and devices.)
+  const autoTried = useRef(false);
+  useEffect(() => {
+    if (!supported || !user) return;
+    if (enabled || busy || autoTried.current) return;
+    if (Notification.permission !== "granted") return;
+    if (!loadIntent()) return;
+    autoTried.current = true;
+    enable();
+  }, [supported, user, enabled, busy, enable]);
 
   const disable = useCallback(async () => {
     setBusy(true);
@@ -255,6 +297,7 @@ export function usePushNotifications(): UsePushNotificationsReturn {
           // ignore
         }
       }
+      saveIntent(false);
       setEnabled(false);
     } finally {
       setBusy(false);

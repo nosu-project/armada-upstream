@@ -4,6 +4,12 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.2.1] - 2026-06-22
+
+Push notifications are now on by default — once you allow notifications, Armada
+keeps them enabled automatically across reloads and devices, so you don't have
+to turn them back on.
+
 ## [0.2.0] - 2026-06-22
 
 The desktop app is now a true standalone client — it isn't tied to any single
