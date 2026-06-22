@@ -9,7 +9,7 @@ import type { Participant } from "livekit-client";
 import { Track } from "livekit-client";
 import { Maximize2, Minimize2, MicOff, Monitor, ScreenShare, Shrink, X } from "lucide-react";
 import type { CSSProperties } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -61,19 +61,31 @@ function fitGrid(
   return best;
 }
 
-/** Track an element's content-box size via ResizeObserver. */
+/**
+ * Track an element's content-box size via ResizeObserver. Uses a callback ref
+ * so the observer is (re)attached whenever the measured element mounts — the
+ * grid container unmounts/remounts as focus/theater toggle, and a plain
+ * useRef + useEffect([]) would leave a stale 0×0 size on the new element.
+ */
 function useElementSize<T extends HTMLElement>() {
-  const ref = useRef<T | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((el: T | null) => {
+    observerRef.current?.disconnect();
+    if (!el) {
+      observerRef.current = null;
+      return;
+    }
+    // Seed immediately so the first paint after (re)mount has real dimensions,
+    // not 0×0 (the ResizeObserver callback is async).
+    const rect = el.getBoundingClientRect();
+    setSize({ width: rect.width, height: rect.height });
     const ro = new ResizeObserver(([entry]) => {
       const box = entry.contentRect;
       setSize({ width: box.width, height: box.height });
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    observerRef.current = ro;
   }, []);
   return [ref, size] as const;
 }
