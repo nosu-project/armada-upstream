@@ -178,7 +178,7 @@ build-apk:
 # hosted web client over HTTPS, so each build is tiny and needs no web bundle.
 # ARMADA_APP_URL overrides the origin it loads (defaults to the public deploy).
 #
-# A shared 1024x1024 PNG icon is generated from client/public/logo.svg;
+# The app icon is committed at client/electron/build/icon.png (1024x1024);
 # electron-builder derives the platform icon formats (.ico/.icns) from it.
 
 .desktop-template: &desktop-template
@@ -197,10 +197,6 @@ build-apk:
     - cd client/electron
     - 'sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json'
     - npm install --no-audit --no-fund
-    # Generate a 1024x1024 PNG icon from the SVG (electron-builder derives the
-    # rest). rsvg-convert ships in the electronuserland builder images.
-    - mkdir -p build
-    - rsvg-convert -w 1024 -h 1024 ../public/logo.svg -o build/icon.png || convert -background none -resize 1024x1024 ../public/logo.svg build/icon.png
   cache:
     key: electron-builder-cache
     paths:
@@ -272,10 +268,6 @@ build-desktop-macos:
     - cd client/electron
     - 'sed -i "" "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json || sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json'
     - npm install --no-audit --no-fund
-    # On macOS runners use the largest source PNG as the base icon; electron-builder
-    # generates the .icns. (rsvg/convert may be absent on a bare mac runner.)
-    - mkdir -p build
-    - cp ../public/logo-192.png build/icon.png
   script:
     - npx electron-builder --mac --config electron-builder.yml --publish never
     - cd ../..
