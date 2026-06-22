@@ -41,6 +41,14 @@ armada.example.com {
 		reverse_proxy RELAY_HOST:5577
 	}
 
+	# Web Push notification gateway: VAPID key + subscription registration
+	# (NIP-98 authed PUT/DELETE). MUST route to the relay — like the Concord
+	# route above, otherwise the request hits the SPA and the client gets HTML
+	# instead of JSON when fetching the VAPID key.
+	handle /.well-known/armada/* {
+		reverse_proxy RELAY_HOST:5577
+	}
+
 	# Relay LiveKit webhook path (defensive; normally reached internally by the
 	# SFU, not the public edge).
 	handle /livekit/* {

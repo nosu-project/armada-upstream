@@ -41,6 +41,13 @@ type Settings struct {
 	LivekitAPIKey    string `envconfig:"LIVEKIT_API_KEY"`
 	LivekitAPISecret string `envconfig:"LIVEKIT_API_SECRET"`
 
+	// Web Push VAPID keys (optional). When unset the relay auto-generates a
+	// keypair on first run and persists it in the database. Pin these in env to
+	// keep the public key stable across database wipes (rotating the public key
+	// invalidates every browser's existing push subscription).
+	PushVapidPublic  string `envconfig:"PUSH_VAPID_PUBLIC_KEY"`
+	PushVapidPrivate string `envconfig:"PUSH_VAPID_PRIVATE_KEY"`
+
 	RelayPubkey string `envconfig:"-"`
 
 	// AdminPubkeys is AdminPubkey parsed into validated 32-byte hex pubkeys.
@@ -197,6 +204,9 @@ func main() {
 	// Single-community model: provision the one group, seed admins, and reject
 	// any attempt to create additional groups. See group.go.
 	setupSingleGroup()
+
+	// Web Push notifications for messages/mentions/DMs/reactions. See push.go.
+	setupPush()
 
 	log.Info().Str("relay-pubkey", s.RelayPubkey).Msg("running on http://0.0.0.0:" + s.Port)
 	if err := http.ListenAndServe(":"+s.Port, relay); err != nil {

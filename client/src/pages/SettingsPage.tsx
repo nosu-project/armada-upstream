@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ProfileSettings } from "@/components/ProfileSettings";
+import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { ThemeSelector } from "@/components/ThemeSelector";
 import { VoiceDeviceSettings } from "@/components/VoiceDeviceSettings";
@@ -122,6 +123,22 @@ export function SettingsPage() {
             </CardHeader>
             <CardContent>
               <ProfileSettings />
+            </CardContent>
+          </Card>
+        )}
+
+        {user && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Notifications</CardTitle>
+              <CardDescription>
+                Get push notifications for messages, mentions, replies, reactions, and DMs —
+                even when {APP_NAME} is closed. Delivered straight from your relay; no
+                third-party push service.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <NotificationSettings />
             </CardContent>
           </Card>
         )}
