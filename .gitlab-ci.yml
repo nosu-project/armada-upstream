@@ -226,9 +226,10 @@ build-desktop-linux:
 
 build-desktop-windows:
   <<: *desktop-template
-  # The :wine variant bundles wine so electron-builder can produce Windows
-  # installers from a Linux runner.
-  image: electronuserland/builder:wine
+  # The -wine variant bundles wine so electron-builder can produce Windows
+  # installers from a Linux runner. Pin an explicit Node tag (matching the
+  # Linux job): the bare ":wine"/":20" tags are no longer reliably published.
+  image: electronuserland/builder:20-wine
   script:
     - npx electron-builder --win --config electron-builder.yml --publish never
     - cd ../..
