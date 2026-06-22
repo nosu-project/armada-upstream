@@ -93,3 +93,19 @@ export function playUnmuteSound(): void {
     0.09,
   );
 }
+
+/**
+ * A screenshare started: a bright, rising three-note arpeggio (C6 → E6 → G6)
+ * to mark the more notable event of a screen going live, distinct from the
+ * two-note join chirp.
+ */
+export function playScreenShareSound(): void {
+  playNotes(
+    [
+      { freq: 1046.5, start: 0, dur: 0.1 },
+      { freq: 1318.5, start: 0.09, dur: 0.1 },
+      { freq: 1568, start: 0.18, dur: 0.18 },
+    ],
+    0.11,
+  );
+}

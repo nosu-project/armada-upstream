@@ -16,6 +16,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { pubkeyFromLivekitIdentity } from "@/hooks/useLivekit";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { playScreenShareSound } from "@/lib/callSounds";
 import {
   getAvatarShape,
   shapedAvatarSpeakingStyle,
@@ -250,6 +251,26 @@ export function CallStage({
     videoTracks.filter((t) => t.source === Track.Source.Camera).map((t) => t.participant.identity),
   );
   const avatarOnly = participants.filter((p) => !withCamera.has(p.identity));
+
+  // Auto-expand the stage when a screenshare *appears* and spotlight it (à la
+  // Discord). We compare against the previous render's screenshare keys so this
+  // fires only on a new share — not on every render, and not re-opening after
+  // the user manually closes the stage while a share is still running.
+  const screenShareKeys = videoTracks
+    .filter((t) => t.source === Track.Source.ScreenShare)
+    .map(trackTileKey);
+  const prevScreenShareKeys = useRef<string[]>([]);
+  useEffect(() => {
+    const prev = prevScreenShareKeys.current;
+    const appeared = screenShareKeys.find((k) => !prev.includes(k));
+    if (appeared) {
+      setStageOpen(true);
+      setFocusKey(appeared);
+      playScreenShareSound();
+    }
+    prevScreenShareKeys.current = screenShareKeys;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screenShareKeys.join("|")]);
 
   // The ordered, keyed set of focusable tiles. A render fn per tile keeps the
   // spotlight + thumbnail strip in sync without duplicating tile markup.
