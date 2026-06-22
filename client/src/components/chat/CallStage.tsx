@@ -7,9 +7,9 @@ import {
 import type { TrackReference } from "@livekit/components-react";
 import type { Participant } from "livekit-client";
 import { Track } from "livekit-client";
-import { MicOff, ScreenShare, X } from "lucide-react";
+import { Maximize2, MicOff, Minimize2, ScreenShare, X } from "lucide-react";
 import type { CSSProperties } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -45,8 +45,28 @@ export function CallStageSlot({ active }: { active: boolean }) {
 }
 
 
+/**
+ * A stable key identifying a focusable tile: a participant's camera/screenshare
+ * track, or an audio-only participant's avatar tile. Used to track which tile is
+ * spotlighted across re-renders (track publications come and go).
+ */
+function trackTileKey(trackRef: TrackReference): string {
+  return `${trackRef.participant.identity}:${trackRef.source}`;
+}
+function participantTileKey(participant: Participant): string {
+  return `${participant.identity}:avatar`;
+}
+
 /** A single video tile (camera or screenshare) for one participant track. */
-function VideoTile({ trackRef }: { trackRef: TrackReference }) {
+function VideoTile({
+  trackRef,
+  focused,
+  onToggleFocus,
+}: {
+  trackRef: TrackReference;
+  focused: boolean;
+  onToggleFocus: () => void;
+}) {
   const participant = trackRef.participant;
   const pubkey = pubkeyFromLivekitIdentity(participant.identity);
   const author = useAuthor(pubkey);
@@ -60,7 +80,12 @@ function VideoTile({ trackRef }: { trackRef: TrackReference }) {
   const isLocal = participant.isLocal;
 
   return (
-    <div className="relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10 aspect-video">
+    <div
+      className={cn(
+        "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10",
+        focused ? "h-full w-full" : "aspect-video",
+      )}
+    >
       {hasVideo ? (
         <VideoTrack
           trackRef={trackRef}
@@ -72,13 +97,14 @@ function VideoTile({ trackRef }: { trackRef: TrackReference }) {
           )}
         />
       ) : (
-        <Avatar shape={shape} className="size-16">
+        <Avatar shape={shape} className={focused ? "size-24" : "size-16"}>
           <AvatarImage src={metadata?.picture} alt={displayName} />
           <AvatarFallback className="bg-primary/20 text-primary text-xl">
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
       )}
+      <FocusButton focused={focused} onClick={onToggleFocus} />
       <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-xs text-white max-w-[calc(100%-0.75rem)]">
         {isScreenShare ? (
           <ScreenShare className="size-3 shrink-0" />
@@ -95,6 +121,24 @@ function VideoTile({ trackRef }: { trackRef: TrackReference }) {
   );
 }
 
+/** Hover-revealed expand/shrink button overlaid on a tile's top-right corner. */
+function FocusButton({ focused, onClick }: { focused: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={focused ? "Exit focus" : "Focus this tile"}
+      onClick={onClick}
+      className={cn(
+        "absolute top-1.5 right-1.5 rounded-md bg-black/60 p-1 text-white/90 hover:bg-black/80 hover:text-white",
+        // Always visible on touch (no hover); fade in on hover for pointer devices.
+        "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity [@media(hover:none)]:opacity-100",
+      )}
+    >
+      {focused ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+    </button>
+  );
+}
+
 /**
  * A tile for a participant who isn't sharing any video: a large centered avatar
  * on the same dark canvas as the video tiles, with a speaking ring and a
@@ -104,9 +148,13 @@ function VideoTile({ trackRef }: { trackRef: TrackReference }) {
 function AvatarTile({
   participant,
   isSpeaking,
+  focused,
+  onToggleFocus,
 }: {
   participant: Participant;
   isSpeaking: boolean;
+  focused: boolean;
+  onToggleFocus: () => void;
 }) {
   const pubkey = pubkeyFromLivekitIdentity(participant.identity);
   const author = useAuthor(pubkey);
@@ -124,7 +172,12 @@ function AvatarTile({
     hasCustomShape && isSpeaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined;
 
   return (
-    <div className="relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10 aspect-video">
+    <div
+      className={cn(
+        "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10",
+        focused ? "h-full w-full" : "aspect-video",
+      )}
+    >
       <div
         className={cn(
           "rounded-full transition-shadow",
@@ -132,13 +185,14 @@ function AvatarTile({
         )}
         style={ringStyle}
       >
-        <Avatar shape={shape} className="size-16">
+        <Avatar shape={shape} className={focused ? "size-28" : "size-16"}>
           <AvatarImage src={metadata?.picture} alt={displayName} />
           <AvatarFallback className="bg-primary/20 text-primary text-xl">
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
       </div>
+      <FocusButton focused={focused} onClick={onToggleFocus} />
       <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-xs text-white max-w-[calc(100%-0.75rem)]">
         {muted && <MicOff className="size-3 shrink-0 text-destructive" />}
         <span className="truncate">
@@ -171,7 +225,13 @@ export function CallStage({
   const { setStageOpen } = useCall();
   const participants = useParticipants();
   const speakingParticipants = useSpeakingParticipants();
-  const speaking = new Set(speakingParticipants.map((p) => p.identity));
+  const speakingIds = useMemo(
+    () => new Set(speakingParticipants.map((p) => p.identity)),
+    [speakingParticipants],
+  );
+
+  // Which tile is spotlighted, tracked by its stable key (or null for the grid).
+  const [focusKey, setFocusKey] = useState<string | null>(null);
 
   // Video tracks (camera + screenshare) we've subscribed to — each a full
   // TrackReference so `VideoTrack` has a real reference to render.
@@ -191,9 +251,51 @@ export function CallStage({
   );
   const avatarOnly = participants.filter((p) => !withCamera.has(p.identity));
 
-  const tileCount = videoTracks.length + avatarOnly.length;
-  // Column count that keeps tiles reasonably sized as the room grows.
-  const cols = tileCount <= 1 ? 1 : tileCount <= 4 ? 2 : tileCount <= 9 ? 3 : 4;
+  // The ordered, keyed set of focusable tiles. A render fn per tile keeps the
+  // spotlight + thumbnail strip in sync without duplicating tile markup.
+  const tiles = useMemo(() => {
+    const list: { key: string; render: (focused: boolean) => React.ReactNode }[] = [];
+    for (const trackRef of videoTracks) {
+      const key = trackTileKey(trackRef);
+      list.push({
+        key,
+        render: (focused) => (
+          <VideoTile
+            trackRef={trackRef}
+            focused={focused}
+            onToggleFocus={() => setFocusKey((cur) => (cur === key ? null : key))}
+          />
+        ),
+      });
+    }
+    for (const p of avatarOnly) {
+      const key = participantTileKey(p);
+      list.push({
+        key,
+        render: (focused) => (
+          <AvatarTile
+            participant={p}
+            isSpeaking={speakingIds.has(p.identity)}
+            focused={focused}
+            onToggleFocus={() => setFocusKey((cur) => (cur === key ? null : key))}
+          />
+        ),
+      });
+    }
+    return list;
+    // `speakingIds`/identities change frequently; recompute is cheap.
+  }, [videoTracks, avatarOnly, speakingIds]);
+
+  // If the focused tile goes away (e.g. its owner stopped sharing or left),
+  // drop back to the grid so we don't spotlight nothing.
+  useEffect(() => {
+    if (focusKey && !tiles.some((t) => t.key === focusKey)) setFocusKey(null);
+  }, [focusKey, tiles]);
+
+  const focused = focusKey ? tiles.find((t) => t.key === focusKey) : undefined;
+
+  // Column count that keeps grid tiles reasonably sized as the room grows.
+  const cols = tiles.length <= 1 ? 1 : tiles.length <= 4 ? 2 : tiles.length <= 9 ? 3 : 4;
 
   return (
     <div
@@ -205,6 +307,16 @@ export function CallStage({
       <div className="clip-corner-lg bg-chrome-deep shadow-lg flex flex-col max-h-[60vh]">
         <div className="flex items-center gap-2 px-3 py-2 shrink-0">
           <span className="text-sm font-medium truncate min-w-0 flex-1">{callLabel}</span>
+          {focused && (
+            <button
+              type="button"
+              className="shrink-0 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+              onClick={() => setFocusKey(null)}
+            >
+              <Minimize2 className="size-3.5" />
+              Show all
+            </button>
+          )}
           <span className="text-xs text-muted-foreground tabular-nums shrink-0">
             {participants.length} in call
           </span>
@@ -217,26 +329,35 @@ export function CallStage({
             <X className="size-4" />
           </button>
         </div>
-        <div className="flex-1 min-h-0 overflow-auto p-3 pt-0">
-          <div
-            className="grid gap-2"
-            style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-          >
-            {videoTracks.map((trackRef) => (
-              <VideoTile
-                key={`${trackRef.participant.identity}:${trackRef.source}:${trackRef.publication?.trackSid}`}
-                trackRef={trackRef}
-              />
-            ))}
-            {avatarOnly.map((p) => (
-              <AvatarTile
-                key={p.identity}
-                participant={p}
-                isSpeaking={speaking.has(p.identity)}
-              />
-            ))}
+        {focused ? (
+          // Spotlight: the focused tile fills the stage; the rest sit in a
+          // horizontally-scrolling thumbnail strip below (à la Discord).
+          <div className="flex-1 min-h-0 flex flex-col gap-2 p-3 pt-0">
+            <div className="flex-1 min-h-0">{focused.render(true)}</div>
+            {tiles.length > 1 && (
+              <div className="shrink-0 flex gap-2 overflow-x-auto">
+                {tiles
+                  .filter((t) => t.key !== focusKey)
+                  .map((t) => (
+                    <div key={t.key} className="shrink-0 w-40 aspect-video">
+                      {t.render(false)}
+                    </div>
+                  ))}
+              </div>
+            )}
           </div>
-        </div>
+        ) : (
+          <div className="flex-1 min-h-0 overflow-auto p-3 pt-0">
+            <div
+              className="grid gap-2"
+              style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+            >
+              {tiles.map((t) => (
+                <div key={t.key}>{t.render(false)}</div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
