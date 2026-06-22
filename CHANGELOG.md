@@ -4,6 +4,11 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.1.1] - 2026-06-22
+
+A maintenance release that gets the desktop (Linux/Windows) installers building
+in CI. No user-facing changes.
+
 ## [0.1.0] - 2026-06-22
 
 The first tagged release of Armada — a sovereign harbor on the open relays, with
