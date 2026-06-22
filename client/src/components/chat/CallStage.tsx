@@ -7,9 +7,10 @@ import {
 import type { TrackReference } from "@livekit/components-react";
 import type { Participant } from "livekit-client";
 import { Track } from "livekit-client";
-import { Maximize2, MicOff, Minimize2, ScreenShare, X } from "lucide-react";
+import { Maximize2, Minimize2, MicOff, Monitor, ScreenShare, Shrink, X } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -22,6 +23,60 @@ import {
   shapedAvatarSpeakingStyle,
 } from "@/lib/avatarShape";
 import { cn } from "@/lib/utils";
+
+/** The tile aspect ratio (16:9) used for fit calculations. */
+const TILE_ASPECT = 16 / 9;
+
+/**
+ * Compute the grid layout (column count + per-tile pixel size) that fits all
+ * `count` 16:9 tiles inside a `width`×`height` box while maximizing tile size —
+ * so tiles scale down to fit instead of overflowing into a scroll. Tries every
+ * column count and keeps the one yielding the largest tiles.
+ */
+function fitGrid(
+  count: number,
+  width: number,
+  height: number,
+  gap: number,
+): { cols: number; tileW: number; tileH: number } {
+  if (count <= 0 || width <= 0 || height <= 0) {
+    return { cols: 1, tileW: 0, tileH: 0 };
+  }
+  let best = { cols: 1, tileW: 0, tileH: 0 };
+  for (let cols = 1; cols <= count; cols++) {
+    const rows = Math.ceil(count / cols);
+    // Available space per cell after gaps.
+    const cellW = (width - gap * (cols - 1)) / cols;
+    const cellH = (height - gap * (rows - 1)) / rows;
+    if (cellW <= 0 || cellH <= 0) continue;
+    // Fit a 16:9 tile inside the cell.
+    let tileW = cellW;
+    let tileH = tileW / TILE_ASPECT;
+    if (tileH > cellH) {
+      tileH = cellH;
+      tileW = tileH * TILE_ASPECT;
+    }
+    if (tileW > best.tileW) best = { cols, tileW, tileH };
+  }
+  return best;
+}
+
+/** Track an element's content-box size via ResizeObserver. */
+function useElementSize<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const box = entry.contentRect;
+      setSize({ width: box.width, height: box.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, size] as const;
+}
 
 /**
  * The top-of-chat host into which the active call's stage portals. A chat
@@ -83,23 +138,18 @@ function VideoTile({
   return (
     <div
       className={cn(
-        "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10",
-        focused ? "w-full" : "aspect-video",
+        "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10 h-full w-full",
       )}
     >
       {hasVideo ? (
         <VideoTrack
           trackRef={trackRef}
-          // Mirror your own camera (not screenshare) so it reads naturally. In
-          // focus mode the video sizes itself (width-driven, height auto) and is
-          // capped by a viewport-relative max-height, so it never overflows the
-          // panel — no dependence on a definite flex/percentage height chain,
-          // which the panel's max-height can't provide.
+          // Mirror your own camera (not screenshare) so it reads naturally. The
+          // video fills its (definite-height) tile and letterboxes via
+          // object-contain, so a tall screenshare fits without overflowing.
           className={cn(
-            focused
-              ? "w-full h-auto max-h-[calc(60vh-8rem)] object-contain"
-              : "h-full w-full",
-            !focused && (isScreenShare ? "object-contain" : "object-cover"),
+            "h-full w-full",
+            isScreenShare || focused ? "object-contain" : "object-cover",
             isLocal && !isScreenShare && "-scale-x-100",
           )}
         />
@@ -182,7 +232,7 @@ function AvatarTile({
     <div
       className={cn(
         "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10",
-        focused ? "h-full w-full" : "aspect-video",
+        focused ? "h-full w-full" : "h-full w-full",
       )}
     >
       <div
@@ -321,72 +371,122 @@ export function CallStage({
 
   const focused = focusKey ? tiles.find((t) => t.key === focusKey) : undefined;
 
-  // Column count that keeps grid tiles reasonably sized as the room grows.
-  const cols = tiles.length <= 1 ? 1 : tiles.length <= 4 ? 2 : tiles.length <= 9 ? 3 : 4;
+  // Theater mode: detach the stage into a full-viewport overlay.
+  const [theater, setTheater] = useState(false);
+  // Leaving the call / closing the stage also exits theater.
+  useEffect(() => {
+    if (!open) setTheater(false);
+  }, [open]);
+  // Esc exits theater mode.
+  useEffect(() => {
+    if (!theater) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTheater(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [theater]);
+
+  // Measure the grid area so tiles scale down to fit instead of overflowing.
+  const [gridRef, gridSize] = useElementSize<HTMLDivElement>();
+  const GRID_GAP = 8; // matches gap-2
+  const grid = fitGrid(tiles.length, gridSize.width, gridSize.height, GRID_GAP);
+
+  const header = (
+    <div className="flex items-center gap-2 px-3 py-2 shrink-0">
+      <span className="text-sm font-medium truncate min-w-0 flex-1">{callLabel}</span>
+      {focused && (
+        <button
+          type="button"
+          className="shrink-0 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+          onClick={() => setFocusKey(null)}
+        >
+          <Minimize2 className="size-3.5" />
+          Show all
+        </button>
+      )}
+      <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+        {participants.length} in call
+      </span>
+      <button
+        type="button"
+        aria-label={theater ? "Exit theater mode" : "Theater mode"}
+        className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+        onClick={() => setTheater((t) => !t)}
+      >
+        {theater ? <Shrink className="size-4" /> : <Monitor className="size-4" />}
+      </button>
+      <button
+        type="button"
+        aria-label="Hide call stage"
+        className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+        onClick={() => setStageOpen(false)}
+      >
+        <X className="size-4" />
+      </button>
+    </div>
+  );
+
+  const body = focused ? (
+    // Spotlight: the focused tile fills the available height (the panel has a
+    // definite height now, so the video letterboxes via object-contain); the
+    // rest go in a horizontally-scrolling thumbnail strip below.
+    <div className="flex-1 min-h-0 flex flex-col gap-2 p-3 pt-0">
+      <div className="flex-1 min-h-0">{focused.render(true)}</div>
+      {tiles.length > 1 && (
+        <div className="shrink-0 flex gap-2 overflow-x-auto">
+          {tiles
+            .filter((t) => t.key !== focusKey)
+            .map((t) => (
+              <div key={t.key} className="shrink-0 w-40 aspect-video">
+                {t.render(false)}
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  ) : (
+    // Auto-fit grid: tiles are sized to the largest 16:9 box that fits all of
+    // them in the measured area, so they scale down rather than overflowing.
+    <div ref={gridRef} className="flex-1 min-h-0 overflow-hidden p-3 pt-0 flex items-center justify-center">
+      <div
+        className="grid place-content-center"
+        style={{
+          gap: GRID_GAP,
+          gridTemplateColumns: `repeat(${grid.cols}, ${grid.tileW}px)`,
+          gridAutoRows: `${grid.tileH}px`,
+        }}
+      >
+        {tiles.map((t) => (
+          <div key={t.key} style={{ width: grid.tileW, height: grid.tileH }}>
+            {t.render(false)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  if (theater) {
+    // Full-viewport overlay; the docked box collapses (renders nothing here).
+    return createPortal(
+      <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in-0 duration-150">
+        {header}
+        {body}
+      </div>,
+      document.body,
+    );
+  }
 
   return (
     <div
       className={cn(
         "shrink-0 mx-2 overflow-hidden transition-all duration-200 ease-out",
-        open ? "mt-2 max-h-[60vh] opacity-100" : "mt-0 max-h-0 opacity-0",
+        open ? "mt-2 max-h-[66vh] opacity-100" : "mt-0 max-h-0 opacity-0",
       )}
     >
-      <div className="clip-corner-lg bg-chrome-deep shadow-lg flex flex-col max-h-[60vh]">
-        <div className="flex items-center gap-2 px-3 py-2 shrink-0">
-          <span className="text-sm font-medium truncate min-w-0 flex-1">{callLabel}</span>
-          {focused && (
-            <button
-              type="button"
-              className="shrink-0 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/10"
-              onClick={() => setFocusKey(null)}
-            >
-              <Minimize2 className="size-3.5" />
-              Show all
-            </button>
-          )}
-          <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-            {participants.length} in call
-          </span>
-          <button
-            type="button"
-            aria-label="Hide call stage"
-            className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
-            onClick={() => setStageOpen(false)}
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-        {focused ? (
-          // Spotlight: the focused tile (width-driven, capped height) sits at
-          // the top; the rest go in a horizontally-scrolling thumbnail strip
-          // below (à la Discord). The whole area scrolls if it still exceeds the
-          // panel, so nothing is clipped.
-          <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-2 p-3 pt-0">
-            <div className="shrink-0">{focused.render(true)}</div>
-            {tiles.length > 1 && (
-              <div className="shrink-0 flex gap-2 overflow-x-auto">
-                {tiles
-                  .filter((t) => t.key !== focusKey)
-                  .map((t) => (
-                    <div key={t.key} className="shrink-0 w-40 aspect-video">
-                      {t.render(false)}
-                    </div>
-                  ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="flex-1 min-h-0 overflow-auto p-3 pt-0">
-            <div
-              className="grid gap-2"
-              style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-            >
-              {tiles.map((t) => (
-                <div key={t.key}>{t.render(false)}</div>
-              ))}
-            </div>
-          </div>
-        )}
+      <div className="clip-corner-lg bg-chrome-deep shadow-lg flex flex-col h-[42vh] max-h-[60vh]">
+        {header}
+        {body}
       </div>
     </div>
   );
