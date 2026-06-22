@@ -1,0 +1,65 @@
+# electron-builder config for the Armada desktop app.
+#
+# The app source is this directory (electron/): main.js + package.json. There is
+# no bundled web build — the shell loads the hosted client over HTTPS (see
+# main.js), so the package is tiny.
+#
+# Built in CI on version tags; see ../../.gitlab-ci.yml (build-desktop-*).
+
+appId: pub.armada.app
+productName: Armada
+copyright: Armada
+
+directories:
+  output: dist
+  buildResources: build
+
+# Only the shell's own files ship inside the asar; node_modules/electron is the
+# runtime (provided by electron-builder) and must not be packed.
+files:
+  - main.js
+  - package.json
+  - "!**/*.map"
+
+# ── Linux ─────────────────────────────────────────────────────────────────────
+linux:
+  category: Network
+  maintainer: Armada <chad@chadwick.site>
+  target:
+    - AppImage
+    - deb
+  desktop:
+    entry:
+      Name: Armada
+      Comment: Sovereign NIP-29 chat, channels, and voice
+      Categories: Network;Chat;InstantMessaging;
+
+# ── Windows ────────────────────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-Setup.${ext}
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+# Builds an UNSIGNED .dmg unless Apple Developer ID certs are provided via the
+# usual electron-builder env vars (CSC_LINK / CSC_KEY_PASSWORD) plus notarization
+# (APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID). Unsigned builds run
+# only after a Gatekeeper override on the user's machine.
+mac:
+  category: public.app-category.social-networking
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  # No hardened runtime / notarization unless signing is configured.
+  hardenedRuntime: false
+
+# Stable, predictable artifact names for the CI upload step.
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}

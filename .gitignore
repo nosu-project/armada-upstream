@@ -12,3 +12,7 @@ server/armada-relay
 *.jks
 *.keystore
 client/android/app/google-services.json
+
+# Desktop (Electron) build outputs + CI-generated icons.
+client/electron/dist/
+client/electron/build/icon.*

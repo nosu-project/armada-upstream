@@ -10,6 +10,8 @@ routing, and getting LiveKit voice to work behind an edge.
 | Path      | What                                                            |
 |-----------|-----------------------------------------------------------------|
 | `client/` | React 19 + Vite web client (nginx-served static build)          |
+| `client/android/`  | Capacitor Android project (signed APK/AAB built in CI) |
+| `client/electron/` | Electron desktop shell (loads the hosted client over HTTPS; Linux/Windows/macOS installers built in CI) |
 | `server/` | Go relay: khatru + relay29 + badger + LiveKit token endpoint    |
 | `infra/`  | `docker-compose.yml` + `.env.example` for the full stack        |
 | `start.sh`| Turnkey wrapper around `docker compose` in `infra/`             |

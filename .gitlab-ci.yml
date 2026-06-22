@@ -172,12 +172,137 @@ build-apk:
       - client/android/.gradle/
       - client/.gradle/
 
+# ── Desktop (Electron) builds on version tags ───────────────────────────────
+#
+# The desktop app (client/electron) is a thin Electron shell that loads the
+# hosted web client over HTTPS, so each build is tiny and needs no web bundle.
+# ARMADA_APP_URL overrides the origin it loads (defaults to the public deploy).
+#
+# A shared 1024x1024 PNG icon is generated from client/public/logo.svg;
+# electron-builder derives the platform icon formats (.ico/.icns) from it.
+
+.desktop-template: &desktop-template
+  stage: build
+  needs: []
+  timeout: 30 minutes
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  variables:
+    # Origin the desktop shell loads. Override per-deploy in CI/CD variables.
+    ARMADA_APP_URL: ${ARMADA_APP_URL}
+  before_script:
+    # Version from the tag (v2.1.0 -> 2.1.0).
+    - export TAG="${CI_COMMIT_TAG#v}"
+    # Stamp the version into the Electron app's package.json.
+    - cd client/electron
+    - 'sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json'
+    - npm install --no-audit --no-fund
+    # Generate a 1024x1024 PNG icon from the SVG (electron-builder derives the
+    # rest). rsvg-convert ships in the electronuserland builder images.
+    - mkdir -p build
+    - rsvg-convert -w 1024 -h 1024 ../public/logo.svg -o build/icon.png || convert -background none -resize 1024x1024 ../public/logo.svg build/icon.png
+  cache:
+    key: electron-builder-cache
+    paths:
+      - client/electron/.cache/
+
+build-desktop-linux:
+  <<: *desktop-template
+  image: electronuserland/builder:20
+  script:
+    - npx electron-builder --linux --config electron-builder.yml --publish never
+    - cd ../..
+    - mkdir -p artifacts
+    # Collect the AppImage + deb under predictable names.
+    - cp client/electron/dist/*.AppImage "artifacts/Armada-${CI_COMMIT_TAG}-linux-x86_64.AppImage"
+    - cp client/electron/dist/*.deb "artifacts/Armada-${CI_COMMIT_TAG}-linux-amd64.deb"
+    - ls -lh artifacts/
+    - |
+      for f in artifacts/*; do
+        curl --fail --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$f" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/armada/${CI_COMMIT_TAG}/$(basename "$f")"
+      done
+  artifacts:
+    paths:
+      - artifacts/Armada-*-linux-*
+    expire_in: 90 days
+
+build-desktop-windows:
+  <<: *desktop-template
+  # The :wine variant bundles wine so electron-builder can produce Windows
+  # installers from a Linux runner.
+  image: electronuserland/builder:wine
+  script:
+    - npx electron-builder --win --config electron-builder.yml --publish never
+    - cd ../..
+    - mkdir -p artifacts
+    - cp client/electron/dist/*Setup*.exe "artifacts/Armada-${CI_COMMIT_TAG}-Setup.exe"
+    # The portable build is the non-Setup .exe.
+    - cp $(ls client/electron/dist/*.exe | grep -iv setup | head -n1) "artifacts/Armada-${CI_COMMIT_TAG}-windows-portable.exe"
+    - ls -lh artifacts/
+    - |
+      for f in artifacts/Armada-${CI_COMMIT_TAG}-Setup.exe artifacts/Armada-${CI_COMMIT_TAG}-windows-portable.exe; do
+        curl --fail --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$f" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/armada/${CI_COMMIT_TAG}/$(basename "$f")"
+      done
+  artifacts:
+    paths:
+      - artifacts/Armada-*-Setup.exe
+      - artifacts/Armada-*-windows-portable.exe
+    expire_in: 90 days
+
+# macOS .dmg. Requires a runner tagged `macos` (Apple hardware — GitLab.com's
+# shared runners are Linux only). Manual + allow_failure so a pipeline without
+# such a runner still succeeds. For a Gatekeeper-friendly (non-quarantined)
+# build, add Apple signing/notarization secrets (CSC_LINK, CSC_KEY_PASSWORD,
+# APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID); otherwise the .dmg is
+# unsigned and users must right-click → Open the first time.
+build-desktop-macos:
+  <<: *desktop-template
+  tags:
+    - macos
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      when: manual
+      allow_failure: true
+  before_script:
+    - export TAG="${CI_COMMIT_TAG#v}"
+    - cd client/electron
+    - 'sed -i "" "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json || sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json'
+    - npm install --no-audit --no-fund
+    # On macOS runners use the largest source PNG as the base icon; electron-builder
+    # generates the .icns. (rsvg/convert may be absent on a bare mac runner.)
+    - mkdir -p build
+    - cp ../public/logo-192.png build/icon.png
+  script:
+    - npx electron-builder --mac --config electron-builder.yml --publish never
+    - cd ../..
+    - mkdir -p artifacts
+    - for f in client/electron/dist/*.dmg; do cp "$f" "artifacts/$(basename "$f")"; done
+    - ls -lh artifacts/
+    - |
+      for f in artifacts/*.dmg; do
+        curl --fail --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$f" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/armada/${CI_COMMIT_TAG}/$(basename "$f")"
+      done
+  artifacts:
+    paths:
+      - artifacts/*.dmg
+    expire_in: 90 days
+
 # ── GitLab Release attaching the APK/AAB package links ──────────────────────
 release:
   stage: release
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:
     - job: build-apk
+      artifacts: false
+    - job: build-desktop-linux
+      artifacts: false
+    - job: build-desktop-windows
       artifacts: false
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
@@ -194,4 +319,16 @@ release:
           link_type: package
         - name: Armada-${CI_COMMIT_TAG}.aab
           url: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/armada/${CI_COMMIT_TAG}/Armada-${CI_COMMIT_TAG}.aab
+          link_type: package
+        - name: Armada-${CI_COMMIT_TAG}-linux-x86_64.AppImage
+          url: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/armada/${CI_COMMIT_TAG}/Armada-${CI_COMMIT_TAG}-linux-x86_64.AppImage
+          link_type: package
+        - name: Armada-${CI_COMMIT_TAG}-linux-amd64.deb
+          url: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/armada/${CI_COMMIT_TAG}/Armada-${CI_COMMIT_TAG}-linux-amd64.deb
+          link_type: package
+        - name: Armada-${CI_COMMIT_TAG}-Setup.exe
+          url: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/armada/${CI_COMMIT_TAG}/Armada-${CI_COMMIT_TAG}-Setup.exe
+          link_type: package
+        - name: Armada-${CI_COMMIT_TAG}-windows-portable.exe
+          url: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/armada/${CI_COMMIT_TAG}/Armada-${CI_COMMIT_TAG}-windows-portable.exe
           link_type: package
