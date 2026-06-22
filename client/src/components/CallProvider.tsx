@@ -519,12 +519,13 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         style={
           user && activeCall
             ? ({
-                // Reserve the bar's full height: content (3.25rem) + the bar's
-                // own pb-safe bottom inset (0.75rem + the home-indicator inset).
-                // A flat 3.25rem under-reserves on devices with a safe-area
-                // inset, letting the fixed bar creep over the composer.
+                // Reserve the stacked call panel's height so the fixed mobile
+                // bar doesn't cover the composer. The panel is header +
+                // roster (scrolls past its cap) + control bar; reserve a
+                // typical few-participant height plus the bar's own pb-safe
+                // bottom inset (0.75rem + the home-indicator inset).
                 "--call-bar-h":
-                  "calc(3.25rem + 0.75rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))",
+                  "calc(11rem + 0.75rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))",
               } as React.CSSProperties)
             : undefined
         }

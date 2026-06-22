@@ -64,12 +64,13 @@ import { cn } from "@/lib/utils";
 function ParticipantAvatar({
   pubkey,
   isSpeaking,
-  participant,
+  size = "size-7",
+  fallbackTextClass = "text-[10px]",
 }: {
   pubkey: string;
   isSpeaking?: boolean;
-  /** When set (remote participant), the avatar opens a per-user volume control. */
-  participant?: RemoteParticipant;
+  size?: string;
+  fallbackTextClass?: string;
 }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -93,40 +94,87 @@ function ParticipantAvatar({
       }
     : undefined;
 
-  const avatar = (
+  return (
     // Wrapper keeps the indicator outside the (overflow-hidden / masked)
     // Avatar so it never gets cropped.
     <div
       className={cn(
-        "rounded-full transition-shadow",
+        "rounded-full transition-shadow shrink-0",
         !hasCustomShape && "ring-2 ring-background",
         !hasCustomShape && isSpeaking && "ring-success shadow-[0_0_0_2px_hsl(var(--success))]",
       )}
       style={wrapperStyle}
     >
-      <Avatar shape={shape} className="size-7">
+      <Avatar shape={shape} className={size}>
         <AvatarImage src={metadata?.picture} alt={displayName} />
-        <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+        <AvatarFallback className={cn("bg-primary/20 text-primary", fallbackTextClass)}>
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>
     </div>
   );
+}
 
-  // Local participant (no `participant` prop): plain avatar with a name tooltip.
+/**
+ * One participant's row in the call panel: avatar (with speaking ring), display
+ * name, and a mic-state icon. Remote participants' rows are clickable and open
+ * a per-user playback-volume control (à la Discord); the local participant's
+ * row is static.
+ */
+function ParticipantRow({
+  pubkey,
+  isSpeaking,
+  isMuted,
+  isLocal,
+  participant,
+}: {
+  pubkey: string;
+  isSpeaking?: boolean;
+  isMuted?: boolean;
+  isLocal?: boolean;
+  /** When set (remote participant), the row opens a per-user volume control. */
+  participant?: RemoteParticipant;
+}) {
+  const author = useAuthor(pubkey);
+  const displayName = useScopedDisplayName(pubkey, author.data?.metadata);
+
+  const body = (
+    <>
+      <ParticipantAvatar pubkey={pubkey} isSpeaking={isSpeaking} />
+      <span
+        className={cn(
+          "flex-1 min-w-0 truncate text-sm",
+          isSpeaking ? "text-success font-medium" : "text-foreground",
+        )}
+      >
+        {displayName}
+        {isLocal && <span className="text-muted-foreground"> (you)</span>}
+      </span>
+      {isMuted ? (
+        <MicOff className="size-3.5 shrink-0 text-muted-foreground" />
+      ) : isSpeaking ? (
+        <Mic className="size-3.5 shrink-0 text-success" />
+      ) : null}
+    </>
+  );
+
+  const rowClass = "flex items-center gap-2 rounded-md px-2 py-1.5 w-full text-left";
+
+  // Local participant: static row, no volume control.
   if (!participant) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>{avatar}</TooltipTrigger>
-        <TooltipContent>{displayName}</TooltipContent>
-      </Tooltip>
-    );
+    return <div className={rowClass}>{body}</div>;
   }
 
-  // Remote participant: clicking opens a per-user volume control.
+  // Remote participant: the whole row is a button that opens the per-user
+  // volume control.
   return (
-    <ParticipantVolumeMenu participant={participant} pubkey={pubkey} displayName={displayName}>
-      {avatar}
+    <ParticipantVolumeMenu
+      participant={participant}
+      pubkey={pubkey}
+      displayName={displayName}
+      className={cn(rowClass, "transition-colors hover:bg-foreground/5")}
+    >
+      {body}
     </ParticipantVolumeMenu>
   );
 }
@@ -141,11 +189,13 @@ function ParticipantVolumeMenu({
   participant,
   pubkey,
   displayName,
+  className,
   children,
 }: {
   participant: RemoteParticipant;
   pubkey: string;
   displayName: string;
+  className?: string;
   children: React.ReactNode;
 }) {
   const [volume, setVolume] = useState(() => getUserVolume(pubkey));
@@ -171,16 +221,11 @@ function ParticipantVolumeMenu({
 
   return (
     <DropdownMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <button type="button" aria-label={`Volume for ${displayName}`} className="shrink-0">
-              {children}
-            </button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent>{displayName}</TooltipContent>
-      </Tooltip>
+      <DropdownMenuTrigger asChild>
+        <button type="button" aria-label={`Volume for ${displayName}`} className={className}>
+          {children}
+        </button>
+      </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56 p-3">
         <div className="flex items-center justify-between gap-2 mb-2">
           <span className="text-sm font-medium truncate">{displayName}</span>
@@ -395,37 +440,53 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
     );
   }
 
-  const labelEl = label && (
-    onLabelClick ? (
-      <button
-        type="button"
-        onClick={onLabelClick}
-        className="flex items-center gap-1.5 min-w-0 text-xs font-medium text-foreground hover:underline text-left"
-      >
-        <Headphones className="size-4 text-success shrink-0" />
-        <span className="truncate">{label}</span>
-      </button>
-    ) : (
-      <span className="flex items-center gap-1.5 min-w-0 text-xs font-medium text-muted-foreground">
-        <Headphones className="size-4 text-success shrink-0" />
-        <span className="truncate">{label}</span>
+  const headerEl = (
+    <div className="flex items-center gap-1.5 min-w-0 px-1">
+      <Headphones className="size-4 text-success shrink-0" />
+      {label ? (
+        onLabelClick ? (
+          <button
+            type="button"
+            onClick={onLabelClick}
+            className="flex-1 min-w-0 truncate text-xs font-semibold text-foreground hover:underline text-left"
+          >
+            {label}
+          </button>
+        ) : (
+          <span className="flex-1 min-w-0 truncate text-xs font-semibold text-foreground">
+            {label}
+          </span>
+        )
+      ) : (
+        <span className="flex-1 min-w-0 truncate text-xs font-semibold text-success">
+          Voice connected
+        </span>
+      )}
+      <span className="shrink-0 text-[11px] font-medium text-muted-foreground tabular-nums">
+        {participants.length}
       </span>
-    )
+    </div>
   );
 
   const participantsEl = (
-    // No `overflow-hidden` here: it would crop the speaking ring/glow off the
-    // edge avatars. Padding gives the ring room; `min-w-0` still lets the row
-    // shrink. Avatars overlap via negative spacing.
-    <div className="flex -space-x-1.5 flex-1 min-w-0 px-0.5 py-1">
-      {participants.map((p) => (
-        <ParticipantAvatar
-          key={p.identity}
-          pubkey={pubkeyFromLivekitIdentity(p.identity)}
-          isSpeaking={speaking.has(p.identity)}
-          participant={remoteByIdentity.get(p.identity)}
-        />
-      ))}
+    // The roster. Each participant gets their own row (avatar + name + mic
+    // state). Capped height with scroll so a busy room can't grow the panel
+    // unbounded; padding leaves room for the speaking ring/glow so it isn't
+    // clipped at the row edges.
+    <div className="flex flex-col max-h-44 overflow-y-auto overflow-x-hidden py-0.5">
+      {participants.map((p) => {
+        const identity = p.identity;
+        return (
+          <ParticipantRow
+            key={identity}
+            pubkey={pubkeyFromLivekitIdentity(identity)}
+            isSpeaking={speaking.has(identity)}
+            isMuted={!p.isMicrophoneEnabled}
+            isLocal={p.isLocal}
+            participant={remoteByIdentity.get(identity)}
+          />
+        );
+      })}
     </div>
   );
 
@@ -433,7 +494,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
     <Button
       variant={isMicrophoneEnabled ? "default" : "outline"}
       size="icon"
-      className="size-8 shrink-0"
+      className="size-9 shrink-0"
       aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
       onClick={() => {
         const enabling = !isMicrophoneEnabled;
@@ -444,7 +505,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
         localParticipant.setMicrophoneEnabled(enabling);
       }}
     >
-      {isMicrophoneEnabled ? <Mic className="size-3.5" /> : <MicOff className="size-3.5" />}
+      {isMicrophoneEnabled ? <Mic className="size-4" /> : <MicOff className="size-4" />}
     </Button>
   );
 
@@ -452,7 +513,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
     <Button
       variant={isCameraEnabled ? "default" : "outline"}
       size="icon"
-      className="size-8 shrink-0"
+      className="size-9 shrink-0"
       aria-label={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
       onClick={() => {
         void localParticipant
@@ -460,7 +521,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
           .catch((err) => console.warn("failed to toggle camera", err));
       }}
     >
-      {isCameraEnabled ? <Video className="size-3.5" /> : <VideoOff className="size-3.5" />}
+      {isCameraEnabled ? <Video className="size-4" /> : <VideoOff className="size-4" />}
     </Button>
   );
 
@@ -468,7 +529,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
     <Button
       variant={isScreenShareEnabled ? "default" : "outline"}
       size="icon"
-      className="size-8 shrink-0"
+      className="size-9 shrink-0"
       aria-label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
       onClick={() => {
         // Screenshare publishes its own track regardless of the camera; the
@@ -485,9 +546,9 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
       }}
     >
       {isScreenShareEnabled ? (
-        <MonitorOff className="size-3.5" />
+        <MonitorOff className="size-4" />
       ) : (
-        <MonitorUp className="size-3.5" />
+        <MonitorUp className="size-4" />
       )}
     </Button>
   );
@@ -499,37 +560,30 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
       // down the room's audio around the same tick and the sound gets cut off.
       // This fires inside the user's gesture, so the AudioContext is unlocked.
       onClick={() => playLeaveSound()}
-      className="inline-flex items-center justify-center rounded-md size-8 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
+      aria-label="Leave call"
+      className="inline-flex items-center justify-center rounded-md size-9 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
     >
-      <PhoneOff className="size-3.5" />
+      <PhoneOff className="size-4" />
     </DisconnectButton>
   );
 
-  if (stacked) {
-    return (
-      <div className="flex flex-col gap-2 px-3 py-2">
-        {labelEl}
-        <div className="flex items-center gap-2">
-          {participantsEl}
+  // A stacked panel (à la Discord): header → participant roster → control bar.
+  // `stacked` only widens the layout (desktop side-panel); the structure is the
+  // same on mobile so the controls are never crammed onto the activity row.
+  return (
+    <div className={cn("flex flex-col gap-1.5 px-2 py-2", stacked && "min-w-0")}>
+      {headerEl}
+      {participantsEl}
+      <div className="flex items-center gap-1.5 pt-1.5 border-t border-foreground/10">
+        <div className="flex items-center gap-1.5">
           {micBtn}
           {cameraBtn}
           {supportsScreenShare && screenShareBtn}
           <DeviceMenu />
-          {hangupBtn}
         </div>
+        <div className="flex-1" />
+        {hangupBtn}
       </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-2 px-3 py-2">
-      {labelEl && <span className="shrink-0 max-w-40 truncate">{labelEl}</span>}
-      {participantsEl}
-      {micBtn}
-      {cameraBtn}
-      {supportsScreenShare && screenShareBtn}
-      <DeviceMenu />
-      {hangupBtn}
     </div>
   );
 }
