@@ -1,11 +1,13 @@
 import { useNostr } from "@nostrify/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 
+import { useEventStore } from "@/hooks/useEventStore";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { KIND_GROUP_METADATA, parseGroupMetadata, type Nip29Group } from "@/lib/nip29";
 
-import type { NostrFilter } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /**
  * Fetch all groups hosted on a server (relay).
@@ -18,9 +20,21 @@ import type { NostrFilter } from "@nostrify/nostrify";
  * Relays may hide closed/private groups from open-ended listings, so the
  * ids remembered in the user's kind 10009 list are queried explicitly by
  * `d` tag and merged in.
+ *
+ * The channel list is one of the most STABLE things in the app: it's
+ * relay-signed metadata that changes only when an admin creates/edits/deletes
+ * a channel. So this query is deliberately quiet — no polling, a long
+ * staleTime, an IndexedDB seed so it renders instantly on reload, and explicit
+ * invalidation (see useGroupModeration / useCreateGroup) for the rare real
+ * changes. The query KEY is just the relay URL: `relaySelf` and the remembered
+ * ids are read inside the queryFn for filtering, but kept OUT of the key so a
+ * resolving NIP-11 doc or a churning kind-10009 list can't swap the cache
+ * entry and force a refetch from scratch.
  */
 export function useRelayGroups(relayUrl: string | undefined) {
   const { nostr } = useNostr();
+  const queryClient = useQueryClient();
+  const eventStore = useEventStore();
   const { data: relayInfo, isLoading: infoLoading, isError: infoError } = useRelayInfo(relayUrl);
   const { data: userList } = useUserGroupList();
 
@@ -30,8 +44,46 @@ export function useRelayGroups(relayUrl: string | undefined) {
     .map((ref) => ref.id)
     .sort();
 
+  const queryKey = ["nip29", "groups", relayUrl];
+
+  function buildGroups(events: NostrEvent[]): Nip29Group[] {
+    const groups = new Map<string, Nip29Group>();
+    for (const event of events) {
+      const group = parseGroupMetadata(event, relayUrl!);
+      if (!group) continue;
+      const existing = groups.get(group.id);
+      if (!existing || existing.event.created_at < event.created_at) {
+        groups.set(group.id, group);
+      }
+    }
+    return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // Cache-first seed: hydrate the channel list from IndexedDB (where the relay's
+  // kind-39000 metadata is persisted by NostrBatcher) so it renders instantly on
+  // a fresh mount/reload instead of going blank while the relay round-trips.
+  useEffect(() => {
+    if (!relayUrl) return;
+    let cancelled = false;
+    void (async () => {
+      if (queryClient.getQueryData(queryKey)) return;
+      const store = await eventStore;
+      const filter: NostrFilter = relaySelf
+        ? { kinds: [KIND_GROUP_METADATA], authors: [relaySelf] }
+        : { kinds: [KIND_GROUP_METADATA] };
+      const cached = await store.query([filter]);
+      if (cancelled || cached.length === 0) return;
+      if (queryClient.getQueryData(queryKey)) return;
+      queryClient.setQueryData(queryKey, buildGroups(cached));
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relayUrl, relaySelf, eventStore, queryClient]);
+
   const query = useQuery({
-    queryKey: ["nip29", "groups", relayUrl, relaySelf ?? "any", rememberedIds.join(",")],
+    queryKey,
     queryFn: async ({ signal }) => {
       const authors = relaySelf ? { authors: [relaySelf] } : {};
       const filters: NostrFilter[] = [
@@ -45,22 +97,32 @@ export function useRelayGroups(relayUrl: string | undefined) {
         signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
       });
 
-      const groups = new Map<string, Nip29Group>();
-      for (const event of events) {
-        const group = parseGroupMetadata(event, relayUrl!);
-        if (!group) continue;
-        const existing = groups.get(group.id);
-        if (!existing || existing.event.created_at < event.created_at) {
-          groups.set(group.id, group);
-        }
-      }
-
-      return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+      return buildGroups(events);
     },
     enabled: Boolean(relayUrl) && !infoLoading,
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    // Relay-signed, rarely-changing data. Keep it fresh for the whole session
+    // and rely on explicit invalidation for the rare real change.
+    staleTime: 60 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   });
+
+  // The remembered ids (private/closed channels from the kind-10009 list) are
+  // not part of the query key — that list churns constantly and we don't want it
+  // swapping the cache entry. But if the user joins a channel the open listing
+  // hides, its id won't be in the current result; refetch ONCE in that case so
+  // the newly-joined channel shows up. Steady state (every remembered id already
+  // present) stays quiet.
+  const data = query.data;
+  useEffect(() => {
+    if (!relayUrl || !data) return;
+    const known = new Set(data.map((g) => g.id));
+    if (rememberedIds.some((id) => !known.has(id))) {
+      void query.refetch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relayUrl, data, rememberedIds.join(",")]);
 
   // While the NIP-11 info doc is still loading the groups query is disabled, so
   // surface that as "loading" too — otherwise a stuck/slow info fetch would read
