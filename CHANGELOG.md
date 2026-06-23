@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.4.0] - 2026-06-23
+
+Your chats now stick around when you reload. Armada keeps your conversations,
+channels, communities, and profiles on your device, so a refresh shows
+everything instantly instead of going blank while it reconnects. The welcome
+and post-login screens also got a cleaner, refreshed look.
+
+### Added
+- Offline history: your messages, direct messages, encrypted communities,
+  joined channels, and profiles are saved on your device and load instantly on
+  refresh, even before the network reconnects.
+
+### Changed
+- Refreshed the welcome and post-login screens with a cleaner look and a
+  step-by-step sign-in progress view.
+
 ## [0.3.1] - 2026-06-23
 
 Logging in now shows a brief loading screen while Armada catches up — pulling
