@@ -4,6 +4,20 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.4.1] - 2026-06-23
+
+Fixes the Windows desktop app, which opened to a blank screen on first launch
+and then wouldn't load your existing servers after signing in — leaving you
+stuck on the "add a server" screen. Also keeps a message's hover toolbar from
+overlapping the text on grouped messages.
+
+### Fixed
+- Windows desktop app no longer opens blank on first launch; signing in now
+  correctly restores your existing servers instead of stranding you on the
+  add-a-server screen.
+- The hover toolbar on grouped (continuation) messages no longer covers the
+  message text.
+
 ## [0.4.0] - 2026-06-23
 
 Your chats now stick around when you reload. Armada keeps your conversations,
