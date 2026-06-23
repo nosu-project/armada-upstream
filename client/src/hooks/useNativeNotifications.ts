@@ -1,0 +1,211 @@
+import { Capacitor } from "@capacitor/core";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useUserGroupList } from "@/hooks/useUserGroupList";
+import {
+  DEFAULT_PUSH_PREFS,
+  type PushPrefs,
+} from "@/hooks/usePushNotifications";
+import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { PLATFORM_RELAYS, normalizeRelayUrl } from "@/lib/platform";
+
+/** localStorage key for the native background-notification intent (toggle). */
+const NATIVE_INTENT_KEY = "armada:native-notif-intent";
+/** Shared per-type prefs with the web-push path. */
+const PREFS_KEY = "armada:push-prefs";
+
+/** True only inside the Capacitor native runtime (the APK), not web/PWA. */
+export function isNativeRuntime(): boolean {
+  return Capacitor.isNativePlatform();
+}
+
+function loadIntent(): boolean {
+  try {
+    const raw = localStorage.getItem(NATIVE_INTENT_KEY);
+    // Opt-out: background notifications are intended-on by default. They only
+    // actually start once the OS notification permission is granted (which may
+    // need one tap on Android 13+); the intent persists across launches.
+    if (raw === null) return true;
+    return raw === "true";
+  } catch {
+    return true;
+  }
+}
+
+function saveIntent(on: boolean): void {
+  try {
+    localStorage.setItem(NATIVE_INTENT_KEY, String(on));
+  } catch {
+    // ignore
+  }
+}
+
+function loadPrefs(): PushPrefs {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (raw) return { ...DEFAULT_PUSH_PREFS, ...JSON.parse(raw) };
+  } catch {
+    // ignore
+  }
+  return { ...DEFAULT_PUSH_PREFS };
+}
+
+export interface UseNativeNotificationsReturn {
+  /** Whether we're in the native APK (where this path applies). */
+  supported: boolean;
+  /** Whether the user has turned background notifications on. */
+  enabled: boolean;
+  /** Whether an enable/disable op is in flight. */
+  busy: boolean;
+  /** Current per-type prefs. */
+  prefs: PushPrefs;
+  /** Request notification permission, then start the background service. */
+  enable: () => Promise<void>;
+  /** Stop the background service. */
+  disable: () => Promise<void>;
+  /** Update per-type prefs (re-configures the running service). */
+  setPrefs: (next: PushPrefs) => Promise<void>;
+}
+
+/**
+ * Native (Android APK) background notifications.
+ *
+ * Instead of Web Push — which the Android System WebView doesn't support — the
+ * APK runs a foreground service holding a persistent Nostr REQ to the relay,
+ * firing local notifications instantly. This hook is the JS control surface:
+ * it feeds the service the user's pubkey, relay URLs, joined group ids and
+ * prefs, and re-configures it whenever any of those change.
+ *
+ * On web/PWA this hook is inert (`supported === false`); the web-push path
+ * (usePushNotifications) handles those.
+ */
+export function useNativeNotifications(): UseNativeNotificationsReturn {
+  const supported = isNativeRuntime();
+  const { user } = useCurrentUser();
+  const { data: groupList } = useUserGroupList();
+
+  // Start dormant; the auto-enable effect below flips this on at launch when
+  // the OS permission is already granted (opt-out behaviour, like Ditto).
+  const [enabled, setEnabled] = useState<boolean>(false);
+  const [busy, setBusy] = useState(false);
+  const [prefs, setPrefsState] = useState<PushPrefs>(loadPrefs);
+
+  // The relays to hold open: the user's joined-group relays + added servers +
+  // the platform relay(s). De-duplicated and normalized.
+  const relayUrls = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of PLATFORM_RELAYS) {
+      const n = normalizeRelayUrl(r);
+      if (n) set.add(n);
+    }
+    for (const url of groupList?.servers ?? []) {
+      const n = normalizeRelayUrl(url);
+      if (n) set.add(n);
+    }
+    for (const g of groupList?.groups ?? []) {
+      const n = normalizeRelayUrl(g.relay);
+      if (n) set.add(n);
+    }
+    return [...set];
+  }, [groupList]);
+
+  // Joined group ids (the `h` tag values) for the kind-9 filter.
+  const groupIds = useMemo(
+    () => [...new Set((groupList?.groups ?? []).map((g) => g.id))],
+    [groupList],
+  );
+
+  const prefsRecord = useMemo<Record<string, boolean>>(
+    () => ({
+      mentions: prefs.mentions,
+      reactions: prefs.reactions,
+      replies: prefs.replies,
+      directMessages: prefs.directMessages,
+      allGroupMessages: prefs.allGroupMessages,
+    }),
+    [prefs],
+  );
+
+  // Push the current config to the native service whenever the relevant inputs
+  // change (and we're enabled + logged in). Stops the service otherwise.
+  const lastConfig = useRef<string>("");
+  useEffect(() => {
+    if (!supported) return;
+
+    const active = enabled && Boolean(user) && relayUrls.length > 0;
+    const payload = active
+      ? {
+          enabled: true,
+          userPubkey: user!.pubkey,
+          relayUrls,
+          groupIds,
+          prefs: prefsRecord,
+        }
+      : { enabled: false };
+
+    // Avoid redundant native round-trips.
+    const key = JSON.stringify(payload);
+    if (key === lastConfig.current) return;
+    lastConfig.current = key;
+
+    ArmadaNotification.configure(payload).catch((err) => {
+      console.warn("[native-notif] configure failed:", err);
+    });
+  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord]);
+
+  // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
+  // off and the OS notification permission is already granted, start the
+  // service silently — no user gesture needed. A first-run user with permission
+  // still "default" keeps the intent on, so flipping the toggle once (which
+  // prompts) sticks across launches thereafter.
+  const autoTried = useRef(false);
+  useEffect(() => {
+    if (!supported || enabled || busy || autoTried.current) return;
+    if (!loadIntent()) return;
+    autoTried.current = true;
+    ArmadaNotification.checkPermission()
+      .then(({ granted }) => {
+        if (granted) setEnabled(true);
+      })
+      .catch(() => {
+        // Permission check failed — leave dormant.
+      });
+  }, [supported, enabled, busy]);
+
+  const enable = useCallback(async () => {
+    if (!supported) return;
+    setBusy(true);
+    try {
+      const { granted } = await ArmadaNotification.requestPermission();
+      if (!granted) return;
+      saveIntent(true);
+      setEnabled(true);
+    } finally {
+      setBusy(false);
+    }
+  }, [supported]);
+
+  const disable = useCallback(async () => {
+    if (!supported) return;
+    setBusy(true);
+    try {
+      saveIntent(false);
+      setEnabled(false);
+      await ArmadaNotification.configure({ enabled: false });
+    } finally {
+      setBusy(false);
+    }
+  }, [supported]);
+
+  const setPrefs = useCallback(async (next: PushPrefs) => {
+    setPrefsState(next);
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  return { supported, enabled, busy, prefs, enable, disable, setPrefs };
+}

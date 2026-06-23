@@ -1,21 +1,51 @@
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useNativeNotifications } from "@/hooks/useNativeNotifications";
 import { usePushNotifications, type PushPrefs } from "@/hooks/usePushNotifications";
 
 import { Switch } from "@/components/ui/switch";
 
 /**
- * Notification settings: a master Web Push toggle plus Discord-style per-type
- * switches. Push is delivered by the Armada relay itself (it sees every
- * message), so no external service is involved.
+ * Notification settings.
+ *
+ * Two delivery paths, picked by runtime:
+ *  - Native APK: a foreground service holds a persistent relay connection and
+ *    fires local notifications instantly (no FCM/Google). See
+ *    useNativeNotifications.
+ *  - Web / PWA: Web Push via the Armada relay's VAPID gateway. See
+ *    usePushNotifications.
+ *
+ * Both expose the same Discord-style per-type toggles.
  */
 export function NotificationSettings() {
   const { user } = useCurrentUser();
-  const { supported, permission, enabled, busy, prefs, enable, disable, setPrefs } =
-    usePushNotifications();
+  const native = useNativeNotifications();
 
   if (!user) {
     return <p className="text-sm text-muted-foreground">Log in to enable notifications.</p>;
   }
+
+  // Native APK: instant background notifications via the relay connection.
+  if (native.supported) {
+    return (
+      <NotificationToggles
+        title="Background notifications"
+        description="Armada stays connected in the background and notifies you instantly — no Google services."
+        enabled={native.enabled}
+        busy={native.busy}
+        blocked={false}
+        prefs={native.prefs}
+        onToggle={(v) => (v ? native.enable() : native.disable())}
+        onSetPrefs={(p) => native.setPrefs(p).catch(() => {})}
+      />
+    );
+  }
+
+  return <WebPushSettings />;
+}
+
+function WebPushSettings() {
+  const { supported, permission, enabled, busy, prefs, enable, disable, setPrefs } =
+    usePushNotifications();
 
   if (!supported) {
     return (
@@ -25,33 +55,50 @@ export function NotificationSettings() {
     );
   }
 
-  const blocked = permission === "denied";
+  return (
+    <NotificationToggles
+      title="Enable push notifications"
+      enabled={enabled}
+      busy={busy}
+      blocked={permission === "denied"}
+      blockedMessage="Notifications are blocked in your browser settings."
+      prefs={prefs}
+      onToggle={(v) => (v ? enable() : disable())}
+      onSetPrefs={(p) => setPrefs(p).catch(() => {})}
+    />
+  );
+}
 
-  const toggleMaster = async (value: boolean) => {
-    if (value) await enable();
-    else await disable();
-  };
+function NotificationToggles(props: {
+  title: string;
+  description?: string;
+  enabled: boolean;
+  busy: boolean;
+  blocked: boolean;
+  blockedMessage?: string;
+  prefs: PushPrefs;
+  onToggle: (value: boolean) => void;
+  onSetPrefs: (next: PushPrefs) => void;
+}) {
+  const { title, description, enabled, busy, blocked, blockedMessage, prefs } = props;
 
   const setPref = (key: keyof PushPrefs) => (value: boolean) => {
-    setPrefs({ ...prefs, [key]: value }).catch(() => {});
+    props.onSetPrefs({ ...prefs, [key]: value });
   };
 
   return (
     <div className="space-y-5">
       <label className="flex items-center justify-between gap-4 cursor-pointer">
         <span className="text-sm font-medium">
-          Enable push notifications
-          {blocked && (
-            <span className="block text-xs font-normal text-destructive">
-              Notifications are blocked in your browser settings.
-            </span>
+          {title}
+          {description && (
+            <span className="block text-xs font-normal text-muted-foreground">{description}</span>
+          )}
+          {blocked && blockedMessage && (
+            <span className="block text-xs font-normal text-destructive">{blockedMessage}</span>
           )}
         </span>
-        <Switch
-          checked={enabled}
-          disabled={busy || blocked}
-          onCheckedChange={toggleMaster}
-        />
+        <Switch checked={enabled} disabled={busy || blocked} onCheckedChange={props.onToggle} />
       </label>
 
       {enabled && (

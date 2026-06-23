@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AppProvider } from "@/components/AppProvider";
 import { DesktopBadge } from "@/components/DesktopBadge";
+import { NativeNotifications } from "@/components/NativeNotifications";
 import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
 import { ReadStateProvider } from "@/components/ReadStateProvider";
@@ -35,6 +36,7 @@ export function App() {
               <ReadStateProvider>
                 <NostrSync />
                 <DesktopBadge />
+                <NativeNotifications />
                 <ScreenSharePicker />
                 <Toaster />
                 <AppRouter />
