@@ -677,11 +677,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
     try {
       if (sendOverride) {
-        // Delegated send (e.g. DMs): the caller owns publishing. The whole
-        // text is sent as-is (NIP-29 tagging / polls don't apply here).
-        await sendOverride(finalText);
+        // Delegated send (e.g. DMs): the caller owns publishing. Clear the
+        // composer immediately and fire the send in the background so the user
+        // can queue several messages in a row without the UI locking up. The
+        // override (DM hook) serializes signing internally and surfaces
+        // per-message delivery state, so we neither await nor reset on its
+        // result here.
         resetComposeState();
         onSent?.();
+        void Promise.resolve(sendOverride(finalText)).catch(() => {
+          // Delivery/sign failures are surfaced inline by the override.
+        });
       } else if (onOptimisticInsert) {
         // Optimistic group send: render the message immediately on sign, reset
         // the composer, then confirm/fail in the background.

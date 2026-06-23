@@ -13,6 +13,40 @@ import type { NostrEvent } from "@nostrify/nostrify";
 /** NIP-04 encrypted direct message kind. */
 export const KIND_DM = 4;
 
+/**
+ * Per-pubkey serialization of signer crypto (encrypt / signEvent / decrypt).
+ *
+ * NIP-07 browser extensions process these one at a time and **reject** (or
+ * queue unpredictably) overlapping calls. The DM data layer fires crypto from
+ * several places concurrently — sending, the thread decrypt loop, the live
+ * subscription, and the conversation-list previews. If those overlap on the
+ * extension they thrash, reject, and feel "locked up". Routing every signer
+ * crypto call for a given identity through one promise chain keeps them
+ * strictly sequential (and fast on a local nsec, where there's no contention).
+ *
+ * Keyed at module scope by pubkey so the chain is shared across every hook
+ * instance and survives remounts.
+ */
+const signerCryptoChains = new Map<string, Promise<unknown>>();
+
+/** Run `fn` exclusively against the signer identified by `key` (FIFO). */
+function runExclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prior = signerCryptoChains.get(key) ?? Promise.resolve();
+  // Chain off the prior call regardless of whether it resolved or rejected,
+  // so one failure never wedges the queue.
+  const next = prior.then(fn, fn);
+  // Store a settled-swallowing tail so the stored promise never rejects
+  // (which would otherwise reject every future `.then` chained onto it).
+  signerCryptoChains.set(
+    key,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return next;
+}
+
 /** The other participant of a DM event, from the viewer's perspective. */
 export function dmCounterparty(event: NostrEvent, self: string): string | undefined {
   if (event.pubkey !== self) return event.pubkey; // received: peer is the sender
@@ -26,6 +60,13 @@ export interface DecryptedDM {
   pubkey: string;
   created_at: number;
   content: string;
+  /**
+   * Delivery state for messages we sent. Absent for received messages and for
+   * sent messages that have been confirmed by the relay. `"sending"` while the
+   * publish is in flight (rendered immediately on sign), `"failed"` if the
+   * relay rejected it or the publish timed out (retryable).
+   */
+  status?: "sending" | "failed";
 }
 
 /** Whether the current signer can do NIP-04 (required for DMs). */
@@ -154,7 +195,7 @@ export function useDMConversations() {
       const out: Record<string, string> = {};
       for (const { peer, latest } of conversations) {
         try {
-          out[peer] = await nip04.decrypt(peer, latest.content);
+          out[peer] = await runExclusive(self, () => nip04.decrypt(peer, latest.content));
         } catch (err) {
           console.warn("DM preview decrypt failed", { peer, id: latest.id, err });
         }
@@ -245,7 +286,7 @@ export function useDirectMessages(peer: string | undefined) {
       for (const event of byId.values()) {
         const counterparty = event.pubkey === self ? peer! : event.pubkey;
         try {
-          const content = await nip04.decrypt(counterparty, event.content);
+          const content = await runExclusive(self!, () => nip04.decrypt(counterparty, event.content));
           decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
         } catch (err) {
           // undecryptable (not actually for us, or signer refused) — skip
@@ -286,7 +327,7 @@ export function useDirectMessages(peer: string | undefined) {
       for (const event of byId.values()) {
         const counterparty = event.pubkey === self ? peer : event.pubkey;
         try {
-          const content = await nip04.decrypt(counterparty, event.content);
+          const content = await runExclusive(self, () => nip04.decrypt(counterparty, event.content));
           decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
         } catch {
           // undecryptable — skip
@@ -327,7 +368,7 @@ export function useDirectMessages(peer: string | undefined) {
           const counterparty = event.pubkey === self ? peer : event.pubkey;
           let content: string;
           try {
-            content = await nip04.decrypt(counterparty, event.content);
+            content = await runExclusive(self, () => nip04.decrypt(counterparty, event.content));
           } catch (err) {
             console.warn("DM live decrypt failed", { id: event.id, counterparty, err });
             continue;
@@ -408,7 +449,7 @@ export function useDirectMessages(peer: string | undefined) {
         if (existing.has(event.id)) continue;
         const counterparty = event.pubkey === self ? peer : event.pubkey;
         try {
-          const content = await nip04.decrypt(counterparty, event.content);
+          const content = await runExclusive(self, () => nip04.decrypt(counterparty, event.content));
           decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
         } catch (err) {
           console.warn("DM backfill decrypt failed", { id: event.id, counterparty, err });
@@ -431,36 +472,153 @@ export function useDirectMessages(peer: string | undefined) {
     }
   }, [self, peer, user?.signer.nip04, hasMore, queryClient, queryKey, nostr, relays]);
 
+  /** Update a single optimistic message's delivery status in the cache. */
+  const setMessageStatus = useCallback(
+    (id: string, status: DecryptedDM["status"]) => {
+      queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
+        old.map((m) => (m.id === id ? { ...m, status } : m)),
+      );
+    },
+    [queryClient, queryKey],
+  );
+
+  // Publish a signed DM in the background and reconcile its optimistic status.
+  // The message is already rendered (status "sending") before this runs, so the
+  // composer can clear immediately and the UI never blocks on the relay.
+  const publish = useCallback(
+    async (event: NostrEvent) => {
+      try {
+        await nostr.group(relays).event(event, { signal: AbortSignal.timeout(8000) });
+        // Confirmed: drop the "sending" badge. The live subscription may also
+        // echo this event back; dedup by id keeps it from duplicating.
+        setMessageStatus(event.id, undefined);
+        queryClient.invalidateQueries({ queryKey: ["dm", "conversations", user?.pubkey] });
+      } catch (err) {
+        setMessageStatus(event.id, "failed");
+        throw err;
+      }
+    },
+    [nostr, relays, setMessageStatus, queryClient, user?.pubkey],
+  );
+
   const send = useMutation({
+    // Encrypt + sign, render immediately, then publish in the background. The
+    // mutation resolves as soon as the message is signed and shown (so the
+    // composer clears instantly); delivery success/failure is reflected via the
+    // message's `status` rather than by blocking the caller on the relay OK.
+    //
+    // Signing is serialized through `signChainRef`: NIP-07 extensions reject
+    // concurrent encrypt/signEvent calls, so when the user fires several
+    // messages in a row we must sign them one at a time. Each message is
+    // rendered as a "sending" placeholder up front (keyed by a temporary local
+    // id) so the queue is visible instantly, then reconciled to the real signed
+    // event id once its turn in the sign queue comes up.
     mutationFn: async (text: string) => {
       if (!user?.signer.nip04) throw new Error("NIP-04 encryption not supported by signer");
       if (!peer) throw new Error("No recipient");
       const trimmed = text.trim();
       if (!trimmed) return;
 
-      const content = await user.signer.nip04.encrypt(peer, trimmed);
-      const event = await user.signer.signEvent({
-        kind: KIND_DM,
-        content,
-        tags: [["p", peer]],
-        created_at: Math.floor(Date.now() / 1000),
-      });
+      const signer = user.signer;
+      const self = user.pubkey;
+      // Temporary client-side id for the optimistic placeholder; swapped for the
+      // real event id after signing.
+      const tempId = `pending:${crypto.randomUUID()}`;
+      const createdAt = Math.floor(Date.now() / 1000);
 
-      await nostr.group(relays).event(event, { signal: AbortSignal.timeout(8000) });
-
-      // Optimistically render the sent message.
+      // Render the queued message immediately, in order, before it even starts
+      // signing — so rapid-fire sends all appear at once.
       queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
-        old.some((m) => m.id === event.id)
-          ? old
-          : [
-              ...old,
-              { id: event.id, pubkey: user.pubkey, created_at: event.created_at, content: trimmed },
-            ].sort((a, b) => a.created_at - b.created_at),
+        [
+          ...old,
+          {
+            id: tempId,
+            pubkey: self,
+            created_at: createdAt,
+            content: trimmed,
+            status: "sending" as const,
+          },
+        ].sort((a, b) => a.created_at - b.created_at),
       );
-      // Refresh the conversation list ordering.
-      queryClient.invalidateQueries({ queryKey: ["dm", "conversations", user.pubkey] });
+      // NOTE: deliberately do NOT invalidate the conversation-list query here.
+      // Invalidating triggers a refetch + a re-decrypt of every conversation's
+      // preview (each a NIP-07 round-trip) that contends with our in-flight
+      // signing on the same extension — turning a burst of sends into a
+      // thrash. The optimistic thread render already shows the message; the
+      // conversation list re-orders on its next natural refetch / live event.
+
+      // Encrypt + sign serialized against all other signer crypto for this
+      // identity (extension-safe), then render the real id and publish in the
+      // background.
+      try {
+        const event = await runExclusive(self, async () => {
+          const content = await signer.nip04!.encrypt(peer, trimmed);
+          return signer.signEvent({
+            kind: KIND_DM,
+            content,
+            tags: [["p", peer]],
+            created_at: createdAt,
+          });
+        });
+
+        // Swap the placeholder for the real, signed event id (still "sending").
+        queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
+          old.map((m) =>
+            m.id === tempId
+              ? { ...m, id: event.id, created_at: event.created_at }
+              : m,
+          ),
+        );
+
+        // Publish in the background; don't make the caller await the relay.
+        void publish(event).catch(() => {
+          // Failure is surfaced via the message's "failed" status (and retry).
+        });
+      } catch {
+        // Encryption/signing failed (e.g. extension rejected) — mark the
+        // placeholder failed so it can be retried, and don't throw (the send is
+        // fire-and-forget from the composer's perspective).
+        setMessageStatus(tempId, "failed");
+      }
     },
   });
+
+  /** Re-publish a message that previously failed to send. */
+  const retry = useCallback(
+    (id: string) => {
+      const messages = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
+      const failed = messages.find((m) => m.id === id && m.status === "failed");
+      if (!failed || !user || !peer) return;
+      const signer = user.signer;
+      const self = user.pubkey;
+      setMessageStatus(id, "sending");
+
+      void (async () => {
+        try {
+          // Re-sign serialized against all other signer crypto, same as send.
+          const event = await runExclusive(self, async () => {
+            const content = await signer.nip04!.encrypt(peer, failed.content);
+            return signer.signEvent({
+              kind: KIND_DM,
+              content,
+              tags: [["p", peer]],
+              created_at: failed.created_at,
+            });
+          });
+          // The signed event id may differ from the placeholder id; reconcile.
+          if (event.id !== id) {
+            queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
+              old.map((m) => (m.id === id ? { ...m, id: event.id } : m)),
+            );
+          }
+          await publish(event);
+        } catch {
+          setMessageStatus(id, "failed");
+        }
+      })();
+    },
+    [queryClient, queryKey, user, peer, setMessageStatus, publish],
+  );
 
   return {
     messages: query.data ?? [],
@@ -468,6 +626,7 @@ export function useDirectMessages(peer: string | undefined) {
     error: query.error,
     send: send.mutateAsync,
     isSending: send.isPending,
+    retry,
     loadOlder,
     hasMore,
     isLoadingOlder,

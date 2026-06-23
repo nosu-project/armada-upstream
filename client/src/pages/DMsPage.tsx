@@ -1,4 +1,4 @@
-import { ArrowLeft, Headphones, Loader2, MessageSquare, Phone, Plus, Search, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Headphones, Loader2, MessageSquare, Phone, Plus, RotateCw, Search, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -154,7 +154,15 @@ const DM_CONTINUATION_WINDOW_SECONDS = 5 * 60;
  * chat messages (shared `MessageRow` + rich `ChatContent` body). DMs carry no
  * tags, so we adapt the decrypted message into a minimal event for rendering.
  */
-function DMMessage({ message, continuation }: { message: DecryptedDM; continuation?: boolean }) {
+function DMMessage({
+  message,
+  continuation,
+  onRetry,
+}: {
+  message: DecryptedDM;
+  continuation?: boolean;
+  onRetry?: (id: string) => void;
+}) {
   const event = useMemo<NostrEvent>(
     () => ({
       id: message.id,
@@ -170,7 +178,23 @@ function DMMessage({ message, continuation }: { message: DecryptedDM; continuati
 
   return (
     <MessageRow pubkey={message.pubkey} createdAt={message.created_at} continuation={continuation}>
-      <ChatContent event={event} className="text-[15px]" />
+      <div className={cn(message.status === "failed" && "opacity-80")}>
+        <ChatContent
+          event={event}
+          className={cn("text-[15px]", message.status === "sending" && "opacity-60")}
+        />
+        {message.status === "failed" && (
+          <button
+            type="button"
+            onClick={() => onRetry?.(message.id)}
+            className="mt-0.5 inline-flex items-center gap-1 text-xs text-destructive hover:underline"
+          >
+            <AlertCircle className="size-3" />
+            Not delivered — tap to retry
+            <RotateCw className="size-3" />
+          </button>
+        )}
+      </div>
     </MessageRow>
   );
 }
@@ -178,7 +202,7 @@ function DMMessage({ message, continuation }: { message: DecryptedDM; continuati
 function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
-  const { messages, isLoading, send, loadOlder, hasMore, isLoadingOlder } = useDirectMessages(peer);
+  const { messages, isLoading, send, retry, loadOlder, hasMore, isLoadingOlder } = useDirectMessages(peer);
   const { markRead } = useReadState();
   const { toast } = useToast();
   const { user } = useCurrentUser();
@@ -256,14 +280,20 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const handleSubmit = useCallback(
     async (text: string) => {
       try {
+        // Resolves as soon as the message is signed + optimistically rendered;
+        // relay delivery happens in the background and is reflected by the
+        // message's status (sending / failed + retry), so the composer clears
+        // immediately and the send button never blocks on the relay.
         await send(text);
       } catch (e) {
+        // Only signing/encryption errors reach here (publish failures are
+        // surfaced inline on the message). Keep the composer content to retry.
         toast({
           title: "Message not sent",
-          description: e instanceof Error ? e.message : "The relay rejected the message.",
+          description: e instanceof Error ? e.message : "Could not sign the message.",
           variant: "destructive",
         });
-        throw e; // keep the composer's content so the user can retry
+        throw e;
       }
     },
     [send, toast],
@@ -353,7 +383,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 !!prev &&
                 prev.pubkey === m.pubkey &&
                 m.created_at - prev.created_at < DM_CONTINUATION_WINDOW_SECONDS;
-              return <DMMessage key={m.id} message={m} continuation={continuation} />;
+              return <DMMessage key={m.id} message={m} continuation={continuation} onRetry={retry} />;
             })}
           </>
         )}

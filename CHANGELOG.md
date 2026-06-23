@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.4.4] - 2026-06-23
+
+Direct messages now send instantly. Your message appears the moment you hit
+send and the input clears right away, so you can fire off several messages in a
+row without the app freezing up while it waits. If a message can't be delivered
+it's now shown clearly with a tap-to-retry option instead of silently
+disappearing.
+
+### Changed
+- Sent direct messages appear immediately and the compose box clears right
+  away, instead of waiting for the message to reach the server first.
+- You can send several direct messages back-to-back without the input locking
+  up between them.
+
+### Fixed
+- Rapid-fire direct messages no longer thrash and stall against background
+  work, which previously made a burst of messages crawl out one at a time.
+- A direct message that fails to send now shows a "Not delivered — tap to
+  retry" prompt instead of vanishing with no explanation.
+
 ## [0.4.3] - 2026-06-23
 
 A server's name, avatar, and channel list now stick around on a shaky or
