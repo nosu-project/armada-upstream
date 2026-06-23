@@ -84,6 +84,13 @@ public class NotificationRelayService extends Service {
     private final List<String> relayUrls = new ArrayList<>();
     private final Set<String> groupIds = new LinkedHashSet<>();
     private JSONObject prefs = new JSONObject();
+    // Concord (E2E) channel subscriptions, keyed for fast lookup:
+    //   zToName: #z pseudonym (hex) → "Community / #channel" display name
+    //   zToUrl:  #z pseudonym (hex) → in-app deep-link (/c/<communityId>)
+    //   relayToZs: relay url → the #z values that live on that relay
+    private final java.util.Map<String, String> zToName = new java.util.HashMap<>();
+    private final java.util.Map<String, String> zToUrl = new java.util.HashMap<>();
+    private final java.util.Map<String, Set<String>> relayToZs = new java.util.HashMap<>();
     // De-dupe notifications across relays/reconnects for this service lifetime.
     private final Set<String> notifiedIds = new HashSet<>();
     // Connect time; we only notify for events at/after this to avoid backfill spam.
@@ -158,8 +165,13 @@ public class NotificationRelayService extends Service {
         } catch (JSONException e) {
             prefs = new JSONObject();
         }
+        parseConcordSubs(sp.getString("concordSubs", null));
 
-        if (userPubkey == null || relayUrls.isEmpty()) {
+        // The relays to connect to: NIP-29 relays ∪ every Concord relay.
+        Set<String> allRelays = new LinkedHashSet<>(relayUrls);
+        allRelays.addAll(relayToZs.keySet());
+
+        if (userPubkey == null || allRelays.isEmpty()) {
             Log.d(TAG, "No pubkey/relays; not connecting.");
             closeAllConnections();
             return;
@@ -167,10 +179,60 @@ public class NotificationRelayService extends Service {
 
         // Rebuild all connections with the current filters.
         closeAllConnections();
-        for (String url : relayUrls) {
+        for (String url : allRelays) {
             RelayConnection rc = new RelayConnection(url);
             connections.add(rc);
             rc.connect();
+        }
+    }
+
+    /**
+     * Parse the Concord subscriptions JSON
+     * ([{relays:[],zs:[],communityName,channelName}, …]) into the lookup maps:
+     * z→display-name and relay→{z…}. Concord messages are E2E-encrypted, so we
+     * only ever fire a generic "New message in <community>/#<channel>".
+     */
+    private void parseConcordSubs(String json) {
+        zToName.clear();
+        zToUrl.clear();
+        relayToZs.clear();
+        if (json == null) return;
+        try {
+            JSONArray arr = new JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject sub = arr.optJSONObject(i);
+                if (sub == null) continue;
+                String community = sub.optString("communityName", "Community");
+                String channel = sub.optString("channelName", "channel");
+                String communityId = sub.optString("communityId", "");
+                String name = community + " / #" + channel;
+                String url = communityId.isEmpty() ? "/" : "/c/" + uriEncode(communityId);
+                JSONArray zs = sub.optJSONArray("zs");
+                JSONArray relays = sub.optJSONArray("relays");
+                if (zs == null || relays == null) continue;
+
+                List<String> zList = new ArrayList<>();
+                for (int j = 0; j < zs.length(); j++) {
+                    String z = zs.optString(j);
+                    if (z != null && !z.isEmpty()) {
+                        zList.add(z);
+                        zToName.put(z, name);
+                        zToUrl.put(z, url);
+                    }
+                }
+                for (int j = 0; j < relays.length(); j++) {
+                    String relay = relays.optString(j);
+                    if (relay == null || relay.isEmpty()) continue;
+                    Set<String> set = relayToZs.get(relay);
+                    if (set == null) {
+                        set = new LinkedHashSet<>();
+                        relayToZs.put(relay, set);
+                    }
+                    set.addAll(zList);
+                }
+            }
+        } catch (JSONException e) {
+            Log.w(TAG, "Failed to parse concordSubs", e);
         }
     }
 
@@ -183,6 +245,7 @@ public class NotificationRelayService extends Service {
         boolean closed = false;
         final String subGroups = "ag-" + Long.toHexString(System.nanoTime());
         final String subDirect = "ad-" + Long.toHexString(System.nanoTime() + 1);
+        final String subConcord = "ac-" + Long.toHexString(System.nanoTime() + 2);
 
         RelayConnection(String relayUrl) {
             this.relayUrl = relayUrl;
@@ -218,22 +281,36 @@ public class NotificationRelayService extends Service {
 
         void sendReqs(WebSocket webSocket) {
             try {
-                // Group messages: kind 9 in the user's joined groups.
-                if (!groupIds.isEmpty()) {
-                    JSONObject f = new JSONObject();
-                    f.put("kinds", new JSONArray().put(9));
-                    JSONArray h = new JSONArray();
-                    for (String id : groupIds) h.put(id);
-                    f.put("#h", h);
-                    f.put("since", sinceSec);
-                    webSocket.send(reqMessage(subGroups, f));
+                boolean isNip29Relay = relayUrls.contains(relayUrl);
+                if (isNip29Relay) {
+                    // Group messages: kind 9 in the user's joined groups.
+                    if (!groupIds.isEmpty()) {
+                        JSONObject f = new JSONObject();
+                        f.put("kinds", new JSONArray().put(9));
+                        JSONArray h = new JSONArray();
+                        for (String id : groupIds) h.put(id);
+                        f.put("#h", h);
+                        f.put("since", sinceSec);
+                        webSocket.send(reqMessage(subGroups, f));
+                    }
+                    // Direct/targeted: reactions, replies, DMs addressed to me.
+                    JSONObject f2 = new JSONObject();
+                    f2.put("kinds", new JSONArray().put(7).put(1111).put(4));
+                    f2.put("#p", new JSONArray().put(userPubkey));
+                    f2.put("since", sinceSec);
+                    webSocket.send(reqMessage(subDirect, f2));
                 }
-                // Direct/targeted: reactions, replies, DMs addressed to me.
-                JSONObject f2 = new JSONObject();
-                f2.put("kinds", new JSONArray().put(7).put(1111).put(4));
-                f2.put("#p", new JSONArray().put(userPubkey));
-                f2.put("since", sinceSec);
-                webSocket.send(reqMessage(subDirect, f2));
+                // Concord (E2E) channel messages on this relay, by #z pseudonym.
+                Set<String> zs = relayToZs.get(relayUrl);
+                if (zs != null && !zs.isEmpty()) {
+                    JSONObject f3 = new JSONObject();
+                    f3.put("kinds", new JSONArray().put(3300));
+                    JSONArray z = new JSONArray();
+                    for (String v : zs) z.put(v);
+                    f3.put("#z", z);
+                    f3.put("since", sinceSec);
+                    webSocket.send(reqMessage(subConcord, f3));
+                }
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to build REQ", e);
             }
@@ -288,10 +365,27 @@ public class NotificationRelayService extends Service {
     private void handleEvent(JSONObject event, String relayUrl) {
         String id = event.optString("id");
         if (id.isEmpty() || notifiedIds.contains(id)) return;
+
+        int kind = event.optInt("kind");
+
+        // Concord (E2E): we can't decrypt, so fire a generic notification keyed
+        // off the #z pseudonym → community/channel name. Outer events are signed
+        // by ephemeral keys, so there's no author/self check to apply.
+        if (kind == 3300) {
+            String z = tagValue(event, "z");
+            String name = z != null ? zToName.get(z) : null;
+            if (name == null) return; // not one of our subscribed channels
+            String url = zToUrl.get(z);
+            long cts = event.optLong("created_at", 0);
+            if (cts + 1 > sinceSec) sinceSec = cts + 1;
+            notifiedIds.add(id);
+            showNotification(hashId(id), name, "New message", url != null ? url : "/");
+            return;
+        }
+
         String author = event.optString("pubkey");
         if (author.equals(userPubkey)) return; // never notify on our own events
 
-        int kind = event.optInt("kind");
         boolean mentionsMe = pTags(event).contains(userPubkey);
 
         if (!wantsNotification(kind, mentionsMe)) return;

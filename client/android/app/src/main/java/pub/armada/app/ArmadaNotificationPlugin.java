@@ -86,6 +86,7 @@ public class ArmadaNotificationPlugin extends Plugin {
 
         String relayUrlsRaw = arrayToString(call.getArray("relayUrls"));
         String groupIdsRaw = arrayToString(call.getArray("groupIds"));
+        String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         // prefs is a flat object of booleans; store its JSON verbatim.
         String prefsRaw = null;
         try {
@@ -97,21 +98,25 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
 
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        boolean hasConfig = enabled && userPubkey != null && relayUrlsRaw != null;
+        boolean hasWatch = relayUrlsRaw != null || concordSubsRaw != null;
+        boolean hasConfig = enabled && userPubkey != null && hasWatch;
 
         if (hasConfig) {
             SharedPreferences.Editor editor = prefs.edit()
                     .putBoolean("enabled", true)
                     .putString("userPubkey", userPubkey)
-                    .putString("relayUrls", relayUrlsRaw);
+                    .putString("relayUrls", relayUrlsRaw != null ? relayUrlsRaw : "[]");
             if (groupIdsRaw != null) editor.putString("groupIds", groupIdsRaw);
             else editor.remove("groupIds");
+            if (concordSubsRaw != null) editor.putString("concordSubs", concordSubsRaw);
+            else editor.remove("concordSubs");
             if (prefsRaw != null) editor.putString("prefs", prefsRaw);
             // Bump a revision so the running service's SharedPreferences
             // listener always fires even if the values look unchanged.
             editor.putLong("rev", System.currentTimeMillis());
             editor.apply();
-            Log.d(TAG, "Configured: relays=" + relayUrlsRaw + " groups=" + groupIdsRaw);
+            Log.d(TAG, "Configured: relays=" + relayUrlsRaw + " groups=" + groupIdsRaw
+                    + " concordSubs=" + (concordSubsRaw != null ? "yes" : "none"));
         } else {
             prefs.edit().clear().apply();
             Log.d(TAG, "Config cleared (disabled or logged out)");

@@ -3,12 +3,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
+import { useConcordList } from "@/hooks/useConcordList";
 import {
   DEFAULT_PUSH_PREFS,
   type PushPrefs,
 } from "@/hooks/usePushNotifications";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
-import { PLATFORM_RELAYS, normalizeRelayUrl } from "@/lib/platform";
+import { buildConcordSubs, type ConcordSub } from "@/lib/concordNotifications";
+import { normalizeRelayUrl } from "@/lib/platform";
 
 /** localStorage key for the native background-notification intent (toggle). */
 const NATIVE_INTENT_KEY = "armada:native-notif-intent";
@@ -84,6 +86,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const supported = isNativeRuntime();
   const { user } = useCurrentUser();
   const { data: groupList } = useUserGroupList();
+  const { data: concordData } = useConcordList();
 
   // Start dormant; the auto-enable effect below flips this on at launch when
   // the OS permission is already granted (opt-out behaviour, like Ditto).
@@ -91,20 +94,19 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const [busy, setBusy] = useState(false);
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPrefs);
 
-  // The relays to hold open: the user's joined-group relays + added servers +
-  // the platform relay(s). De-duplicated and normalized.
+  // The relays to hold open. A standalone Armada client has no host, so the
+  // source of truth is the user's own kind 10009 list: the relays that host
+  // their joined groups, plus any servers they've added. We deliberately do
+  // NOT use PLATFORM_RELAYS here — that's a hosted-deployment / dev pin (it
+  // defaults to ws://localhost), which is meaningless on a hostless device.
   const relayUrls = useMemo(() => {
     const set = new Set<string>();
-    for (const r of PLATFORM_RELAYS) {
-      const n = normalizeRelayUrl(r);
+    for (const g of groupList?.groups ?? []) {
+      const n = normalizeRelayUrl(g.relay);
       if (n) set.add(n);
     }
     for (const url of groupList?.servers ?? []) {
       const n = normalizeRelayUrl(url);
-      if (n) set.add(n);
-    }
-    for (const g of groupList?.groups ?? []) {
-      const n = normalizeRelayUrl(g.relay);
       if (n) set.add(n);
     }
     return [...set];
@@ -127,22 +129,45 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     [prefs],
   );
 
+  // Concord (E2E) channel subscriptions: relays + #z pseudonyms + display names.
+  // Computed here (we hold the channel keys); the native service can't decrypt
+  // so it only fires generic "New message in <community>/#<channel>".
+  const concordSubs = useMemo<ConcordSub[]>(
+    () => buildConcordSubs(concordData?.list),
+    [concordData],
+  );
+
   // Push the current config to the native service whenever the relevant inputs
-  // change (and we're enabled + logged in). Stops the service otherwise.
+  // change. Three cases:
+  //   - turned off / logged out  → tear the service down ({enabled:false}).
+  //   - on, but nothing to watch  → do nothing. The lists load async and
+  //     transiently read empty; pushing an empty config here would clobber a
+  //     working subscription and drop notifications.
+  //   - on, with relays/concord   → push the full config.
   const lastConfig = useRef<string>("");
   useEffect(() => {
     if (!supported) return;
 
-    const active = enabled && Boolean(user) && relayUrls.length > 0;
-    const payload = active
-      ? {
-          enabled: true,
-          userPubkey: user!.pubkey,
-          relayUrls,
-          groupIds,
-          prefs: prefsRecord,
-        }
-      : { enabled: false };
+    const loggedOut = !user;
+    const turnedOff = !enabled;
+    const nothingToWatch = relayUrls.length === 0 && concordSubs.length === 0;
+
+    let payload: Parameters<typeof ArmadaNotification.configure>[0];
+    if (turnedOff || loggedOut) {
+      payload = { enabled: false };
+    } else if (nothingToWatch) {
+      // Still loading the user's groups/communities — keep whatever's running.
+      return;
+    } else {
+      payload = {
+        enabled: true,
+        userPubkey: user!.pubkey,
+        relayUrls,
+        groupIds,
+        prefs: prefsRecord,
+        concordSubs,
+      };
+    }
 
     // Avoid redundant native round-trips.
     const key = JSON.stringify(payload);
@@ -152,7 +177,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord]);
+  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord, concordSubs]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off and the OS notification permission is already granted, start the
