@@ -71,8 +71,16 @@ export function ChannelSidebarView({
       )}
     >
       {/* Header — aligned with the channel rows' text gutter below (container
-          px-1 + row pl-4 = pl-5 here) so the grid lines up. */}
-      <div className={cn("pl-5 pr-3 pt-5 pb-3 flex", titleIcon ? "items-center gap-2" : "flex-col justify-center")}>
+          px-1 + row pl-4 = pl-5 here) so the grid lines up. The header reaches
+          the top screen edge on mobile, so it carries the status-bar safe-area
+          inset on top of its base top padding (0 on desktop). */}
+      <div
+        className={cn(
+          "pl-5 pr-3 pb-3 flex",
+          "pt-[calc(1.25rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
+          titleIcon ? "items-center gap-2" : "flex-col justify-center",
+        )}
+      >
         {titleIcon}
         <div className="min-w-0">
           <h2 className="font-semibold truncate leading-tight tracking-wide text-sm">{title}</h2>

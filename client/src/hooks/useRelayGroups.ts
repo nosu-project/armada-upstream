@@ -21,7 +21,7 @@ import type { NostrFilter } from "@nostrify/nostrify";
  */
 export function useRelayGroups(relayUrl: string | undefined) {
   const { nostr } = useNostr();
-  const { data: relayInfo, isLoading: infoLoading } = useRelayInfo(relayUrl);
+  const { data: relayInfo, isLoading: infoLoading, isError: infoError } = useRelayInfo(relayUrl);
   const { data: userList } = useUserGroupList();
 
   const relaySelf = relayInfo?.self || relayInfo?.pubkey;
@@ -62,5 +62,12 @@ export function useRelayGroups(relayUrl: string | undefined) {
     refetchInterval: 60_000,
   });
 
-  return { ...query, relayInfo };
+  // While the NIP-11 info doc is still loading the groups query is disabled, so
+  // surface that as "loading" too — otherwise a stuck/slow info fetch would read
+  // as a non-loading, empty result. `isError` covers a failed info fetch as well
+  // (we still attempt the groups query, but expose either failure to the caller).
+  const isLoading = infoLoading || query.isLoading;
+  const isError = infoError || query.isError;
+
+  return { ...query, isLoading, isError, relayInfo };
 }

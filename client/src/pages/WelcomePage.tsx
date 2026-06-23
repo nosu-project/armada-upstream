@@ -1,11 +1,13 @@
 import { Plus, Server } from "lucide-react";
 import { useState } from "react";
+import { Navigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
 import { AddDialog } from "@/components/dialogs/AddDialog";
 import { Button } from "@/components/ui/button";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { APP_NAME } from "@/lib/platform";
+import { APP_NAME, PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 
 /**
  * First-run onboarding for the standalone (rogue) client.
@@ -16,8 +18,16 @@ import { APP_NAME } from "@/lib/platform";
  * redirect never lands here.)
  */
 export function WelcomePage() {
+  const { config } = useAppContext();
   const { user } = useCurrentUser();
   const [addOpen, setAddOpen] = useState(false);
+
+  // Once signed in, leave the welcome screen for a real server: the pinned
+  // platform relay on a hosted build, or the user's first added server.
+  const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0];
+  if (user && firstServer) {
+    return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
+  }
 
   return (
     <main className="flex-1 min-w-0 overflow-y-auto">

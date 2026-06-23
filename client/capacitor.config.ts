@@ -25,6 +25,12 @@ const config: CapacitorConfig = {
       statusBarStyle: 'DARK',
       navigationBarStyle: 'DARK',
     },
+    // Capacitor v8 ships its own (beta) inset handling that conflicts with the
+    // safe-area plugin — leaving an extra band/padding at the top. The safe-area
+    // plugin docs require disabling it so the plugin owns edge-to-edge insets.
+    SystemBars: {
+      insetsHandling: 'disable',
+    },
   },
 };
 

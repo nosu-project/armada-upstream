@@ -1,4 +1,4 @@
-import { Hash, Headphones, Loader2, Lock, Volume2 } from "lucide-react";
+import { Hash, Headphones, Loader2, Lock, RefreshCw, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
@@ -111,13 +111,23 @@ interface ChannelSidebarProps {
  * the account area pinned to the bottom (Discord-style).
  */
 export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSidebarProps) {
-  const { data: groups, isLoading, relayInfo } = useRelayGroups(relayUrl);
+  const { data: groups, isLoading, isError, refetch, relayInfo } = useRelayGroups(relayUrl);
   const { user } = useCurrentUser();
   const { registerCallBarSlot } = useCall();
   const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [signupOpen, setSignupOpen] = useState(false);
+
+  // Don't let skeletons run for the full connect/timeout window (which can be
+  // 8–16s on a slow or AUTH-gated relay) — that reads as a hang. Show skeletons
+  // briefly, then switch to an explicit "Connecting…" message.
+  const [skeletonExpired, setSkeletonExpired] = useState(false);
+  useEffect(() => {
+    setSkeletonExpired(false);
+    const t = setTimeout(() => setSkeletonExpired(true), 2500);
+    return () => clearTimeout(t);
+  }, [relayUrl]);
 
   const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
   const { byGroup } = useRelayUnread(relayUrl, groupIds);
@@ -179,23 +189,36 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
         </>
       }
     >
-      {isLoading ? (
+      {isLoading && !skeletonExpired ? (
         <div className="space-y-2 px-2 py-1">
           {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-7 w-full" />
           ))}
         </div>
+      ) : isLoading ? (
+        // Loading has outlasted the skeleton window — show an explicit,
+        // non-looping "Connecting…" so it doesn't read as a hang.
+        <div className="px-2 py-8 text-center text-sm text-muted-foreground">
+          <span className="inline-flex items-center gap-2">
+            <Loader2 className="size-4 animate-spin" /> Connecting to server…
+          </span>
+        </div>
       ) : groups && groups.length > 0 ? (
         groups.map((group) => (
           <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
         ))
+      ) : isError && !groups ? (
+        // The relay couldn't be reached (NIP-11 and the group query both failed).
+        <div className="px-3 py-8 text-center text-sm text-muted-foreground space-y-3">
+          <p>Couldn&rsquo;t reach this server. It may be offline or unreachable.</p>
+          <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">
+            <RefreshCw className="size-3.5" />
+            Retry
+          </Button>
+        </div>
       ) : (
         <div className="px-2 py-8 text-center text-sm text-muted-foreground">
-          {groups ? "No channels yet." : (
-            <span className="inline-flex items-center gap-2">
-              <Loader2 className="size-4 animate-spin" /> Connecting…
-            </span>
-          )}
+          No channels yet.
         </div>
       )}
     </ChannelSidebarView>

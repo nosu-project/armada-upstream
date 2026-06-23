@@ -515,7 +515,9 @@ export function ConcordPage() {
           aria-label="Channels"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
-          <div className="flex h-full w-full safe-area-top">
+          {/* The rail + channel-list header own their own top safe-area inset,
+              so this wrapper must not add it again (would double-pad). */}
+          <div className="flex h-full w-full">
             <ServerRail onNavigate={() => setChannelsOpen(false)} />
             {channelList(() => setChannelsOpen(false))}
           </div>

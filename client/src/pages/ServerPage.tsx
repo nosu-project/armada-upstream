@@ -37,7 +37,7 @@ export function ServerPage() {
   const relayUrl = server ? routeParamToRelay(server) : undefined;
   const [profileOpen, setProfileOpen] = useState(false);
 
-  const { data: groups, isLoading, relayInfo } = useRelayGroups(relayUrl);
+  const { data: groups, isLoading, isError, relayInfo } = useRelayGroups(relayUrl);
 
   if (!relayUrl) {
     return <Navigate to="/" replace />;
@@ -177,6 +177,14 @@ export function ServerPage() {
                   </Card>
                 ))}
               </div>
+            ) : isError && !groups ? (
+              <Card className="border-dashed">
+                <CardContent className="py-12 px-8 text-center">
+                  <p className="text-muted-foreground max-w-sm mx-auto">
+                    Couldn&rsquo;t reach this server. It may be offline or unreachable.
+                  </p>
+                </CardContent>
+              </Card>
             ) : (
               <Card className="border-dashed">
                 <CardContent className="py-12 px-8 text-center">

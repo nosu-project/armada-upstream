@@ -10,16 +10,30 @@ import { ServerPage } from "@/pages/ServerPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { WelcomePage } from "@/pages/WelcomePage";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 
 /**
- * Land the user somewhere sensible. A hosted deployment has pinned platform
- * relays and goes straight to the first one. A standalone (rogue) client ships
- * with NO pinned relay, so fall back to the user's first added server, or — if
- * they have none yet — the welcome/onboarding screen.
+ * Land the user somewhere sensible.
+ *
+ * A logged-out user always gets the welcome/onboarding screen first — dropping
+ * a signed-out user straight into a relay's channel list (which may be slow or
+ * AUTH-gated) leaves them staring at a skeleton with no explanation of what
+ * Armada is or how to sign in.
+ *
+ * Once signed in: a hosted deployment has pinned platform relays and goes
+ * straight to the first one; a standalone (rogue) client ships with NO pinned
+ * relay, so fall back to the user's first added server, or — if they have none
+ * yet — the welcome screen (to add one).
  */
 function HomeRedirect() {
   const { config } = useAppContext();
+  const { user } = useCurrentUser();
+
+  if (!user) {
+    return <Navigate to="/welcome" replace />;
+  }
+
   const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0];
   if (!firstServer) {
     return <Navigate to="/welcome" replace />;

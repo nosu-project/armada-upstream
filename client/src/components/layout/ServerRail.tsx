@@ -524,8 +524,13 @@ export function ServerRail({
       ref={navRef}
       aria-label="Servers"
       className={cn(
-        // Chrome plane — deepest part of the recessed frame.
-        "flex flex-col items-center gap-5 w-[72px] shrink-0 pt-3 pb-3 overflow-y-auto bg-chrome-deep",
+        // Chrome plane — deepest part of the recessed frame. The rail reaches
+        // both screen edges on mobile, so it owns the top/bottom safe-area
+        // insets (status bar above, gesture/nav bar below) on top of its base
+        // padding. On desktop the env() insets are 0, so this is a no-op there.
+        "flex flex-col items-center gap-5 w-[72px] shrink-0 overflow-y-auto bg-chrome-deep",
+        "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
+        "pb-[calc(0.75rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]",
         // Lock scrolling while dragging so the rail doesn't fight the gesture.
         dragUrl && "overflow-hidden",
         className,
