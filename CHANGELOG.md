@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.4.2] - 2026-06-23
+
+Your channel list no longer reloads itself in the background. It now loads
+instantly from your device and stays put, instead of refetching every minute
+and flickering when you switch servers or reload.
+
+### Fixed
+- The channel list stopped constantly refetching. It loads instantly from local
+  storage, no longer polls in the background, and only refreshes when a channel
+  is actually created or changed.
+
 ## [0.4.1] - 2026-06-23
 
 Fixes the Windows desktop app, which opened to a blank screen on first launch
