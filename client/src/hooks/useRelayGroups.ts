@@ -124,12 +124,16 @@ export function useRelayGroups(relayUrl: string | undefined) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relayUrl, data, rememberedIds.join(",")]);
 
-  // While the NIP-11 info doc is still loading the groups query is disabled, so
-  // surface that as "loading" too — otherwise a stuck/slow info fetch would read
-  // as a non-loading, empty result. `isError` covers a failed info fetch as well
-  // (we still attempt the groups query, but expose either failure to the caller).
-  const isLoading = infoLoading || query.isLoading;
-  const isError = infoError || query.isError;
+  // While the NIP-11 info doc is still loading AND we have no channel data yet,
+  // surface that as "loading" — otherwise a stuck/slow info fetch would read as
+  // a non-loading, empty result. But once we have groups (live or seeded from
+  // IndexedDB), a slow/failed NIP-11 fetch must NOT mark the channel list as
+  // loading/errored: the channel list is its own stable thing and shouldn't
+  // blank just because the relay's name/avatar fetch hiccuped on a shaky
+  // connection. So info state only matters when there's no group data at all.
+  const haveGroups = Boolean(query.data);
+  const isLoading = query.isLoading || (infoLoading && !haveGroups);
+  const isError = query.isError || (infoError && !haveGroups);
 
   return { ...query, isLoading, isError, relayInfo };
 }

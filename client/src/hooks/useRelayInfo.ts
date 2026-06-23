@@ -41,6 +41,33 @@ function relayToHttpUrl(relayUrl: string): string | null {
   }
 }
 
+// A relay's NIP-11 doc (name, icon, banner, self key) is one of the most STABLE
+// things about a server — it changes almost never. So we persist the last
+// known-good doc to localStorage, keyed by relay URL, and seed the query with
+// it. That way a reload over a shaky/offline connection still shows the real
+// server name and avatar instead of collapsing to the bare host + a placeholder
+// logo while the NIP-11 fetch fails. (react-query's cache is memory-only and
+// vanishes on reload; this is the disk-backed last-known-good.)
+const STORAGE_PREFIX = 'armada:relay-info:';
+
+function readCachedInfo(relayUrl: string | undefined): RelayInfoDocument | undefined {
+  if (!relayUrl) return undefined;
+  try {
+    const raw = localStorage.getItem(STORAGE_PREFIX + relayUrl);
+    return raw ? (JSON.parse(raw) as RelayInfoDocument) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCachedInfo(relayUrl: string, info: RelayInfoDocument): void {
+  try {
+    localStorage.setItem(STORAGE_PREFIX + relayUrl, JSON.stringify(info));
+  } catch {
+    // localStorage full / unavailable — non-fatal, we just lose the seed.
+  }
+}
+
 export function useRelayInfo(relayUrl: string | undefined) {
   const httpUrl = relayUrl ? relayToHttpUrl(relayUrl) : null;
 
@@ -65,11 +92,22 @@ export function useRelayInfo(relayUrl: string | undefined) {
         throw new Error('Invalid NIP-11 response');
       }
 
-      return payload as RelayInfoDocument;
+      const info = payload as RelayInfoDocument;
+      if (relayUrl) writeCachedInfo(relayUrl, info);
+      return info;
     },
     enabled: !!httpUrl,
+    // Seed from the persisted last-known-good doc so name/avatar render
+    // instantly and survive a reload on a flaky connection. `initialData` puts
+    // it straight into the cache (treated as a real success), so a subsequent
+    // fetch failure never blanks back to undefined. `initialDataUpdatedAt: 0`
+    // marks the seed as already-stale so we still background-refresh once on
+    // mount (picking up the rare real change) while showing last-known-good.
+    initialData: () => readCachedInfo(relayUrl),
+    initialDataUpdatedAt: 0,
     staleTime: 12 * 60 * 60 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
     retry: 1,
   });
 }
+
