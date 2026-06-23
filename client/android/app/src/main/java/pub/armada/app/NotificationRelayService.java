@@ -83,6 +83,7 @@ public class NotificationRelayService extends Service {
     private String userPubkey;
     private final List<String> relayUrls = new ArrayList<>();
     private final Set<String> groupIds = new LinkedHashSet<>();
+    private final Set<String> dmRelays = new LinkedHashSet<>();
     private JSONObject prefs = new JSONObject();
     // Concord (E2E) channel subscriptions, keyed for fast lookup:
     //   zToName: #z pseudonym (hex) → "Community / #channel" display name
@@ -96,9 +97,32 @@ public class NotificationRelayService extends Service {
     // Connect time; we only notify for events at/after this to avoid backfill spam.
     private long sinceSec;
 
+    // Live instance so the plugin can route a signed AUTH event back to us.
+    private static NotificationRelayService instance;
+
+    /**
+     * Called by the plugin once the WebView has signed a NIP-42 challenge.
+     * Routes the kind-22242 event to the matching relay connection.
+     */
+    static void submitAuth(String relayUrl, String eventJson) {
+        NotificationRelayService svc = instance;
+        if (svc == null) return;
+        svc.handler.post(() -> svc.deliverAuth(relayUrl, eventJson));
+    }
+
+    private void deliverAuth(String relayUrl, String eventJson) {
+        for (RelayConnection rc : connections) {
+            if (rc.relayUrl.equals(relayUrl)) {
+                rc.sendAuth(eventJson);
+                return;
+            }
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
         createChannels();
         try {
             startForeground(FOREGROUND_ID, buildForegroundNotification());
@@ -131,6 +155,7 @@ public class NotificationRelayService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        if (instance == this) instance = null;
         closeAllConnections();
         unregisterNetworkCallback();
         unregisterConfigListener();
@@ -159,6 +184,8 @@ public class NotificationRelayService extends Service {
         relayUrls.addAll(parseStringArray(sp.getString("relayUrls", null)));
         groupIds.clear();
         groupIds.addAll(parseStringArray(sp.getString("groupIds", null)));
+        dmRelays.clear();
+        dmRelays.addAll(parseStringArray(sp.getString("dmRelays", null)));
         try {
             String p = sp.getString("prefs", null);
             prefs = p != null ? new JSONObject(p) : new JSONObject();
@@ -167,8 +194,9 @@ public class NotificationRelayService extends Service {
         }
         parseConcordSubs(sp.getString("concordSubs", null));
 
-        // The relays to connect to: NIP-29 relays ∪ every Concord relay.
+        // The relays to connect to: NIP-29 group relays ∪ DM relays ∪ Concord relays.
         Set<String> allRelays = new LinkedHashSet<>(relayUrls);
+        allRelays.addAll(dmRelays);
         allRelays.addAll(relayToZs.keySet());
 
         if (userPubkey == null || allRelays.isEmpty()) {
@@ -246,6 +274,7 @@ public class NotificationRelayService extends Service {
         final String subGroups = "ag-" + Long.toHexString(System.nanoTime());
         final String subDirect = "ad-" + Long.toHexString(System.nanoTime() + 1);
         final String subConcord = "ac-" + Long.toHexString(System.nanoTime() + 2);
+        final String subDm = "am-" + Long.toHexString(System.nanoTime() + 3);
 
         RelayConnection(String relayUrl) {
             this.relayUrl = relayUrl;
@@ -258,6 +287,7 @@ public class NotificationRelayService extends Service {
                 @Override
                 public void onOpen(WebSocket webSocket, Response response) {
                     backoffMs = INITIAL_BACKOFF_MS;
+                    Log.d(TAG, "WS open: " + relayUrl);
                     sendReqs(webSocket);
                 }
 
@@ -281,24 +311,36 @@ public class NotificationRelayService extends Service {
 
         void sendReqs(WebSocket webSocket) {
             try {
-                boolean isNip29Relay = relayUrls.contains(relayUrl);
-                if (isNip29Relay) {
+                if (relayUrls.contains(relayUrl) && !groupIds.isEmpty()) {
                     // Group messages: kind 9 in the user's joined groups.
-                    if (!groupIds.isEmpty()) {
-                        JSONObject f = new JSONObject();
-                        f.put("kinds", new JSONArray().put(9));
-                        JSONArray h = new JSONArray();
-                        for (String id : groupIds) h.put(id);
-                        f.put("#h", h);
-                        f.put("since", sinceSec);
-                        webSocket.send(reqMessage(subGroups, f));
-                    }
-                    // Direct/targeted: reactions, replies, DMs addressed to me.
+                    JSONObject f = new JSONObject();
+                    f.put("kinds", new JSONArray().put(9));
+                    JSONArray h = new JSONArray();
+                    for (String id : groupIds) h.put(id);
+                    f.put("#h", h);
+                    f.put("since", sinceSec);
+                    webSocket.send(reqMessage(subGroups, f));
+
+                    // Reactions/replies to me, scoped to my joined groups so the
+                    // query is a valid NIP-29 request (relays reject a #p-only
+                    // filter with "must have 'h','e' or 'a' tag").
                     JSONObject f2 = new JSONObject();
-                    f2.put("kinds", new JSONArray().put(7).put(1111).put(4));
+                    f2.put("kinds", new JSONArray().put(7).put(1111));
+                    JSONArray h2 = new JSONArray();
+                    for (String id : groupIds) h2.put(id);
+                    f2.put("#h", h2);
                     f2.put("#p", new JSONArray().put(userPubkey));
                     f2.put("since", sinceSec);
                     webSocket.send(reqMessage(subDirect, f2));
+                }
+                // Direct messages (kind 4) addressed to me, on the DM/app relays
+                // (NOT the NIP-29 group relays — DMs don't live there).
+                if (dmRelays.contains(relayUrl)) {
+                    JSONObject f4 = new JSONObject();
+                    f4.put("kinds", new JSONArray().put(4));
+                    f4.put("#p", new JSONArray().put(userPubkey));
+                    f4.put("since", sinceSec);
+                    webSocket.send(reqMessage(subDm, f4));
                 }
                 // Concord (E2E) channel messages on this relay, by #z pseudonym.
                 Set<String> zs = relayToZs.get(relayUrl);
@@ -313,6 +355,19 @@ public class NotificationRelayService extends Service {
                 }
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to build REQ", e);
+            }
+        }
+
+        void sendAuth(String eventJson) {
+            if (ws == null) return;
+            try {
+                JSONArray auth = new JSONArray();
+                auth.put("AUTH");
+                auth.put(new JSONObject(eventJson));
+                ws.send(auth.toString());
+                Log.d(TAG, "Sent AUTH to " + relayUrl);
+            } catch (JSONException e) {
+                Log.w(TAG, "Failed to send AUTH", e);
             }
         }
 
@@ -351,7 +406,42 @@ public class NotificationRelayService extends Service {
     private void onRelayMessage(String text, String relayUrl) {
         try {
             JSONArray msg = new JSONArray(text);
-            if (!"EVENT".equals(msg.optString(0))) return;
+            String type = msg.optString(0);
+            if ("AUTH".equals(type)) {
+                // NIP-42 challenge. Ask the WebView's signer (handles nsec /
+                // bunker / extension) to sign a kind-22242; it comes back via
+                // ArmadaNotificationPlugin.submitAuth → deliverAuth.
+                String challenge = msg.optString(1);
+                Log.d(TAG, "AUTH challenge from " + relayUrl);
+                boolean bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge);
+                if (!bridged) {
+                    Log.w(TAG, "No bridge (WebView down) — can't AUTH " + relayUrl);
+                }
+                return;
+            }
+            if ("EOSE".equals(type)) {
+                Log.d(TAG, "EOSE from " + relayUrl + " sub=" + msg.optString(1));
+                return;
+            }
+            if ("CLOSED".equals(type)) {
+                Log.w(TAG, "CLOSED from " + relayUrl + " sub=" + msg.optString(1) + " reason=" + msg.optString(2));
+                return;
+            }
+            if ("OK".equals(type)) {
+                // AUTH ack (["OK", <event-id>, true/false, msg]). On success the
+                // matching connection re-sends its REQs.
+                boolean ok = msg.optBoolean(2, false);
+                Log.d(TAG, "OK from " + relayUrl + " ok=" + ok + " " + msg.optString(3));
+                if (ok) {
+                    for (RelayConnection rc : connections) {
+                        if (rc.relayUrl.equals(relayUrl) && rc.ws != null) {
+                            rc.sendReqs(rc.ws);
+                        }
+                    }
+                }
+                return;
+            }
+            if (!"EVENT".equals(type)) return;
             JSONObject event = msg.optJSONObject(2);
             if (event == null) return;
             handleEvent(event, relayUrl);
@@ -364,7 +454,9 @@ public class NotificationRelayService extends Service {
 
     private void handleEvent(JSONObject event, String relayUrl) {
         String id = event.optString("id");
-        if (id.isEmpty() || notifiedIds.contains(id)) return;
+        if (id.isEmpty() || notifiedIds.contains(id)) {
+            return;
+        }
 
         int kind = event.optInt("kind");
 
@@ -374,21 +466,28 @@ public class NotificationRelayService extends Service {
         if (kind == 3300) {
             String z = tagValue(event, "z");
             String name = z != null ? zToName.get(z) : null;
-            if (name == null) return; // not one of our subscribed channels
+            if (name == null) {
+                return;
+            }
             String url = zToUrl.get(z);
             long cts = event.optLong("created_at", 0);
             if (cts + 1 > sinceSec) sinceSec = cts + 1;
             notifiedIds.add(id);
+            Log.d(TAG, "NOTIFY concord: " + name);
             showNotification(hashId(id), name, "New message", url != null ? url : "/");
             return;
         }
 
         String author = event.optString("pubkey");
-        if (author.equals(userPubkey)) return; // never notify on our own events
+        if (author.equals(userPubkey)) {
+            return;
+        }
 
         boolean mentionsMe = pTags(event).contains(userPubkey);
 
-        if (!wantsNotification(kind, mentionsMe)) return;
+        if (!wantsNotification(kind, mentionsMe)) {
+            return;
+        }
 
         String title;
         String body;
@@ -425,6 +524,7 @@ public class NotificationRelayService extends Service {
         notifiedIds.add(id);
         long ts = event.optLong("created_at", 0);
         if (ts + 1 > sinceSec) sinceSec = ts + 1; // advance so reconnects don't replay
+        Log.d(TAG, "NOTIFY kind=" + kind + " title=" + title);
         showNotification(hashId(id), title, body, url);
     }
 

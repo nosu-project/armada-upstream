@@ -2,6 +2,7 @@ import { Capacitor } from "@capacitor/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { useConcordList } from "@/hooks/useConcordList";
 import {
@@ -10,6 +11,7 @@ import {
 } from "@/hooks/usePushNotifications";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { buildConcordSubs, type ConcordSub } from "@/lib/concordNotifications";
+import { effectiveDmRelays } from "@/contexts/AppContext";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 /** localStorage key for the native background-notification intent (toggle). */
@@ -85,6 +87,7 @@ export interface UseNativeNotificationsReturn {
 export function useNativeNotifications(): UseNativeNotificationsReturn {
   const supported = isNativeRuntime();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const { data: groupList } = useUserGroupList();
   const { data: concordData } = useConcordList();
 
@@ -109,14 +112,29 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       const n = normalizeRelayUrl(url);
       if (n) set.add(n);
     }
-    return [...set];
+    // Sorted so a relay-list refetch that merely reorders doesn't churn the
+    // native config (which would tear down + rebuild every connection).
+    return [...set].sort();
   }, [groupList]);
 
   // Joined group ids (the `h` tag values) for the kind-9 filter.
   const groupIds = useMemo(
-    () => [...new Set((groupList?.groups ?? []).map((g) => g.id))],
+    () => [...new Set((groupList?.groups ?? []).map((g) => g.id))].sort(),
     [groupList],
   );
+
+  // DM relays: where kind-4 DMs are read from (config.appRelays, or the user's
+  // own DM relays if opted in). These are NOT the NIP-29 group relays — DMs
+  // live on the general app relays and are addressed by #p, so they get their
+  // own connection + filter.
+  const dmRelays = useMemo(() => {
+    const set = new Set<string>();
+    for (const url of effectiveDmRelays(config)) {
+      const n = normalizeRelayUrl(url);
+      if (n) set.add(n);
+    }
+    return [...set].sort();
+  }, [config]);
 
   const prefsRecord = useMemo<Record<string, boolean>>(
     () => ({
@@ -150,7 +168,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
 
     const loggedOut = !user;
     const turnedOff = !enabled;
-    const nothingToWatch = relayUrls.length === 0 && concordSubs.length === 0;
+    const nothingToWatch =
+      relayUrls.length === 0 && concordSubs.length === 0 && dmRelays.length === 0;
 
     let payload: Parameters<typeof ArmadaNotification.configure>[0];
     if (turnedOff || loggedOut) {
@@ -166,6 +185,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         groupIds,
         prefs: prefsRecord,
         concordSubs,
+        dmRelays,
       };
     }
 
@@ -177,7 +197,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord, concordSubs]);
+  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord, concordSubs, dmRelays]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off and the OS notification permission is already granted, start the
@@ -197,6 +217,40 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         // Permission check failed — leave dormant.
       });
   }, [supported, enabled, busy]);
+
+  // NIP-42: the service can't sign, so it bridges each relay's AUTH challenge
+  // here. We sign a kind-22242 with the user's signer (nsec / bunker /
+  // extension — all handled in the WebView) and hand it back. No key ever
+  // enters native code.
+  const signer = user?.signer;
+  useEffect(() => {
+    if (!supported || !signer) return;
+    let handle: { remove: () => void } | undefined;
+    let cancelled = false;
+    ArmadaNotification.addListener("authChallenge", async ({ relayUrl, challenge }) => {
+      try {
+        const event = await signer.signEvent({
+          kind: 22242,
+          content: "",
+          tags: [
+            ["relay", relayUrl],
+            ["challenge", challenge],
+          ],
+          created_at: Math.floor(Date.now() / 1000),
+        });
+        await ArmadaNotification.submitAuth({ relayUrl, event });
+      } catch (err) {
+        console.warn("[native-notif] AUTH signing failed:", err);
+      }
+    }).then((h) => {
+      if (cancelled) h.remove();
+      else handle = h;
+    });
+    return () => {
+      cancelled = true;
+      handle?.remove();
+    };
+  }, [supported, signer]);
 
   const enable = useCallback(async () => {
     if (!supported) return;

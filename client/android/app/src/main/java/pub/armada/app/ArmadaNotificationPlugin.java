@@ -44,6 +44,58 @@ public class ArmadaNotificationPlugin extends Plugin {
     private static final String TAG = "ArmadaNotifPlugin";
     static final String PREFS_NAME = "armada_notification_config";
 
+    /**
+     * Live plugin instance, so the background service can reach back into the
+     * Capacitor bridge to ask the WebView's signer for a NIP-42 signature.
+     * Null when the activity/bridge isn't up (WebView dead) — the service then
+     * simply can't authenticate until the app is reopened.
+     */
+    private static ArmadaNotificationPlugin instance;
+
+    @Override
+    public void load() {
+        super.load();
+        instance = this;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (instance == this) instance = null;
+        super.handleOnDestroy();
+    }
+
+    /**
+     * Emit a NIP-42 challenge to the JS layer so it can sign a kind-22242 with
+     * the user's signer (nsec/bunker/extension — all handled in the WebView).
+     * Returns false if the bridge isn't available (WebView not running).
+     */
+    static boolean emitAuthChallenge(String relayUrl, String challenge) {
+        ArmadaNotificationPlugin p = instance;
+        if (p == null) return false;
+        JSObject data = new JSObject();
+        data.put("relayUrl", relayUrl);
+        data.put("challenge", challenge);
+        p.notifyListeners("authChallenge", data);
+        return true;
+    }
+
+    /**
+     * Receive a signed kind-22242 event from JS and hand it to the running
+     * service to send as ["AUTH", event] on the matching relay connection.
+     */
+    @PluginMethod
+    public void submitAuth(PluginCall call) {
+        String relayUrl = call.getString("relayUrl");
+        try {
+            if (relayUrl != null && call.getObject("event") != null) {
+                NotificationRelayService.submitAuth(relayUrl, call.getObject("event").toString());
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "submitAuth failed", e);
+        }
+        call.resolve();
+    }
+
     /** Whether the POST_NOTIFICATIONS runtime permission is granted (always true < API 33). */
     @PluginMethod
     public void checkPermission(PluginCall call) {
@@ -86,6 +138,7 @@ public class ArmadaNotificationPlugin extends Plugin {
 
         String relayUrlsRaw = arrayToString(call.getArray("relayUrls"));
         String groupIdsRaw = arrayToString(call.getArray("groupIds"));
+        String dmRelaysRaw = arrayToString(call.getArray("dmRelays"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         // prefs is a flat object of booleans; store its JSON verbatim.
         String prefsRaw = null;
@@ -98,7 +151,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
 
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        boolean hasWatch = relayUrlsRaw != null || concordSubsRaw != null;
+        boolean hasWatch = relayUrlsRaw != null || concordSubsRaw != null || dmRelaysRaw != null;
         boolean hasConfig = enabled && userPubkey != null && hasWatch;
 
         if (hasConfig) {
@@ -108,6 +161,8 @@ public class ArmadaNotificationPlugin extends Plugin {
                     .putString("relayUrls", relayUrlsRaw != null ? relayUrlsRaw : "[]");
             if (groupIdsRaw != null) editor.putString("groupIds", groupIdsRaw);
             else editor.remove("groupIds");
+            if (dmRelaysRaw != null) editor.putString("dmRelays", dmRelaysRaw);
+            else editor.remove("dmRelays");
             if (concordSubsRaw != null) editor.putString("concordSubs", concordSubsRaw);
             else editor.remove("concordSubs");
             if (prefsRaw != null) editor.putString("prefs", prefsRaw);
@@ -116,6 +171,7 @@ public class ArmadaNotificationPlugin extends Plugin {
             editor.putLong("rev", System.currentTimeMillis());
             editor.apply();
             Log.d(TAG, "Configured: relays=" + relayUrlsRaw + " groups=" + groupIdsRaw
+                    + " dmRelays=" + dmRelaysRaw
                     + " concordSubs=" + (concordSubsRaw != null ? "yes" : "none"));
         } else {
             prefs.edit().clear().apply();
