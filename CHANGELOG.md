@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.3.0] - 2026-06-23
+
+The Android app now delivers instant push notifications on its own — no Google
+or third-party push service involved. Messages, mentions, replies, reactions,
+direct messages, and community voice channels all ping you the moment they
+arrive, even when Armada is closed, signed in with any login method. This
+release also polishes the mobile experience with a branded launcher icon and
+splash screen and fixes several layout glitches.
+
+### Added
+- Instant native push notifications on Android, delivered directly without
+  Google/FCM: messages, mentions, replies, reactions, direct messages, and
+  community channels. Works with any login method (key, signer, or remote
+  signer) and notifies you even when the app is closed.
+- A branded Armada launcher icon and splash screen on Android.
+
+### Fixed
+- Mobile layout fixes: safe areas around notches and system bars, the
+  logged-out landing screen, and a screen that could get stuck loading.
+
 ## [0.2.1] - 2026-06-22
 
 Push notifications are now on by default — once you allow notifications, Armada
