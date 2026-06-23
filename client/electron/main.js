@@ -22,14 +22,13 @@ const {
   Tray,
   shell,
   protocol,
-  net,
   nativeImage,
   ipcMain,
   desktopCapturer,
   session,
 } = require("electron");
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
+const fs = require("node:fs");
 
 // Where the bundled web build lives inside the packaged app.
 const DIST = path.join(__dirname, "dist");
@@ -71,6 +70,52 @@ protocol.registerSchemesAsPrivileged([
 
 // ── Serving the bundled SPA over app:// ──────────────────────────────────────
 
+// Minimal extension → MIME map for the assets the SPA actually ships. The
+// browser is strict about a few of these (a module script served as text/plain
+// is rejected; .css with the wrong type is ignored), so we set them explicitly.
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".wasm": "application/wasm",
+  ".map": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".webmanifest": "application/manifest+json",
+};
+
+function contentTypeFor(filePath) {
+  return MIME_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
+}
+
+// Read a bundled file and return an HTTP Response. We read through Node's `fs`
+// (NOT net.fetch of a file:// URL) because the web build is packaged inside
+// `app.asar`: `fs` is asar-aware, while Chromium's file:// network stack is
+// not — handing it `…/app.asar/dist/index.html` 404s (notably on Windows),
+// which left the window blank on first open and broke boot/sync.
+function serveFile(filePath) {
+  try {
+    const body = fs.readFileSync(filePath);
+    return new Response(body, {
+      status: 200,
+      headers: { "Content-Type": contentTypeFor(filePath) },
+    });
+  } catch {
+    return null;
+  }
+}
+
 function registerAppProtocol() {
   protocol.handle(SCHEME, (request) => {
     const url = new URL(request.url);
@@ -78,20 +123,25 @@ function registerAppProtocol() {
     let pathname = decodeURIComponent(url.pathname);
     if (pathname === "/" || pathname === "") pathname = "/index.html";
 
+    const indexHtml = path.join(DIST, "index.html");
     let filePath = path.normalize(path.join(DIST, pathname));
-    if (!filePath.startsWith(DIST)) {
+    // Reject path traversal. Compare with a trailing separator so a sibling
+    // like `<DIST>-evil` can't pass the prefix check.
+    if (filePath !== DIST && !filePath.startsWith(DIST + path.sep)) {
       return new Response("Forbidden", { status: 403 });
     }
 
     // SPA fallback: a request without a file extension (a client route like
     // /s/<server>/<group>) serves index.html so the router can handle it.
     if (!path.extname(filePath)) {
-      filePath = path.join(DIST, "index.html");
+      filePath = indexHtml;
     }
 
-    return net.fetch(pathToFileURL(filePath).toString()).catch(() =>
-      net.fetch(pathToFileURL(path.join(DIST, "index.html")).toString()),
-    );
+    // Serve the file; if it's missing (e.g. a route that *looked* like a file
+    // because a relay param contains a dot), fall back to index.html so the
+    // SPA router can resolve it instead of 404ing.
+    return serveFile(filePath) ?? serveFile(indexHtml) ??
+      new Response("Not Found", { status: 404 });
   });
 }
 
