@@ -12,11 +12,28 @@
     <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
-        <item name="android:background">@null</item>
+        <!-- Dark window background so the area behind the transparent edge-to-edge
+             system bars renders the app's dark theme color (#100b15) instead of a
+             white flash before the WebView paints. -->
+        <item name="android:background">@color/armadaBackground</item>
+        <item name="android:windowBackground">@color/armadaBackground</item>
+        <!-- Transparent system bars; the WebView draws edge-to-edge beneath them. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <!-- Branded launch splash: dark background + centered Armada crest.
+             windowSplashScreen* apply on API 31+; android:background is the
+             pre-31 fallback (and what Capacitor's launch window uses). -->
+        <item name="android:windowBackground">@drawable/splash</item>
         <item name="android:background">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">@color/armadaBackground</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_logo</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Theme to hand off to once the activity is up. -->
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
 </resources>

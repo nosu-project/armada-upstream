@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Armada dark theme palette. Background matches index.html theme-color
+         (#100b15) and capacitor.config backgroundColor. -->
+    <color name="armadaBackground">#100b15</color>
+    <color name="colorPrimary">#100b15</color>
+    <color name="colorPrimaryDark">#100b15</color>
+    <color name="colorAccent">#fb4d96</color>
+</resources>

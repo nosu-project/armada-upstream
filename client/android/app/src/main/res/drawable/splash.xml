@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Armada launch splash: solid dark background (#100b15, matching the app's
+     dark theme and theme-color) with the Armada crest centered. Replaces the
+     default Capacitor white starburst splash. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/armadaBackground" />
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@drawable/splash_logo" />
+    </item>
+</layer-list>
