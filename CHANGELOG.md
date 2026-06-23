@@ -4,6 +4,20 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.4.3] - 2026-06-23
+
+A server's name, avatar, and channel list now stick around on a shaky or
+dropped connection instead of collapsing to a bare address and a blank list.
+The server's details are remembered on your device and shown immediately, even
+when the network is struggling to reach it.
+
+### Fixed
+- Server name and avatar no longer disappear (replaced by the raw address and a
+  placeholder icon) when the connection is flaky; the last-known details are
+  remembered and shown instantly.
+- The channel list no longer blanks out just because fetching the server's
+  name/icon failed; it stays visible as long as the channels are known.
+
 ## [0.4.2] - 2026-06-23
 
 Your channel list no longer reloads itself in the background. It now loads
