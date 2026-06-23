@@ -1,7 +1,9 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import {
   buildGroupListTags,
@@ -56,9 +58,39 @@ async function readGroupListEvent(
 export function useUserGroupList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const eventStore = useEventStore();
+  const queryClient = useQueryClient();
+
+  const queryKey = ["nip29", "user-groups", user?.pubkey];
+
+  // Cache-first seed: hydrate the joined-channels list from IndexedDB so it
+  // survives a refresh and renders before the network resolves. The 10009 event
+  // is persisted by NostrBatcher; we read it back by (kind, author) and decrypt
+  // its private items locally.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    void (async () => {
+      if (queryClient.getQueryData(queryKey)) return;
+      const store = await eventStore;
+      const [cached] = await store.query([{ kinds: [KIND_USER_GROUPS], authors: [user.pubkey] }]);
+      if (cancelled || !cached) return;
+      const list = await readGroupListEvent(cached, user.signer);
+      if (cancelled || queryClient.getQueryData(queryKey)) return;
+      queryClient.setQueryData(queryKey, {
+        event: cached as NostrEvent | null,
+        groups: list.groups,
+        servers: list.servers,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.pubkey, eventStore, queryClient]);
 
   return useQuery({
-    queryKey: ["nip29", "user-groups", user?.pubkey],
+    queryKey,
     queryFn: async ({ signal }) => {
       const events = await nostr.query(
         [{ kinds: [KIND_USER_GROUPS], authors: [user!.pubkey], limit: 1 }],

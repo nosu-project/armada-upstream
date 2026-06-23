@@ -119,23 +119,23 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     placeholderData: (prev) => prev,
   });
 
-  // Cache-first seed: while the network query is in flight, hydrate the cache
-  // from IndexedDB so a channel we've visited renders instantly. The store only
-  // indexes by id, so we read back the message ids we previously persisted for
-  // this group (kept in a sibling cache entry) and resolve them locally.
+  // Cache-first seed: while the network query is in flight, hydrate from
+  // IndexedDB so a channel we've visited renders instantly — and survives a
+  // page refresh. The local store now indexes by tag, so we query the group's
+  // timeline directly by `#h` (the same filter we send to the relay), no
+  // sibling id-list bookkeeping required.
   useEffect(() => {
     if (!relayUrl || !groupId) return;
     let cancelled = false;
     void (async () => {
-      const idsKey = ["nip29", "msg-ids", relayUrl, groupId] as const;
-      const ids = queryClient.getQueryData<string[]>(idsKey);
-      if (!ids || ids.length === 0) return;
       // Don't clobber a network result that already landed.
       if ((queryClient.getQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId)) ?? []).length > 0) {
         return;
       }
       const store = await eventStore;
-      const cached = await store.query([{ ids }]);
+      const cached = await store.query([
+        { kinds: TIMELINE_KINDS, "#h": [groupId], limit: PAGE_SIZE },
+      ]);
       if (cancelled || cached.length === 0) return;
       queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old) =>
         old && old.length > 0 ? old : sortDedupe(cached),
@@ -145,18 +145,6 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       cancelled = true;
     };
   }, [relayUrl, groupId, eventStore, queryClient]);
-
-  // Persist the set of loaded message ids so a future visit can seed from the
-  // IndexedDB cache (which the NostrBatcher already mirrors every event into).
-  useEffect(() => {
-    if (!relayUrl || !groupId) return;
-    const data = query.data;
-    if (!data || data.length === 0) return;
-    queryClient.setQueryData<string[]>(
-      ["nip29", "msg-ids", relayUrl, groupId],
-      data.map((e) => e.id),
-    );
-  }, [query.data, relayUrl, groupId, queryClient]);
 
   // Send-status for optimistic messages (kept in its own cache entry).
   const { data: status = {} } = useQuery<SendStatusMap>({

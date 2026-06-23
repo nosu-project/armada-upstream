@@ -1,7 +1,9 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { APP_NAME } from "@/lib/platform";
 import {
   addToConcordList,
@@ -55,9 +57,37 @@ async function readConcordListEvent(
 export function useConcordList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const eventStore = useEventStore();
+  const queryClient = useQueryClient();
+
+  const queryKey = ["concord", "list", user?.pubkey];
+
+  // Cache-first seed: hydrate the community list (the room keys) from IndexedDB
+  // so rooms survive a refresh and render before the network resolves. The
+  // 30078 list event is persisted by NostrBatcher; read it back by its addr
+  // coordinate and decrypt locally.
+  useEffect(() => {
+    if (!user?.signer.nip44) return;
+    let cancelled = false;
+    void (async () => {
+      if (queryClient.getQueryData(queryKey)) return;
+      const store = await eventStore;
+      const [cached] = await store.query([
+        { kinds: [CONCORD_LIST_KIND], authors: [user.pubkey], "#d": [CONCORD_LIST_D_TAG] },
+      ]);
+      if (cancelled || !cached) return;
+      const list = await readConcordListEvent(cached, user.signer, user.pubkey);
+      if (cancelled || queryClient.getQueryData(queryKey)) return;
+      queryClient.setQueryData(queryKey, { event: cached as NostrEvent | null, list });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.pubkey, user?.signer.nip44, eventStore, queryClient]);
 
   return useQuery({
-    queryKey: ["concord", "list", user?.pubkey],
+    queryKey,
     enabled: Boolean(user?.signer.nip44),
     staleTime: 30_000,
     queryFn: async ({ signal }) => {

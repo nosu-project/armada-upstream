@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 
@@ -43,6 +44,7 @@ export function useDMConversations() {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const queryClient = useQueryClient();
+  const eventStore = useEventStore();
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
 
@@ -64,6 +66,30 @@ export function useDMConversations() {
     },
     staleTime: 15_000,
   });
+
+  // Cache-first seed: hydrate the conversation list from IndexedDB so it
+  // survives a refresh and renders before the network resolves.
+  useEffect(() => {
+    if (!user?.pubkey) return;
+    const pubkey = user.pubkey;
+    let cancelled = false;
+    void (async () => {
+      if ((queryClient.getQueryData<NostrEvent[]>(queryKey) ?? []).length > 0) return;
+      const store = await eventStore;
+      const events = await store.query([
+        { kinds: [KIND_DM], authors: [pubkey], limit: 500 },
+        { kinds: [KIND_DM], "#p": [pubkey], limit: 500 },
+      ]);
+      if (cancelled || events.length === 0) return;
+      queryClient.setQueryData<NostrEvent[]>(queryKey, (old) =>
+        old && old.length > 0 ? old : events,
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.pubkey, eventStore, queryClient, relayKey]);
 
   // Live subscription so new conversations/messages surface without a refetch.
   useEffect(() => {
@@ -175,6 +201,7 @@ export function useDirectMessages(peer: string | undefined) {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const queryClient = useQueryClient();
+  const eventStore = useEventStore();
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
 
@@ -230,6 +257,52 @@ export function useDirectMessages(peer: string | undefined) {
     },
     staleTime: 10_000,
   });
+
+  // Cache-first seed: decrypt this thread from IndexedDB before the network
+  // resolves, so a conversation we've opened renders instantly and survives a
+  // page refresh. The store holds the raw kind-4 events (mirrored by
+  // NostrBatcher); we read our own DM set by tag/author, narrow to this peer,
+  // and decrypt locally.
+  useEffect(() => {
+    if (!self || !peer || !user?.signer.nip04) return;
+    const nip04 = user.signer.nip04;
+    let cancelled = false;
+    void (async () => {
+      if ((queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? []).length > 0) return;
+      const store = await eventStore;
+      const events = await store.query([
+        { kinds: [KIND_DM], authors: [self], limit: 1000 },
+        { kinds: [KIND_DM], "#p": [self], limit: 1000 },
+      ]);
+      if (cancelled || events.length === 0) return;
+
+      const byId = new Map<string, NostrEvent>();
+      for (const e of events) {
+        if (dmCounterparty(e, self) === peer) byId.set(e.id, e);
+      }
+      if (byId.size === 0) return;
+
+      const decrypted: DecryptedDM[] = [];
+      for (const event of byId.values()) {
+        const counterparty = event.pubkey === self ? peer : event.pubkey;
+        try {
+          const content = await nip04.decrypt(counterparty, event.content);
+          decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
+        } catch {
+          // undecryptable — skip
+        }
+      }
+      if (cancelled || decrypted.length === 0) return;
+      decrypted.sort((a, b) => a.created_at - b.created_at);
+      queryClient.setQueryData<DecryptedDM[]>(queryKey, (old) =>
+        old && old.length > 0 ? old : decrypted,
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [self, peer, user?.signer.nip04, eventStore, queryClient]);
 
   // Live subscription for new messages in this thread.
   useEffect(() => {

@@ -1,7 +1,9 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { channelPseudonym } from "@/lib/concord/derive";
 import {
   buildInnerEvent,
@@ -27,17 +29,92 @@ function channelPseudonyms(channel: Channel): string[] {
 }
 
 /**
+ * Open + tally a batch of sealed outer events for a channel: decode each under
+ * the held epoch keys (binding triad enforced), drop author-deleted messages,
+ * and return the surviving messages sorted by time. Shared by the network query
+ * and the IndexedDB cache-first seed.
+ */
+function openMessages(
+  events: NostrEvent[],
+  channelId: Uint8Array,
+  epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
+): OpenedMessage[] {
+  const byId = new Map<string, OpenedMessage>();
+  // Tombstones: target message id → set of pubkeys that authored a delete
+  // for it. A delete only takes effect for the original author's own
+  // message (cooperative self-delete), mirroring Vector's hide model.
+  const deletes = new Map<string, Set<string>>();
+  for (const ev of events) {
+    try {
+      const opened = openMessageMulti(ev, channelId, epochKeys);
+      if (opened.kind === KIND_COMMUNITY_DELETE) {
+        const target = opened.tags.find((t) => t[0] === "e")?.[1];
+        if (!target) continue;
+        let authors = deletes.get(target);
+        if (!authors) deletes.set(target, (authors = new Set()));
+        authors.add(opened.author);
+        continue;
+      }
+      byId.set(opened.messageId, opened);
+    } catch {
+      // NoHeldEpoch / splice / bad-sig → not ours or invalid; skip.
+    }
+  }
+  // Drop any message its own author deleted.
+  for (const [id, msg] of byId) {
+    if (deletes.get(id)?.has(msg.author)) byId.delete(id);
+  }
+  return [...byId.values()].sort((a, b) => a.ms - b.ms);
+}
+
+/**
  * Fetch + decrypt the messages of one Concord channel from the community's
  * relays. Queries every retained-epoch pseudonym (`#z`), opens each sealed outer
  * event under the matching epoch key (binding triad enforced), and returns the
  * verified messages sorted by time. Foreign/old-epoch blobs are silently
  * skipped (NoHeldEpoch), exactly as Vector's read path does.
+ *
+ * Cache-first: while the network query is in flight, the channel's sealed
+ * events are read back from IndexedDB by their `#z` pseudonyms and decrypted
+ * locally, so a channel we've visited renders instantly and survives a page
+ * refresh (the relays only ever stored opaque blobs; decryption is local).
  */
 export function useConcordChannelMessages(community: Community | undefined, channel: Channel | undefined) {
   const { nostr } = useNostr();
+  const eventStore = useEventStore();
+  const queryClient = useQueryClient();
+
+  const channelIdHex = channel ? bytesToHex(channel.id) : null;
+  const queryKey = ["concord", "channel", channelIdHex];
+
+  // Seed from the local store (decrypt sealed blobs by `#z`) before the network
+  // resolves. Survives refresh because NostrBatcher mirrors the sealed events.
+  useEffect(() => {
+    if (!community || !channel) return;
+    let cancelled = false;
+    void (async () => {
+      if ((queryClient.getQueryData<OpenedMessage[]>(queryKey) ?? []).length > 0) return;
+      const store = await eventStore;
+      const epochKeys = readEpochKeys(channel);
+      const zs = channelPseudonyms(channel);
+      const sealed = await store.query([
+        { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": zs, limit: 500 },
+      ]);
+      if (cancelled || sealed.length === 0) return;
+      const opened = openMessages(sealed, channel.id, epochKeys);
+      if (cancelled || opened.length === 0) return;
+      queryClient.setQueryData<OpenedMessage[]>(queryKey, (old) =>
+        old && old.length > 0 ? old : opened,
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelIdHex, community, eventStore, queryClient]);
 
   return useQuery({
-    queryKey: ["concord", "channel", channel ? bytesToHex(channel.id) : null],
+    queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
     refetchInterval: 15_000,
@@ -55,33 +132,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
             .catch(() => [] as NostrEvent[]),
         ),
       );
-
-      const byId = new Map<string, OpenedMessage>();
-      // Tombstones: target message id → set of pubkeys that authored a delete
-      // for it. A delete only takes effect for the original author's own
-      // message (cooperative self-delete), mirroring Vector's hide model.
-      const deletes = new Map<string, Set<string>>();
-      for (const ev of results.flat()) {
-        try {
-          const opened = openMessageMulti(ev, channel!.id, epochKeys);
-          if (opened.kind === KIND_COMMUNITY_DELETE) {
-            const target = opened.tags.find((t) => t[0] === "e")?.[1];
-            if (!target) continue;
-            let authors = deletes.get(target);
-            if (!authors) deletes.set(target, (authors = new Set()));
-            authors.add(opened.author);
-            continue;
-          }
-          byId.set(opened.messageId, opened);
-        } catch {
-          // NoHeldEpoch / splice / bad-sig → not ours or invalid; skip.
-        }
-      }
-      // Drop any message its own author deleted.
-      for (const [id, msg] of byId) {
-        if (deletes.get(id)?.has(msg.author)) byId.delete(id);
-      }
-      return [...byId.values()].sort((a, b) => a.ms - b.ms);
+      return openMessages(results.flat(), channel!.id, epochKeys);
     },
   });
 }

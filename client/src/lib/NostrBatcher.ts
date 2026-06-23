@@ -1,6 +1,9 @@
 import type { NostrEvent, NostrFilter } from '@nostrify/types';
 import type { NPool, NStore } from '@nostrify/nostrify';
 
+/** The relay/group handle shape we wrap for caching: query + req. */
+type NRelayLike = ReturnType<NPool['relay']>;
+
 /** Maximum number of items per batch to avoid hitting relay filter limits. */
 const MAX_BATCH_SIZE = 50;
 
@@ -623,11 +626,49 @@ export class NostrBatcher {
   }
 
   relay(url: string) {
-    return this.pool.relay(url);
+    return this.wrapCaching(this.pool.relay(url));
   }
 
   group(urls: string[]) {
-    return this.pool.group(urls);
+    return this.wrapCaching(this.pool.group(urls));
+  }
+
+  /**
+   * Wrap a relay/group handle so its `.query()` and `.req()` output is mirrored
+   * into the local cache, exactly like the pool-level `.query()`/`.req()` above.
+   *
+   * Group-scoped traffic (NIP-29 via `relay(url)`, DMs/Concord via `group()`)
+   * bypasses the pool, so without this wrapper those events would never be
+   * persisted — and chat history could not be read back from IndexedDB after a
+   * refresh. The wrapper is transparent: callers see the same NRelay interface
+   * and the same results; caching is fire-and-forget on the side.
+   */
+  private wrapCaching<R extends NRelayLike>(relay: R): R {
+    const cacheEvents = this.cacheEvents.bind(this);
+    return new Proxy(relay, {
+      get(target, prop, receiver) {
+        if (prop === 'query') {
+          return async (filters: NostrFilter[], opts?: { signal?: AbortSignal }) => {
+            const events = await target.query(filters, opts);
+            cacheEvents(events);
+            return events;
+          };
+        }
+        if (prop === 'req') {
+          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) => {
+            const source = target.req(filters, opts);
+            return (async function* () {
+              for await (const msg of source) {
+                if (msg[0] === 'EVENT') cacheEvents([msg[2]]);
+                yield msg;
+              }
+            })();
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
   }
 
   close(): Promise<void> {
