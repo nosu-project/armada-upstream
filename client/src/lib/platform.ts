@@ -50,8 +50,23 @@ export function routeParamToRelay(param: string): string | undefined {
 
 export const APP_NAME: string = import.meta.env.VITE_APP_NAME || "Armada";
 
-/** Pinned platform relays. Always present; not user-removable. */
-export const PLATFORM_RELAYS: string[] = (import.meta.env.VITE_PLATFORM_RELAYS || "ws://localhost:5577")
+/**
+ * Pinned platform relays. Always present; not user-removable.
+ *
+ * `VITE_PLATFORM_RELAYS` is treated three ways, and the distinction matters:
+ *   - unset (`undefined`): local dev → default to `ws://localhost:5577`.
+ *   - empty string (`""`): an explicit "no pinned relays" — this is how the
+ *     standalone/sovereign (Electron, rogue) builds ship. The user starts with
+ *     zero servers and adds their own.
+ *   - non-empty: the hosted deployment's comma-separated pinned relays.
+ *
+ * The empty-string case is why we can't use `... || "ws://localhost:5577"`:
+ * `""` is falsy, so that fallback would resurrect a phantom `ws://localhost`
+ * server in sovereign builds (a relay that does not exist for those clients).
+ */
+const RAW_PLATFORM_RELAYS: string =
+  import.meta.env.VITE_PLATFORM_RELAYS ?? "ws://localhost:5577";
+export const PLATFORM_RELAYS: string[] = RAW_PLATFORM_RELAYS
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
