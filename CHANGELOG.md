@@ -4,6 +4,31 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.4.5] - 2026-06-23
+
+Messages everywhere now feel instant and your server list stops vanishing.
+Group and encrypted-community messages send optimistically — they appear the
+moment you hit send, the box clears right away, and you can fire off several in
+a row without the app locking up. Deleting an encrypted-community message
+removes it immediately. Separately, the server rail and encrypted-community
+list no longer flicker out and disappear on a flaky connection.
+
+### Changed
+- Group and encrypted-community messages appear immediately on send and the
+  compose box clears right away, instead of waiting for the server. You can
+  send several in a row without the input locking up between them.
+- Deleting a message in an encrypted community now hides it immediately.
+
+### Fixed
+- The server list (the icons on the left) no longer briefly appears and then
+  disappears on a slow or flaky connection.
+- The encrypted-community list and its channels no longer flicker out and
+  vanish when the connection is struggling.
+- A message that fails to send now shows a retry option inline instead of
+  silently disappearing.
+- Prevented a rare case where saving your server or community list during a
+  connection hiccup could wipe it.
+
 ## [0.4.4] - 2026-06-23
 
 Direct messages now send instantly. Your message appears the moment you hit

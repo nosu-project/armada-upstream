@@ -3,10 +3,12 @@ import { useMemo } from "react";
 import {
   useConcordChannelMessages,
   useConcordReactions,
+  useConcordSendStatus,
+  useRetryConcordMessage,
   useSendConcordMessage,
 } from "@/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_REACTION } from "@/lib/concord/kinds";
+import { KIND_COMMUNITY_REACTION } from "@/lib/concord/kinds";
 
 import type { OpenedMessage } from "@/lib/concord/envelope";
 import type { Channel, Community } from "@/lib/concord/types";
@@ -50,6 +52,8 @@ export function useConcordTransport(
   const { data: opened, isLoading } = useConcordChannelMessages(community, channel);
   const { data: rawReactions } = useConcordReactions(community, channel);
   const { mutateAsync: send } = useSendConcordMessage(community, channel);
+  const { retry, discard, deleteMessage } = useRetryConcordMessage(community, channel);
+  const sendStatus = useConcordSendStatus(channel);
 
   const messages = useMemo<ChatMsg[]>(() => (opened ?? []).map(openedToEvent), [opened]);
 
@@ -92,13 +96,12 @@ export function useConcordTransport(
       isLoading,
       canWrite,
       canModerate,
-      deleteMessage: (event: NostrEvent) => {
-        // Cooperative self-delete: a sealed 3305 referencing the message. The
-        // read path drops a message whose own author published a delete for it.
-        void send({ content: "", kind: KIND_COMMUNITY_DELETE, reference: event.id }).catch(() => {});
-      },
+      sendStatusFor: (id: string) => sendStatus[id],
+      retry: (event: ChatMsg) => retry(event.id),
+      discard,
+      deleteMessage: (event: NostrEvent) => deleteMessage(event.id),
     }),
-    [messages, isLoading, canWrite, canModerate, send],
+    [messages, isLoading, canWrite, canModerate, sendStatus, retry, discard, deleteMessage],
   );
 
   return { transport, reactionsFor };

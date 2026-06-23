@@ -449,6 +449,9 @@ export function ConcordPage() {
                     replyContext={<ConcordReplyContext pubkey={replyPk} />}
                     onReply={canWrite ? setReplyTo : undefined}
                     onDelete={transport.deleteMessage}
+                    sendStatus={transport.sendStatusFor?.(msg.id)}
+                    onRetry={transport.retry ? () => transport.retry!(msg) : undefined}
+                    onDiscard={transport.discard ? () => transport.discard!(msg.id) : undefined}
                   />
                 );
               }}

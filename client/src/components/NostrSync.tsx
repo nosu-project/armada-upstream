@@ -89,22 +89,33 @@ export function NostrSync() {
 
   // ─── 1b. NIP-29 server list (kind 10009 `r` tags) → addedRelays cache ──
   // The 10009 list is the cross-device source of truth for added servers;
-  // localStorage `addedRelays` is just a fast/offline cache. Hydrate it once
-  // per account from the list, dropping platform-pinned relays (those are not
-  // "added"). Runs after the list query resolves.
+  // localStorage `addedRelays` is just a fast/offline cache. Hydrate by MERGING
+  // the list into the local cache (union) — never by replacing it. Replacing
+  // was catastrophic: any transient empty/partial/failed-decrypt read of the
+  // 10009 event (slow relay, signer not ready) would overwrite `addedRelays`
+  // with [] and the whole server rail would vanish. A union only ever ADDS
+  // servers the list knows about; explicit removals update `addedRelays`
+  // directly at the call site (ServerPage), so we don't need the list to drive
+  // removals here. Runs once per account after the list query resolves.
   useEffect(() => {
     if (!user?.pubkey || !groupList) return;
     if (serversAppliedPubkey.current === user.pubkey) return;
+
+    // Nothing trustworthy to merge from: no event yet, or its encrypted items
+    // failed to decrypt (servers would read empty). Wait for a real list.
+    if (!groupList.event || groupList.decryptFailed) return;
+
     serversAppliedPubkey.current = user.pubkey;
 
     const pinned = new Set(PLATFORM_RELAYS);
     const fromList = groupList.servers.filter((url) => !pinned.has(url));
+    if (fromList.length === 0) return;
 
     updateConfig((current) => {
-      const same =
-        current.addedRelays.length === fromList.length &&
-        current.addedRelays.every((url) => fromList.includes(url));
-      return same ? current : { ...current, addedRelays: fromList };
+      const have = new Set(current.addedRelays);
+      const missing = fromList.filter((url) => !have.has(url));
+      if (missing.length === 0) return current;
+      return { ...current, addedRelays: [...current.addedRelays, ...missing] };
     });
   }, [user?.pubkey, groupList, updateConfig]);
 

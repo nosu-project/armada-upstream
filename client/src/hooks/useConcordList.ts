@@ -33,23 +33,43 @@ import type { NUser } from "@nostrify/react/login";
  * from another device.
  */
 
+/** A read of the list event, with a flag distinguishing "couldn't read" from "empty". */
+interface ReadConcordListResult {
+  list: ConcordList;
+  /**
+   * True when an event existed but we couldn't decrypt/parse it (signer not
+   * ready, decrypt threw, bad JSON). The returned `list` is then empty but is
+   * NOT authoritative — callers MUST NOT overwrite a populated list with it,
+   * and the mutation MUST NOT read-modify-write on top of it (doing so would
+   * republish a list that wipes the user's community keys → lost rooms).
+   */
+  decryptFailed: boolean;
+}
+
 /** Decrypt and parse the list event's NIP-44 self-encrypted content. */
 async function readConcordListEvent(
   event: NostrEvent | null,
   signer: NUser["signer"] | undefined,
   selfPubkey: string,
-): Promise<ConcordList> {
-  if (!event?.content || !signer?.nip44) return EMPTY_CONCORD_LIST;
+): Promise<ReadConcordListResult> {
+  // No event at all (or no encrypted content) is a genuine, authoritative
+  // "empty" — there's nothing to decrypt and nothing to lose.
+  if (!event?.content) return { list: EMPTY_CONCORD_LIST, decryptFailed: false };
+  // An event exists but we can't decrypt it yet (no nip44 signer): untrusted.
+  if (!signer?.nip44) return { list: EMPTY_CONCORD_LIST, decryptFailed: true };
   try {
     const decrypted = await signer.nip44.decrypt(selfPubkey, event.content);
     const parsed = JSON.parse(decrypted) as Partial<ConcordList>;
     return {
-      entries: Array.isArray(parsed.entries) ? parsed.entries : [],
-      tombstones: Array.isArray(parsed.tombstones) ? parsed.tombstones : [],
+      list: {
+        entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+        tombstones: Array.isArray(parsed.tombstones) ? parsed.tombstones : [],
+      },
+      decryptFailed: false,
     };
   } catch (err) {
     console.warn("Failed to decrypt Concord membership list:", err);
-    return EMPTY_CONCORD_LIST;
+    return { list: EMPTY_CONCORD_LIST, decryptFailed: true };
   }
 }
 
@@ -76,7 +96,7 @@ export function useConcordList() {
         { kinds: [CONCORD_LIST_KIND], authors: [user.pubkey], "#d": [CONCORD_LIST_D_TAG] },
       ]);
       if (cancelled || !cached) return;
-      const list = await readConcordListEvent(cached, user.signer, user.pubkey);
+      const { list } = await readConcordListEvent(cached, user.signer, user.pubkey);
       if (cancelled || queryClient.getQueryData(queryKey)) return;
       queryClient.setQueryData(queryKey, { event: cached as NostrEvent | null, list });
     })();
@@ -96,8 +116,24 @@ export function useConcordList() {
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
       const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-      const list = await readConcordListEvent(latest, user!.signer, user!.pubkey);
-      return { event: latest as NostrEvent | null, list };
+      const { list, decryptFailed } = await readConcordListEvent(latest, user!.signer, user!.pubkey);
+
+      const prev = queryClient.getQueryData<{ event: NostrEvent | null; list: ConcordList }>(queryKey);
+
+      // Never let a flaky/untrusted network read clobber a populated list. If we
+      // couldn't decrypt the event (signer not ready, transient error), keep
+      // whatever we already have — the community keys live here and a wrongful
+      // empty would make the rooms (and their keys) vanish from the UI.
+      if (decryptFailed) {
+        return prev ?? { event: latest, list: EMPTY_CONCORD_LIST };
+      }
+
+      // Merge the network read with what we already had (seed/cache) rather than
+      // replacing it, so a transient short/empty relay read can't drop rooms.
+      // `mergeConcordLists` is deterministic (tombstone-aware), so a genuine
+      // remote removal still wins; this only prevents data loss from flaky reads.
+      const merged = prev ? mergeConcordLists(prev.list, list) : list;
+      return { event: latest, list: merged };
     },
   });
 }
@@ -142,7 +178,13 @@ export function useUpdateConcordList() {
         { signal: AbortSignal.timeout(8000) },
       );
       const prev = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-      const current = await readConcordListEvent(prev, user.signer, user.pubkey);
+      const { list: current, decryptFailed } = await readConcordListEvent(prev, user.signer, user.pubkey);
+      // Refuse to read-modify-write on top of a list we couldn't decrypt: the
+      // community keys would read as empty and we'd republish a list that wipes
+      // the user's rooms (and their keys → unrecoverable). Fail the action loud.
+      if (decryptFailed) {
+        throw new Error("Couldn't read your existing communities (decryption failed); not saving to avoid losing room keys.");
+      }
 
       // Merge the existing relay state with itself first (idempotent normalize),
       // then apply the local action — both go through the deterministic merge.

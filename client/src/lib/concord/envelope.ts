@@ -283,4 +283,32 @@ export function openMessageMulti(
   throw new EnvelopeError("no-held-epoch", "no held epoch key for this pseudonym");
 }
 
+/**
+ * Build an {@link OpenedMessage} directly from a locally-signed inner event and
+ * the sealed outer it was wrapped in — without a decrypt round-trip. Used for
+ * optimistic rendering on the send path: we already hold the verified inner
+ * (we just signed it) and the sealed outer (we just produced it), so this is
+ * exactly what `openMessage` would return once the relay echoes the outer back,
+ * and it reconciles by `messageId` (the inner id) on the next refetch.
+ */
+export function openedFromSealed(
+  inner: NostrEvent,
+  outer: NostrEvent,
+  channelId: Uint8Array,
+  epoch: bigint,
+): OpenedMessage {
+  return {
+    messageId: inner.id,
+    author: inner.pubkey,
+    content: inner.content,
+    channelId,
+    epoch,
+    ms: resolveMs(inner.created_at, uniqueTag(inner, TAG_MS)),
+    createdAt: inner.created_at,
+    kind: inner.kind,
+    wrapperId: outer.id,
+    tags: inner.tags,
+  };
+}
+
 export { getPublicKey };

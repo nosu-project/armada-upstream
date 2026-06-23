@@ -20,6 +20,17 @@ import type { NUser } from "@nostrify/react/login";
 /** Empty list, used before any 10009 event exists. */
 const EMPTY_LIST: UserGroupList = { groups: [], servers: [] };
 
+/** Result of reading a 10009 event, with a flag for a failed private-item decrypt. */
+interface ReadGroupListResult extends UserGroupList {
+  /**
+   * True when the event had encrypted private items but decryption failed (no
+   * signer, signer refused, or transient error). The parsed list is then only
+   * the public tags — which are usually empty — so callers MUST NOT treat an
+   * empty `servers`/`groups` as authoritative when this is set.
+   */
+  decryptFailed: boolean;
+}
+
 /**
  * Decrypt the NIP-44 private items of a kind 10009 event (NIP-51) and merge
  * them with the public tags. Private items live in `.content` as a stringified
@@ -29,10 +40,11 @@ const EMPTY_LIST: UserGroupList = { groups: [], servers: [] };
 async function readGroupListEvent(
   event: NostrEvent | null,
   signer: NUser["signer"] | undefined,
-): Promise<UserGroupList> {
-  if (!event) return EMPTY_LIST;
+): Promise<ReadGroupListResult> {
+  if (!event) return { ...EMPTY_LIST, decryptFailed: false };
 
   const tags = [...event.tags];
+  let decryptFailed = false;
   if (event.content && signer?.nip44) {
     try {
       const decrypted = await signer.nip44.decrypt(event.pubkey, event.content);
@@ -44,9 +56,13 @@ async function readGroupListEvent(
       }
     } catch (err) {
       console.warn("Failed to decrypt group list private items:", err);
+      decryptFailed = true;
     }
+  } else if (event.content && !signer?.nip44) {
+    // There ARE encrypted items but we can't decrypt them (no nip44 signer).
+    decryptFailed = true;
   }
-  return parseGroupListTags(tags);
+  return { ...parseGroupListTags(tags), decryptFailed };
 }
 
 /**
@@ -81,6 +97,7 @@ export function useUserGroupList() {
         event: cached as NostrEvent | null,
         groups: list.groups,
         servers: list.servers,
+        decryptFailed: list.decryptFailed,
       });
     })();
     return () => {
@@ -102,6 +119,7 @@ export function useUserGroupList() {
         event: latest as NostrEvent | null,
         groups: list.groups,
         servers: list.servers,
+        decryptFailed: list.decryptFailed,
       };
     },
     enabled: Boolean(user),
@@ -189,6 +207,13 @@ export function useUpdateUserGroupList() {
       );
       const prev = events.sort((a, b) => b.created_at - a.created_at)[0];
       const current = await readGroupListEvent(prev ?? null, user.signer);
+      // Refuse to read-modify-write on top of a list we couldn't decrypt: the
+      // private items (servers + joined groups) would read as empty and we'd
+      // publish a list that wipes everything the user has. Better to fail the
+      // action than to silently destroy their server/group list.
+      if (current.decryptFailed) {
+        throw new Error("Couldn't read your existing list (decryption failed); not saving to avoid data loss.");
+      }
       const next = applyAction(current, action);
 
       // Preserve any unrelated tags (title, etc.) from the previous event, but

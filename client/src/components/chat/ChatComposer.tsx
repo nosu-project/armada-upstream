@@ -673,7 +673,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   /** Publish a finalized message body via the active send path. */
   const publishMessage = useCallback(async (finalText: string) => {
-    if (!finalText || !user || isSending || finalText.length > MAX_CHARS) return;
+    if (!finalText || !user || finalText.length > MAX_CHARS) return;
+    // Only the legacy (non-optimistic) publish path serializes on `isSending`.
+    // The optimistic and override paths clear the composer and publish in the
+    // background so the user can queue several messages back-to-back; their
+    // signer crypto is serialized by the per-identity signer queue instead.
+    if (!sendOverride && !onOptimisticInsert && isSending) return;
 
     try {
       if (sendOverride) {
@@ -689,35 +694,42 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           // Delivery/sign failures are surfaced inline by the override.
         });
       } else if (onOptimisticInsert) {
-        // Optimistic group send: render the message immediately on sign, reset
-        // the composer, then confirm/fail in the background.
-        let signedId: string | undefined;
+        // Optimistic group send: clear the composer immediately and render the
+        // message the moment it is signed, then confirm/fail in the background.
+        // Fire-and-forget so a burst of sends never blocks the UI; signing is
+        // serialized by the per-identity signer queue (useNostrPublish), so
+        // rapid Enter presses don't race on a NIP-07 extension.
         resetComposeState();
         onSent?.();
-        try {
-          await createEvent({
-            kind: KIND_GROUP_CHAT,
-            content: finalText,
-            tags: buildMessageTags(finalText),
-            relay: relayUrl,
-            onSigned: (event) => {
-              signedId = event.id;
-              onOptimisticInsert(event);
-            },
-          });
-          if (signedId) onOptimisticSent?.(signedId);
-        } catch (err) {
-          // Surface the relay's rejection reason (NRelay1 throws OK:false
-          // reasons as the Error message) instead of failing silently — a
-          // message that "sends" then vanishes with no explanation is the
-          // worst failure mode.
-          if (signedId) onOptimisticFailed?.(signedId);
-          toast({
-            title: "Message not sent",
-            description: relayRejectionMessage(err),
-            variant: "destructive",
-          });
-        }
+        void (async () => {
+          let signedId: string | undefined;
+          try {
+            await createEvent({
+              kind: KIND_GROUP_CHAT,
+              content: finalText,
+              tags: buildMessageTags(finalText),
+              relay: relayUrl,
+              onSigned: (event) => {
+                signedId = event.id;
+                onOptimisticInsert(event);
+              },
+            });
+            if (signedId) onOptimisticSent?.(signedId);
+          } catch (err) {
+            // Surface the relay's rejection reason (NRelay1 throws OK:false
+            // reasons as the Error message) instead of failing silently — a
+            // message that "sends" then vanishes with no explanation is the
+            // worst failure mode. The message stays visible with a "failed"
+            // status (and a retry affordance) rather than disappearing.
+            if (signedId) onOptimisticFailed?.(signedId);
+            else
+              toast({
+                title: "Message not sent",
+                description: relayRejectionMessage(err),
+                variant: "destructive",
+              });
+          }
+        })();
       } else {
         await createEvent({
           kind: KIND_GROUP_CHAT,
@@ -1215,11 +1227,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 <button
                   type="button"
                   onClick={mode === "poll" ? handlePollSubmit : handleSend}
-                  disabled={mode === "poll" ? !isPollValid || isSending : !hasContent || isSending}
+                  disabled={mode === "poll" ? !isPollValid || isSending : !hasContent}
                   aria-label={mode === "poll" ? "Publish poll" : "Send message"}
                   className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9"
                 >
-                  {isSending
+                  {mode === "poll" && isSending
                     ? <Loader2 className="size-4 animate-spin" />
                     : <ArrowUpRight className="size-5" strokeWidth={2.5} />}
                 </button>

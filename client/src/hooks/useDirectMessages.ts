@@ -7,45 +7,12 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { effectiveDmRelays } from "@/contexts/AppContext";
+import { runExclusive } from "@/lib/signerQueue";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /** NIP-04 encrypted direct message kind. */
 export const KIND_DM = 4;
-
-/**
- * Per-pubkey serialization of signer crypto (encrypt / signEvent / decrypt).
- *
- * NIP-07 browser extensions process these one at a time and **reject** (or
- * queue unpredictably) overlapping calls. The DM data layer fires crypto from
- * several places concurrently — sending, the thread decrypt loop, the live
- * subscription, and the conversation-list previews. If those overlap on the
- * extension they thrash, reject, and feel "locked up". Routing every signer
- * crypto call for a given identity through one promise chain keeps them
- * strictly sequential (and fast on a local nsec, where there's no contention).
- *
- * Keyed at module scope by pubkey so the chain is shared across every hook
- * instance and survives remounts.
- */
-const signerCryptoChains = new Map<string, Promise<unknown>>();
-
-/** Run `fn` exclusively against the signer identified by `key` (FIFO). */
-function runExclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const prior = signerCryptoChains.get(key) ?? Promise.resolve();
-  // Chain off the prior call regardless of whether it resolved or rejected,
-  // so one failure never wedges the queue.
-  const next = prior.then(fn, fn);
-  // Store a settled-swallowing tail so the stored promise never rejects
-  // (which would otherwise reject every future `.then` chained onto it).
-  signerCryptoChains.set(
-    key,
-    next.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
-  return next;
-}
 
 /** The other participant of a DM event, from the viewer's perspective. */
 export function dmCounterparty(event: NostrEvent, self: string): string | undefined {
