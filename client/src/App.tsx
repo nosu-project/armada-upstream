@@ -11,6 +11,7 @@ import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
 import { ReadStateProvider } from "@/components/ReadStateProvider";
 import { ScreenSharePicker } from "@/components/ScreenSharePicker";
+import { SyncGate } from "@/components/SyncGate";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -35,6 +36,7 @@ export function App() {
             <TooltipProvider>
               <ReadStateProvider>
                 <NostrSync />
+                <SyncGate />
                 <DesktopBadge />
                 <NativeNotifications />
                 <ScreenSharePicker />
