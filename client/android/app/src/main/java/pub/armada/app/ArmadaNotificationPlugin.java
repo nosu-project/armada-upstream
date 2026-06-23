@@ -170,7 +170,7 @@ public class ArmadaNotificationPlugin extends Plugin {
             // listener always fires even if the values look unchanged.
             editor.putLong("rev", System.currentTimeMillis());
             editor.apply();
-            Log.d(TAG, "Configured: relays=" + relayUrlsRaw + " groups=" + groupIdsRaw
+            if (BuildConfig.DEBUG) Log.d(TAG, "Configured: relays=" + relayUrlsRaw + " groups=" + groupIdsRaw
                     + " dmRelays=" + dmRelaysRaw
                     + " concordSubs=" + (concordSubsRaw != null ? "yes" : "none"));
         } else {

@@ -218,6 +218,21 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       });
   }, [supported, enabled, busy]);
 
+  // The complete set of relays we actually told the native service to watch.
+  // Used to validate AUTH challenges before signing: we only sign a kind-22242
+  // for a relay we configured, never one the native layer invents.
+  const knownRelays = useMemo(() => {
+    const set = new Set<string>(relayUrls);
+    for (const url of dmRelays) set.add(url);
+    for (const sub of concordSubs) {
+      for (const url of sub.relays) {
+        const n = normalizeRelayUrl(url);
+        if (n) set.add(n);
+      }
+    }
+    return set;
+  }, [relayUrls, dmRelays, concordSubs]);
+
   // NIP-42: the service can't sign, so it bridges each relay's AUTH challenge
   // here. We sign a kind-22242 with the user's signer (nsec / bunker /
   // extension — all handled in the WebView) and hand it back. No key ever
@@ -228,6 +243,13 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     let handle: { remove: () => void } | undefined;
     let cancelled = false;
     ArmadaNotification.addListener("authChallenge", async ({ relayUrl, challenge }) => {
+      // Only sign for a relay we configured; ignore challenges for anything
+      // else so a rogue/unexpected relay URL can't elicit a signature.
+      const normalized = normalizeRelayUrl(relayUrl);
+      if (!normalized || !knownRelays.has(normalized)) {
+        console.warn("[native-notif] ignoring AUTH for unknown relay:", relayUrl);
+        return;
+      }
       try {
         const event = await signer.signEvent({
           kind: 22242,
@@ -250,7 +272,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       cancelled = true;
       handle?.remove();
     };
-  }, [supported, signer]);
+  }, [supported, signer, knownRelays]);
 
   const enable = useCallback(async () => {
     if (!supported) return;

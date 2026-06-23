@@ -275,6 +275,9 @@ public class NotificationRelayService extends Service {
         final String subDirect = "ad-" + Long.toHexString(System.nanoTime() + 1);
         final String subConcord = "ac-" + Long.toHexString(System.nanoTime() + 2);
         final String subDm = "am-" + Long.toHexString(System.nanoTime() + 3);
+        // id of the last kind-22242 we sent; used to match the AUTH OK so a
+        // relay's OK for some other event can't trigger a REQ re-send.
+        String authEventId;
 
         RelayConnection(String relayUrl) {
             this.relayUrl = relayUrl;
@@ -287,7 +290,7 @@ public class NotificationRelayService extends Service {
                 @Override
                 public void onOpen(WebSocket webSocket, Response response) {
                     backoffMs = INITIAL_BACKOFF_MS;
-                    Log.d(TAG, "WS open: " + relayUrl);
+                    if (BuildConfig.DEBUG) Log.d(TAG, "WS open: " + relayUrl);
                     sendReqs(webSocket);
                 }
 
@@ -361,11 +364,13 @@ public class NotificationRelayService extends Service {
         void sendAuth(String eventJson) {
             if (ws == null) return;
             try {
+                JSONObject event = new JSONObject(eventJson);
+                authEventId = event.optString("id", null);
                 JSONArray auth = new JSONArray();
                 auth.put("AUTH");
-                auth.put(new JSONObject(eventJson));
+                auth.put(event);
                 ws.send(auth.toString());
-                Log.d(TAG, "Sent AUTH to " + relayUrl);
+                if (BuildConfig.DEBUG) Log.d(TAG, "Sent AUTH to " + relayUrl);
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to send AUTH", e);
             }
@@ -412,7 +417,7 @@ public class NotificationRelayService extends Service {
                 // bunker / extension) to sign a kind-22242; it comes back via
                 // ArmadaNotificationPlugin.submitAuth → deliverAuth.
                 String challenge = msg.optString(1);
-                Log.d(TAG, "AUTH challenge from " + relayUrl);
+                if (BuildConfig.DEBUG) Log.d(TAG, "AUTH challenge from " + relayUrl);
                 boolean bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge);
                 if (!bridged) {
                     Log.w(TAG, "No bridge (WebView down) — can't AUTH " + relayUrl);
@@ -420,7 +425,7 @@ public class NotificationRelayService extends Service {
                 return;
             }
             if ("EOSE".equals(type)) {
-                Log.d(TAG, "EOSE from " + relayUrl + " sub=" + msg.optString(1));
+                if (BuildConfig.DEBUG) Log.d(TAG, "EOSE from " + relayUrl + " sub=" + msg.optString(1));
                 return;
             }
             if ("CLOSED".equals(type)) {
@@ -428,13 +433,17 @@ public class NotificationRelayService extends Service {
                 return;
             }
             if ("OK".equals(type)) {
-                // AUTH ack (["OK", <event-id>, true/false, msg]). On success the
+                // AUTH ack (["OK", <event-id>, true/false, msg]). On success,
+                // and only when the id matches the kind-22242 we sent, the
                 // matching connection re-sends its REQs.
+                String okId = msg.optString(1);
                 boolean ok = msg.optBoolean(2, false);
-                Log.d(TAG, "OK from " + relayUrl + " ok=" + ok + " " + msg.optString(3));
+                if (BuildConfig.DEBUG) Log.d(TAG, "OK from " + relayUrl + " ok=" + ok + " " + msg.optString(3));
                 if (ok) {
                     for (RelayConnection rc : connections) {
-                        if (rc.relayUrl.equals(relayUrl) && rc.ws != null) {
+                        if (rc.relayUrl.equals(relayUrl) && rc.ws != null
+                                && okId.equals(rc.authEventId)) {
+                            rc.authEventId = null;
                             rc.sendReqs(rc.ws);
                         }
                     }
@@ -473,7 +482,7 @@ public class NotificationRelayService extends Service {
             long cts = event.optLong("created_at", 0);
             if (cts + 1 > sinceSec) sinceSec = cts + 1;
             notifiedIds.add(id);
-            Log.d(TAG, "NOTIFY concord: " + name);
+            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + name);
             showNotification(hashId(id), name, "New message", url != null ? url : "/");
             return;
         }
@@ -524,7 +533,7 @@ public class NotificationRelayService extends Service {
         notifiedIds.add(id);
         long ts = event.optLong("created_at", 0);
         if (ts + 1 > sinceSec) sinceSec = ts + 1; // advance so reconnects don't replay
-        Log.d(TAG, "NOTIFY kind=" + kind + " title=" + title);
+        if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " title=" + title);
         showNotification(hashId(id), title, body, url);
     }
 

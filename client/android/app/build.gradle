@@ -39,6 +39,11 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    buildFeatures {
+        // Generate BuildConfig so debug-only logging can be gated behind
+        // BuildConfig.DEBUG (AGP 8 turns this off by default).
+        buildConfig = true
+    }
 }
 
 repositories {
