@@ -124,7 +124,11 @@ export function MessageRow({
           </div>
         )}
         {continuation && (edited || pending || actions) && (
-          <div className="flex items-center gap-2 absolute right-2.5 top-0 z-10">
+          // Float the toolbar above the top-right edge of the row so it does
+          // not overlap the message text of continuation messages. Lifting it
+          // (-top-3.5) and giving it a solid background keeps it clear of the
+          // body content while staying anchored to this row.
+          <div className="absolute right-2.5 -top-3.5 z-10 flex items-center gap-2 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity">
             {edited && (
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
@@ -132,7 +136,7 @@ export function MessageRow({
               <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
             )}
             {actions && (
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity">
+              <div className="flex items-center gap-0.5">
                 {actions}
               </div>
             )}
