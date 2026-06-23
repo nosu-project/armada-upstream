@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.3.1] - 2026-06-23
+
+Logging in now shows a brief loading screen while Armada catches up — pulling
+your settings, your channels, and recent messages — so the app opens ready to
+use instead of filling in piece by piece. This release also fixes standalone
+(non-hosted) clients that wrongly showed a phantom local server that didn't
+exist.
+
+### Added
+- A post-login loading screen that syncs your settings, channel list, and
+  recent messages before dropping you into the app, so nothing pops in late.
+
+### Fixed
+- Standalone clients no longer show a bogus "localhost" server that isn't
+  reachable; they now correctly start with no servers until you add one.
+
 ## [0.3.0] - 2026-06-23
 
 The Android app now delivers instant push notifications on its own — no Google
