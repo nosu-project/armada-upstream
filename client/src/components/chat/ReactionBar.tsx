@@ -38,7 +38,11 @@ function ReactionGlyph({ tally, className }: { tally: ReactionTally; className?:
       />
     );
   }
-  return <span className={cn("leading-none", className ?? "text-base")}>{tally.key}</span>;
+  return (
+    <span className={cn("inline-flex items-center justify-center leading-none -translate-y-px", className ?? "text-base")}>
+      {tally.key}
+    </span>
+  );
 }
 
 /** A single reactor row (avatar + display name) inside the detail popover. */
@@ -170,9 +174,9 @@ export function ReactionPicker({ onReact }: ReactionPickerProps) {
               variant="ghost"
               size="icon"
               aria-label="Add reaction"
-              className="size-7 text-muted-foreground hover:text-primary"
+              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
             >
-              <SmilePlus className="size-3.5" />
+              <SmilePlus className="size-[18px] md:size-3.5" />
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>

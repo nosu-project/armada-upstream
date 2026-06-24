@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useIsMobile } from "@/hooks/useIsMobile";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { isMeAction, meActionText } from "@/lib/slashCommands";
@@ -118,7 +118,7 @@ export function ChatMessage({
   continuation = false,
 }: ChatMessageProps) {
   const { user } = useCurrentUser();
-  const isMobile = useIsMobile();
+  const isTouch = useIsTouch();
   const author = useAuthor(event.pubkey);
   const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
   const replyToId = getReplyToId(event);
@@ -172,14 +172,15 @@ export function ChatMessage({
     if (isEditing) setEditText(event.content);
   }, [isEditing, event.content]);
 
-  // Toggle the toolbar on tap (mobile only — desktop reveals it on hover), but
-  // ignore taps that land on interactive children (buttons, links, inputs,
-  // mention chips) so those still act normally instead of being swallowed.
+  // Toggle the toolbar on tap (touch devices only — desktop reveals it on
+  // hover, so a click must not highlight the row), but ignore taps that land on
+  // interactive children (buttons, links, inputs, mention chips) so those still
+  // act normally instead of being swallowed.
   const handleRowClick = useCallback((e: React.MouseEvent) => {
-    if (!isMobile) return;
+    if (!isTouch) return;
     if ((e.target as HTMLElement).closest("button, a, input, textarea, [role='button']")) return;
     onToggleActive?.(event.id);
-  }, [isMobile, onToggleActive, event.id]);
+  }, [isTouch, onToggleActive, event.id]);
 
   const toolbar = (
     <>
@@ -191,10 +192,10 @@ export function ChatMessage({
               variant="ghost"
               size="icon"
               aria-label="Reply"
-              className="size-7 text-muted-foreground hover:text-primary"
+              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
               onClick={() => onReply(event)}
             >
-              <Reply className="size-3.5" />
+              <Reply className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Reply</TooltipContent>
@@ -207,10 +208,10 @@ export function ChatMessage({
               variant="ghost"
               size="icon"
               aria-label="Reply in thread"
-              className="size-7 text-muted-foreground hover:text-primary"
+              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
               onClick={() => onOpenThread(event)}
             >
-              <MessagesSquare className="size-3.5" />
+              <MessagesSquare className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Reply in thread</TooltipContent>
@@ -223,10 +224,10 @@ export function ChatMessage({
               variant="ghost"
               size="icon"
               aria-label="Edit message"
-              className="size-7 text-muted-foreground hover:text-primary"
+              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
               onClick={() => onEdit?.(event)}
             >
-              <Pencil className="size-3.5" />
+              <Pencil className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Edit message</TooltipContent>
@@ -241,14 +242,14 @@ export function ChatMessage({
               aria-label={isPinned ? "Unpin message" : "Pin message"}
               aria-pressed={isPinned}
               className={cn(
-                "size-7",
+                "size-9 md:size-7",
                 isPinned
                   ? "text-primary hover:text-primary"
                   : "text-muted-foreground hover:text-primary",
               )}
               onClick={() => onTogglePin?.(event)}
             >
-              {isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+              {isPinned ? <PinOff className="size-[18px] md:size-3.5" /> : <Pin className="size-[18px] md:size-3.5" />}
             </Button>
           </TooltipTrigger>
           <TooltipContent>{isPinned ? "Unpin message" : "Pin message"}</TooltipContent>
@@ -263,14 +264,14 @@ export function ChatMessage({
               aria-label={deleteArmed ? "Confirm delete message" : "Delete message"}
               aria-pressed={deleteArmed}
               className={cn(
-                "size-7 transition-colors",
+                "size-9 md:size-7 transition-colors",
                 deleteArmed
                   ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   : "text-muted-foreground hover:text-destructive",
               )}
               onClick={handleDeleteClick}
             >
-              <Trash2 className="size-3.5" />
+              <Trash2 className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>{deleteArmed ? "Click again to delete" : "Delete message"}</TooltipContent>

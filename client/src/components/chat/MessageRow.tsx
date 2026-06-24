@@ -94,15 +94,15 @@ export function MessageRow({
             <ProfilePreviewCard pubkey={pubkey}>
               <button
                 type="button"
-                className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none"
+                className="text-[15px] font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none"
                 style={color ? { color } : undefined}
               >
                 {displayName}
               </button>
             </ProfilePreviewCard>
             {label && (
-              <Badge variant="secondary" className="text-[10px] font-medium shrink-0">
-                {label}
+              <Badge variant="secondary" className="text-[10px] font-medium shrink min-w-0 max-w-[35%]">
+                <span className="truncate">{label}</span>
               </Badge>
             )}
             <span className="text-[11px] text-muted-foreground/70 shrink-0">
@@ -114,31 +114,35 @@ export function MessageRow({
             {pending && (
               <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
             )}
-            {actions && (
-              // Negative vertical margins keep the taller icon buttons from
-              // increasing the header row's height.
-              <div className="ml-auto -my-1.5 flex items-center gap-0.5 self-center opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity">
-                {actions}
-              </div>
-            )}
           </div>
         )}
-        {continuation && (edited || pending || actions) && (
-          // Float the toolbar above the top-right edge of the row so it does
-          // not overlap the message text of continuation messages. Lifting it
-          // (-top-3.5) and giving it a solid background keeps it clear of the
-          // body content while staying anchored to this row.
-          <div className="absolute right-2.5 -top-3.5 z-10 flex items-center gap-2 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity">
+        {actions && (
+          // Float the action toolbar above the top-right edge of the row rather
+          // than inline on the header. Inline, a long name/title would get
+          // crushed by the buttons; floating keeps the full name visible and the
+          // toolbar clear of the body. Solid background + a small lift keeps it
+          // legible over whatever it overlaps. On mobile (no hover) it's
+          // tap-revealed and stays non-interactive until the row is made active,
+          // so the first tap only reveals it and a second, deliberate tap
+          // engages an action (avoids fat-fingering deletes).
+          <div className={cn(
+            "absolute right-2.5 z-10 flex items-center gap-0.5 max-md:gap-1 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity max-md:pointer-events-none max-md:group-data-[active]:pointer-events-auto",
+            // Continuation rows lift the panel clear of the prior message on
+            // mobile (tap-revealed, larger targets); desktop keeps it close.
+            continuation ? "-top-8 max-md:-top-10" : "-top-2.5 max-md:-top-3.5",
+          )}>
+            {actions}
+          </div>
+        )}
+        {continuation && (edited || pending) && (
+          // Continuation rows hide the header, so surface the (edited)/sending
+          // markers in the same floated slot the toolbar uses.
+          <div className="absolute right-2.5 -top-8 max-md:-top-10 z-10 flex items-center gap-2 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity">
             {edited && (
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
             {pending && (
               <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
-            )}
-            {actions && (
-              <div className="flex items-center gap-0.5">
-                {actions}
-              </div>
             )}
           </div>
         )}
