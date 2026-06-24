@@ -4,6 +4,25 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.5.2] - 2026-06-24
+
+A community chat fix-up release. Accepting several invites in a row no longer
+wipes your community list, custom emoji now show as images in community
+messages and reactions, image attachments with malformed links from some media
+servers are repaired automatically, and busy community rooms are noticeably
+smoother.
+
+### Fixed
+- Accepting several community invites back to back could wipe your community
+  list (and lose access to those rooms); invites are now accepted safely in
+  sequence.
+- Custom emoji now render as images in community messages and reactions instead
+  of showing as raw `:shortcode:` text.
+- Image and file attachments that came back from some media servers with a
+  malformed link are now repaired, so they preview and send correctly.
+- Active community rooms with lots of messages and reactions are much smoother;
+  the message list no longer redraws everything on each new message.
+
 ## [0.5.1] - 2026-06-24
 
 A polish release for dialogs and message actions. Every dialog now shares the
