@@ -4,6 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.4.7] - 2026-06-24
+
+A chat readability and touch-friendliness release. The per-message action
+buttons (react, reply, thread, edit, pin, delete) now float in a panel above the
+message instead of crowding the author's name, so long names and titles are no
+longer cut off. The buttons are larger on phones and tablets, the panel only
+appears on tap (and stays put until you deliberately tap an action, so you won't
+fat-finger a delete), and on desktop a click no longer highlights a message.
+Reaction emoji also sit properly centered in their pills.
+
+### Changed
+- Message action buttons now float in a panel above the message rather than
+  inline with the author's name, and are larger and easier to tap on phones and
+  tablets.
+
+### Fixed
+- A long username is no longer truncated by the author's title badge.
+- On desktop, clicking a message no longer highlights it; the action panel still
+  appears on hover.
+- Reaction emoji are now vertically centered in their pills.
+
 ## [0.4.6] - 2026-06-23
 
 A reliability release for chat, encrypted messages, and offline use. Encrypted
