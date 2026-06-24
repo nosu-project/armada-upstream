@@ -4,6 +4,25 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.5.1] - 2026-06-24
+
+A polish release for dialogs and message actions. Every dialog now shares the
+same cut-corner "chrome" look, their headings scale to fit, and tall dialogs
+scroll instead of running off the screen on phones. On smaller desktop and
+tablet windows, the per-message action buttons no longer float out of place or
+become unclickable.
+
+### Changed
+- All dialogs share a consistent cut-corner style, with headings that scale to
+  fit so they no longer overflow on narrow screens.
+
+### Fixed
+- Dialogs that are taller than the screen now scroll instead of overflowing off
+  the bottom on mobile.
+- The hover toolbar on a message could float out of place and become unclickable
+  on smaller desktop and tablet windows; its buttons now stay aligned and
+  clickable, and the "(edited)" marker no longer overlaps them.
+
 ## [0.5.0] - 2026-06-24
 
 A big release for serverless communities. You can now run a community end to
