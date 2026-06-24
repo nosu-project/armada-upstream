@@ -8,6 +8,7 @@ import {
 } from "@nostrify/react/login";
 
 import { useAppContext } from "@/hooks/useAppContext";
+import { clearPlaintextCache } from "@/lib/plaintextCache";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 
 export type { NostrConnectParams, NostrConnectStatus };
@@ -67,6 +68,9 @@ export function useLoginActions() {
       if (login) {
         removeLogin(login.id);
       }
+      // Drop any decrypted plaintext memoized this session so it can't be read
+      // after logout or by the next account.
+      clearPlaintextCache();
     },
   };
 }

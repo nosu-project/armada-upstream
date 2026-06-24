@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildThreadPlaceholders,
+  buildThreadRows,
+  decryptThreadRows,
   dmCounterparty,
   mergeDmEvents,
   mergeDmThread,
   type DecryptedDM,
 } from "@/hooks/useDirectMessages";
+import { clearPlaintextCache, setCachedPlaintext } from "@/lib/plaintextCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -14,7 +18,10 @@ import type { NostrEvent } from "@nostrify/nostrify";
 // relay result, so a sparse/empty relay read — or a transient NIP-04 decrypt
 // failure — could SHRINK or blank an already-loaded conversation list / thread.
 // The fix merges the network result with the cache as a floor (mergeDmEvents /
-// mergeDmThread), mirroring the Concord pattern.
+// mergeDmThread), mirroring the Concord pattern. buildThreadRows additionally
+// bounds eager decryption to the newest screenful (viewport-lazy decrypt).
+
+afterEach(() => clearPlaintextCache());
 
 const SELF = "a".repeat(64);
 const PEER1 = "b".repeat(64);
@@ -115,5 +122,194 @@ describe("mergeDmThread (thread merge floor)", () => {
     const failed = [msg("5", 500, { status: "failed" })];
     const retried = [msg("5", 500, { status: "sending" })];
     expect(mergeDmThread(failed, retried).find((m) => m.id === "5")?.status).toBe("sending");
+  });
+
+  it("never downgrades a decrypted row back to an encrypted placeholder", () => {
+    // The thread refetch re-runs buildThreadRows, which may emit an OLD message
+    // as a placeholder. If that message was already lazily decrypted (and is in
+    // the cache as plaintext), the merge must keep the plaintext, not blank it.
+    const decryptedRow = [msg("9", 900)]; // content "m9", not encrypted
+    const placeholder = [{ id: "9", pubkey: SELF, created_at: 900, content: "", encrypted: true }];
+    const merged = mergeDmThread(decryptedRow, placeholder);
+    const row = merged.find((m) => m.id === "9")!;
+    expect(row.content).toBe("m9");
+    expect(row.encrypted).toBeUndefined();
+  });
+
+  it("still takes a fresh status even when keeping the decrypted content", () => {
+    const decryptedRow = [msg("9", 900)];
+    const placeholderWithStatus = [
+      { id: "9", pubkey: SELF, created_at: 900, content: "", encrypted: true, status: "failed" as const },
+    ];
+    const row = mergeDmThread(decryptedRow, placeholderWithStatus).find((m) => m.id === "9")!;
+    expect(row.content).toBe("m9");
+    expect(row.status).toBe("failed");
+  });
+});
+
+describe("buildThreadRows (viewport-bounded eager decryption)", () => {
+  const SELF_PK = "a".repeat(64);
+  const PEER_PK = "b".repeat(64);
+
+  function dmEvt(id: string, createdAt: number, from = PEER_PK): NostrEvent {
+    return {
+      id: id.padEnd(64, "0").slice(0, 64),
+      pubkey: from,
+      created_at: createdAt,
+      kind: 4,
+      tags: [["p", SELF_PK]],
+      content: `cipher-${id}`,
+      sig: "f".repeat(128),
+    };
+  }
+
+  const ok = async (_cp: string, ct: string) => `plain-${ct}`;
+
+  it("decrypts only the newest `eager` messages; older are placeholders", async () => {
+    const events = [dmEvt("1", 100), dmEvt("2", 200), dmEvt("3", 300), dmEvt("4", 400)];
+    const decrypt = vi.fn(ok);
+
+    // eager = 2 → only the two newest (400, 300) get decrypted.
+    const rows = await buildThreadRows(events, SELF_PK, PEER_PK, decrypt, 2);
+
+    expect(decrypt).toHaveBeenCalledTimes(2);
+    // Returned oldest-first.
+    expect(rows.map((r) => r.created_at)).toEqual([100, 200, 300, 400]);
+    const byTime = Object.fromEntries(rows.map((r) => [r.created_at, r]));
+    expect(byTime[100].encrypted).toBe(true);
+    expect(byTime[200].encrypted).toBe(true);
+    expect(byTime[300].encrypted).toBeUndefined();
+    expect(byTime[300].content).toBe("plain-cipher-3");
+    expect(byTime[400].encrypted).toBeUndefined();
+  });
+
+  it("eager = 0 makes every message a placeholder (no signer calls)", async () => {
+    const events = [dmEvt("1", 100), dmEvt("2", 200)];
+    const decrypt = vi.fn(ok);
+    const rows = await buildThreadRows(events, SELF_PK, PEER_PK, decrypt, 0);
+    expect(decrypt).not.toHaveBeenCalled();
+    expect(rows.every((r) => r.encrypted)).toBe(true);
+  });
+
+  it("a decrypt failure on an eager message becomes a placeholder, not a drop", async () => {
+    const events = [dmEvt("1", 100)];
+    const decrypt = vi.fn(async () => {
+      throw new Error("signer refused");
+    });
+    const rows = await buildThreadRows(events, SELF_PK, PEER_PK, decrypt, 10);
+    expect(rows).toHaveLength(1); // not dropped
+    expect(rows[0].encrypted).toBe(true);
+    expect(rows[0].content).toBe("");
+  });
+
+  it("uses already-cached plaintext for OLD messages regardless of the eager window", async () => {
+    // Revisiting a thread: an old message decrypted last time is in the memo, so
+    // it must come back decrypted even though it's outside the eager window.
+    const old = dmEvt("1", 100);
+    const newer = dmEvt("2", 200);
+    // Prime the memo as if "1" was decrypted earlier.
+    setCachedPlaintext(old.id, "remembered");
+
+    const decrypt = vi.fn(ok);
+    const rows = await buildThreadRows([old, newer], SELF_PK, PEER_PK, decrypt, 1);
+
+    const byTime = Object.fromEntries(rows.map((r) => [r.created_at, r]));
+    // "1" served from memo (no decrypt call for it); "2" decrypted eagerly.
+    expect(byTime[100].content).toBe("remembered");
+    expect(byTime[100].encrypted).toBeUndefined();
+    expect(byTime[200].content).toBe("plain-cipher-2");
+    expect(decrypt).toHaveBeenCalledTimes(1); // only "2"
+  });
+});
+
+describe("buildThreadPlaceholders (instant first frame)", () => {
+  const SELF_PK = "a".repeat(64);
+  const PEER_PK = "b".repeat(64);
+
+  function dmEvt(id: string, createdAt: number): NostrEvent {
+    return {
+      id: id.padEnd(64, "0").slice(0, 64),
+      pubkey: PEER_PK,
+      created_at: createdAt,
+      kind: 4,
+      tags: [["p", SELF_PK]],
+      content: `cipher-${id}`,
+      sig: "f".repeat(128),
+    };
+  }
+
+  it("returns every event as a placeholder synchronously (no decryption)", () => {
+    const rows = buildThreadPlaceholders([dmEvt("2", 200), dmEvt("1", 100)]);
+    expect(rows.map((r) => r.created_at)).toEqual([100, 200]); // oldest-first
+    expect(rows.every((r) => r.encrypted && r.content === "")).toBe(true);
+  });
+
+  it("fills in already-cached plaintext immediately (not a placeholder)", () => {
+    const e = dmEvt("1", 100);
+    setCachedPlaintext(e.id, "already known");
+    const [row] = buildThreadPlaceholders([e]);
+    expect(row.encrypted).toBeUndefined();
+    expect(row.content).toBe("already known");
+  });
+});
+
+describe("decryptThreadRows (progressive streaming, newest-first)", () => {
+  const SELF_PK = "a".repeat(64);
+  const PEER_PK = "b".repeat(64);
+
+  function dmEvt(id: string, createdAt: number): NostrEvent {
+    return {
+      id: id.padEnd(64, "0").slice(0, 64),
+      pubkey: PEER_PK,
+      created_at: createdAt,
+      kind: 4,
+      tags: [["p", SELF_PK]],
+      content: `cipher-${id}`,
+      sig: "f".repeat(128),
+    };
+  }
+  const ok = async (_cp: string, ct: string) => `plain-${ct}`;
+
+  it("streams each decrypted row via onRow, newest-first", async () => {
+    const events = [dmEvt("1", 100), dmEvt("2", 200), dmEvt("3", 300)];
+    const order: number[] = [];
+    await decryptThreadRows(events, SELF_PK, PEER_PK, vi.fn(ok), 10, (row) => {
+      order.push(row.created_at);
+    });
+    // Reveal order is newest-first (the visible bottom fills first).
+    expect(order).toEqual([300, 200, 100]);
+  });
+
+  it("only streams the newest `eager` rows", async () => {
+    const events = [dmEvt("1", 100), dmEvt("2", 200), dmEvt("3", 300)];
+    const got: number[] = [];
+    await decryptThreadRows(events, SELF_PK, PEER_PK, vi.fn(ok), 1, (row) => {
+      got.push(row.created_at);
+    });
+    expect(got).toEqual([300]); // only the newest
+  });
+
+  it("skips messages already in the plaintext cache (no re-decrypt, no onRow)", async () => {
+    const cached = dmEvt("1", 100);
+    const fresh = dmEvt("2", 200);
+    setCachedPlaintext(cached.id, "known");
+    const decrypt = vi.fn(ok);
+    const got: number[] = [];
+    await decryptThreadRows([cached, fresh], SELF_PK, PEER_PK, decrypt, 10, (row) => {
+      got.push(row.created_at);
+    });
+    expect(decrypt).toHaveBeenCalledTimes(1); // only the fresh one
+    expect(got).toEqual([200]);
+  });
+
+  it("a failed decrypt is skipped (no onRow) so the row stays a placeholder", async () => {
+    const decrypt = vi.fn(async () => {
+      throw new Error("refused");
+    });
+    const got: number[] = [];
+    await decryptThreadRows([dmEvt("1", 100)], SELF_PK, PEER_PK, decrypt, 10, (row) => {
+      got.push(row.created_at);
+    });
+    expect(got).toEqual([]); // nothing streamed; placeholder remains
   });
 });

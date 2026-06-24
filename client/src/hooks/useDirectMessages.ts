@@ -7,6 +7,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { effectiveDmRelays } from "@/contexts/AppContext";
+import { decryptCached, getCachedPlaintext, hasCachedPlaintext, setCachedPlaintext, type DecryptFn } from "@/lib/plaintextCache";
 import { runExclusive } from "@/lib/signerQueue";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -34,7 +35,24 @@ export interface DecryptedDM {
    * relay rejected it or the publish timed out (retryable).
    */
   status?: "sending" | "failed";
+  /**
+   * True when this row's ciphertext has NOT been decrypted yet — a viewport
+   * placeholder. The thread eagerly decrypts only the newest screenful (the
+   * visible window); older messages are surfaced as placeholders so the list
+   * length and scroll position are correct, and each is decrypted lazily when
+   * it scrolls into view (see `decryptVisible`). `content` is empty until then.
+   */
+  encrypted?: boolean;
 }
+
+/**
+ * How many of the newest messages to decrypt eagerly. The thread is anchored to
+ * the bottom (newest), so this is roughly one screenful plus headroom; older
+ * messages are decrypted lazily as they scroll into view. Decryption is the
+ * per-message signer round-trip, so bounding the eager set is what keeps opening
+ * a long thread fast.
+ */
+const EAGER_DECRYPT_COUNT = 40;
 
 /** Whether the current signer can do NIP-04 (required for DMs). */
 export function useDMSupport(): boolean {
@@ -70,8 +88,115 @@ export function mergeDmEvents(prev: NostrEvent[], incoming: NostrEvent[]): Nostr
 export function mergeDmThread(prev: DecryptedDM[], incoming: DecryptedDM[]): DecryptedDM[] {
   const merged = new Map<string, DecryptedDM>();
   for (const m of prev) merged.set(m.id, m);
-  for (const m of incoming) merged.set(m.id, { ...merged.get(m.id), ...m });
+  for (const m of incoming) {
+    const existing = merged.get(m.id);
+    // Never downgrade an already-decrypted row back to an encrypted placeholder:
+    // if we have plaintext for this id, keep it (but still take any fresh status).
+    if (existing && !existing.encrypted && m.encrypted) {
+      merged.set(m.id, { ...existing, status: m.status ?? existing.status });
+    } else {
+      merged.set(m.id, { ...existing, ...m });
+    }
+  }
   return [...merged.values()].sort((a, b) => a.created_at - b.created_at);
+}
+
+/**
+ * Build placeholder rows for a conversation's events, synchronously and with no
+ * decryption. Already-memoized plaintext (`getCachedPlaintext`) is filled in
+ * immediately; everything else is an `encrypted: true` placeholder. This gives
+ * the thread its full structure and correct scroll length on the very first
+ * frame — the actual plaintext streams in afterwards (see `decryptThreadRows`).
+ *
+ * Returned oldest-first (render order).
+ */
+export function buildThreadPlaceholders(events: NostrEvent[]): DecryptedDM[] {
+  const rows: DecryptedDM[] = [];
+  for (const event of events) {
+    const base = { id: event.id, pubkey: event.pubkey, created_at: event.created_at };
+    const cached = getCachedPlaintext(event.id);
+    rows.push(cached !== undefined ? { ...base, content: cached } : { ...base, content: "", encrypted: true });
+  }
+  return rows.sort((a, b) => a.created_at - b.created_at);
+}
+
+/**
+ * Patch a single decrypted message into the thread cache by id, sorted
+ * oldest-first. Used to stream each message in as it decrypts. Never downgrades
+ * an already-decrypted row, and only flips `encrypted` off (keeps existing
+ * optimistic `status`).
+ */
+function patchRow(
+  queryClient: ReturnType<typeof useQueryClient>,
+  queryKey: readonly unknown[],
+  row: DecryptedDM,
+): void {
+  queryClient.setQueryData<DecryptedDM[]>([...queryKey], (old = []) => {
+    let found = false;
+    const next = old.map((m) => {
+      if (m.id !== row.id) return m;
+      found = true;
+      return { ...m, content: row.content, encrypted: undefined };
+    });
+    if (!found) next.push(row);
+    return next.sort((a, b) => a.created_at - b.created_at);
+  });
+}
+
+/**
+ * Decrypt the newest `eager` placeholders of a conversation one at a time,
+ * NEWEST-FIRST (the visible bottom), invoking `onRow` with each message the
+ * instant its plaintext resolves so it can stream into the UI individually
+ * instead of the whole batch appearing at once. Older messages are left as
+ * placeholders for lazy, scroll-into-view decryption (`decryptVisible`).
+ *
+ * A decrypt failure is skipped (the row stays a placeholder and retries lazily),
+ * so a transient signer hiccup never shrinks the thread. Cache hits are skipped
+ * too (they're already plaintext from `buildThreadPlaceholders`).
+ */
+export async function decryptThreadRows(
+  events: NostrEvent[],
+  self: string,
+  peer: string,
+  decrypt: DecryptFn,
+  eager: number,
+  onRow: (row: DecryptedDM) => void,
+): Promise<void> {
+  // Newest-first so the eager window is the newest messages (the visible bottom)
+  // and they reveal from the bottom up.
+  const ordered = [...events].sort((a, b) => b.created_at - a.created_at);
+
+  for (let i = 0; i < ordered.length && i < eager; i++) {
+    const event = ordered[i];
+    if (getCachedPlaintext(event.id) !== undefined) continue; // already shown
+    const counterparty = event.pubkey === self ? peer : event.pubkey;
+    try {
+      const content = await decryptCached(self, counterparty, event, decrypt);
+      onRow({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
+    } catch {
+      // Keep as a placeholder; retried lazily when it scrolls into view.
+    }
+  }
+}
+
+/**
+ * Convenience: build placeholders then fully resolve the eager window into a
+ * single array (no streaming). Used where a batch result is wanted (the IDB
+ * seed) or in tests. Returned oldest-first; failures stay placeholders.
+ */
+export async function buildThreadRows(
+  events: NostrEvent[],
+  self: string,
+  peer: string,
+  decrypt: DecryptFn,
+  eager: number,
+): Promise<DecryptedDM[]> {
+  const byId = new Map<string, DecryptedDM>();
+  for (const row of buildThreadPlaceholders(events)) byId.set(row.id, row);
+  await decryptThreadRows(events, self, peer, decrypt, eager, (row) => {
+    byId.set(row.id, row);
+  });
+  return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
 }
 
 /**
@@ -199,7 +324,7 @@ export function useDMConversations() {
       const out: Record<string, string> = {};
       for (const { peer, latest } of conversations) {
         try {
-          out[peer] = await runExclusive(self, () => nip04.decrypt(peer, latest.content));
+          out[peer] = await decryptCached(self, peer, latest, (cp, ct) => nip04.decrypt(cp, ct));
         } catch (err) {
           console.warn("DM preview decrypt failed", { peer, id: latest.id, err });
         }
@@ -279,30 +404,29 @@ export function useDirectMessages(peer: string | undefined) {
       // Keep only events that belong to this 1:1 conversation.
       const inThread = events.filter((e) => dmCounterparty(e, self!) === peer);
 
-      // De-duplicate (relays in the group may each return the same event).
-      const byId = new Map<string, NostrEvent>();
-      for (const event of inThread) byId.set(event.id, event);
-
-      // Decrypt sequentially, not via Promise.all: NIP-07 extensions serialize
-      // (and may reject) concurrent nip04.decrypt calls, which would otherwise
-      // make every message fail and the thread look empty.
-      const decrypted: DecryptedDM[] = [];
-      for (const event of byId.values()) {
-        const counterparty = event.pubkey === self ? peer! : event.pubkey;
-        try {
-          const content = await runExclusive(self!, () => nip04.decrypt(counterparty, event.content));
-          decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
-        } catch (err) {
-          // undecryptable (not actually for us, or signer refused) — skip
-          console.warn("DM decrypt failed", { id: event.id, counterparty, err });
-        }
-      }
-
-      // Merge with the already-cached thread (seed or a previous fetch) so a
-      // sparse relay read OR a transient mass-decrypt failure (NIP-07 extension
-      // refusing a batch) can never DROP messages already decrypted and shown.
+      // Render the whole thread as placeholders IMMEDIATELY (cached messages are
+      // already plaintext), so structure + scroll are correct on the first frame
+      // instead of pausing while a batch decrypts. Then decrypt the newest
+      // screenful one at a time, streaming each into the cache the instant it
+      // resolves (decryptThreadRows + patchRow) so messages reveal individually,
+      // newest-first. Older messages stay placeholders for scroll-into-view
+      // decryption (decryptVisible).
+      //
+      // Merge with the already-cached thread (seed or previous fetch) so a sparse
+      // relay read or a transient decrypt failure can never DROP shown messages.
       const prev = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
-      return mergeDmThread(prev, decrypted);
+      const placeholders = mergeDmThread(prev, buildThreadPlaceholders(inThread));
+
+      void decryptThreadRows(
+        inThread,
+        self!,
+        peer!,
+        (cp, ct) => nip04.decrypt(cp, ct),
+        EAGER_DECRYPT_COUNT,
+        (row) => patchRow(queryClient, queryKey, row),
+      );
+
+      return placeholders;
     },
     staleTime: 10_000,
   });
@@ -325,26 +449,25 @@ export function useDirectMessages(peer: string | undefined) {
       ]);
       if (cancelled || events.length === 0) return;
 
-      const byId = new Map<string, NostrEvent>();
-      for (const e of events) {
-        if (dmCounterparty(e, self) === peer) byId.set(e.id, e);
-      }
-      if (byId.size === 0) return;
+      const inThread = events.filter((e) => dmCounterparty(e, self) === peer);
+      if (inThread.length === 0) return;
 
-      const decrypted: DecryptedDM[] = [];
-      for (const event of byId.values()) {
-        const counterparty = event.pubkey === self ? peer : event.pubkey;
-        try {
-          const content = await runExclusive(self, () => nip04.decrypt(counterparty, event.content));
-          decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
-        } catch {
-          // undecryptable — skip
-        }
-      }
-      if (cancelled || decrypted.length === 0) return;
-      decrypted.sort((a, b) => a.created_at - b.created_at);
+      // Show placeholders immediately, then stream each decrypt in (same as the
+      // network path) so a cold reload reveals the thread progressively.
+      const placeholders = buildThreadPlaceholders(inThread);
+      if (cancelled || placeholders.length === 0) return;
       queryClient.setQueryData<DecryptedDM[]>(queryKey, (old) =>
-        old && old.length > 0 ? old : decrypted,
+        old && old.length > 0 ? old : placeholders,
+      );
+      void decryptThreadRows(
+        inThread,
+        self,
+        peer,
+        (cp, ct) => nip04.decrypt(cp, ct),
+        EAGER_DECRYPT_COUNT,
+        (row) => {
+          if (!cancelled) patchRow(queryClient, queryKey, row);
+        },
       );
     })();
     return () => {
@@ -376,7 +499,7 @@ export function useDirectMessages(peer: string | undefined) {
           const counterparty = event.pubkey === self ? peer : event.pubkey;
           let content: string;
           try {
-            content = await runExclusive(self, () => nip04.decrypt(counterparty, event.content));
+            content = await decryptCached(self, counterparty, event, (cp, ct) => nip04.decrypt(cp, ct));
           } catch (err) {
             console.warn("DM live decrypt failed", { id: event.id, counterparty, err });
             continue;
@@ -451,27 +574,28 @@ export function useDirectMessages(peer: string | undefined) {
 
       const inThread = events.filter((e) => dmCounterparty(e, self) === peer);
       const existing = new Set(current.map((m) => m.id));
+      const fresh = inThread.filter((e) => !existing.has(e.id));
 
-      const decrypted: DecryptedDM[] = [];
-      for (const event of inThread) {
-        if (existing.has(event.id)) continue;
-        const counterparty = event.pubkey === self ? peer : event.pubkey;
-        try {
-          const content = await runExclusive(self, () => nip04.decrypt(counterparty, event.content));
-          decrypted.push({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
-        } catch (err) {
-          console.warn("DM backfill decrypt failed", { id: event.id, counterparty, err });
-        }
-      }
+      // Backfilled history is older than what's shown, so it's all lazy
+      // placeholders (eager = 0) — each decrypts when it scrolls into view.
+      // Already-memoized messages still come back decrypted (buildThreadRows
+      // honors the cache regardless of position).
+      const rows = await buildThreadRows(
+        fresh,
+        self,
+        peer,
+        (cp, ct) => nip04.decrypt(cp, ct),
+        0,
+      );
 
-      if (decrypted.length === 0) return 0;
+      if (rows.length === 0) return 0;
 
       queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) => {
         const byId = new Map<string, DecryptedDM>();
-        for (const m of [...decrypted, ...old]) byId.set(m.id, m);
+        for (const m of [...rows, ...old]) byId.set(m.id, m);
         return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
       });
-      return decrypted.length;
+      return rows.length;
     } catch {
       return 0;
     } finally {
@@ -578,6 +702,12 @@ export function useDirectMessages(peer: string | undefined) {
           ),
         );
 
+        // Seed the plaintext memo with what we just sent, keyed by the real
+        // event id, so when the relay echoes this message back through the live
+        // subscription (or a refetch) it's a cache hit — we never re-decrypt our
+        // own outgoing message.
+        setCachedPlaintext(event.id, trimmed);
+
         // Publish in the background; don't make the caller await the relay.
         void publish(event).catch(() => {
           // Failure is surfaced via the message's "failed" status (and retry).
@@ -628,6 +758,45 @@ export function useDirectMessages(peer: string | undefined) {
     [queryClient, queryKey, user, peer, setMessageStatus, publish],
   );
 
+  /**
+   * Decrypt a placeholder message that has scrolled into view, filling its
+   * plaintext into the thread. Called by the render layer's IntersectionObserver
+   * for each `encrypted: true` row. Reads the raw ciphertext from the event
+   * store (where NostrBatcher mirrors it), decrypts through the memo, and
+   * patches just that row. Idempotent: a no-op once the id is decrypted, and
+   * concurrent calls for the same id share one signer round-trip (plaintextCache
+   * in-flight dedup).
+   */
+  const decryptVisible = useCallback(
+    (id: string) => {
+      if (!self || !peer || !user?.signer.nip04) return;
+      if (hasCachedPlaintext(id)) {
+        // Already decrypted this session — just make sure the row reflects it.
+        const content = getCachedPlaintext(id)!;
+        queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
+          old.map((m) => (m.id === id && m.encrypted ? { ...m, content, encrypted: false } : m)),
+        );
+        return;
+      }
+      const nip04 = user.signer.nip04;
+      void (async () => {
+        const store = await eventStore;
+        const [event] = await store.query([{ ids: [id] }]);
+        if (!event) return;
+        const counterparty = event.pubkey === self ? peer : event.pubkey;
+        try {
+          const content = await decryptCached(self, counterparty, event, (cp, ct) => nip04.decrypt(cp, ct));
+          queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
+            old.map((m) => (m.id === id ? { ...m, content, encrypted: false } : m)),
+          );
+        } catch {
+          // Leave it as a placeholder; it'll retry next time it enters view.
+        }
+      })();
+    },
+    [self, peer, user?.signer.nip04, eventStore, queryClient, queryKey],
+  );
+
   return {
     messages: query.data ?? [],
     isLoading: query.isLoading,
@@ -638,5 +807,6 @@ export function useDirectMessages(peer: string | undefined) {
     loadOlder,
     hasMore,
     isLoadingOlder,
+    decryptVisible,
   };
 }

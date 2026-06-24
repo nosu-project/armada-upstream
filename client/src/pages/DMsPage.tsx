@@ -158,11 +158,27 @@ function DMMessage({
   message,
   continuation,
   onRetry,
+  observePlaceholder,
 }: {
   message: DecryptedDM;
   continuation?: boolean;
   onRetry?: (id: string) => void;
+  /**
+   * For an `encrypted` placeholder row, register its element with the thread's
+   * IntersectionObserver so it's decrypted when it scrolls into view. Returns a
+   * cleanup that unobserves. No-op for already-decrypted rows.
+   */
+  observePlaceholder?: (el: HTMLElement, id: string) => () => void;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!message.encrypted || !observePlaceholder) return;
+    const el = rowRef.current;
+    if (!el) return;
+    return observePlaceholder(el, message.id);
+  }, [message.encrypted, message.id, observePlaceholder]);
+
   const event = useMemo<NostrEvent>(
     () => ({
       id: message.id,
@@ -175,6 +191,18 @@ function DMMessage({
     }),
     [message],
   );
+
+  // A not-yet-decrypted placeholder: reserve the row (so scroll length/position
+  // stay correct) and show a muted shimmer until it scrolls into view.
+  if (message.encrypted) {
+    return (
+      <div ref={rowRef} data-message-id={message.id}>
+        <MessageRow pubkey={message.pubkey} createdAt={message.created_at} continuation={continuation}>
+          <Skeleton className="h-3 w-40 max-w-full" />
+        </MessageRow>
+      </div>
+    );
+  }
 
   return (
     <MessageRow pubkey={message.pubkey} createdAt={message.created_at} continuation={continuation}>
@@ -202,7 +230,7 @@ function DMMessage({
 function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
-  const { messages, isLoading, send, retry, loadOlder, hasMore, isLoadingOlder } = useDirectMessages(peer);
+  const { messages, isLoading, send, retry, loadOlder, hasMore, isLoadingOlder, decryptVisible } = useDirectMessages(peer);
   const { markRead } = useReadState();
   const { toast } = useToast();
   const { user } = useCurrentUser();
@@ -251,6 +279,45 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
     }
     el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  // Lazy decryption: a single IntersectionObserver (rooted on the scroll
+  // container) decrypts placeholder rows as they scroll into view, so opening a
+  // long thread only pays for the visible screenful up front. The element→id
+  // map lets the observer callback look up which message a row belongs to;
+  // `observePlaceholder` (passed to each placeholder DMMessage) registers it.
+  const elementIds = useRef(new WeakMap<Element, string>());
+  // Always call the latest decryptVisible without re-creating the observer.
+  const decryptVisibleRef = useRef(decryptVisible);
+  decryptVisibleRef.current = decryptVisible;
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  if (!observerRef.current && typeof IntersectionObserver !== "undefined") {
+    observerRef.current = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const id = elementIds.current.get(entry.target);
+          if (id) decryptVisibleRef.current(id);
+        }
+      },
+      { rootMargin: "200px 0px" },
+    );
+  }
+  useEffect(() => () => observerRef.current?.disconnect(), []);
+
+  const observePlaceholder = useCallback((el: HTMLElement, id: string) => {
+    const observer = observerRef.current;
+    if (!observer) {
+      // No IntersectionObserver (very old env / tests): decrypt immediately.
+      decryptVisibleRef.current(id);
+      return () => {};
+    }
+    elementIds.current.set(el, id);
+    observer.observe(el);
+    return () => {
+      observer.unobserve(el);
+      elementIds.current.delete(el);
+    };
+  }, []);
 
   // Backfill older history when the user scrolls near the top.
   const handleScroll = useCallback(() => {
@@ -383,7 +450,15 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 !!prev &&
                 prev.pubkey === m.pubkey &&
                 m.created_at - prev.created_at < DM_CONTINUATION_WINDOW_SECONDS;
-              return <DMMessage key={m.id} message={m} continuation={continuation} onRetry={retry} />;
+              return (
+                <DMMessage
+                  key={m.id}
+                  message={m}
+                  continuation={continuation}
+                  onRetry={retry}
+                  observePlaceholder={observePlaceholder}
+                />
+              );
             })}
           </>
         )}
