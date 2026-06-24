@@ -1,5 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, Settings, Shield, ShieldCheck, UserPlus, Users, Volume2 } from "lucide-react";
+import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, Settings, Shield, ShieldCheck, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -35,6 +35,7 @@ import { useConcordMetadata } from "@/hooks/useConcordMetadata";
 import { useConcordModeration } from "@/hooks/useConcordModeration";
 import { useConcordTyping, useConcordTypingPublisher } from "@/hooks/useConcordTyping";
 import { useConcordRosterActions, concordMembers } from "@/hooks/useConcordRoster";
+import { useConcordDissolved } from "@/hooks/useConcordRoster";
 import { useConcordTransport } from "@/hooks/useConcordTransport";
 import { useConcordVoiceServer } from "@/hooks/useConcordVoice";
 import { useConcordVoicePresence } from "@/hooks/useConcordVoice";
@@ -193,7 +194,8 @@ export function ConcordPage() {
   const { transport, reactionsFor } = useConcordTransport(community, channel, canWrite, iAmOwner);
   const { mutateAsync: send } = useSendConcordMessage(community, channel);
   const { createChannel, isAddingChannel } = useConcordActions();
-  const { leave, isLeaving } = useConcordCommunityActions(community);
+  const { leave, isLeaving, dissolve } = useConcordCommunityActions(community);
+  const { data: dissolved } = useConcordDissolved(community);
   const { joinConcordCall, activeCall } = useCall();
   const { data: voiceServer } = useConcordVoiceServer(community, channel);
   const hasVoice = Boolean(voiceServer);
@@ -249,6 +251,12 @@ export function ConcordPage() {
   const publishTyping = useConcordTypingPublisher(community, channel);
   const { data: typingPubkeys } = useConcordTyping(community, channel);
 
+  // A dissolved community is terminal — leave the page. (Declared before the
+  // early return so the hook order stays stable.)
+  useEffect(() => {
+    if (dissolved) navigateTo("/");
+  }, [dissolved, navigateTo]);
+
   if (!communityId) return <Navigate to="/" replace />;
 
   // Send via the rich composer: the whole content is sealed; the reply target
@@ -279,6 +287,17 @@ export function ConcordPage() {
       navigateTo("/");
     } catch {
       // best-effort
+    }
+  };
+
+  const handleDissolve = async () => {
+    if (!confirm("Permanently delete this community for everyone? This cannot be undone.")) return;
+    try {
+      await dissolve();
+      toast({ title: "Community deleted" });
+      navigateTo("/");
+    } catch (e) {
+      toast({ title: "Couldn't delete", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }
   };
 
@@ -493,6 +512,15 @@ export function ConcordPage() {
                     <LogOut className="size-4" />
                     Leave community
                   </DropdownMenuItem>
+                  {iAmOwner && (
+                    <DropdownMenuItem
+                      className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
+                      onClick={handleDissolve}
+                    >
+                      <Trash2 className="size-4" />
+                      Delete community
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

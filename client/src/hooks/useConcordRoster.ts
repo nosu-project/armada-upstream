@@ -7,7 +7,9 @@ import {
   buildGrantEditionUnsigned,
   buildRoleEditionUnsigned,
   controlPseudonym,
+  dissolvedAddress,
   foldRoster,
+  isDissolved,
   sealControlEdition,
   type FoldedRoster,
 } from "@/lib/concord/control";
@@ -61,6 +63,37 @@ export function concordMembers(roster: FoldedRoster): Array<{ pubkey: string; is
   if (roster.ownerHex) set.add(roster.ownerHex);
   for (const g of roster.roster.grants) set.add(g.member);
   return [...set].map((pubkey) => ({ pubkey, isOwner: pubkey === roster.ownerHex }));
+}
+
+/**
+ * Whether a community has been dissolved by its owner (terminal). Reads the
+ * epoch-free dissolved pseudonym and verifies an owner-signed vsk=10 tombstone.
+ * Polled so a dissolution propagates to open clients.
+ */
+export function useConcordDissolved(community: Community | undefined) {
+  const { nostr } = useNostr();
+  const roster = useConcordRoster(community);
+
+  return useQuery<boolean>({
+    queryKey: ["concord", "dissolved", community ? bytesToHex(community.id) : null],
+    enabled: Boolean(community) && Boolean(roster.data?.ownerHex),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    queryFn: async ({ signal }) => {
+      const z = dissolvedAddress(community!.id);
+      const results = await Promise.all(
+        community!.relays.map((url) =>
+          nostr
+            .relay(url)
+            .query([{ kinds: [KIND_COMMUNITY_CONTROL], "#z": [z], limit: 10 }], {
+              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+            })
+            .catch(() => [] as NostrEvent[]),
+        ),
+      );
+      return isDissolved(results.flat(), community!.id, roster.data!.ownerHex);
+    },
+  });
 }
 
 /** Publish a control edition (role or grant) to the community's relays. */

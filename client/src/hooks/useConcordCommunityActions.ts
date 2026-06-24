@@ -6,6 +6,7 @@ import { wrapEvent } from "nostr-tools/nip59";
 
 import { useUpdateConcordList } from "@/hooks/useConcordList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { buildDissolvedEditionUnsigned, sealDissolvedEdition } from "@/lib/concord/control";
 import { buildInviteRumorTemplate } from "@/lib/concord/invite";
 import {
   buildPublicInviteEvent,
@@ -105,6 +106,30 @@ export function useConcordCommunityActions(community: Community | undefined) {
     },
   });
 
+  /**
+   * Dissolve the community (owner-only, IRREVERSIBLE): publish the terminal
+   * GroupDissolved tombstone (vsk=10) under the epoch-free dissolved
+   * envelope/pseudonym so every member at any epoch discovers it and seals the
+   * community. Then remove it from the local membership list.
+   */
+  const dissolve = useMutation<void, Error, void>({
+    mutationFn: async () => {
+      if (!user || !community) throw new Error("Not ready.");
+      const now = Math.floor(Date.now() / 1000);
+      const inner = await user.signer.signEvent(buildDissolvedEditionUnsigned(community.id, now));
+      const outer = sealDissolvedEdition(inner, community.id);
+      await Promise.all(
+        community.relays.map((url) =>
+          nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }).catch(() => {}),
+        ),
+      );
+      await updateList({ type: "remove", communityId: bytesToHex(community.id) });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
+    },
+  });
+
   return {
     createInviteLink: createInviteLink.mutateAsync,
     isCreatingLink: createInviteLink.isPending,
@@ -113,5 +138,7 @@ export function useConcordCommunityActions(community: Community | undefined) {
     isSendingInvite: sendDirectInvite.isPending,
     leave: leave.mutateAsync,
     isLeaving: leave.isPending,
+    dissolve: dissolve.mutateAsync,
+    isDissolving: dissolve.isPending,
   };
 }

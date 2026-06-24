@@ -8,10 +8,13 @@ import {
   buildCommunityRootEditionUnsigned,
   buildRoleEditionUnsigned,
   buildGrantEditionUnsigned,
+  buildDissolvedEditionUnsigned,
   foldBanlist,
   foldMetadata,
   foldRoster,
+  isDissolved,
   sealControlEdition,
+  sealDissolvedEdition,
 } from "@/lib/concord/control";
 import { signEdition } from "@/lib/concord/edition";
 import { communityMetadataOf } from "@/lib/concord/metadata";
@@ -257,5 +260,22 @@ describe("banlist fold (vsk=4)", () => {
     const roster = foldRoster(outers, community.serverRootKey, community.id, community.ownerAttestation);
     const banlist = foldBanlist(outers, community.serverRootKey, community.id, roster.roster, roster.ownerHex);
     expect(banlist.banned.has(target)).toBe(true);
+  });
+});
+
+describe("dissolve (vsk=10)", () => {
+  it("an owner's tombstone marks the community dissolved; a stranger's does not", () => {
+    const { ownerSk, ownerHex, community } = mintWithOwner();
+    const strangerSk = generateSecretKey();
+    const now = 1700000000;
+
+    const ownerTomb = sealDissolvedEdition(signEdition(buildDissolvedEditionUnsigned(community.id, now), ownerSk), community.id);
+    expect(isDissolved([ownerTomb], community.id, ownerHex)).toBe(true);
+
+    const strangerTomb = sealDissolvedEdition(
+      signEdition(buildDissolvedEditionUnsigned(community.id, now), strangerSk),
+      community.id,
+    );
+    expect(isDissolved([strangerTomb], community.id, ownerHex)).toBe(false);
   });
 });

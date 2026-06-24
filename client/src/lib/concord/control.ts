@@ -18,7 +18,7 @@ import { finalizeEvent, verifyEvent } from "nostr-tools/pure";
 import type { NostrEvent } from "nostr-tools/pure";
 
 import { open as cipherOpen, seal as cipherSeal } from "@/lib/concord/cipher";
-import { banlistLocator, channelPseudonym, grantLocator } from "@/lib/concord/derive";
+import { banlistLocator, channelPseudonym, dissolvedEnvelopeKey, dissolvedLocator, dissolvedPseudonym, grantLocator } from "@/lib/concord/derive";
 import {
   buildEditionInner,
   parseEditionInner,
@@ -46,6 +46,8 @@ export const VSK_ROLE = "1";
 export const VSK_CHANNEL = "2";
 export const VSK_GRANT = "3";
 export const VSK_BANLIST = "4";
+/** vsk=10: the owner-dissolution tombstone (no version chain; presence = dissolved). */
+export const VSK_DISSOLVED = "10";
 
 /**
  * The control-plane relay address (`#z`). Derived from the server-root key +
@@ -491,6 +493,83 @@ function authorizeDelegation(
   }
 
   return roster;
+}
+
+// ── Dissolve (vsk=10) ────────────────────────────────────────────────────────
+
+/** Build the unsigned owner-dissolution tombstone (vsk=10, chain-free, empty content). */
+export function buildDissolvedEditionUnsigned(communityId: Uint8Array, createdAtSecs: number) {
+  return buildEditionInner({
+    vsk: VSK_DISSOLVED,
+    entityId: dissolvedLocator(communityId),
+    version: 1n,
+    content: "{}",
+    createdAtSecs,
+  });
+}
+
+/**
+ * Seal a signed dissolution tombstone. Unlike ordinary control editions (sealed
+ * under the server-root key + control pseudonym), the tombstone is enveloped
+ * under the epoch-free `dissolvedEnvelopeKey` and addressed by `dissolvedPseudonym`
+ * — both community-id-derived — so ANY joiner at ANY epoch finds and opens it.
+ */
+export function sealDissolvedEdition(inner: NostrEvent, communityId: Uint8Array, ephemeralSk?: Uint8Array): NostrEvent {
+  if (inner.kind !== KIND_COMMUNITY_CONTROL) throw new Error("a dissolved tombstone must be kind 3308");
+  const content = cipherSeal(dissolvedEnvelopeKey(communityId), JSON.stringify(inner));
+  const sk = ephemeralSk ?? crypto.getRandomValues(new Uint8Array(32));
+  return finalizeEvent(
+    {
+      kind: KIND_COMMUNITY_CONTROL,
+      content,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [["z", dissolvedPseudonym(communityId)], ["v", "1"]],
+    },
+    sk,
+  );
+}
+
+/** The `#z` address to fetch a community's dissolution tombstone by (epoch-free). */
+export function dissolvedAddress(communityId: Uint8Array): string {
+  return dissolvedPseudonym(communityId);
+}
+
+/**
+ * Check whether any of `outers` is a valid owner-signed dissolution tombstone
+ * for this community. Returns true once a tombstone decrypts (under the
+ * dissolved envelope key), parses as a vsk=10 edition at the community's
+ * dissolved locator, and is signed by the proven owner. Dissolution is terminal
+ * and owner-only — a non-owner tombstone is ignored.
+ */
+export function isDissolved(
+  outers: NostrEvent[],
+  communityId: Uint8Array,
+  ownerHex: string | undefined,
+): boolean {
+  if (!ownerHex) return false;
+  const eid = bytesToHex(dissolvedLocator(communityId));
+  const key = dissolvedEnvelopeKey(communityId);
+  for (const outer of outers) {
+    if (outer.kind !== KIND_COMMUNITY_CONTROL) continue;
+    let inner: NostrEvent;
+    try {
+      const json = cipherOpen(key, outer.content);
+      inner = JSON.parse(json) as NostrEvent;
+    } catch {
+      continue;
+    }
+    if (!verifyEvent(inner)) continue;
+    let parsed: ParsedEdition;
+    try {
+      parsed = parseEditionInner(inner);
+    } catch {
+      continue;
+    }
+    if (parsed.vsk === VSK_DISSOLVED && bytesToHex(parsed.entityId) === eid && parsed.author === ownerHex) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export { verifyEvent };
