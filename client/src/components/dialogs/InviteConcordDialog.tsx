@@ -41,10 +41,13 @@ export function InviteConcordDialog({
 }
 
 function InviteBody({ community }: { community: Community | undefined }) {
-  const { createInviteLink, isCreatingLink, sendDirectInvite, isSendingInvite } =
+  const { createInviteLink, isCreatingLink, revokeInviteLink, sendDirectInvite, isSendingInvite } =
     useConcordCommunityActions(community);
   const [link, setLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [expiryDays, setExpiryDays] = useState<number>(0); // 0 = never
+  const [label, setLabel] = useState("");
+  const [revoking, setRevoking] = useState(false);
   const [sentPubkey, setSentPubkey] = useState<string | null>(null);
   const [pendingPubkey, setPendingPubkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,9 +55,26 @@ function InviteBody({ community }: { community: Community | undefined }) {
   const handleGenerate = async () => {
     setError(null);
     try {
-      setLink(await createInviteLink({}));
+      const expiresAt = expiryDays > 0 ? Math.floor(Date.now() / 1000) + expiryDays * 86400 : undefined;
+      setLink(await createInviteLink({ expiresAt, label: label.trim() || undefined }));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't create the link.");
+    }
+  };
+
+  const handleRevoke = async () => {
+    if (!link) return;
+    setError(null);
+    setRevoking(true);
+    try {
+      await revokeInviteLink({ url: link });
+      setLink(null);
+      setLabel("");
+      toast({ title: "Invite link revoked", description: "It can no longer be used to join." });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't revoke the link.");
+    } finally {
+      setRevoking(false);
     }
   };
 
@@ -125,22 +145,56 @@ function InviteBody({ community }: { community: Community | undefined }) {
           Or share a link
         </div>
         {link ? (
-          <div className="flex items-center gap-2">
-            <Input readOnly value={link} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
-            <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={handleCopy} aria-label="Copy link">
-              {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+          <>
+            <div className="flex items-center gap-2">
+              <Input readOnly value={link} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+              <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={handleCopy} aria-label="Copy link">
+                {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+              </Button>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleRevoke}
+              disabled={revoking}
+              className="text-destructive hover:text-destructive"
+            >
+              {revoking ? <><Loader2 className="size-3.5 mr-1.5 animate-spin" /> Revoking...</> : "Revoke this link"}
             </Button>
-          </div>
+          </>
         ) : (
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={handleGenerate}
-            disabled={isCreatingLink || !community}
-            className="w-full clip-corner-lg"
-          >
-            {isCreatingLink ? <><Loader2 className="size-4 mr-2 animate-spin" /> Generating...</> : "Generate invite link"}
-          </Button>
+          <>
+            <div className="flex gap-2">
+              <select
+                value={expiryDays}
+                onChange={(e) => setExpiryDays(Number(e.target.value))}
+                className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
+                aria-label="Link expiry"
+              >
+                <option value={0}>Never expires</option>
+                <option value={1}>1 day</option>
+                <option value={7}>7 days</option>
+                <option value={30}>30 days</option>
+              </select>
+              <Input
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="Label (optional)"
+                className="text-sm"
+                aria-label="Invite label"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleGenerate}
+              disabled={isCreatingLink || !community}
+              className="w-full clip-corner-lg"
+            >
+              {isCreatingLink ? <><Loader2 className="size-4 mr-2 animate-spin" /> Generating...</> : "Generate invite link"}
+            </Button>
+          </>
         )}
         <p className="text-xs text-muted-foreground">
           Anyone with the link can join. The secret lives in the # fragment, never sent to a server.

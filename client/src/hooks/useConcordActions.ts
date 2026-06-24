@@ -17,7 +17,7 @@ import { communityMetadataOf } from "@/lib/concord/metadata";
 import {
   buildOwnerAttestationUnsigned,
 } from "@/lib/concord/owner";
-import { locatorHex, parseInviteUrl, parsePublicInviteEvent, signerPubkey } from "@/lib/concord/publicInvite";
+import { isExpired, locatorHex, parseInviteUrl, parsePublicInviteEvent, signerPubkey } from "@/lib/concord/publicInvite";
 import { adminRole, type Role } from "@/lib/concord/roles";
 import { createCommunity as mintCommunity, random32, type Channel, type Community } from "@/lib/concord/types";
 import { APP_RELAYS } from "@/lib/platform";
@@ -107,6 +107,9 @@ export function useConcordActions() {
 
     // Decrypt + verify the bundle with the token (rejects impostor/revoked).
     const bundle = parsePublicInviteEvent(flat[0], tokenBytes);
+    if (isExpired(bundle, Math.floor(Date.now() / 1000))) {
+      throw new Error("This invite link has expired.");
+    }
     return acceptInvite(bundle.join);
   }
 
