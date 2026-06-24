@@ -4,6 +4,37 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.5.0] - 2026-06-24
+
+A big release for serverless communities. You can now run a community end to
+end without a server in charge: edit its name, description, logo, and banner;
+create and rename channels; build custom roles and hand out fine-grained
+permissions; and moderate with kick, ban, unban, and hide. Communities support
+message editing and live "someone is typing" indicators, and invite links can
+carry an expiry (never, 1, 7, or 30 days) and a label, and be revoked so a
+shared link stops working. Owners can permanently dissolve a community. Adding
+and inviting people got a fresh look, with a smart paste box that accepts links,
+invite tokens, or a bare domain, a people search that surfaces the folks you
+follow first, and full cross-compatibility with Vector invite links.
+
+### Added
+- Edit a community's name, description, logo, and banner.
+- Create and rename channels within a community.
+- Custom roles with per-permission controls (manage roles, metadata, channels,
+  kick, ban, and more).
+- Moderation: kick, ban, unban, and hide messages.
+- Message editing in communities.
+- Live typing indicators showing when someone is composing a message.
+- Invite links can expire (never, 1, 7, or 30 days), carry a label, and be
+  revoked.
+- Owners can permanently dissolve a community.
+- A people search when inviting that surfaces accounts you follow first, plus a
+  paste button.
+
+### Changed
+- Redesigned Add and Invite dialogs.
+- Community invite links are now fully compatible with Vector.
+
 ## [0.4.7] - 2026-06-24
 
 A chat readability and touch-friendliness release. The per-message action
