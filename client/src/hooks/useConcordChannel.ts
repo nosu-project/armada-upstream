@@ -357,12 +357,15 @@ export function useSendConcordMessage(community: Community | undefined, channel:
       content,
       kind = KIND_COMMUNITY_MESSAGE,
       reference,
+      extraTags,
     }: {
       content: string;
       /** 3300 message (default), 3301 reaction, 3302 edit. */
       kind?: number;
       /** Target inner id for a reply/reaction/edit. */
       reference?: string;
+      /** Extra inner tags appended verbatim (e.g. NIP-30 `emoji`, NIP-92 imeta). */
+      extraTags?: string[][];
     }) => {
       if (!user) throw new Error("Sign in to send a message.");
       if (!community || !channel) throw new Error("No channel selected.");
@@ -382,6 +385,7 @@ export function useSendConcordMessage(community: Community | undefined, channel:
         ms,
         kind,
         reference,
+        extraTags,
       });
 
       // Sign + seal serialized per-identity (extension-safe). If this throws
@@ -593,10 +597,19 @@ export function useConcordSendStatus(channel: Channel | undefined): ConcordSendS
   return data ?? {};
 }
 
+/** A tallied reaction key: reactors plus the NIP-30 custom-emoji image URL (if any). */
+export interface ConcordReactionTally {
+  reactors: Set<string>;
+  /** Custom-emoji image URL when the key is a `:shortcode:` (from the reaction's `emoji` tag). */
+  url?: string;
+}
+
 /**
  * Fetch + decrypt reactions (kind 3301) for a channel and tally them per target
  * message. Each reaction's `content` is the emoji; its reply `e` tag names the
- * reacted-to message. Reuses the same per-epoch envelope read path.
+ * reacted-to message. A NIP-30 custom-emoji reaction additionally carries an
+ * `emoji` tag (`["emoji", shortcode, url]`) so the pill renders the image rather
+ * than the literal `:shortcode:`. Reuses the same per-epoch envelope read path.
  */
 export function useConcordReactions(community: Community | undefined, channel: Channel | undefined) {
   const { nostr } = useNostr();
@@ -619,18 +632,23 @@ export function useConcordReactions(community: Community | undefined, channel: C
             .catch(() => [] as NostrEvent[]),
         ),
       );
-      // target id → emoji → set of reactor pubkeys
-      const tally = new Map<string, Map<string, Set<string>>>();
+      // target id → emoji → { reactors, url }
+      const tally = new Map<string, Map<string, ConcordReactionTally>>();
       for (const ev of results.flat()) {
         try {
           const opened = openMessageMulti(ev, channel!.id, epochKeys);
           const target = opened.tags.find((t) => t[0] === "e")?.[1];
           if (!target || !opened.content) continue;
+          // NIP-30 custom emoji: content is `:shortcode:`, the `emoji` tag holds
+          // its image URL (`["emoji", shortcode, url]`). Keep it so the pill can
+          // render the image instead of the literal shortcode text.
+          const url = opened.tags.find((t) => t[0] === "emoji")?.[2];
           let byEmoji = tally.get(target);
           if (!byEmoji) tally.set(target, (byEmoji = new Map()));
-          let reactors = byEmoji.get(opened.content);
-          if (!reactors) byEmoji.set(opened.content, (reactors = new Set()));
-          reactors.add(opened.author);
+          let entry = byEmoji.get(opened.content);
+          if (!entry) byEmoji.set(opened.content, (entry = { reactors: new Set() }));
+          entry.reactors.add(opened.author);
+          if (url && !entry.url) entry.url = url;
         } catch {
           // not ours / invalid → skip
         }

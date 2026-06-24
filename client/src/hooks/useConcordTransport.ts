@@ -65,12 +65,13 @@ export function useConcordTransport(
     if (!rawReactions) return out;
     for (const [targetId, byEmoji] of rawReactions) {
       const tallies: ReactionTally[] = [];
-      for (const [emoji, reactors] of byEmoji) {
+      for (const [emoji, entry] of byEmoji) {
         tallies.push({
           key: emoji,
-          count: reactors.size,
-          pubkeys: [...reactors],
-          mine: Boolean(user && reactors.has(user.pubkey)),
+          url: entry.url,
+          count: entry.reactors.size,
+          pubkeys: [...entry.reactors],
+          mine: Boolean(user && entry.reactors.has(user.pubkey)),
         });
       }
       tallies.sort((a, b) => b.count - a.count);
@@ -83,9 +84,19 @@ export function useConcordTransport(
     return (id: string): MessageReactions => ({
       tallies: talliesById.get(id) ?? [],
       react: (input: ReactInput) => {
-        // Concord reactions carry the emoji as content; a `:shortcode:` reacts
-        // with its literal form (no custom-emoji image plumbing yet).
-        void send({ content: input.content, kind: KIND_COMMUNITY_REACTION, reference: id }).catch(() => {});
+        // NIP-30 custom emoji: content is `:shortcode:` and the image URL rides
+        // along on an `emoji` inner tag so the reaction pill renders the image
+        // (matching NIP-29). Native/unicode reactions carry no extra tag.
+        const extraTags =
+          input.emojiUrl && input.content.startsWith(":") && input.content.endsWith(":")
+            ? [["emoji", input.content.slice(1, -1), input.emojiUrl]]
+            : undefined;
+        void send({
+          content: input.content,
+          kind: KIND_COMMUNITY_REACTION,
+          reference: id,
+          extraTags,
+        }).catch(() => {});
       },
     });
   }, [talliesById, send]);
