@@ -6,9 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
+  ChromeDialogContent,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -89,23 +87,25 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md p-0 gap-0 overflow-hidden" aria-describedby={undefined}>
-        <DialogHeader className="items-center text-center gap-2 px-6 pt-6 pb-5 bg-gradient-to-b from-primary/10 to-transparent">
-          <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/15 text-primary">
+      <ChromeDialogContent title="Create a channel">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <Hash className="size-6" />
           </div>
-          <DialogTitle className="text-lg">Create a channel</DialogTitle>
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+            create a channel
+          </h2>
           <p className="text-sm text-muted-foreground">
             Channels are where your community talks. You&apos;ll be its first admin.
           </p>
-        </DialogHeader>
+        </div>
 
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handleCreate();
           }}
-          className="space-y-5 px-6 pb-6"
+          className="mt-6 space-y-5"
         >
           <div className="space-y-1.5">
             <Label htmlFor="group-name" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -171,15 +171,15 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
           )}
 
           <div className="flex gap-2 pt-1">
-            <Button type="button" variant="ghost" className="flex-1" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" className="flex-1" disabled={pending || !name.trim()}>
+            <Button type="submit" className="flex-1 clip-corner-lg" disabled={pending || !name.trim()}>
               {pending ? <><Loader2 className="size-4 mr-2 animate-spin" /> Creating…</> : "Create channel"}
             </Button>
           </div>
         </form>
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }
@@ -199,12 +199,12 @@ export function PrivacyToggle({ id, icon, title, description, checked, onChecked
     <label
       htmlFor={id}
       className={cn(
-        "flex items-center gap-3 rounded-xl border p-3 cursor-pointer transition-colors",
+        "flex items-center gap-3 clip-corner-lg border p-3 cursor-pointer transition-colors",
         checked ? "border-primary/50 bg-primary/5" : "border-border/70 hover:bg-secondary/40",
       )}
     >
       <span className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-lg transition-colors",
+        "flex size-9 shrink-0 items-center justify-center clip-corner-lg transition-colors",
         checked ? "bg-primary/15 text-primary" : "bg-secondary text-muted-foreground",
       )}>
         {icon}

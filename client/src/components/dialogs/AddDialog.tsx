@@ -10,7 +10,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Tooltip,
@@ -52,18 +52,10 @@ export function AddDialog({ open, onOpenChange }: AddDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-      <DialogContent
-        // Cut-corner chrome card (not the default bordered/rounded dialog): the
-        // same vessel shape used by the roster and composer. The crest + copy
-        // do the framing, so the visually-hidden title just satisfies a11y.
-        className="sm:max-w-md border-0 rounded-none p-0 bg-transparent shadow-none"
-      >
-        <DialogTitle className="sr-only">Add an encrypted chat or server</DialogTitle>
-        <div className="clip-corner-lg bg-chrome p-6 sm:p-7">
-          <AddBody onDone={close} />
-        </div>
+      <ChromeDialogContent title="Add an encrypted chat or server">
+        <AddBody onDone={close} />
         <ArmadaCrestKeyframes />
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }
@@ -96,7 +88,7 @@ function AddBody({ onDone }: { onDone: () => void }) {
       <ArmadaCrest size={84} />
 
       <div className="space-y-1.5">
-        <h2 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+        <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
           start an encrypted chat
         </h2>
         <p className="text-sm text-muted-foreground">
@@ -333,6 +325,7 @@ function EscapeHatch({
               autoCapitalize="off"
               autoCorrect="off"
               spellCheck={false}
+              className="min-w-0"
             />
             <TooltipProvider delayDuration={300}>
               <Tooltip>

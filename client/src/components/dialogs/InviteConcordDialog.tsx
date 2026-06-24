@@ -5,7 +5,7 @@ import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCres
 import { ProfileSearchSelect } from "@/components/chat/ProfileSearchSelect";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useConcordCommunityActions } from "@/hooks/useConcordCommunityActions";
 import { toast } from "@/hooks/useToast";
@@ -29,13 +29,10 @@ export function InviteConcordDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md border-0 rounded-none p-0 bg-transparent shadow-none">
-        <DialogTitle className="sr-only">Invite people</DialogTitle>
-        <div className="clip-corner-lg bg-chrome p-6 sm:p-7">
-          <InviteBody community={community} />
-        </div>
+      <ChromeDialogContent title="Invite people">
+        <InviteBody community={community} />
         <ArmadaCrestKeyframes />
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }
@@ -111,7 +108,7 @@ function InviteBody({ community }: { community: Community | undefined }) {
       <div className="flex flex-col items-center gap-3 text-center">
         <ArmadaCrest size={72} />
         <div className="space-y-1">
-          <h2 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
             invite people
           </h2>
           <p className="text-sm text-muted-foreground">
@@ -147,7 +144,7 @@ function InviteBody({ community }: { community: Community | undefined }) {
         {link ? (
           <>
             <div className="flex items-center gap-2">
-              <Input readOnly value={link} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+              <Input readOnly value={link} className="min-w-0 font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
               <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={handleCopy} aria-label="Copy link">
                 {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
               </Button>
@@ -181,7 +178,7 @@ function InviteBody({ community }: { community: Community | undefined }) {
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
                 placeholder="Label (optional)"
-                className="text-sm"
+                className="min-w-0 text-sm"
                 aria-label="Invite label"
               />
             </div>

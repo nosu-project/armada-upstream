@@ -270,4 +270,23 @@
     opacity: 1;
     box-shadow: 0 0 8px hsl(var(--primary) / 0.7);
   }
+
+  /*
+   * ── Cut-corner chrome dialog ──────────────────────────────────────────
+   * The single modal idiom: a "terminal square with cut edges" vessel card.
+   * `.chrome-dialog` establishes an inline-size container so its contents can
+   * size off the *card's* width (cqw) instead of the viewport — that's what
+   * keeps the big lowercase headings from overflowing a narrow phone. The
+   * heading uses clamp() so it scales with the card but never gets silly on a
+   * wide screen, and `overflow-wrap: anywhere` guarantees a long unbroken
+   * token (e.g. a pasted URL) can't push the card wider than the screen.
+   */
+  .chrome-dialog {
+    container-type: inline-size;
+  }
+  .chrome-dialog-title {
+    /* ~9cqw of the card width, clamped to a sane min/max. */
+    font-size: clamp(1.25rem, 9cqw, 1.6rem);
+    overflow-wrap: anywhere;
+  }
 }

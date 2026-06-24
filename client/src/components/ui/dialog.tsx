@@ -37,7 +37,7 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-[50%] top-[50%] z-[250] grid w-[calc(100%-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg rounded-xl duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
+        "fixed left-[50%] top-[50%] z-[250] grid w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto overscroll-contain border bg-background p-6 shadow-lg rounded-xl duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
         className
       )}
       {...props}
@@ -51,6 +51,38 @@ const DialogContent = React.forwardRef<
   </DialogPortal>
 ))
 DialogContent.displayName = DialogPrimitive.Content.displayName
+
+/**
+ * The "terminal square with cut edges" modal shell — Armada's single dialog
+ * idiom. Strips the default bordered/rounded chrome and renders the body inside
+ * a cut-corner chrome vessel (the same shape as the roster / composer). The
+ * inner card is an inline-size container, so children can size text in `cqw`
+ * (and the `.chrome-dialog-title` helper) to stay readable without overflowing
+ * on a narrow phone. Pass the dialog's accessible title via `title` (rendered
+ * visually-hidden unless you render your own heading inside).
+ */
+const ChromeDialogContent = React.forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+    title: string
+    contentClassName?: string
+  }
+>(({ className, contentClassName, title, children, ...props }, ref) => (
+  <DialogContent
+    ref={ref}
+    className={cn(
+      "sm:max-w-md border-0 rounded-none p-0 bg-transparent shadow-none",
+      className
+    )}
+    {...props}
+  >
+    <DialogTitle className="sr-only">{title}</DialogTitle>
+    <div className={cn("chrome-dialog clip-corner-lg bg-chrome p-5 sm:p-7", contentClassName)}>
+      {children}
+    </div>
+  </DialogContent>
+))
+ChromeDialogContent.displayName = "ChromeDialogContent"
 
 const DialogHeader = ({
   className,
@@ -114,6 +146,7 @@ export {
   DialogClose,
   DialogTrigger,
   DialogContent,
+  ChromeDialogContent,
   DialogHeader,
   DialogFooter,
   DialogTitle,

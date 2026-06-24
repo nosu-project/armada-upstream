@@ -4,9 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
+  ChromeDialogContent,
 } from "@/components/ui/dialog";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayClaim } from "@/hooks/useRelayMembership";
@@ -106,18 +104,20 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md p-0 gap-0 overflow-hidden" aria-describedby={undefined}>
-        <DialogHeader className="items-center text-center gap-2 px-6 pt-6 pb-5 bg-gradient-to-b from-primary/10 to-transparent">
-          <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/15 text-primary">
+      <ChromeDialogContent title={`Invite people to #${group.name}`}>
+        <div className="flex flex-col items-center gap-2 text-center">
+          <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <PartyPopper className="size-6" />
           </div>
-          <DialogTitle className="text-lg max-w-full truncate">Invite people to #{group.name}</DialogTitle>
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+            invite people
+          </h2>
           <p className="text-sm text-muted-foreground">
-            Share this link and anyone who opens it joins instantly.
+            Share this link and anyone who opens it joins <span className="text-foreground">#{group.name}</span> instantly.
           </p>
-        </DialogHeader>
+        </div>
 
-        <div className="px-6 pb-6 space-y-4 min-w-0">
+        <div className="mt-6 space-y-4 min-w-0">
           {error ? (
             <div className="text-center space-y-3 py-2">
               <p className="text-sm text-muted-foreground">Couldn&apos;t create an invite link.</p>
@@ -135,7 +135,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
               <button
                 type="button"
                 onClick={copy}
-                className="group w-full min-w-0 max-w-full overflow-hidden flex items-center gap-2 rounded-xl border border-border bg-secondary/40 px-3 py-3 text-left transition-colors hover:border-primary/50 hover:bg-secondary/70"
+                className="group w-full min-w-0 max-w-full overflow-hidden flex items-center gap-2 clip-corner-lg border border-border bg-secondary/40 px-3 py-3 text-left transition-colors hover:border-primary/50 hover:bg-secondary/70"
               >
                 <Link2 className="size-4 shrink-0 text-muted-foreground" />
                 <span className="flex-1 min-w-0 truncate font-mono text-sm">{url}</span>
@@ -145,13 +145,13 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
               </button>
 
               <div className="flex gap-2">
-                <Button className="flex-1" onClick={copy}>
+                <Button className="flex-1 clip-corner-lg" onClick={copy}>
                   {copied
                     ? <><Check className="size-4 mr-2" /> Copied!</>
                     : <><Copy className="size-4 mr-2" /> Copy link</>}
                 </Button>
                 {canShare && (
-                  <Button variant="outline" onClick={share} aria-label="Share">
+                  <Button variant="outline" className="clip-corner-lg" onClick={share} aria-label="Share">
                     <Share2 className="size-4" />
                   </Button>
                 )}
@@ -173,7 +173,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
             </>
           )}
         </div>
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

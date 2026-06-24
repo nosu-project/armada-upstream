@@ -2,13 +2,11 @@ import { Loader2, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
+  ChromeDialogContent,
 } from "@/components/ui/dialog";
 import {
   useAcceptConcordInvite,
@@ -65,45 +63,53 @@ export function ConcordInvitesPrompt() {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleDecline()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ShieldCheck className="size-5 text-success" />
-            Encrypted chat invite
-          </DialogTitle>
-          <DialogDescription>
-            You've been invited to an end-to-end-encrypted community. Accepting gives you the keys to
-            read and post; no host can see its messages.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="rounded-lg border p-4">
-          <div className="font-medium">{current.name}</div>
-          <div className="text-xs text-muted-foreground break-all">
-            from {current.sender.slice(0, 16)}…
-          </div>
-          {pending.length > 1 && (
-            <div className="mt-2 text-xs text-muted-foreground">
-              +{pending.length - 1} more invite{pending.length - 1 === 1 ? "" : "s"} after this
+      <ChromeDialogContent title="Encrypted chat invite">
+        <div className="flex flex-col items-center gap-6">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <ArmadaCrest size={72} />
+            <div className="space-y-1">
+              <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+                encrypted chat invite
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                You've been invited to an end-to-end-encrypted community. Accepting gives you the
+                keys to read and post; no host can see its messages.
+              </p>
             </div>
-          )}
-        </div>
+          </div>
 
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={handleDecline} disabled={busy}>
-            Decline
-          </Button>
-          <Button onClick={handleAccept} disabled={busy}>
-            {accepting ? (
-              <>
-                <Loader2 className="size-4 mr-2 animate-spin" /> Joining…
-              </>
-            ) : (
-              "Accept"
+          <div className="w-full clip-corner-lg border border-chrome bg-secondary/40 p-4">
+            <div className="flex items-center gap-2 font-medium">
+              <ShieldCheck className="size-4 shrink-0 text-success" />
+              <span className="min-w-0 truncate">{current.name}</span>
+            </div>
+            <div className="mt-1 break-all text-xs text-muted-foreground">
+              from {current.sender.slice(0, 16)}…
+            </div>
+            {pending.length > 1 && (
+              <div className="mt-2 text-xs text-muted-foreground">
+                +{pending.length - 1} more invite{pending.length - 1 === 1 ? "" : "s"} after this
+              </div>
             )}
-          </Button>
+          </div>
+
+          <div className="flex w-full justify-end gap-2">
+            <Button variant="ghost" className="clip-corner-lg" onClick={handleDecline} disabled={busy}>
+              Decline
+            </Button>
+            <Button className="clip-corner-lg" onClick={handleAccept} disabled={busy}>
+              {accepting ? (
+                <>
+                  <Loader2 className="size-4 mr-2 animate-spin" /> Joining…
+                </>
+              ) : (
+                "Accept"
+              )}
+            </Button>
+          </div>
         </div>
-      </DialogContent>
+        <ArmadaCrestKeyframes />
+      </ChromeDialogContent>
     </Dialog>
   );
 }
