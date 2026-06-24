@@ -5,12 +5,20 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useConcordList, useUpdateConcordList } from "@/hooks/useConcordList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import type { ConcordCommunity, ConcordInvite, ConcordKeyBundle } from "@/lib/concord";
+import {
+  buildChannelMetadataEditionUnsigned,
+  buildCommunityRootEditionUnsigned,
+  buildRoleEditionUnsigned,
+  sealControlEdition,
+} from "@/lib/concord/control";
 import { acceptInvite, buildInvite } from "@/lib/concord/invite";
 import { KIND_APPLICATION_SPECIFIC } from "@/lib/concord/kinds";
+import { communityMetadataOf } from "@/lib/concord/metadata";
 import {
   buildOwnerAttestationUnsigned,
 } from "@/lib/concord/owner";
 import { locatorHex, parseInviteUrl, parsePublicInviteEvent, signerPubkey } from "@/lib/concord/publicInvite";
+import { adminRole, type Role } from "@/lib/concord/roles";
 import { createCommunity as mintCommunity, random32, type Channel, type Community } from "@/lib/concord/types";
 import { APP_RELAYS } from "@/lib/platform";
 
@@ -132,10 +140,60 @@ export function useConcordActions() {
       community.ownerAttestation = JSON.stringify(signed);
       await nostr.event(signed, { signal: AbortSignal.timeout(8000) }).catch(() => {});
 
+      // Publish the genesis control plane (owner-signed, server-root-sealed):
+      // the GroupRoot metadata (vsk=0), an auto Admin role (vsk=1), and one
+      // ChannelMetadata edition (vsk=2) per channel. This anchors the control
+      // plane at mint so members fold authoritative metadata/roles from the
+      // start, instead of the Admin role being minted lazily on first grant.
+      await publishGenesisControlPlane(community);
+
       await updateList({ bundle: toBundle(community), type: "add" });
       return toCommunity(community);
     },
   });
+
+  /** Sign + seal + publish the genesis vsk=0/1/2 control editions for a freshly minted community. */
+  async function publishGenesisControlPlane(community: Community): Promise<void> {
+    if (!user) return;
+    const now = Math.floor(Date.now() / 1000);
+    const signer = user.signer;
+
+    const seal = async (unsigned: { kind: number; content: string; tags: string[][]; created_at: number }) => {
+      const inner = await signer.signEvent(unsigned);
+      return sealControlEdition(inner, community.serverRootKey, community.id, community.serverRootEpoch);
+    };
+
+    const role: Role = adminRole(bytesToHex(random32()));
+    const editions = await Promise.all([
+      seal(
+        buildCommunityRootEditionUnsigned({
+          communityId: community.id,
+          metadata: communityMetadataOf(community),
+          version: 1n,
+          createdAtSecs: now,
+        }),
+      ),
+      seal(buildRoleEditionUnsigned({ role, version: 1n, createdAtSecs: now })),
+      ...community.channels.map((ch) =>
+        seal(
+          buildChannelMetadataEditionUnsigned({
+            channelId: ch.id,
+            metadata: { name: ch.name },
+            version: 1n,
+            createdAtSecs: now,
+          }),
+        ),
+      ),
+    ]);
+
+    await Promise.all(
+      editions.flatMap((outer) =>
+        community.relays.map((url) =>
+          nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }).catch(() => {}),
+        ),
+      ),
+    );
+  }
 
   const join = useMutation<ConcordCommunity, Error, { invite: ConcordInvite }>({
     mutationFn: async ({ invite }) => {

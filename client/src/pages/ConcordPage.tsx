@@ -1,5 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, ShieldCheck, UserPlus, Users, Volume2 } from "lucide-react";
+import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, Settings, ShieldCheck, UserPlus, Users, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -11,6 +11,7 @@ import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline } from "@/components/chat/MessageTimeline";
 import { VoicePresence } from "@/components/VoicePresence";
 import { InviteConcordDialog } from "@/components/dialogs/InviteConcordDialog";
+import { ConcordSettingsDialog } from "@/components/dialogs/ConcordSettingsDialog";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ import { useCall } from "@/hooks/useCall";
 import { useConcordActions } from "@/hooks/useConcordActions";
 import { useConcordCommunity } from "@/hooks/useConcordList";
 import { useConcordCommunityActions } from "@/hooks/useConcordCommunityActions";
+import { useConcordMetadata } from "@/hooks/useConcordMetadata";
 import { useConcordRosterActions, concordMembers } from "@/hooks/useConcordRoster";
 import { useConcordTransport } from "@/hooks/useConcordTransport";
 import { useConcordVoiceServer } from "@/hooks/useConcordVoice";
@@ -136,7 +138,27 @@ function ConcordChannelRow({
 export function ConcordPage() {
   const { communityId } = useParams<{ communityId: string }>();
   const { user } = useCurrentUser();
-  const community = useConcordCommunity(communityId);
+  const baseCommunity = useConcordCommunity(communityId);
+  // Overlay the folded GroupRoot/channel metadata (vsk=0/2) onto the community
+  // rehydrated from the membership-list bundle, so name/description/icon/banner
+  // and channel names reflect authoritative, owner-controlled edits — while keys
+  // and relays stay sourced from the sealed bundle.
+  const { data: folded } = useConcordMetadata(baseCommunity);
+  const community = useMemo<Community | undefined>(() => {
+    if (!baseCommunity) return undefined;
+    if (!folded) return baseCommunity;
+    return {
+      ...baseCommunity,
+      name: folded.root?.name ?? baseCommunity.name,
+      description: folded.root?.description ?? baseCommunity.description,
+      icon: folded.root?.icon ?? baseCommunity.icon,
+      banner: folded.root?.banner ?? baseCommunity.banner,
+      channels: baseCommunity.channels.map((ch) => {
+        const name = folded.channelNames.get(bytesToHex(ch.id));
+        return name ? { ...ch, name } : ch;
+      }),
+    };
+  }, [baseCommunity, folded]);
   const [channelIdHex, setChannelIdHex] = useState<string | null>(null);
 
   const channel = useMemo(() => {
@@ -168,6 +190,7 @@ export function ConcordPage() {
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   /** Desktop: whether the member roster pane is shown. */
   const [membersVisible, setMembersVisible] = useState(true);
   /** Mobile: whether the member sheet is open. */
@@ -405,6 +428,15 @@ export function ConcordPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48 p-2">
+                  {iAmOwner && (
+                    <DropdownMenuItem
+                      className="gap-3 px-3 py-2.5"
+                      onClick={() => setSettingsOpen(true)}
+                    >
+                      <Settings className="size-4" />
+                      Community settings
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem
                     className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
                     disabled={isLeaving}
@@ -528,6 +560,7 @@ export function ConcordPage() {
       </Sheet>
 
       <InviteConcordDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} />
+      <ConcordSettingsDialog community={community} open={settingsOpen} onOpenChange={setSettingsOpen} />
     </>
   );
 }

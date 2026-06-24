@@ -69,6 +69,44 @@ export function adminRole(roleId: string): Role {
   return { roleId, name: "Admin", position: 1, permissions: ADMIN_ALL, scope: { kind: "server" }, color: 0 };
 }
 
+/**
+ * The on-wire JSON shape of a Role. `permissions` is a u64 bitfield carried as a
+ * DECIMAL STRING (JSON has no bigint, and a JS number loses precision past
+ * 2^53), matching the rest of the protocol's bigint-as-string convention.
+ */
+interface RoleWire {
+  roleId: string;
+  name: string;
+  position: number;
+  permissions: string;
+  scope: RoleScope;
+  color: number;
+}
+
+/** Serialize a Role to its wire JSON (permissions → decimal string). */
+export function roleToJSON(role: Role): string {
+  const wire: RoleWire = { ...role, permissions: role.permissions.toString() };
+  return JSON.stringify(wire);
+}
+
+/** Parse a Role from wire JSON, or undefined if malformed. */
+export function roleFromJSON(json: string): Role | undefined {
+  try {
+    const w = JSON.parse(json) as RoleWire;
+    if (typeof w.roleId !== "string" || typeof w.permissions !== "string") return undefined;
+    return {
+      roleId: w.roleId,
+      name: typeof w.name === "string" ? w.name : "",
+      position: typeof w.position === "number" ? w.position : Number.MAX_SAFE_INTEGER,
+      permissions: BigInt(w.permissions),
+      scope: w.scope?.kind === "channel" ? w.scope : { kind: "server" },
+      color: typeof w.color === "number" ? w.color : 0,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export interface MemberGrant {
   /** Grantee pubkey, lowercase hex. */
   member: string;

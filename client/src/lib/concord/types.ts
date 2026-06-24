@@ -62,6 +62,25 @@ export interface Channel {
   epochKeys: Array<{ epoch: bigint; key: Uint8Array }>;
 }
 
+/**
+ * An encrypted blob reference (community logo / banner), ported from Vector's
+ * `CommunityImage`. The blob lives on a Blossom-style host as ciphertext; the
+ * per-image symmetric key rides inside the ServerRoot-sealed metadata, so a
+ * relay/host scraper without membership sees only an opaque blob.
+ */
+export interface CommunityImage {
+  /** URL of the encrypted blob. */
+  url: string;
+  /** Hex AES-GCM key for the blob. */
+  key: string;
+  /** Hex AES-GCM nonce/iv. */
+  nonce: string;
+  /** Hex SHA-256 of the plaintext (integrity check after decrypt). */
+  hash: string;
+  /** File extension / mime hint. */
+  ext: string;
+}
+
 /** A Concord community (Discord's "server"). */
 export interface Community {
   id: Uint8Array;
@@ -70,6 +89,10 @@ export interface Community {
   serverRootEpoch: bigint;
   name: string;
   description?: string;
+  /** Logo (encrypted blob ref). */
+  icon?: CommunityImage;
+  /** Banner (encrypted blob ref). */
+  banner?: CommunityImage;
   relays: string[];
   channels: Channel[];
   /** Owner attestation (signed event JSON) binding this community's id to the owner. */

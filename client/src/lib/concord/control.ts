@@ -26,10 +26,13 @@ import {
   type ParsedEdition,
 } from "@/lib/concord/edition";
 import { KIND_COMMUNITY_CONTROL } from "@/lib/concord/kinds";
+import type { ChannelMetadata, CommunityMetadata } from "@/lib/concord/metadata";
 import { verifyOwnerAttestation } from "@/lib/concord/owner";
 import {
   canActOnPosition,
   Permissions,
+  roleFromJSON,
+  roleToJSON,
   type CommunityRoles,
   type MemberGrant,
   type Role,
@@ -96,7 +99,7 @@ export function buildRoleEditionUnsigned(opts: {
     entityId: hex32(opts.role.roleId),
     version: opts.version,
     prevHash: opts.prevHash,
-    content: JSON.stringify(opts.role),
+    content: roleToJSON(opts.role),
     createdAtSecs: opts.createdAtSecs,
   });
 }
@@ -116,6 +119,42 @@ export function buildGrantEditionUnsigned(opts: {
     version: opts.version,
     prevHash: opts.prevHash,
     content: JSON.stringify(opts.grant),
+    createdAtSecs: opts.createdAtSecs,
+  });
+}
+
+/** Build an unsigned GroupRoot (community metadata) edition (vsk=0, entity_id == community_id). */
+export function buildCommunityRootEditionUnsigned(opts: {
+  communityId: Uint8Array;
+  metadata: CommunityMetadata;
+  version: bigint;
+  prevHash?: Uint8Array;
+  createdAtSecs: number;
+}) {
+  return buildEditionInner({
+    vsk: VSK_COMMUNITY_ROOT,
+    entityId: opts.communityId,
+    version: opts.version,
+    prevHash: opts.prevHash,
+    content: JSON.stringify(opts.metadata),
+    createdAtSecs: opts.createdAtSecs,
+  });
+}
+
+/** Build an unsigned ChannelMetadata edition (vsk=2, entity_id == channel_id). */
+export function buildChannelMetadataEditionUnsigned(opts: {
+  channelId: Uint8Array;
+  metadata: ChannelMetadata;
+  version: bigint;
+  prevHash?: Uint8Array;
+  createdAtSecs: number;
+}) {
+  return buildEditionInner({
+    vsk: VSK_CHANNEL,
+    entityId: opts.channelId,
+    version: opts.version,
+    prevHash: opts.prevHash,
+    content: JSON.stringify(opts.metadata),
     createdAtSecs: opts.createdAtSecs,
   });
 }
@@ -181,13 +220,9 @@ export function foldRoster(
   // 3. Parse head contents into Role/MemberGrant + remember each head's signer.
   const roles: Array<{ role: Role; author: string }> = [];
   for (const p of roleHeads) {
-    try {
-      const role = JSON.parse(p.content) as Role;
-      if (role.roleId && bytesToHex(hex32(role.roleId)) === bytesToHex(p.entityId)) {
-        roles.push({ role, author: p.author });
-      }
-    } catch {
-      // skip malformed
+    const role = roleFromJSON(p.content);
+    if (role && role.roleId && bytesToHex(hex32(role.roleId)) === bytesToHex(p.entityId)) {
+      roles.push({ role, author: p.author });
     }
   }
   const grants: Array<{ grant: MemberGrant; author: string }> = [];
@@ -207,6 +242,101 @@ export function foldRoster(
   const authorized = authorizeDelegation(roles, grants, ownerHex);
 
   return { roster: authorized, ownerHex, heads };
+}
+
+// ── Metadata fold (GroupRoot vsk=0, Channel vsk=2) ───────────────────────────
+
+/** The folded community metadata: the GroupRoot + per-channel name overrides. */
+export interface FoldedMetadata {
+  /** The community-level GroupRoot descriptor, if a valid one folded. */
+  root?: CommunityMetadata;
+  /** channelIdHex → folded channel name. */
+  channelNames: Map<string, string>;
+  /** Per-entity head version + hash, for chaining the next edition. */
+  heads: Map<string, { version: bigint; hash: Uint8Array }>;
+}
+
+/**
+ * Fold the metadata control plane (GroupRoot vsk=0 + ChannelMetadata vsk=2) from
+ * the same kind-3308 outers. Authority is enforced against the already-folded
+ * roster: a GroupRoot edit requires the owner or MANAGE_METADATA; a channel-name
+ * edit requires the owner or MANAGE_CHANNELS. Anything from an unauthorized
+ * signer is dropped (fail-closed). `communityId` anchors the GroupRoot entity.
+ */
+export function foldMetadata(
+  outers: NostrEvent[],
+  serverRoot: Uint8Array,
+  communityId: Uint8Array,
+  roster: CommunityRoles,
+  ownerHex: string | undefined,
+): FoldedMetadata {
+  const rootEntities = new Map<string, ParsedEdition[]>();
+  const channelEntities = new Map<string, ParsedEdition[]>();
+
+  for (const outer of outers) {
+    let inner: NostrEvent;
+    try {
+      inner = openControlEdition(outer, serverRoot);
+    } catch {
+      continue;
+    }
+    let parsed: ParsedEdition;
+    try {
+      parsed = parseEditionInner(inner);
+    } catch {
+      continue;
+    }
+    const key = bytesToHex(parsed.entityId);
+    if (parsed.vsk === VSK_COMMUNITY_ROOT) push(rootEntities, key, parsed);
+    else if (parsed.vsk === VSK_CHANNEL) push(channelEntities, key, parsed);
+  }
+
+  const heads = new Map<string, { version: bigint; hash: Uint8Array }>();
+  const rootHeads = foldEntities(rootEntities, heads);
+  const channelHeads = foldEntities(channelEntities, heads);
+
+  const cidHex = bytesToHex(communityId);
+
+  // GroupRoot: must be the community's own entity AND signed by an authorized actor.
+  let root: CommunityMetadata | undefined;
+  for (const p of rootHeads) {
+    if (bytesToHex(p.entityId) !== cidHex) continue;
+    if (!metadataAuthorized(roster, p.author, ownerHex, Permissions.MANAGE_METADATA)) continue;
+    try {
+      root = JSON.parse(p.content) as CommunityMetadata;
+    } catch {
+      // skip malformed
+    }
+  }
+
+  // Channel names: each authorized by MANAGE_CHANNELS.
+  const channelNames = new Map<string, string>();
+  for (const p of channelHeads) {
+    if (!metadataAuthorized(roster, p.author, ownerHex, Permissions.MANAGE_CHANNELS)) continue;
+    try {
+      const meta = JSON.parse(p.content) as ChannelMetadata;
+      if (typeof meta.name === "string" && meta.name.length > 0) {
+        channelNames.set(bytesToHex(p.entityId), meta.name);
+      }
+    } catch {
+      // skip malformed
+    }
+  }
+
+  return { root, channelNames, heads };
+}
+
+/** Owner or a holder of `permission` may edit metadata. */
+function metadataAuthorized(
+  roster: CommunityRoles,
+  authorHex: string,
+  ownerHex: string | undefined,
+  permission: bigint,
+): boolean {
+  if (ownerHex && authorHex === ownerHex) return true;
+  // effectivePermissions lives in roles.ts; inline the union check via canActOnPosition
+  // against the top position (owner can always; non-owner needs the permission bit).
+  return canActOnPosition(roster, authorHex, ownerHex, Number.MAX_SAFE_INTEGER, permission);
 }
 
 function push(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdition) {
