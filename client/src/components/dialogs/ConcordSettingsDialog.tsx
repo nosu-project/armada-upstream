@@ -1,4 +1,5 @@
-import { ImagePlus, Loader2, Save } from "lucide-react";
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { Check, Hash, ImagePlus, Loader2, Pencil, Save } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
@@ -12,7 +13,7 @@ import { useConcordMetadataActions } from "@/hooks/useConcordMetadata";
 import { toast } from "@/hooks/useToast";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { decryptImageToObjectURL, encryptImage, extOf } from "@/lib/concord/communityImage";
-import type { Community, CommunityImage } from "@/lib/concord/types";
+import type { Channel, Community, CommunityImage } from "@/lib/concord/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -150,6 +151,8 @@ function SettingsBody({ community, onDone }: { community: Community; onDone: () 
           />
         </div>
 
+        <ChannelsSection community={community} />
+
         {error && (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
@@ -248,6 +251,97 @@ function ImageField({
           e.target.value = "";
         }}
       />
+    </div>
+  );
+}
+
+/** Lists the community's channels with inline rename (publishes vsk=2 editions). */
+function ChannelsSection({ community }: { community: Community }) {
+  const { renameChannel, isRenaming } = useConcordMetadataActions(community);
+  return (
+    <div className="space-y-1.5">
+      <Label>Channels</Label>
+      <div className="space-y-1 rounded-lg bg-secondary/40 p-1">
+        {community.channels.map((ch) => (
+          <ChannelRenameRow
+            key={bytesToHex(ch.id)}
+            channel={ch}
+            disabled={isRenaming}
+            onRename={(name) => renameChannel({ channelId: bytesToHex(ch.id), name })}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ChannelRenameRow({
+  channel,
+  disabled,
+  onRename,
+}: {
+  channel: Channel;
+  disabled: boolean;
+  onRename: (name: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(channel.name);
+
+  useEffect(() => {
+    setValue(channel.name);
+  }, [channel.name]);
+
+  const commit = async () => {
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== channel.name) {
+      try {
+        await onRename(trimmed);
+        toast({ title: "Channel renamed" });
+      } catch (e) {
+        toast({ title: "Rename failed", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+        setValue(channel.name);
+      }
+    }
+    setEditing(false);
+  };
+
+  return (
+    <div className="flex items-center gap-2 px-1">
+      <Hash className="size-3.5 shrink-0 text-muted-foreground" />
+      {editing ? (
+        <form
+          className="flex flex-1 items-center gap-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            commit();
+          }}
+        >
+          <Input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoFocus
+            className="h-7 text-sm"
+            onBlur={commit}
+          />
+          <Button type="submit" size="icon" variant="ghost" className="size-7 shrink-0" disabled={disabled} aria-label="Save name">
+            <Check className="size-3.5" />
+          </Button>
+        </form>
+      ) : (
+        <>
+          <span className="flex-1 truncate text-sm">{channel.name}</span>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-7 shrink-0 text-muted-foreground"
+            aria-label="Rename channel"
+            onClick={() => setEditing(true)}
+          >
+            <Pencil className="size-3.5" />
+          </Button>
+        </>
+      )}
     </div>
   );
 }

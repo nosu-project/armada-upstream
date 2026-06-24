@@ -206,13 +206,12 @@ export function useConcordActions() {
 
   /**
    * Add a channel to an existing community: mint a fresh random channel key+id,
-   * append it, and persist by refreshing the membership-list bundle (which
-   * carries every channel key). The new channel needs no on-relay event — it
-   * exists as soon as members hold its key; the first message creates its
-   * presence on the relays. Since only the local member's list is updated here,
-   * other members learn the channel when the owner re-shares an invite (the MVP
-   * grants the full channel set); per-member channel-grant editions are the
-   * natural next step.
+   * append it to the local membership-list bundle, AND publish a ChannelMetadata
+   * (vsk=2) control edition so the channel's name is authoritative and
+   * discoverable to every member on the control plane. The channel KEY still
+   * rides to members via an invite re-share (channel keys can't go on the
+   * server-root-readable control plane), but the name/existence is now on-relay
+   * rather than local-only.
    */
   const createChannel = useMutation<Community, Error, { community: Community; name: string }>({
     mutationFn: async ({ community, name }) => {
@@ -228,6 +227,23 @@ export function useConcordActions() {
         epochKeys: [],
       };
       const updated: Community = { ...community, channels: [...community.channels, newChannel] };
+
+      // Publish the channel-metadata edition (owner/MANAGE_CHANNELS signs).
+      const now = Math.floor(Date.now() / 1000);
+      const inner = await user.signer.signEvent(
+        buildChannelMetadataEditionUnsigned({
+          channelId: newChannel.id,
+          metadata: { name: trimmed },
+          version: 1n,
+          createdAtSecs: now,
+        }),
+      );
+      const outer = sealControlEdition(inner, community.serverRootKey, community.id, community.serverRootEpoch);
+      await Promise.all(
+        community.relays.map((url) =>
+          nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }).catch(() => {}),
+        ),
+      );
 
       await updateList({ type: "refresh-current", current: toBundle(updated) });
       return updated;
