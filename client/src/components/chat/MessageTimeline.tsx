@@ -67,55 +67,78 @@ export function MessageTimeline({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Inner content wrapper, observed for size changes (images, link previews,
-  // lazily-loaded embeds) so the view stays pinned to the bottom as it grows.
+  // lazily-loaded embeds, reactions, reply-count rows) so the view stays pinned
+  // to the bottom as message rows grow.
   const contentRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
+  // Set right before we programmatically change scrollTop, so the resulting
+  // `scroll` event doesn't get mistaken for the user scrolling away and unpin
+  // us. (Reactions/threads appearing grow a row, shift content, and fire a
+  // scroll event; without this guard that event recomputes pinned=false a beat
+  // before the ResizeObserver re-pins, so the re-pin is skipped and the view
+  // drifts.)
+  const programmaticScrollRef = useRef(false);
   // When backfilling older messages, the scroll height grows above the
   // viewport. Capture the pre-prepend metrics so we can restore the reading
   // position (anchor it to the same message) afterwards.
   const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
 
+  /** Pin to the bottom, flagging the scroll as programmatic. */
+  const pinToBottomNow = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    programmaticScrollRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+    });
+  }, []);
+
+  /** Restore the captured reading position after a backfill prepend. */
+  const restoreAfterPrepend = useCallback(() => {
+    const el = scrollRef.current;
+    const restore = restoreScrollRef.current;
+    if (!el || !restore) return false;
+    restoreScrollRef.current = null;
+    programmaticScrollRef.current = true;
+    el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+    });
+    return true;
+  }, []);
+
   // Auto-scroll to bottom when new messages arrive (unless the user scrolled
   // up). When older history was just prepended (backfill), instead restore the
   // reading position by keeping the same content under the viewport.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const restore = restoreScrollRef.current;
-    if (restore) {
-      restoreScrollRef.current = null;
-      el.scrollTop = restore.top + (el.scrollHeight - restore.height);
-      return;
-    }
-    if (isAutoScrollRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages]);
+    if (restoreAfterPrepend()) return;
+    if (isAutoScrollRef.current) pinToBottomNow();
+  }, [messages, restoreAfterPrepend, pinToBottomNow]);
 
   // Keep the view pinned to the bottom as the CONTENT grows from async loads
-  // (images, link previews, embeds) that don't change `messages` and so would
-  // otherwise let the bottom-anchored view drift. Only re-pins while the user is
-  // at the bottom; honors a pending backfill restore first.
+  // (images, link previews, embeds, reactions, reply counts) that don't change
+  // `messages` and so would otherwise let the bottom-anchored view drift. Only
+  // re-pins while the user is at the bottom; honors a pending backfill restore
+  // first.
   useEffect(() => {
     const el = scrollRef.current;
     const content = contentRef.current;
     if (!el || !content) return;
     const ro = new ResizeObserver(() => {
-      const restore = restoreScrollRef.current;
-      if (restore) {
-        restoreScrollRef.current = null;
-        el.scrollTop = restore.top + (el.scrollHeight - restore.height);
-        return;
-      }
-      if (isAutoScrollRef.current) el.scrollTop = el.scrollHeight;
+      if (restoreAfterPrepend()) return;
+      if (isAutoScrollRef.current) pinToBottomNow();
     });
     ro.observe(content);
     return () => ro.disconnect();
-  }, []);
+  }, [restoreAfterPrepend, pinToBottomNow]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // Ignore the scroll event we caused ourselves (pin/restore) — only genuine
+    // user scrolls should change whether we're pinned. (Self-clears next frame.)
+    if (programmaticScrollRef.current) return;
     isAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     // Near the top: backfill older history. Capture current metrics first so
     // the post-prepend effect can hold the reading position steady.
@@ -144,16 +167,14 @@ export function MessageTimeline({
       scrollToMessage,
       pinToBottom: () => {
         isAutoScrollRef.current = true;
-        const el = scrollRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
+        pinToBottomNow();
       },
       maintainBottom: () => {
         if (!isAutoScrollRef.current) return;
-        const el = scrollRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
+        pinToBottomNow();
       },
     }),
-    [scrollToMessage],
+    [scrollToMessage, pinToBottomNow],
   );
 
   return (

@@ -278,50 +278,59 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   // view is currently at the bottom (`pinnedRef`) and a ResizeObserver re-pins
   // on any content growth while pinned.
   const pinnedRef = useRef(true);
+  // Set right before we programmatically change scrollTop, so the resulting
+  // `scroll` event isn't mistaken for the user scrolling away (which would
+  // unpin us a beat before the ResizeObserver re-pins — the cause of drift when
+  // reactions/embeds/decrypts grow a row).
+  const programmaticScrollRef = useRef(false);
   // Distance from the bottom (px) under which we consider the view "pinned".
   const PIN_THRESHOLD = 80;
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    programmaticScrollRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    // Clear the guard next frame in case the assignment fired no scroll event
+    // (e.g. already at bottom), so a later genuine user scroll isn't swallowed.
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+    });
   }, []);
 
-  // Re-pin to bottom whenever the content grows (images/embeds/lazy decrypts) —
-  // but only while the user hasn't scrolled away. Also handles the backfill
-  // scroll-position restore when older history is prepended above the viewport.
+  const restoreAfterPrepend = useCallback(() => {
+    const el = scrollRef.current;
+    const restore = restoreScrollRef.current;
+    if (!el || !restore) return false;
+    restoreScrollRef.current = null;
+    programmaticScrollRef.current = true;
+    el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+    });
+    return true;
+  }, []);
+
+  // Re-pin to bottom whenever the content grows (images/embeds/lazy decrypts/
+  // reactions) — but only while the user hasn't scrolled away. Also handles the
+  // backfill scroll-position restore when older history is prepended.
   useEffect(() => {
     const el = scrollRef.current;
     const content = contentRef.current;
     if (!el || !content) return;
-
-    const onResize = () => {
-      const restore = restoreScrollRef.current;
-      if (restore) {
-        restoreScrollRef.current = null;
-        el.scrollTop = restore.top + (el.scrollHeight - restore.height);
-        return;
-      }
-      if (pinnedRef.current) el.scrollTop = el.scrollHeight;
-    };
-
-    const ro = new ResizeObserver(onResize);
+    const ro = new ResizeObserver(() => {
+      if (restoreAfterPrepend()) return;
+      if (pinnedRef.current) scrollToBottom();
+    });
     ro.observe(content);
     return () => ro.disconnect();
-  }, [peer]);
+  }, [peer, restoreAfterPrepend, scrollToBottom]);
 
   // On a new message (and on first load) pin to bottom if the user is pinned.
   useEffect(() => {
-    const restore = restoreScrollRef.current;
-    if (restore) {
-      const el = scrollRef.current;
-      if (el) {
-        restoreScrollRef.current = null;
-        el.scrollTop = restore.top + (el.scrollHeight - restore.height);
-      }
-      return;
-    }
+    if (restoreAfterPrepend()) return;
     if (pinnedRef.current) scrollToBottom();
-  }, [messages, scrollToBottom]);
+  }, [messages, restoreAfterPrepend, scrollToBottom]);
 
   // Lazy decryption: a single IntersectionObserver (rooted on the scroll
   // container) decrypts placeholder rows as they scroll into view, so opening a
@@ -373,6 +382,11 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+
+    // Ignore the scroll event our own pin/restore caused — only a genuine user
+    // scroll should change whether we're pinned. (The flag self-clears next
+    // frame.)
+    if (programmaticScrollRef.current) return;
 
     // Pinned = within PIN_THRESHOLD px of the bottom. Scrolling up unpins;
     // scrolling back down re-pins. While unpinned, content growth won't yank.

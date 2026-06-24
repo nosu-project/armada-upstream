@@ -8,6 +8,7 @@ import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import LoginDialog from "@/components/auth/LoginDialog";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEvent } from "@/hooks/useEvent";
@@ -121,6 +122,13 @@ interface GroupChatProps {
   groupId: string;
   /** Whether the current user can write to this group. */
   canWrite: boolean;
+  /**
+   * Whether membership is still resolving for a logged-in user (tri-state
+   * "unknown"). While true, the composer area shows a skeleton instead of the
+   * "join to message" prompt, so an actual member never sees the join prompt
+   * flash before membership confirms.
+   */
+  membershipPending?: boolean;
   /** Whether the current user can moderate (delete messages). */
   canModerate: boolean;
   /**
@@ -142,7 +150,7 @@ interface GroupChatProps {
  * and rendered through the shared {@link MessageTimeline}/{@link ChatMessage}/
  * {@link ChatComposer}, the same components Concord uses.
  */
-export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuery = "", scrollToMessageRef }: GroupChatProps) {
+export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, searchQuery = "", scrollToMessageRef }: GroupChatProps) {
   const { user } = useCurrentUser();
   const {
     data: messages = [],
@@ -221,6 +229,21 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
     raf = requestAnimationFrame(pin);
     return () => cancelAnimationFrame(raf);
   }, [threadRoot]);
+
+  // The footer below the timeline (composer / membership skeleton / join
+  // prompt) changes height when membership resolves or search toggles, which
+  // resizes the timeline. Re-pin to the bottom across that swap so a pinned
+  // view doesn't jump.
+  useEffect(() => {
+    let raf = 0;
+    const start = performance.now();
+    const pin = (now: number) => {
+      timelineRef.current?.maintainBottom();
+      if (now - start < 260) raf = requestAnimationFrame(pin);
+    };
+    raf = requestAnimationFrame(pin);
+    return () => cancelAnimationFrame(raf);
+  }, [canWrite, membershipPending, searching]);
 
   const handleSent = useCallback(() => {
     setReplyTo(undefined);
@@ -456,6 +479,13 @@ export function GroupChat({ relayUrl, groupId, canWrite, canModerate, searchQuer
             canModerate={canModerate}
             onSlashAction={handleSlashAction}
           />
+        ) : membershipPending ? (
+          // Membership is still resolving — don't flash the "join to message"
+          // prompt at an actual member. Show a composer-shaped skeleton, sized
+          // close to the real composer so the swap doesn't jump the scroll.
+          <div className="border-t p-3 shrink-0 pb-safe">
+            <Skeleton className="h-9 w-full rounded-md" />
+          </div>
         ) : (
           <div className="border-t p-3 shrink-0 pb-safe">
             {user ? (

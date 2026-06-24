@@ -100,7 +100,7 @@ export function GroupPage() {
 
   const { user } = useCurrentUser();
   const { data: details, isLoading } = useGroup(relayUrl, groupId);
-  const { data: membership } = useGroupMembership(relayUrl, groupId);
+  const { data: membership, isLoading: membershipLoading } = useGroupMembership(relayUrl, groupId);
   const { data: relayHasLivekit } = useRelayLivekitSupport(relayUrl);
   const leave = useLeaveGroup(relayUrl ?? "", groupId ?? "");
   const { removeUser, putUser, deleteGroup } = useGroupModeration(relayUrl ?? "", groupId ?? "");
@@ -161,6 +161,13 @@ export function GroupPage() {
   // NIP-29 relays generally only accept writes from members (relay29 always
   // does), so gate the composer on membership.
   const canWrite = Boolean(user) && isMember;
+  // Membership is a TRI-STATE: while the group details or the membership query
+  // are still resolving and we don't yet have a positive membership signal, the
+  // member-vs-not answer is UNKNOWN — not "not a member". Surfacing the "join to
+  // message" prompt during this window flashes it at actual members. When a
+  // logged-in user is in this ambiguous window, the composer area shows a
+  // skeleton instead of the join prompt.
+  const membershipPending = Boolean(user) && !isMember && (isLoading || membershipLoading);
   // Voice is available when the group is tagged `livekit` or the relay
   // advertises the NIP-29 LiveKit extension for all its groups.
   const hasVoice = Boolean(group?.hasLivekit || relayHasLivekit);
@@ -452,6 +459,7 @@ export function GroupPage() {
             relayUrl={relayUrl}
             groupId={groupId}
             canWrite={canWrite}
+            membershipPending={membershipPending}
             canModerate={isAdmin}
             searchQuery={searchOpen ? searchQuery : ""}
             scrollToMessageRef={scrollToMessageRef}
