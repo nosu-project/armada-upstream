@@ -54,6 +54,13 @@ export function useUploadFile() {
 
       const tags = await uploader.upload(file);
 
+      // Repair a doubled scheme some Blossom servers emit in their BlobDescriptor
+      // `url` (e.g. `https://https//blossom.example/<hash>` or
+      // `https://https://blossom.example/<hash>`). Left as-is it renders as a
+      // broken image and, once sealed into a Concord/NIP-92 message, is
+      // permanently wrong. Collapse the leading duplicate scheme back to one.
+      tags[0][1] = repairDoubledScheme(tags[0][1]);
+
       // Blossom URLs are content-addressed (`/<sha256>`) and may omit the
       // extension. Append it so media-type detection keeps working.
       const ext = getFileExtension(file.name);
@@ -82,6 +89,22 @@ function getFileExtension(filename: string): string {
   const dotIndex = filename.lastIndexOf(".");
   if (dotIndex <= 0) return "";
   return filename.slice(dotIndex).toLowerCase();
+}
+
+/**
+ * Repair a doubled scheme some Blossom servers emit in their BlobDescriptor
+ * `url`:
+ *   `https://https//host/<hash>`   (second scheme missing its colon)
+ *   `https://https://host/<hash>`  (second scheme intact)
+ * Collapse one leading `scheme://` when it's immediately followed by another
+ * `scheme` token (with or without the colon), leaving a single valid scheme.
+ * Left unrepaired this renders as a broken image and, once sealed into a
+ * Concord/NIP-92 message, is permanently wrong.
+ */
+export function repairDoubledScheme(url: string): string {
+  const m = url.match(/^(https?):\/\/(https?):?\/\/(.+)$/i);
+  if (m) return `${m[2].toLowerCase()}://${m[3]}`;
+  return url;
 }
 
 /** Append a file extension to a URL if its path doesn't already have one. */
