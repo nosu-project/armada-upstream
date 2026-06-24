@@ -33,6 +33,7 @@ import { useConcordCommunity } from "@/hooks/useConcordList";
 import { useConcordCommunityActions } from "@/hooks/useConcordCommunityActions";
 import { useConcordMetadata } from "@/hooks/useConcordMetadata";
 import { useConcordModeration } from "@/hooks/useConcordModeration";
+import { useConcordTyping, useConcordTypingPublisher } from "@/hooks/useConcordTyping";
 import { useConcordRosterActions, concordMembers } from "@/hooks/useConcordRoster";
 import { useConcordTransport } from "@/hooks/useConcordTransport";
 import { useConcordVoiceServer } from "@/hooks/useConcordVoice";
@@ -243,6 +244,10 @@ export function ConcordPage() {
   // Moderation: ban (read-cut), kick (cooperative), unban. The recipient set for
   // a ban's read-cut is everyone we know about minus the banned member.
   const moderation = useConcordModeration(community, memberPubkeys);
+
+  // Typing indicators (ephemeral 3311).
+  const publishTyping = useConcordTypingPublisher(community, channel);
+  const { data: typingPubkeys } = useConcordTyping(community, channel);
 
   if (!communityId) return <Navigate to="/" replace />;
 
@@ -532,6 +537,11 @@ export function ConcordPage() {
               }}
             />
 
+            {(typingPubkeys?.length ?? 0) > 0 && (
+              <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
+                {typingPubkeys!.length === 1 ? "Someone is typing…" : `${typingPubkeys!.length} people are typing…`}
+              </div>
+            )}
             {channel && (
               <ChatComposer
                 relayUrl="dm"
@@ -541,6 +551,7 @@ export function ConcordPage() {
                 onCancelReply={() => setReplyTo(undefined)}
                 placeholder={user ? "Message (encrypted)…" : "Sign in to send"}
                 sendOverride={handleSend}
+                onTyping={publishTyping}
               />
             )}
           </div>

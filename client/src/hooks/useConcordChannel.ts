@@ -16,7 +16,7 @@ import {
   sealWithSignedInner,
   type OpenedMessage,
 } from "@/lib/concord/envelope";
-import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/lib/concord/kinds";
+import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_REACTION } from "@/lib/concord/kinds";
 import { canActOnMember, Permissions } from "@/lib/concord/roles";
 import { runExclusive } from "@/lib/signerQueue";
 import type { Channel, Community } from "@/lib/concord/types";
@@ -79,6 +79,9 @@ function openMessages(
   // it. A delete takes effect when authored by the message's OWN author
   // (cooperative self-delete) OR by an authorized moderator (moderation-hide).
   const deletes = new Map<string, Set<string>>();
+  // Edits (3302): target id → newest {author, content, ms}. Applied only when
+  // the edit's author IS the original message's author.
+  const edits = new Map<string, { author: string; content: string; ms: number }>();
   for (const ev of events) {
     try {
       const opened = openMessageMulti(ev, channelId, epochKeys);
@@ -92,10 +95,28 @@ function openMessages(
         authors.add(opened.author);
         continue;
       }
-      // Drop kick/typing/etc. — only message-shaped kinds populate the timeline.
+      if (opened.kind === KIND_COMMUNITY_EDIT) {
+        const target = opened.tags.find((t) => t[0] === "e")?.[1];
+        if (!target) continue;
+        const prev = edits.get(target);
+        if (!prev || opened.ms > prev.ms) {
+          edits.set(target, { author: opened.author, content: opened.content, ms: opened.ms });
+        }
+        continue;
+      }
+      // Reactions are tallied elsewhere (useConcordReactions); keep them out of
+      // the message timeline.
+      if (opened.kind === KIND_COMMUNITY_REACTION) continue;
       byId.set(opened.messageId, opened);
     } catch {
       // NoHeldEpoch / splice / bad-sig → not ours or invalid; skip.
+    }
+  }
+  // Apply edits: only the original author may edit; latest edit (by ms) wins.
+  for (const [id, edit] of edits) {
+    const msg = byId.get(id);
+    if (msg && edit.author === msg.author) {
+      byId.set(id, { ...msg, content: edit.content });
     }
   }
   // Apply deletes: self-delete (author deleted their own) or an authorized
@@ -175,7 +196,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       const epochKeys = readEpochKeys(channel);
       const zs = channelPseudonyms(channel);
       const sealed = await store.query([
-        { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": zs, limit: 500 },
+        { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, limit: 500 },
       ]);
       if (cancelled || sealed.length === 0) return;
       const { messages: opened } = openMessages(sealed, channel.id, epochKeys);
@@ -210,7 +231,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
         relays.map((url) =>
           nostr
             .relay(url)
-            .query([{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": zs, limit: 500 }], {
+            .query([{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, limit: 500 }], {
               signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
             })
             .catch(() => [] as NostrEvent[]),

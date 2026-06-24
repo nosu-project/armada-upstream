@@ -198,6 +198,8 @@ interface ChatComposerProps {
   canModerate?: boolean;
   /** Focus the textarea on mount (e.g. when a thread panel opens). */
   autoFocus?: boolean;
+  /** Fired (unthrottled) as the user types; the caller throttles + publishes a typing signal. */
+  onTyping?: () => void;
   /**
    * Run a slash-command moderation action (e.g. /kick, /ban). Delegated to the
    * caller, which owns the NIP-29 moderation mutations and member roster.
@@ -215,7 +217,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onSlashAction }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
@@ -1155,7 +1157,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   ref={textareaRef}
                   dir="auto"
                   value={content}
-                  onChange={(e) => setContent(e.target.value)}
+                  onChange={(e) => {
+                    setContent(e.target.value);
+                    if (e.target.value) onTyping?.();
+                  }}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   placeholder={mode === "poll" ? "Ask a question…" : (placeholder ?? "Message the channel…")}
