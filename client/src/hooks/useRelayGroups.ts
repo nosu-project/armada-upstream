@@ -5,7 +5,11 @@ import { useEffect } from "react";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { KIND_GROUP_METADATA, parseGroupMetadata, type Nip29Group } from "@/lib/nip29";
+import {
+  buildRelayGroups,
+  KIND_GROUP_METADATA,
+  relayGroupCacheFilters,
+} from "@/lib/nip29";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -46,41 +50,29 @@ export function useRelayGroups(relayUrl: string | undefined) {
 
   const queryKey = ["nip29", "groups", relayUrl];
 
-  function buildGroups(events: NostrEvent[]): Nip29Group[] {
-    const groups = new Map<string, Nip29Group>();
-    for (const event of events) {
-      const group = parseGroupMetadata(event, relayUrl!);
-      if (!group) continue;
-      const existing = groups.get(group.id);
-      if (!existing || existing.event.created_at < event.created_at) {
-        groups.set(group.id, group);
-      }
-    }
-    return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }
-
   // Cache-first seed: hydrate the channel list from IndexedDB (where the relay's
   // kind-39000 metadata is persisted by NostrBatcher) so it renders instantly on
   // a fresh mount/reload instead of going blank while the relay round-trips.
+  // Reads are scoped to THIS relay (see relayGroupCacheFilters) so one server's
+  // channels never bleed into another's.
   useEffect(() => {
     if (!relayUrl) return;
     let cancelled = false;
     void (async () => {
       if (queryClient.getQueryData(queryKey)) return;
+      const filters = relayGroupCacheFilters(relaySelf, rememberedIds);
+      if (filters.length === 0) return;
       const store = await eventStore;
-      const filter: NostrFilter = relaySelf
-        ? { kinds: [KIND_GROUP_METADATA], authors: [relaySelf] }
-        : { kinds: [KIND_GROUP_METADATA] };
-      const cached = await store.query([filter]);
+      const cached = await store.query(filters);
       if (cancelled || cached.length === 0) return;
       if (queryClient.getQueryData(queryKey)) return;
-      queryClient.setQueryData(queryKey, buildGroups(cached));
+      queryClient.setQueryData(queryKey, buildRelayGroups(cached, relayUrl));
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relayUrl, relaySelf, eventStore, queryClient]);
+  }, [relayUrl, relaySelf, rememberedIds.join(","), eventStore, queryClient]);
 
   const query = useQuery({
     queryKey,
@@ -97,7 +89,20 @@ export function useRelayGroups(relayUrl: string | undefined) {
         signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
       });
 
-      return buildGroups(events);
+      // Merge with the relay's cached metadata so a sparse or empty relay read
+      // never DROPS channels we already knew about (the disappearing-channels
+      // bug). `buildRelayGroups` dedupes by id keeping the newest, so a relay
+      // edit/delete still wins (newer created_at) and a real kind-5 delete has
+      // already pruned the cache. Cache events go FIRST so the network result
+      // supersedes ties — see buildRelayGroups for the full rationale.
+      const cacheScoped = relayGroupCacheFilters(relaySelf, rememberedIds);
+      let cached: NostrEvent[] = [];
+      if (cacheScoped.length > 0) {
+        const store = await eventStore;
+        cached = await store.query(cacheScoped);
+      }
+
+      return buildRelayGroups([...cached, ...events], relayUrl!);
     },
     enabled: Boolean(relayUrl) && !infoLoading,
     // Relay-signed, rarely-changing data. Keep it fresh for the whole session

@@ -43,6 +43,38 @@ export function useDMSupport(): boolean {
 }
 
 /**
+ * Union raw kind-4 events with the previously-cached set, de-duplicated by id.
+ *
+ * This is the conversation-list merge floor: a sparse or empty relay read must
+ * never SHRINK the list. Relays legitimately return partial pages or nothing on
+ * a flaky connection — that doesn't mean conversations are gone. kind-4 events
+ * are immutable, so a re-seen id is identical and last-write is harmless.
+ */
+export function mergeDmEvents(prev: NostrEvent[], incoming: NostrEvent[]): NostrEvent[] {
+  const byId = new Map<string, NostrEvent>();
+  for (const e of prev) byId.set(e.id, e);
+  for (const e of incoming) byId.set(e.id, e);
+  return [...byId.values()];
+}
+
+/**
+ * Union a freshly-decrypted thread with the previously-cached thread,
+ * de-duplicated by message id and sorted oldest-first.
+ *
+ * This is the thread merge floor: neither a sparse relay read nor a transient
+ * mass-decrypt failure (a NIP-07 extension refusing a batch) may DROP messages
+ * already decrypted and shown. Any optimistic `status` on a cached message is
+ * preserved when the network echoes the same id back without one (the confirmed
+ * publish path clears the badge explicitly).
+ */
+export function mergeDmThread(prev: DecryptedDM[], incoming: DecryptedDM[]): DecryptedDM[] {
+  const merged = new Map<string, DecryptedDM>();
+  for (const m of prev) merged.set(m.id, m);
+  for (const m of incoming) merged.set(m.id, { ...merged.get(m.id), ...m });
+  return [...merged.values()].sort((a, b) => a.created_at - b.created_at);
+}
+
+/**
  * The list of DM conversations for the current user: every distinct
  * counterparty with the latest message and its timestamp. Built client-side
  * from kind-4 events on the DM relay (no caching service, unlike Primal).
@@ -70,7 +102,12 @@ export function useDMConversations() {
         ],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
-      return events;
+      // Merge with whatever is already cached (seed or a previous fetch) so a
+      // sparse/empty relay read can never SHRINK the conversation list. Relays
+      // legitimately return partial pages or nothing on a flaky connection; that
+      // doesn't mean the conversations are gone. (Same floor as Concord.)
+      const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
+      return mergeDmEvents(prev, events);
     },
     staleTime: 15_000,
   });
@@ -261,7 +298,11 @@ export function useDirectMessages(peer: string | undefined) {
         }
       }
 
-      return decrypted.sort((a, b) => a.created_at - b.created_at);
+      // Merge with the already-cached thread (seed or a previous fetch) so a
+      // sparse relay read OR a transient mass-decrypt failure (NIP-07 extension
+      // refusing a batch) can never DROP messages already decrypted and shown.
+      const prev = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
+      return mergeDmThread(prev, decrypted);
     },
     staleTime: 10_000,
   });

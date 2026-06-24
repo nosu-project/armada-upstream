@@ -4,9 +4,10 @@ import { NostrContext } from "@nostrify/react";
 import { NUser, useNostrLogin } from "@nostrify/react/login";
 import type { NostrSigner } from "@nostrify/types";
 
+import { NIndexedDB } from "@nostrify/indexeddb";
+
 import { EventStoreContext } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
-import { NIndexedDBStore } from "@/lib/NIndexedDBStore";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 
@@ -36,9 +37,15 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
 
   const pool = useRef<NPool | undefined>(undefined);
 
-  // Shared IndexedDB event cache (batcher writes results into it).
-  const eventStore = useRef<Promise<NIndexedDBStore> | undefined>(undefined);
-  eventStore.current ??= NIndexedDBStore.open();
+  // Shared IndexedDB event cache (batcher writes results into it). Backed by
+  // @nostrify/indexeddb (the strfry-port NStore). Its constructor is synchronous
+  // — it opens the DB in the background and every method awaits the connection —
+  // but the EventStoreContext contract is a Promise, so wrap it. Use a fresh DB
+  // name ("armada-events") rather than the legacy "ditto-events": the package
+  // installs schema version 1, and pointing it at the old v2 database would make
+  // IndexedDB reject the open as a downgrade (→ silent no-op cache).
+  const eventStore = useRef<Promise<NIndexedDB> | undefined>(undefined);
+  eventStore.current ??= Promise.resolve(new NIndexedDB("armada-events"));
 
   // Pool routes: app relays (non-NIP-29 traffic) + all servers
   // (platform-pinned + user-added). The internal servers stay in the set so

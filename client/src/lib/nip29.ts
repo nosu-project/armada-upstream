@@ -1,4 +1,4 @@
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /**
  * NIP-29 (Relay-based Groups) constants and event parsing.
@@ -227,6 +227,55 @@ export function parseGroupMetadata(event: NostrEvent, relay: string): Nip29Group
       : undefined,
     event,
   };
+}
+
+/**
+ * Build the IndexedDB filters that read a single relay's channel metadata
+ * (kind 39000) from the shared local event cache.
+ *
+ * Scoping is the whole point. Every server's kind-39000 events live together
+ * in one cache, so an unscoped `{ kinds: [39000] }` read returns *every*
+ * server's channels and bleeds them into this server's list — the
+ * duplicate/cross-server channels bug. Kind 39000 is signed by the relay's own
+ * key, so when that key (`relaySelf`) is known we scope by `authors`. Before
+ * NIP-11 resolves we don't know it, so we fall back to scoping by the ids the
+ * user remembers for THIS relay (their `d` tag) — never an open read. With
+ * neither, there is nothing relay-scoped to read, so we return no filters
+ * rather than risk surfacing another server's channels.
+ */
+export function relayGroupCacheFilters(
+  relaySelf: string | undefined,
+  rememberedIds: string[],
+): NostrFilter[] {
+  if (relaySelf) return [{ kinds: [KIND_GROUP_METADATA], authors: [relaySelf] }];
+  if (rememberedIds.length > 0) return [{ kinds: [KIND_GROUP_METADATA], "#d": rememberedIds }];
+  return [];
+}
+
+/**
+ * Collapse kind-39000 metadata events into a de-duplicated, name-sorted channel
+ * list for `relay`. Events are de-duplicated by group id (`d` tag), keeping the
+ * newest `created_at` so a relay edit/delete supersedes an older copy. Malformed
+ * events are skipped.
+ *
+ * Callers pass cached events FIRST and live relay events SECOND so the cache
+ * acts as a floor: a sparse or empty relay read can only add to or supersede
+ * the cached list, never clear it. Relays legitimately return nothing on a
+ * flaky connection, before AUTH completes, or because they hide closed/private
+ * groups — none of which mean the channels are gone. This mirrors how
+ * ditto/flotilla treat replaceable lists.
+ */
+export function buildRelayGroups(events: NostrEvent[], relay: string): Nip29Group[] {
+  const groups = new Map<string, Nip29Group>();
+  for (const event of events) {
+    const group = parseGroupMetadata(event, relay);
+    if (!group) continue;
+    const existing = groups.get(group.id);
+    if (!existing || existing.event.created_at < event.created_at) {
+      groups.set(group.id, group);
+    }
+  }
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Parse a kind 39001 group-admins event into a list of admins with roles. */
