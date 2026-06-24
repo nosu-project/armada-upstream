@@ -1,4 +1,5 @@
 import { Loader2 } from "lucide-react";
+import { memo } from "react";
 
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -45,7 +46,7 @@ interface MessageRowProps {
  * body slot. Used by both group chat (`ChatMessage`) and direct messages so the
  * two render identically.
  */
-export function MessageRow({
+export const MessageRow = memo(function MessageRow({
   pubkey,
   createdAt,
   children,
@@ -162,4 +163,4 @@ export function MessageRow({
       </div>
     </div>
   );
-}
+});

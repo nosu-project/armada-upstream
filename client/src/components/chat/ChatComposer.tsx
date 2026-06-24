@@ -176,8 +176,13 @@ interface ChatComposerProps {
    * kind-9 group message. Used by DMs, where the whole content is encrypted
    * and NIP-29 group tagging / polls don't apply. Poll mode is hidden in this
    * mode. The returned promise resolving means "sent" (composer is reset).
+   *
+   * `tags` carries the content-derived NIP-30 emoji / NIP-92 imeta / NIP-27
+   * mention / NIP-10 reply tags the composer built for this message, so an
+   * override (e.g. Concord) can seal them with the message and render custom
+   * emoji, media and mentions just like NIP-29 does.
    */
-  sendOverride?: (finalText: string) => Promise<void>;
+  sendOverride?: (finalText: string, tags: string[][]) => Promise<void>;
   /** Placeholder text for the input (defaults to the group placeholder). */
   placeholder?: string;
   /**
@@ -692,7 +697,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // result here.
         resetComposeState();
         onSent?.();
-        void Promise.resolve(sendOverride(finalText)).catch(() => {
+        void Promise.resolve(sendOverride(finalText, buildMessageTags(finalText))).catch(() => {
           // Delivery/sign failures are surfaced inline by the override.
         });
       } else if (onOptimisticInsert) {

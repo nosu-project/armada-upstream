@@ -1,5 +1,5 @@
 import { AlertCircle, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageRow } from "@/components/chat/MessageRow";
@@ -92,7 +92,18 @@ export interface ChatMessageProps {
  * supplied (e.g. no `onTogglePin` ⇒ no pin button), so a transport that can't
  * do a thing shows no dead control for it.
  */
-export function ChatMessage({
+export function ChatMessage(props: ChatMessageProps) {
+  return <ChatMessageInner {...props} />;
+}
+
+/**
+ * Memoized to avoid re-rendering every message row when the timeline re-renders
+ * (e.g. a new message or reaction arrives, or the channel polls). The transport
+ * supplies stable `event`/`reactions`/callback identities for unchanged rows, so
+ * `React.memo`'s shallow prop compare keeps untouched rows from re-tokenizing
+ * content, rebuilding emoji maps, and re-running author queries.
+ */
+const ChatMessageInner = memo(function ChatMessageInner({
   event,
   canWrite,
   canModerate,
@@ -408,4 +419,4 @@ export function ChatMessage({
       {body}
     </MessageRow>
   );
-}
+});

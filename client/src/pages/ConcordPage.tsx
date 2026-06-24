@@ -1,6 +1,6 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, Settings, Shield, ShieldCheck, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
@@ -47,7 +47,7 @@ import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/lib/conco
 import type { Channel, Community } from "@/lib/concord/types";
 import { cn } from "@/lib/utils";
 
-import type { ChatMsg } from "@/components/chat/transport";
+import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
 
 /** Compact "replying to" context line shown above a Concord reply message. */
 function ConcordReplyContext({ pubkey }: { pubkey: string | undefined }) {
@@ -66,6 +66,60 @@ function ConcordReplyContext({ pubkey }: { pubkey: string | undefined }) {
 function replyTargetId(event: ChatMsg): string | undefined {
   return event.tags.find((t) => t[0] === "e" && t[3] === "reply")?.[1];
 }
+
+interface ConcordChatMessageProps {
+  event: ChatMsg;
+  reactions: MessageReactions;
+  replyPubkey: string | undefined;
+  continuation: boolean;
+  canWrite: boolean;
+  canModerate: boolean;
+  sendStatus: SendStatus | undefined;
+  onReply: ((event: ChatMsg) => void) | undefined;
+  onDelete: ((event: ChatMsg) => void) | undefined;
+  onRetry: ((event: ChatMsg) => void) | undefined;
+  onDiscard: ((id: string) => void) | undefined;
+}
+
+/**
+ * Memoized per-message binding for Concord, mirroring NIP-29's
+ * `Nip29ChatMessage`. It takes only individually-stable props (never the whole
+ * `transport`, whose identity changes every poll), and constructs the inline
+ * `replyContext` element + `onRetry`/`onDiscard` closures here rather than in
+ * the timeline's `renderMessage` map. So when the page re-renders (e.g. a
+ * reaction lands on another message, or the channel polls), `React.memo` skips
+ * every row whose inputs are unchanged — the expensive content tokenization,
+ * emoji maps and author queries don't re-run across the whole room.
+ */
+const ConcordChatMessage = memo(function ConcordChatMessage({
+  event,
+  reactions,
+  replyPubkey,
+  continuation,
+  canWrite,
+  canModerate,
+  sendStatus,
+  onReply,
+  onDelete,
+  onRetry,
+  onDiscard,
+}: ConcordChatMessageProps) {
+  return (
+    <ChatMessage
+      event={event}
+      canWrite={canWrite}
+      canModerate={canModerate}
+      reactions={reactions}
+      sendStatus={sendStatus}
+      continuation={continuation}
+      replyContext={<ConcordReplyContext pubkey={replyPubkey} />}
+      onReply={onReply}
+      onDelete={onDelete}
+      onRetry={onRetry ? () => onRetry(event) : undefined}
+      onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
+    />
+  );
+});
 
 /**
  * The pinned footer for the Concord channel sidebar: the persistent voice
@@ -243,6 +297,19 @@ export function ConcordPage() {
     return [...set];
   }, [roster, transport.messages, user]);
 
+  // id → author pubkey, so resolving a reply's target author is O(1) per row
+  // instead of an O(N) `.find()` scan inside the per-row render closure (which
+  // made a reply-heavy room O(N²) to render).
+  const pubkeyById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of transport.messages) map.set(m.id, m.pubkey);
+    return map;
+  }, [transport.messages]);
+
+  // Stable reply callback so a per-message `ConcordChatMessage` doesn't re-render
+  // just because the page did. `setReplyTo` is a stable state setter.
+  const onReplyCb = useMemo(() => (canWrite ? setReplyTo : undefined), [canWrite]);
+
   // Moderation: ban (read-cut), kick (cooperative), unban. The recipient set for
   // a ban's read-cut is everyone we know about minus the banned member.
   const moderation = useConcordModeration(community, memberPubkeys);
@@ -260,11 +327,18 @@ export function ConcordPage() {
   if (!communityId) return <Navigate to="/" replace />;
 
   // Send via the rich composer: the whole content is sealed; the reply target
-  // (if any) rides along as an `e` reference on the inner event.
-  const handleSend = async (content: string) => {
+  // (if any) rides along as an `e` reference on the inner event. The composer's
+  // content-derived tags (NIP-30 emoji, NIP-92 imeta, NIP-27 mentions, NIP-18
+  // quotes) are sealed verbatim so custom emoji, media and mentions render —
+  // but the NIP-29 group `h` tag and the composer's NIP-10 reply `e` tags are
+  // dropped: Concord isn't a NIP-29 group, and the reply is bound by the inner
+  // event's own `reference` (a single `["e", ref, "", "reply"]`), so passing the
+  // composer's `e` tags too would duplicate/conflict with it.
+  const handleSend = async (content: string, tags: string[][]) => {
     const reference = replyTo?.id;
     setReplyTo(undefined);
-    await send({ content, reference });
+    const extraTags = tags.filter(([name]) => name !== "h" && name !== "e");
+    await send({ content, reference, extraTags });
   };
 
   const handleCreateChannel = async () => {
@@ -543,23 +617,22 @@ export function ConcordPage() {
                 </p>
               }
               renderMessage={(msg, continuation) => {
-                const replyPk = replyTargetId(msg)
-                  ? transport.messages.find((m) => m.id === replyTargetId(msg))?.pubkey
-                  : undefined;
+                const replyTo = replyTargetId(msg);
+                const replyPk = replyTo ? pubkeyById.get(replyTo) : undefined;
                 return (
-                  <ChatMessage
+                  <ConcordChatMessage
                     key={msg.id}
                     event={msg}
+                    reactions={reactionsFor(msg.id)}
+                    replyPubkey={replyPk}
+                    continuation={continuation}
                     canWrite={transport.canWrite}
                     canModerate={transport.canModerate}
-                    reactions={reactionsFor(msg.id)}
-                    continuation={continuation}
-                    replyContext={<ConcordReplyContext pubkey={replyPk} />}
-                    onReply={canWrite ? setReplyTo : undefined}
-                    onDelete={transport.deleteMessage}
                     sendStatus={transport.sendStatusFor?.(msg.id)}
-                    onRetry={transport.retry ? () => transport.retry!(msg) : undefined}
-                    onDiscard={transport.discard ? () => transport.discard!(msg.id) : undefined}
+                    onReply={onReplyCb}
+                    onDelete={transport.deleteMessage}
+                    onRetry={transport.retry}
+                    onDiscard={transport.discard}
                   />
                 );
               }}
