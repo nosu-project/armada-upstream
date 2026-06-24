@@ -4,6 +4,32 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.4.6] - 2026-06-23
+
+A reliability release for chat, encrypted messages, and offline use. Encrypted
+direct messages now open instantly and stay decrypted when you switch back to a
+thread, filling in from the newest message down. Chat stays pinned to the
+bottom as images, link previews, and reactions load in, so the view no longer
+drifts upward. Your channel lists, conversations, and account names now survive
+a flaky or offline connection instead of vanishing, and channels from different
+servers no longer bleed into each other.
+
+### Changed
+- Direct messages open noticeably faster and reveal newest-first; revisiting a
+  thread no longer re-decrypts everything from scratch.
+- Account names and avatars in the account switcher load instantly from local
+  storage, including when you're offline.
+
+### Fixed
+- Chat now stays anchored to the bottom while images, link previews, and
+  reactions finish loading, instead of drifting up the screen.
+- The message composer no longer briefly flashes a "join to send" prompt for
+  members while a channel is still loading.
+- Channel lists, direct-message conversations, and threads no longer disappear
+  or shrink on a slow, flaky, or offline connection.
+- Channels from one server no longer show up as phantom rooms on another server
+  that shares the same identity.
+
 ## [0.4.5] - 2026-06-23
 
 Messages everywhere now feel instant and your server list stops vanishing.
