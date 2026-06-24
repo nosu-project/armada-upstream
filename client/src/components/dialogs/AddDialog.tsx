@@ -1,26 +1,31 @@
-import { ArrowLeft, Loader2, Server, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { ChevronDown, ClipboardPaste, Link2, Loader2, Server, ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useConcordActions } from "@/hooks/useConcordActions";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
-import { parseConcordInvite, type ConcordCommunity } from "@/lib/concord";
-import { normalizeRelayUrl, PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
+import { readClipboardText } from "@/lib/clipboard";
+import { classifyAddInput, type ConcordCommunity } from "@/lib/concord";
+import { PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 interface AddDialogProps {
@@ -28,385 +33,387 @@ interface AddDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/** Which branch of the wizard the user is on. */
-type Step =
-  | { name: "choose" }
-  | { name: "nip29" }
-  | { name: "concord-choose" }
-  | { name: "concord-start" }
-  | { name: "concord-join" };
-
 /**
- * The "Add" wizard. NIP-29 servers and Concord chats are different things —
- * one connects to a relay, the other mints/joins a serverless E2E community —
- * so the wizard asks *what you're doing* first, then branches. NIP-29 is fully
- * baked in here; Concord routes through the (stubbed) protocol layer.
+ * The "Add" wizard, restructured around Concord.
+ *
+ * The headline act is **starting an end-to-end-encrypted chat** — name it, hit
+ * a button, you own a serverless community. Everything else (joining an existing
+ * community, or connecting to a trust-the-host NIP-29 relay) folds into a single
+ * smaller "escape hatch": one smart-paste field that figures out what you gave
+ * it — a Concord invite link, a bare domain-agnostic invite token, or a relay
+ * URL — and does the right thing.
+ *
+ * Styled to match the rest of the deck: a cut-corner chrome card (same shape as
+ * the member roster / composer), the animated crest up top, the same easy-brain
+ * polish as the login and welcome screens.
  */
 export function AddDialog({ open, onOpenChange }: AddDialogProps) {
-  const [step, setStep] = useState<Step>({ name: "choose" });
-
-  const close = () => {
-    onOpenChange(false);
-    // Reset to the chooser for the next open (after the close animation).
-    setTimeout(() => setStep({ name: "choose" }), 200);
-  };
+  const close = () => onOpenChange(false);
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-      <DialogContent className="sm:max-w-md">
-        {step.name === "choose" && <ChooseStep onPick={setStep} />}
-        {step.name === "nip29" && (
-          <Nip29Step onBack={() => setStep({ name: "choose" })} onDone={close} />
-        )}
-        {step.name === "concord-choose" && (
-          <ConcordChooseStep onBack={() => setStep({ name: "choose" })} onPick={setStep} />
-        )}
-        {step.name === "concord-start" && (
-          <ConcordStartStep onBack={() => setStep({ name: "concord-choose" })} onDone={close} />
-        )}
-        {step.name === "concord-join" && (
-          <ConcordJoinStep onBack={() => setStep({ name: "concord-choose" })} onDone={close} />
-        )}
+      <DialogContent
+        // Cut-corner chrome card (not the default bordered/rounded dialog): the
+        // same vessel shape used by the roster and composer. The crest + copy
+        // do the framing, so the visually-hidden title just satisfies a11y.
+        className="sm:max-w-md border-0 rounded-none p-0 bg-transparent shadow-none"
+      >
+        <DialogTitle className="sr-only">Add an encrypted chat or server</DialogTitle>
+        <div className="clip-corner-lg bg-chrome p-6 sm:p-7">
+          <AddBody onDone={close} />
+        </div>
+        <ArmadaCrestKeyframes />
       </DialogContent>
     </Dialog>
   );
 }
 
-// ── Step 1: what are you doing? ─────────────────────────────────────────────
-
-function ChoiceCard({
-  icon: Icon,
-  title,
-  blurb,
-  accent,
-  onClick,
-}: {
-  icon: typeof Server;
-  title: string;
-  blurb: string;
-  accent?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors",
-        "hover:border-primary/50 hover:bg-accent/40",
-        accent && "hover:border-success/50",
-      )}
-    >
-      <Icon className={cn("size-5 shrink-0 mt-0.5 text-muted-foreground", accent && "text-success")} />
-      <span className="min-w-0">
-        <span className="block font-medium">{title}</span>
-        <span className="block text-sm text-muted-foreground">{blurb}</span>
-      </span>
-    </button>
-  );
-}
-
-function ChooseStep({ onPick }: { onPick: (s: Step) => void }) {
-  return (
-    <>
-      <DialogHeader>
-        <DialogTitle>Add</DialogTitle>
-        <DialogDescription>What would you like to do?</DialogDescription>
-      </DialogHeader>
-      <div className="space-y-3">
-        <ChoiceCard
-          icon={Server}
-          title="Add a server"
-          blurb="Connect to a relay that hosts channels. Fast, searchable, voice-capable — the server can read messages."
-          onClick={() => onPick({ name: "nip29" })}
-        />
-        <ChoiceCard
-          icon={ShieldCheck}
-          title="Start or join an encrypted chat"
-          blurb="A serverless, end-to-end-encrypted community. No host can read it; membership is your key. (Concord)"
-          accent
-          onClick={() => onPick({ name: "concord-choose" })}
-        />
-      </div>
-    </>
-  );
-}
-
-function StepHeader({ onBack, title, description }: { onBack: () => void; title: string; description: string }) {
-  return (
-    <DialogHeader>
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon" className="size-7 -ml-1" aria-label="Back" onClick={onBack}>
-          <ArrowLeft className="size-4" />
-        </Button>
-        <DialogTitle>{title}</DialogTitle>
-      </div>
-      <DialogDescription>{description}</DialogDescription>
-    </DialogHeader>
-  );
-}
-
-// ── Step 2a: add a NIP-29 server ────────────────────────────────────────────
-
-function Nip29Step({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
-  const { config, updateConfig } = useAppContext();
-  const { user } = useCurrentUser();
-  const { mutateAsync: updateList } = useUpdateUserGroupList();
-  const [url, setUrl] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [checking, setChecking] = useState(false);
-
-  const handleAdd = async () => {
-    setError(null);
-    const normalized = normalizeRelayUrl(url);
-    if (!normalized) {
-      setError("Enter a valid ws:// or wss:// relay URL.");
-      return;
-    }
-    if (PLATFORM_RELAYS.includes(normalized) || config.addedRelays.includes(normalized)) {
-      setError("That server is already in your list.");
-      return;
-    }
-
-    setChecking(true);
-    try {
-      const res = await fetch(relayToHttpUrl(normalized), {
-        headers: { Accept: "application/nostr+json" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await res.json();
-    } catch {
-      setChecking(false);
-      setError("Could not reach that relay's NIP-11 endpoint. Check the URL and your network.");
-      return;
-    }
-    setChecking(false);
-
-    updateConfig((current) => ({
-      ...current,
-      addedRelays: [...current.addedRelays, normalized],
-    }));
-    if (user) {
-      updateList({ type: "add-server", url: normalized }).catch((err) =>
-        console.warn("Failed to sync server to group list:", err));
-    }
-    toast({ title: "Server added", description: normalized });
-    onDone();
-  };
-
-  return (
-    <>
-      <StepHeader
-        onBack={onBack}
-        title="Add a server"
-        description="Connect to a relay. Servers host their own channels and members."
-      />
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          handleAdd();
-        }}
-        className="space-y-4"
-      >
-        <div className="space-y-2">
-          <Label htmlFor="server-url">Relay URL</Label>
-          <Input
-            id="server-url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="wss://relay.internal"
-            autoComplete="off"
-            autoFocus
-          />
-        </div>
-
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        <Alert>
-          <ShieldCheck className="size-4" />
-          <AlertDescription>
-            Pinned platform servers cannot be removed; servers you add here can be managed from Settings.
-          </AlertDescription>
-        </Alert>
-
-        <DialogFooter>
-          <Button type="submit" disabled={checking || !url.trim()}>
-            {checking ? <><Loader2 className="size-4 mr-2 animate-spin" /> Checking…</> : "Add server"}
-          </Button>
-        </DialogFooter>
-      </form>
-    </>
-  );
-}
-
-// ── Step 2b: Concord — start vs join ────────────────────────────────────────
-
-function ConcordChooseStep({ onBack, onPick }: { onBack: () => void; onPick: (s: Step) => void }) {
-  return (
-    <>
-      <StepHeader
-        onBack={onBack}
-        title="Encrypted chat"
-        description="Start a new end-to-end-encrypted community, or join one you were invited to."
-      />
-      <div className="space-y-3">
-        <ChoiceCard
-          icon={ShieldCheck}
-          title="Start a new encrypted chat"
-          blurb="Create a community. You become the owner; only people you invite can read it."
-          accent
-          onClick={() => onPick({ name: "concord-start" })}
-        />
-        <ChoiceCard
-          icon={ShieldCheck}
-          title="Join with an invite link"
-          blurb="Paste an invite link. The secret lives in the link; the relay never sees it."
-          accent
-          onClick={() => onPick({ name: "concord-join" })}
-        />
-      </div>
-    </>
-  );
-}
-
-function useConcordToast(onDone: () => void) {
+function AddBody({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate();
-  return (community: ConcordCommunity) => {
+  const { createCommunity, isWorking: isCreating } = useConcordActions();
+
+  const [name, setName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const finishConcord = (community: ConcordCommunity) => {
     onDone();
     toast({ title: "Encrypted chat ready", description: community.name });
     navigate(`/c/${encodeURIComponent(community.communityId)}`);
   };
-}
 
-function ConcordStartStep({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const { createCommunity, isWorking } = useConcordActions();
-  const finish = useConcordToast(onDone);
-
-  const handleStart = async () => {
-    setError(null);
+  const handleCreate = async () => {
+    setCreateError(null);
     try {
       const community = await createCommunity({ name: name.trim() });
-      finish(community);
+      finishConcord(community);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't create the chat.");
+      setCreateError(e instanceof Error ? e.message : "Couldn't create the chat.");
     }
   };
 
   return (
-    <>
-      <StepHeader
-        onBack={onBack}
-        title="Start an encrypted chat"
-        description="No host can read it. You become the owner."
-      />
+    <div className="flex flex-col items-center gap-6 text-center">
+      <ArmadaCrest size={84} />
+
+      <div className="space-y-1.5">
+        <h2 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+          start an encrypted chat
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Serverless and end-to-end-encrypted. No host can read it; your key is
+          your membership. You become the owner.
+        </p>
+      </div>
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          handleStart();
+          handleCreate();
         }}
-        className="space-y-4"
+        className="w-full space-y-3"
       >
-        <div className="space-y-2">
-          <Label htmlFor="concord-name">Name</Label>
-          <Input
-            id="concord-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="My private community"
-            autoComplete="off"
-            autoFocus
-          />
-        </div>
-        {error && (
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Name your chat"
+          aria-label="Chat name"
+          autoComplete="off"
+          autoFocus
+          className="h-12 text-base"
+        />
+
+        {createError && (
           <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription>{createError}</AlertDescription>
           </Alert>
         )}
-        <DialogFooter>
-          <Button type="submit" disabled={isWorking || !name.trim()}>
-            {isWorking ? <><Loader2 className="size-4 mr-2 animate-spin" /> Creating…</> : "Create"}
-          </Button>
-        </DialogFooter>
+
+        <Button
+          type="submit"
+          size="lg"
+          disabled={isCreating || !name.trim()}
+          className="h-12 w-full clip-corner-lg text-base font-medium"
+        >
+          {isCreating ? (
+            <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</>
+          ) : (
+            <><ShieldCheck className="size-4 mr-2" /> Create encrypted chat</>
+          )}
+        </Button>
       </form>
-    </>
+
+      <EscapeHatch onDone={onDone} onConcordJoined={finishConcord} />
+    </div>
   );
 }
 
-function ConcordJoinStep({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
-  const [link, setLink] = useState("");
+/**
+ * The "I already have something" path, kept deliberately small and secondary.
+ * One field, one classifier: a Concord invite link, a bare (domain-agnostic)
+ * invite token, or a NIP-29 relay URL all go here.
+ *
+ * Look before you leap: as soon as the input classifies, we *resolve* it —
+ * fetch the Concord invite's sealed bundle, or the relay's NIP-11 document —
+ * and show where you're being invited to. The Join / Add button only appears
+ * once that resolution succeeds, so you commit to something you can see.
+ */
+/** What a resolved (validated + loaded) target looks like, for the preview card. */
+type Target =
+  | { kind: "concord"; name: string; about?: string; channelCount: number; relays: string[] }
+  | { kind: "nip29"; relay: string; name?: string; description?: string };
+
+function EscapeHatch({
+  onDone,
+  onConcordJoined,
+}: {
+  onDone: () => void;
+  onConcordJoined: (community: ConcordCommunity) => void;
+}) {
+  const { config, updateConfig } = useAppContext();
+  const { user } = useCurrentUser();
+  const { mutateAsync: updateList } = useUpdateUserGroupList();
+  const { previewInvite, joinViaInvite, isWorking: isJoining } = useConcordActions();
+
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const { joinViaInvite, isWorking } = useConcordActions();
-  const finish = useConcordToast(onDone);
+  const [resolving, setResolving] = useState(false);
+  const [target, setTarget] = useState<Target | null>(null);
+  const [committing, setCommitting] = useState(false);
 
-  const invite = parseConcordInvite(link);
-  const looksLikeLink = link.trim().length > 0;
+  const classified = useMemo(() => classifyAddInput(value), [value]);
 
-  const handleJoin = async () => {
-    setError(null);
-    const parsed = parseConcordInvite(link);
-    if (!parsed) {
-      setError("That doesn't look like an encrypted-chat invite link.");
-      return;
-    }
+  // A stable identity for the classified input, so the resolve effect only
+  // re-runs when the *target* changes — not on every keystroke that resolves
+  // to the same relay/invite token.
+  const identity =
+    classified.kind === "concord"
+      ? `c:${classified.invite.token}`
+      : classified.kind === "nip29"
+        ? `n:${classified.relay}`
+        : "";
+
+  /** Read the clipboard into the field (web + native), surfacing failures. */
+  const handlePaste = async () => {
     try {
-      const community = await joinViaInvite({ invite: parsed });
-      finish(community);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't join that chat.");
+      const text = (await readClipboardText()).trim();
+      if (text) {
+        setValue(text);
+        setError(null);
+      }
+    } catch {
+      toast({
+        title: "Paste failed",
+        description: "Couldn't read the clipboard. Paste manually instead.",
+        variant: "destructive",
+      });
     }
   };
 
+  // Resolve (validate + load) the target whenever the classified input settles.
+  // Debounced so paste/typing doesn't fire a fetch per character, and guarded so
+  // a stale resolution can't overwrite a newer one.
+  useEffect(() => {
+    setTarget(null);
+    setError(null);
+    if (!identity) {
+      setResolving(false);
+      return;
+    }
+
+    let cancelled = false;
+    setResolving(true);
+    const timer = setTimeout(async () => {
+      try {
+        if (classified.kind === "concord") {
+          const { community, channelCount } = await previewInvite({ invite: classified.invite });
+          if (cancelled) return;
+          setTarget({
+            kind: "concord",
+            name: community.name,
+            about: community.about,
+            channelCount,
+            relays: community.relays,
+          });
+        } else if (classified.kind === "nip29") {
+          const relay = classified.relay;
+          if (PLATFORM_RELAYS.includes(relay) || config.addedRelays.includes(relay)) {
+            throw new Error("That server is already in your list.");
+          }
+          const res = await fetch(relayToHttpUrl(relay), {
+            headers: { Accept: "application/nostr+json" },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const info = (await res.json()) as { name?: string; description?: string };
+          if (cancelled) return;
+          setTarget({ kind: "nip29", relay, name: info.name, description: info.description });
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setError(
+          e instanceof Error
+            ? e.message
+            : classified.kind === "concord"
+              ? "Couldn't load that invite."
+              : "Could not reach that relay's NIP-11 endpoint. Check the URL and your network.",
+        );
+      } finally {
+        if (!cancelled) setResolving(false);
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // `classified` is derived from `value`; `identity` captures the parts that
+    // matter, so we key the effect on it (plus the lists that gate nip29 dupes).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity, config.addedRelays]);
+
+  const handleCommit = async () => {
+    if (!target) return;
+    setError(null);
+    setCommitting(true);
+    try {
+      if (target.kind === "concord") {
+        if (classified.kind !== "concord") return;
+        const community = await joinViaInvite({ invite: classified.invite });
+        onConcordJoined(community);
+        return;
+      }
+      // nip29: already validated in the preview; persist + sync.
+      updateConfig((current) => ({
+        ...current,
+        addedRelays: [...current.addedRelays, target.relay],
+      }));
+      if (user) {
+        updateList({ type: "add-server", url: target.relay }).catch((err) =>
+          console.warn("Failed to sync server to group list:", err));
+      }
+      toast({ title: "Server added", description: target.name || target.relay });
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  const busy = isJoining || committing;
+
   return (
-    <>
-      <StepHeader
-        onBack={onBack}
-        title="Join with an invite"
-        description="The invite's secret rides in the link and never reaches the relay."
-      />
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          handleJoin();
-        }}
-        className="space-y-4"
-      >
-        <div className="space-y-2">
-          <Label htmlFor="concord-invite">Invite link</Label>
-          <Input
-            id="concord-invite"
-            value={link}
-            onChange={(e) => setLink(e.target.value)}
-            placeholder="https://…/invite#…"
-            autoComplete="off"
-            autoFocus
-          />
-          <div className="min-h-5 text-xs text-muted-foreground">
-            {looksLikeLink &&
-              (invite ? (
-                <span className="text-success">Looks like a valid invite link.</span>
-              ) : (
-                <span>Not a recognized invite link yet…</span>
-              ))}
+    <Collapsible open={open} onOpenChange={setOpen} className="w-full">
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Link2 className="size-3.5" />
+          Have an invite or server URL?
+          <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleCommit();
+          }}
+          className="mt-4 text-left"
+        >
+          <div className="flex gap-2">
+            <Input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="Paste invite or server URL"
+              aria-label="Invite link, invite code, or server URL"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0"
+                    aria-label="Paste from clipboard"
+                    onClick={handlePaste}
+                  >
+                    <ClipboardPaste className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="z-[260] max-w-60 text-center text-xs">
+                  Paste a Concord invite link, a bare invite code, or a server
+                  relay URL. We detect which it is.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
+
+          {resolving && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              {classified.kind === "concord" ? "Loading invite..." : "Reaching server..."}
+            </div>
+          )}
+
+          {error && (
+            <Alert variant="destructive" className="mt-3">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {target && !resolving && (
+            <>
+              <TargetPreview target={target} />
+              <Button
+                type="submit"
+                disabled={busy}
+                className="mt-3 w-full clip-corner-lg"
+              >
+                {busy ? (
+                  <><Loader2 className="size-4 mr-2 animate-spin" /> {target.kind === "nip29" ? "Adding..." : "Joining..."}</>
+                ) : target.kind === "nip29" ? (
+                  "Add server"
+                ) : (
+                  "Join"
+                )}
+              </Button>
+            </>
+          )}
+        </form>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** The "here's where you're going" card shown once a target resolves. */
+function TargetPreview({ target }: { target: Target }) {
+  const Icon = target.kind === "concord" ? ShieldCheck : Server;
+  const accent = target.kind === "concord";
+  const title = target.kind === "concord" ? target.name : target.name || target.relay;
+  const subtitle =
+    target.kind === "concord"
+      ? target.about ||
+        `Encrypted chat · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`
+      : target.description || target.relay;
+
+  return (
+    <div className="mt-3 flex items-start gap-3 rounded-lg bg-secondary/50 p-3 text-left">
+      <Icon className={cn("mt-0.5 size-5 shrink-0", accent ? "text-success" : "text-muted-foreground")} />
+      <div className="min-w-0">
+        <div className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">
+          {target.kind === "concord" ? "You're joining" : "You're adding the server"}
         </div>
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-        <DialogFooter>
-          <Button type="submit" disabled={isWorking || !invite}>
-            {isWorking ? <><Loader2 className="size-4 mr-2 animate-spin" /> Joining…</> : "Join"}
-          </Button>
-        </DialogFooter>
-      </form>
-    </>
+        <div className="truncate font-medium">{title || "Untitled"}</div>
+        <div className="truncate text-xs text-muted-foreground">{subtitle}</div>
+      </div>
+    </div>
   );
 }

@@ -15,6 +15,7 @@
     "@capacitor-community/safe-area": "^8.0.1",
     "@capacitor/android": "^8.1.0",
     "@capacitor/app": "^8.0.0",
+    "@capacitor/clipboard": "^8.0.1",
     "@capacitor/core": "^8.1.0",
     "@emoji-mart/data": "^1.2.1",
     "@hookform/resolvers": "^5.2.2",

@@ -1,36 +1,22 @@
-import { Copy, Loader2, Send } from "lucide-react";
-import { nip19 } from "nostr-tools";
+import { Check, Copy, Link as LinkIcon, Loader2, UserPlus } from "lucide-react";
 import { useState } from "react";
 
+import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
+import { ProfileSearchSelect } from "@/components/chat/ProfileSearchSelect";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useConcordCommunityActions } from "@/hooks/useConcordCommunityActions";
 import { toast } from "@/hooks/useToast";
+import type { SearchProfile } from "@/hooks/useSearchProfiles";
 import type { Community } from "@/lib/concord/types";
-
-/** Decode an npub to hex, or return undefined. */
-function npubToHex(value: string): string | undefined {
-  try {
-    const decoded = nip19.decode(value);
-    return decoded.type === "npub" ? (decoded.data as string) : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * Invite people to a Concord community two ways: a shareable public link (the
- * secret rides in the URL fragment) or a direct gift-wrapped invite to a
- * specific npub (parked for the recipient's consent).
+ * secret rides in the URL fragment) or a direct gift-wrapped invite to someone
+ * found by name (NIP-50 search, follows first). Styled in the cut-corner chrome
+ * idiom of the Add dialog.
  */
 export function InviteConcordDialog({
   community,
@@ -41,10 +27,26 @@ export function InviteConcordDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md border-0 rounded-none p-0 bg-transparent shadow-none">
+        <DialogTitle className="sr-only">Invite people</DialogTitle>
+        <div className="clip-corner-lg bg-chrome p-6 sm:p-7">
+          <InviteBody community={community} />
+        </div>
+        <ArmadaCrestKeyframes />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function InviteBody({ community }: { community: Community | undefined }) {
   const { createInviteLink, isCreatingLink, sendDirectInvite, isSendingInvite } =
     useConcordCommunityActions(community);
   const [link, setLink] = useState<string | null>(null);
-  const [recipient, setRecipient] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [sentPubkey, setSentPubkey] = useState<string | null>(null);
+  const [pendingPubkey, setPendingPubkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleGenerate = async () => {
@@ -59,86 +61,97 @@ export function InviteConcordDialog({
   const handleCopy = () => {
     if (!link) return;
     navigator.clipboard?.writeText(link).then(
-      () => toast({ title: "Invite link copied" }),
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
       () => toast({ title: "Copy failed", variant: "destructive" }),
     );
   };
 
-  const handleSendDirect = async () => {
+  const handleSelect = async (profile: SearchProfile) => {
     setError(null);
-    const hex = recipient.trim().startsWith("npub1") ? npubToHex(recipient.trim()) : recipient.trim();    if (!hex || !/^[0-9a-f]{64}$/i.test(hex)) {
-      setError("Enter a valid npub or hex pubkey.");
-      return;
-    }
+    setPendingPubkey(profile.pubkey);
     try {
-      await sendDirectInvite({ recipientPubkey: hex });
-      toast({ title: "Invite sent", description: "It's waiting for their consent." });
-      setRecipient("");
+      await sendDirectInvite({ recipientPubkey: profile.pubkey });
+      setSentPubkey(profile.pubkey);
+      toast({
+        title: "Invite sent",
+        description: `${profile.metadata.name || profile.metadata.display_name || "They"} will be asked to accept.`,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't send the invite.");
+    } finally {
+      setPendingPubkey(null);
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Invite people</DialogTitle>
-          <DialogDescription>
-            Share a link, or send a private invite to someone's Nostr key. The community keys never
-            touch a relay in the clear.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-5">
-          <section className="space-y-2">
-            <Label>Public invite link</Label>
-            {link ? (
-              <div className="flex items-center gap-2">
-                <Input readOnly value={link} className="font-mono text-xs" />
-                <Button type="button" size="icon" variant="secondary" onClick={handleCopy} aria-label="Copy link">
-                  <Copy className="size-4" />
-                </Button>
-              </div>
+    <div className="flex flex-col items-center gap-6">
+      <div className="flex flex-col items-center gap-3 text-center">
+        <ArmadaCrest size={72} />
+        <div className="space-y-1">
+          <h2 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+            invite people
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {community?.name ? (
+              <>Bring people into <span className="text-foreground">{community.name}</span>. The keys never touch a relay in the clear.</>
             ) : (
-              <Button type="button" onClick={handleGenerate} disabled={isCreatingLink}>
-                {isCreatingLink ? <><Loader2 className="size-4 mr-2 animate-spin" /> Generating…</> : "Generate link"}
-              </Button>
+              <>The community keys never touch a relay in the clear.</>
             )}
-            <p className="text-xs text-muted-foreground">
-              Anyone with the link can join. The secret lives in the `#` fragment — never sent to a server.
-            </p>
-          </section>
-
-          <section className="space-y-2">
-            <Label htmlFor="invite-npub">Direct invite</Label>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleSendDirect();
-              }}
-              className="flex items-center gap-2"
-            >
-              <Input
-                id="invite-npub"
-                value={recipient}
-                onChange={(e) => setRecipient(e.target.value)}
-                placeholder="npub1… or hex pubkey"
-                autoComplete="off"
-              />
-              <Button type="submit" size="icon" disabled={isSendingInvite || !recipient.trim()} aria-label="Send invite">
-                {isSendingInvite ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-              </Button>
-            </form>
-          </section>
-
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+          </p>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+
+      {/* Direct invite — search by name, follows first. */}
+      <div className="w-full space-y-2">
+        <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <UserPlus className="size-3.5" />
+          Invite someone directly
+        </div>
+        <ProfileSearchSelect onSelect={handleSelect} busyPubkey={pendingPubkey} autoFocus />
+        {sentPubkey && !isSendingInvite && (
+          <p className="flex items-center gap-1.5 text-xs text-success">
+            <Check className="size-3.5" /> Invite sent. Search again to invite more.
+          </p>
+        )}
+      </div>
+
+      {/* Public link — the escape hatch / share-anywhere path. */}
+      <div className="w-full space-y-2 border-t border-chrome pt-5">
+        <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <LinkIcon className="size-3.5" />
+          Or share a link
+        </div>
+        {link ? (
+          <div className="flex items-center gap-2">
+            <Input readOnly value={link} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+            <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={handleCopy} aria-label="Copy link">
+              {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+            </Button>
+          </div>
+        ) : (
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleGenerate}
+            disabled={isCreatingLink || !community}
+            className="w-full clip-corner-lg"
+          >
+            {isCreatingLink ? <><Loader2 className="size-4 mr-2 animate-spin" /> Generating...</> : "Generate invite link"}
+          </Button>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Anyone with the link can join. The secret lives in the # fragment, never sent to a server.
+        </p>
+      </div>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+    </div>
   );
 }

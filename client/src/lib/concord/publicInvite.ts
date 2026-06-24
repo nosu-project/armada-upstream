@@ -46,6 +46,62 @@ const VSK_PUBLIC_INVITE_REVOKED = "9";
 const URL_V2 = 2;
 const MAX_V2_BOOTSTRAP_RELAYS = 3;
 
+/**
+ * v2 flags bit: the invite's bundle lives on the stock {@link TRUSTED_RELAYS}
+ * set, so the link carries no relay bytes at all. Set on Vector's
+ * default-relay-set links (the common case). FROZEN — part of the shared
+ * Vector wire format.
+ */
+const V2_FLAG_DEFAULT_RELAYS = 0b0000_0001;
+
+/**
+ * Vector's stock relay set, resolved when a v2 link sets
+ * {@link V2_FLAG_DEFAULT_RELAYS}. Mirrors `vector-core`'s `TRUSTED_RELAYS`
+ * verbatim: a default-set Vector invite carries no relays, so cross-compat
+ * REQUIRES we know exactly where its bundle is posted. FROZEN — keep in lockstep
+ * with Vector; changing it silently breaks every default-set link.
+ */
+export const TRUSTED_RELAYS: readonly string[] = [
+  "wss://jskitty.com/nostr",
+  "wss://asia.vectorapp.io/nostr",
+  "wss://nostr.computingcache.com",
+];
+
+/**
+ * Append-only dictionary of well-known relays for v2 links — a listed relay
+ * costs ONE byte (its 1-based id) instead of a length-prefixed literal. Ids live
+ * in 1..=254 (0 = wss-implied literal, 255 = verbatim literal). NEVER renumber
+ * or remove entries (ids are baked into minted links forever); append only, in
+ * lockstep with Vector's copy.
+ */
+const RELAY_DICTIONARY: readonly string[] = [
+  "wss://jskitty.com/nostr",        // id 1
+  "wss://asia.vectorapp.io/nostr",  // id 2
+  "wss://nostr.computingcache.com", // id 3
+  "wss://relay.damus.io",           // id 4
+];
+
+/** Order/case/trailing-slash-insensitive relay comparison key (matches Vector's `norm_relay`). */
+function normRelay(r: string): string {
+  return r.trim().replace(/\/+$/, "").toLowerCase();
+}
+
+/** True when `relays` is exactly the stock trusted set (set-equal, normalized). */
+function isDefaultRelaySet(relays: string[]): boolean {
+  const want = new Set(TRUSTED_RELAYS.map(normRelay));
+  const have = new Set(relays.map(normRelay));
+  if (want.size !== have.size) return false;
+  for (const r of want) if (!have.has(r)) return false;
+  return true;
+}
+
+/** The 1-based dictionary id for a relay, or `undefined` if it isn't a known relay. */
+function dictionaryId(relay: string): number | undefined {
+  const n = normRelay(relay);
+  const i = RELAY_DICTIONARY.findIndex((d) => normRelay(d) === n);
+  return i >= 0 ? i + 1 : undefined;
+}
+
 export interface PublicInvitePreview {
   name: string;
   description?: string;
@@ -206,27 +262,50 @@ function base64urlDecode(str: string): Uint8Array {
 }
 
 /**
- * Build the shareable invite URL (v2 binary fragment): `[ver][flags=0][count][relays…][token:32]`,
- * base64url. Relays travel as length-prefixed literals (`wss://` implied, else verbatim).
+ * Build the shareable invite URL (v2 binary fragment): `[ver][flags][relays?][token:32]`,
+ * base64url. Faithful port of Vector's `encode_invite_url` for cross-compat:
+ *   - the stock relay set costs ZERO relay bytes (the {@link V2_FLAG_DEFAULT_RELAYS} flag);
+ *   - a well-known relay costs ONE byte (its {@link RELAY_DICTIONARY} id);
+ *   - a custom relay is a length-prefixed literal (`wss://` implied as id 0, else verbatim id 255).
  */
 export function encodeInviteUrl(relays: string[], token: Uint8Array): string {
-  const payload: number[] = [URL_V2, 0];
-  const boot = relays
-    .filter((r) => (r.startsWith("wss://") ? r.slice(6) : r).length <= 255)
-    .slice(0, MAX_V2_BOOTSTRAP_RELAYS);
-  payload.push(boot.length);
-  for (const r of boot) {
-    const host = r.startsWith("wss://") ? r.slice(6) : null;
-    const kind = host !== null ? 0 : 255;
-    const s = host ?? r;
-    payload.push(kind, s.length);
-    for (let i = 0; i < s.length; i++) payload.push(s.charCodeAt(i) & 0xff);
+  const payload: number[] = [URL_V2];
+  if (isDefaultRelaySet(relays)) {
+    payload.push(V2_FLAG_DEFAULT_RELAYS);
+  } else {
+    payload.push(0);
+    // Bootstrap only — the bundle carries the authoritative set. Relays whose
+    // host exceeds 255 bytes can't be length-prefixed; skip them (absurd in practice).
+    const boot = relays
+      .filter((r) => (r.startsWith("wss://") ? r.slice(6) : r).length <= 255)
+      .slice(0, MAX_V2_BOOTSTRAP_RELAYS);
+    payload.push(boot.length);
+    for (const r of boot) {
+      const id = dictionaryId(r);
+      if (id !== undefined) {
+        payload.push(id);
+        continue;
+      }
+      // Literal: `wss://` rides implied as entry 0; anything else is stored
+      // VERBATIM as entry 255 so the string round-trips exactly.
+      const host = r.startsWith("wss://") ? r.slice(6) : null;
+      const kind = host !== null ? 0 : 255;
+      const s = host ?? r;
+      payload.push(kind, s.length);
+      for (let i = 0; i < s.length; i++) payload.push(s.charCodeAt(i) & 0xff);
+    }
   }
   for (const b of token) payload.push(b);
   return `${inviteUrlBase()}#${base64urlEncode(new Uint8Array(payload))}`;
 }
 
-/** Parse a shareable invite URL (or bare fragment) back to `{ relays, token }`. */
+/**
+ * Parse a shareable invite URL (or a bare fragment) back to `{ relays, token }`.
+ * Accepts the full URL or just the fragment after `#`, in either the v2 binary
+ * format or the legacy v1 JSON format (v1 links in the wild stay valid forever).
+ * A v1 fragment is base64url(JSON) whose first decoded byte is `{` (0x7B); a v2
+ * fragment's first byte is the version (2). The two never collide.
+ */
 export function parseInviteUrl(url: string): { relays: string[]; token: Uint8Array } {
   const idx = url.lastIndexOf("#");
   const fragment = idx >= 0 ? url.slice(idx + 1) : url;
@@ -238,31 +317,63 @@ export function parseInviteUrl(url: string): { relays: string[]; token: Uint8Arr
     throw new PublicInviteError("bad-url", `base64: ${e instanceof Error ? e.message : e}`);
   }
   if (raw[0] === URL_V2) return parseV2(raw);
+  if (raw[0] === 0x7b /* '{' */) return parseV1(raw);
   throw new PublicInviteError("bad-url", "unrecognized fragment format");
+}
+
+/** Legacy v1 fragment: base64url(JSON) `{ v:1, relays:[...], t:"<hex token>" }`. */
+function parseV1(json: Uint8Array): { relays: string[]; token: Uint8Array } {
+  const bad = (m: string): never => {
+    throw new PublicInviteError("bad-url", m);
+  };
+  let frag: { v?: number; relays?: unknown; t?: unknown };
+  try {
+    frag = JSON.parse(new TextDecoder().decode(json));
+  } catch (e) {
+    return bad(`json: ${e instanceof Error ? e.message : e}`);
+  }
+  if (frag.v !== 1) return bad(`unsupported url version ${frag.v}`);
+  const relays = Array.isArray(frag.relays) ? frag.relays.filter((r): r is string => typeof r === "string") : [];
+  if (relays.length > MAX_URL_RELAYS) return bad(`invite url declares too many relays (${relays.length})`);
+  if (typeof frag.t !== "string" || !/^[0-9a-fA-F]{64}$/.test(frag.t)) return bad("token must be 64 hex chars");
+  return { relays, token: hexToBytes(frag.t) };
 }
 
 function parseV2(raw: Uint8Array): { relays: string[]; token: Uint8Array } {
   const bad = (m: string): never => {
     throw new PublicInviteError("bad-url", m);
   };
-  let pos = 2; // skip [ver][flags]
-  if (raw.length < 3) bad("truncated v2 fragment");
-  const count = raw[pos++];
-  if (count > MAX_URL_RELAYS) bad("bad v2 relay count");
-  const relays: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const kind = raw[pos++];
-    if (kind === 0 || kind === 255) {
-      const len = raw[pos++];
-      const end = pos + len;
-      if (end > raw.length) bad("truncated v2 relay literal");
-      let host = "";
-      for (let j = pos; j < end; j++) host += String.fromCharCode(raw[j]);
-      relays.push(kind === 0 ? `wss://${host}` : host);
-      pos = end;
-    } else {
-      bad("unknown v2 relay id");
+  if (raw.length < 2) bad("truncated v2 fragment");
+  const flags = raw[1];
+  let pos = 2;
+  let relays: string[];
+  if ((flags & V2_FLAG_DEFAULT_RELAYS) !== 0) {
+    // No relay bytes — the bundle lives on the stock trusted set.
+    relays = [...TRUSTED_RELAYS];
+  } else {
+    if (pos >= raw.length) bad("truncated v2 relay count");
+    const count = raw[pos++];
+    if (count === 0 || count > MAX_URL_RELAYS) bad("bad v2 relay count");
+    relays = [];
+    for (let i = 0; i < count; i++) {
+      if (pos >= raw.length) bad("truncated v2 relay entry");
+      const id = raw[pos++];
+      if (id === 0 || id === 255) {
+        if (pos >= raw.length) bad("truncated v2 relay literal");
+        const len = raw[pos++];
+        const end = pos + len;
+        if (end > raw.length) bad("truncated v2 relay literal");
+        let host = "";
+        for (let j = pos; j < end; j++) host += String.fromCharCode(raw[j]);
+        relays.push(id === 0 ? `wss://${host}` : host);
+        pos = end;
+      } else if (id - 1 < RELAY_DICTIONARY.length) {
+        relays.push(RELAY_DICTIONARY[id - 1]);
+      }
+      // Unknown dictionary id = an entry appended by a NEWER build — skip it
+      // (forward-compat); the remaining entries still bootstrap.
     }
+    if (relays.length === 0) bad("no resolvable bootstrap relays");
   }
   const tokenBytes = raw.slice(pos);
   if (tokenBytes.length !== 32) bad("v2 token must be exactly 32 bytes");

@@ -14,6 +14,12 @@ import { locatorHex, parseInviteUrl, parsePublicInviteEvent, signerPubkey } from
 import { createCommunity as mintCommunity, random32, type Channel, type Community } from "@/lib/concord/types";
 import { APP_RELAYS } from "@/lib/platform";
 
+/** A preview of where an invite leads, resolved before actually joining. */
+export interface ConcordInvitePreview {
+  community: ConcordCommunity;
+  channelCount: number;
+}
+
 /**
  * The real Concord create/join actions, wired to app relays + the membership
  * list. Concord communities are serverless, so they ride the app-relay pool
@@ -54,6 +60,56 @@ export function useConcordActions() {
     return { communityId: bytesToHex(c.id), name: c.name, about: c.description, relays: c.relays };
   }
 
+  /**
+   * Resolve an invite to its live {@link Community} without joining: decode the
+   * token, fetch the sealed bundle from the bootstrap relays, then decrypt +
+   * verify it (rejecting impostor/revoked invites). Shared by the preview (look
+   * before you leap) and the actual join.
+   */
+  async function resolveInvite(invite: ConcordInvite): Promise<Community> {
+    // `invite.token` is the raw `#fragment`; decode it to the real 32-byte
+    // token + bootstrap relays via the v2 fragment parser.
+    let tokenBytes: Uint8Array;
+    let bootstrapRelays: string[];
+    try {
+      const parsed = parseInviteUrl(invite.token);
+      tokenBytes = parsed.token;
+      bootstrapRelays = parsed.relays;
+    } catch {
+      throw new Error("Invalid invite link.");
+    }
+
+    // Fetch the sealed bundle from the token's locator on the bootstrap relays.
+    const locator = locatorHex(tokenBytes);
+    const author = signerPubkey(tokenBytes);
+    const pool = bootstrapRelays.length ? bootstrapRelays : relays;
+    const events = await Promise.all(
+      pool.map((url) =>
+        nostr
+          .relay(url)
+          .query(
+            [{ kinds: [KIND_APPLICATION_SPECIFIC], authors: [author], "#d": [locator], limit: 1 }],
+            { signal: AbortSignal.timeout(8000) },
+          )
+          .catch(() => []),
+      ),
+    );
+    const flat = events.flat().sort((a, b) => b.created_at - a.created_at);
+    if (flat.length === 0) throw new Error("Couldn't find that invite on its relays.");
+
+    // Decrypt + verify the bundle with the token (rejects impostor/revoked).
+    const bundle = parsePublicInviteEvent(flat[0], tokenBytes);
+    return acceptInvite(bundle.join);
+  }
+
+  /** Look up an invite's community (name, channels, relays) without joining. */
+  const preview = useMutation<ConcordInvitePreview, Error, { invite: ConcordInvite }>({
+    mutationFn: async ({ invite }) => {
+      const community = await resolveInvite(invite);
+      return { community: toCommunity(community), channelCount: community.channels.length };
+    },
+  });
+
   const create = useMutation<ConcordCommunity, Error, { name: string }>({
     mutationFn: async ({ name }) => {
       if (!user) throw new Error("Sign in to start an encrypted chat.");
@@ -84,40 +140,7 @@ export function useConcordActions() {
   const join = useMutation<ConcordCommunity, Error, { invite: ConcordInvite }>({
     mutationFn: async ({ invite }) => {
       if (!user) throw new Error("Sign in to join an encrypted chat.");
-      // `invite.token` is the raw `#fragment`; decode it to the real 32-byte
-      // token + bootstrap relays via the v2 fragment parser.
-      let tokenBytes: Uint8Array;
-      let bootstrapRelays: string[];
-      try {
-        const parsed = parseInviteUrl(invite.token);
-        tokenBytes = parsed.token;
-        bootstrapRelays = parsed.relays;
-      } catch {
-        throw new Error("Invalid invite link.");
-      }
-
-      // Fetch the sealed bundle from the token's locator on the bootstrap relays.
-      const locator = locatorHex(tokenBytes);
-      const author = signerPubkey(tokenBytes);
-      const pool = bootstrapRelays.length ? bootstrapRelays : relays;
-      const events = await Promise.all(
-        pool.map((url) =>
-          nostr
-            .relay(url)
-            .query(
-              [{ kinds: [KIND_APPLICATION_SPECIFIC], authors: [author], "#d": [locator], limit: 1 }],
-              { signal: AbortSignal.timeout(8000) },
-            )
-            .catch(() => []),
-        ),
-      );
-      const flat = events.flat().sort((a, b) => b.created_at - a.created_at);
-      if (flat.length === 0) throw new Error("Couldn't find that invite on its relays.");
-
-      // Decrypt + verify the bundle with the token (rejects impostor/revoked).
-      const bundle = parsePublicInviteEvent(flat[0], tokenBytes);
-      const community = acceptInvite(bundle.join);
-
+      const community = await resolveInvite(invite);
       await updateList({ bundle: toBundle(community), type: "add" });
       return toCommunity(community);
     },
@@ -158,9 +181,11 @@ export function useConcordActions() {
 
   return {
     createCommunity: create.mutateAsync,
+    previewInvite: preview.mutateAsync,
     joinViaInvite: join.mutateAsync,
     createChannel: createChannel.mutateAsync,
     isWorking: create.isPending || join.isPending,
+    isPreviewing: preview.isPending,
     isAddingChannel: createChannel.isPending,
     communities: (list.data?.list.entries ?? []).map((e) => ({
       communityId: e.communityId,

@@ -4,7 +4,7 @@ import { useEffect } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
-import { APP_NAME } from "@/lib/platform";
+import { APP_NAME, APP_RELAYS } from "@/lib/platform";
 import {
   addToConcordList,
   CONCORD_LIST_D_TAG,
@@ -17,7 +17,7 @@ import {
   type ConcordList,
 } from "@/lib/concord";
 import { acceptInvite, type CommunityInvite } from "@/lib/concord/invite";
-import type { Community } from "@/lib/concord/types";
+import { capRelays, type Community } from "@/lib/concord/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
@@ -219,6 +219,15 @@ export function useUpdateConcordList() {
  * list entry for `communityIdHex`. The entry's `current` bundle carries the
  * full invite, so `acceptInvite` reconstructs the read material. Returns
  * undefined until the list loads or if the community isn't in the list.
+ *
+ * Runtime relay fan-out is the UNION of the community's own relays (sealed in
+ * the invite — for a Vector community, Vector's relays) and this deployment's
+ * {@link APP_RELAYS}, so Armada users additionally gather on Armada infra while
+ * staying fully reachable to clients on the community's original relays
+ * (cross-compat). The community's own relays come FIRST so the protocol cap
+ * never drops them in favor of app relays. This union is applied to the runtime
+ * Community only; the sealed invite bundle is untouched, so a re-shared link
+ * still points other clients at the owner's original relay set.
  */
 export function useConcordCommunity(communityIdHex: string | undefined): Community | undefined {
   const { data } = useConcordList();
@@ -228,7 +237,8 @@ export function useConcordCommunity(communityIdHex: string | undefined): Communi
   const bundle = entry.current.keys.invite as CommunityInvite | undefined;
   if (!bundle) return undefined;
   try {
-    return acceptInvite(bundle);
+    const community = acceptInvite(bundle);
+    return { ...community, relays: capRelays([...community.relays, ...APP_RELAYS]) };
   } catch {
     return undefined;
   }

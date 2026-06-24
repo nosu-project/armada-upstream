@@ -272,17 +272,47 @@ export interface ConcordInvite {
 }
 
 /**
- * Parse a Concord invite URL: `https://host/invite#<token>` (optionally
- * `?relays=…`). The token rides in the fragment, which by the way the web works
- * never reaches the page's server — only this client reads it. We do not (and
- * cannot, without the protocol layer) validate the token here; we only extract
- * it and any bootstrap relays. Returns `undefined` for anything that isn't a
- * Concord invite link.
+ * A bare Concord invite token is the base64url `#fragment` payload on its own,
+ * with no surrounding URL — the domain-agnostic form. Concord invites are
+ * host-independent by design (the secret is the token; the host in a link is
+ * only cosmetic), so the token alone is a complete, shareable invite. We accept
+ * a generous base64url charset and a minimum length to avoid matching arbitrary
+ * single words; the real validation happens when the token is decoded
+ * (`parseInviteUrl`) and the sealed bundle is fetched + verified.
+ */
+const BARE_INVITE_TOKEN = /^[A-Za-z0-9_-]{24,}$/;
+
+/** True when a string looks like a bare (domain-agnostic) Concord invite token. */
+export function isBareConcordToken(input: string): boolean {
+  return BARE_INVITE_TOKEN.test(input.trim());
+}
+
+/**
+ * Parse a Concord invite into `{ token, relays }`. Accepts two forms:
+ *
+ *   1. A full invite URL — `https://host/invite#<token>` (optionally
+ *      `?relays=…`). The token rides in the fragment, which by the way the web
+ *      works never reaches the page's server — only this client reads it.
+ *   2. A bare, domain-agnostic invite token — the base64url fragment payload on
+ *      its own, no URL around it. Concord invites are host-independent, so the
+ *      token alone is a complete invite.
+ *
+ * We do not (and cannot, without the protocol layer) validate the token here;
+ * we only extract it and any bootstrap relays. Returns `undefined` for anything
+ * that isn't a recognizable Concord invite.
  */
 export function parseConcordInvite(input: string): ConcordInvite | undefined {
+  const trimmed = input.trim();
+
+  // Domain-agnostic: a bare base64url token (or `#token`) with no URL.
+  const bare = trimmed.replace(/^#/, "");
+  if (!/[:/]/.test(trimmed) && isBareConcordToken(bare)) {
+    return { token: bare, relays: [] };
+  }
+
   let url: URL;
   try {
-    url = new URL(input.trim());
+    url = new URL(trimmed);
   } catch {
     return undefined;
   }
@@ -300,9 +330,40 @@ export function parseConcordInvite(input: string): ConcordInvite | undefined {
   return { token, relays };
 }
 
-/** True when a string looks like a Concord invite link (path + fragment). */
+/** True when a string looks like a Concord invite (link or bare token). */
 export function isConcordInvite(input: string): boolean {
   return parseConcordInvite(input) !== undefined;
+}
+
+/**
+ * The result of classifying a pasted "add" input. The Add wizard's escape
+ * hatch takes one free-text field and figures out what the user pasted:
+ *
+ *   - `concord` — a Concord invite (full link or bare domain-agnostic token);
+ *     join the encrypted chat.
+ *   - `nip29`   — a relay URL (or bare host); add the server.
+ *   - `unknown` — nothing recognizable yet.
+ *
+ * Concord invites are checked first because their bare-token form never looks
+ * like a relay URL (no scheme/host), so there's no ambiguity.
+ */
+export type AddInput =
+  | { kind: "concord"; invite: ConcordInvite }
+  | { kind: "nip29"; relay: string }
+  | { kind: "unknown" };
+
+/** Classify a pasted string into a Concord invite, a NIP-29 relay, or unknown. */
+export function classifyAddInput(input: string): AddInput {
+  const trimmed = input.trim();
+  if (!trimmed) return { kind: "unknown" };
+
+  const invite = parseConcordInvite(trimmed);
+  if (invite) return { kind: "concord", invite };
+
+  const relay = normalizeRelayUrl(trimmed);
+  if (relay) return { kind: "nip29", relay };
+
+  return { kind: "unknown" };
 }
 
 // ── Protocol implementation ─────────────────────────────────────────────────

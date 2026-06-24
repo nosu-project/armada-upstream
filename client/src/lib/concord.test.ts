@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   addToConcordList,
   canonicalJson,
+  classifyAddInput,
   EMPTY_CONCORD_LIST,
   isConcordInvite,
   mergeConcordLists,
@@ -29,17 +30,61 @@ describe("parseConcordInvite", () => {
     expect(invite?.relays).toEqual(["wss://a.relay", "wss://b.relay"]);
   });
 
+  it("accepts a bare, domain-agnostic invite token", () => {
+    const token = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    expect(parseConcordInvite(token)).toEqual({ token, relays: [] });
+    // A leading `#` (as copied from a URL fragment) is tolerated.
+    expect(parseConcordInvite(`#${token}`)).toEqual({ token, relays: [] });
+  });
+
   it("rejects non-invite paths, missing fragments, relay URLs, and free text", () => {
     expect(parseConcordInvite("https://x.io/somewhere#tok")).toBeUndefined();
     expect(parseConcordInvite("https://x.io/invite")).toBeUndefined();
     expect(parseConcordInvite("wss://relay.internal")).toBeUndefined();
     expect(parseConcordInvite("just some text")).toBeUndefined();
+    expect(parseConcordInvite("relay.example.com")).toBeUndefined();
+    expect(parseConcordInvite("short")).toBeUndefined();
     expect(parseConcordInvite("")).toBeUndefined();
   });
 
   it("isConcordInvite reflects parseConcordInvite", () => {
     expect(isConcordInvite("https://x.io/invite#tok")).toBe(true);
     expect(isConcordInvite("wss://relay.internal")).toBe(false);
+  });
+});
+
+// ── unified add-input classification ─────────────────────────────────────────
+
+describe("classifyAddInput", () => {
+  it("classifies a Concord invite link", () => {
+    const out = classifyAddInput("https://x.io/invite#abc123token");
+    expect(out.kind).toBe("concord");
+    if (out.kind === "concord") expect(out.invite.token).toBe("abc123token");
+  });
+
+  it("classifies a bare, domain-agnostic Concord token", () => {
+    const token = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    const out = classifyAddInput(token);
+    expect(out.kind).toBe("concord");
+    if (out.kind === "concord") expect(out.invite.token).toBe(token);
+  });
+
+  it("classifies a relay URL as nip29", () => {
+    expect(classifyAddInput("wss://relay.internal")).toEqual({
+      kind: "nip29",
+      relay: "wss://relay.internal",
+    });
+  });
+
+  it("classifies a bare relay hostname as nip29", () => {
+    const out = classifyAddInput("relay.example.com");
+    expect(out.kind).toBe("nip29");
+    if (out.kind === "nip29") expect(out.relay).toBe("wss://relay.example.com");
+  });
+
+  it("returns unknown for empty input", () => {
+    expect(classifyAddInput("")).toEqual({ kind: "unknown" });
+    expect(classifyAddInput("   ")).toEqual({ kind: "unknown" });
   });
 });
 
