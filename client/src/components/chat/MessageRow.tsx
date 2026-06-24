@@ -121,23 +121,33 @@ export function MessageRow({
           // than inline on the header. Inline, a long name/title would get
           // crushed by the buttons; floating keeps the full name visible and the
           // toolbar clear of the body. Solid background + a small lift keeps it
-          // legible over whatever it overlaps. On mobile (no hover) it's
+          // legible over whatever it overlaps. On touch (no hover) it's
           // tap-revealed and stays non-interactive until the row is made active,
           // so the first tap only reveals it and a second, deliberate tap
-          // engages an action (avoids fat-fingering deletes).
+          // engages an action (avoids fat-fingering deletes). The tap-reveal
+          // guard is keyed to `touch:` (real touch), NOT a width breakpoint — a
+          // narrow desktop window still hovers and must stay clickable.
           <div className={cn(
-            "absolute right-2.5 z-10 flex items-center gap-0.5 max-md:gap-1 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity max-md:pointer-events-none max-md:group-data-[active]:pointer-events-auto",
-            // Continuation rows lift the panel clear of the prior message on
-            // mobile (tap-revealed, larger targets); desktop keeps it close.
-            continuation ? "-top-8 max-md:-top-10" : "-top-2.5 max-md:-top-3.5",
+            "absolute right-2.5 z-20 flex items-center gap-0.5 touch:gap-1 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity touch:pointer-events-none touch:group-data-[active]:pointer-events-auto",
+            // Sit just above the row's top-right edge, overlapping it so it stays
+            // inside the row's hover region (a fully-detached panel vanishes when
+            // the pointer leaves the row to reach it). Continuation rows are
+            // compact and header-less, but the offset is the same; touch gets a
+            // little more lift for its larger targets.
+            continuation
+              ? "-top-3 touch:-top-10"
+              : "-top-2.5 touch:-top-3.5",
           )}>
             {actions}
           </div>
         )}
         {continuation && (edited || pending) && (
           // Continuation rows hide the header, so surface the (edited)/sending
-          // markers in the same floated slot the toolbar uses.
-          <div className="absolute right-2.5 -top-8 max-md:-top-10 z-10 flex items-center gap-2 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity">
+          // markers in the same floated slot the toolbar uses. The toolbar
+          // (z-20) takes over that slot on hover/active, so hand off: show this
+          // marker at rest and fade it out when the toolbar appears, so the two
+          // never stack on top of each other.
+          <div className="absolute right-2.5 -top-3 touch:-top-10 z-10 flex items-center gap-2 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm transition-opacity pointer-events-none group-hover:opacity-0 group-data-[active]:opacity-0 group-focus-within:opacity-0">
             {edited && (
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}

@@ -176,6 +176,11 @@ export default {
 		// `fullscreen:` variant — targets an element while it is the fullscreen element.
 		plugin(({ addVariant }) => {
 			addVariant('fullscreen', '&:fullscreen');
+			// `touch:` — true touch devices only (no hover, coarse pointer). Use
+			// this instead of width breakpoints to gate tap-reveal / fat-finger
+			// guards, so a merely narrow *desktop* window keeps hover + clickable
+			// controls.
+			addVariant('touch', '@media (hover: none) and (pointer: coarse)');
 		}),
 	],
 } satisfies Config;
