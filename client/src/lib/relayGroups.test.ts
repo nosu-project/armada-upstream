@@ -6,6 +6,11 @@ import {
   KIND_GROUP_METADATA,
   relayGroupCacheFilters,
 } from "@/lib/nip29";
+import {
+  __resetProvenanceForTests,
+  eventIdsForRelay,
+  recordRelayProvenanceBatch,
+} from "@/lib/relayProvenance";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -222,5 +227,93 @@ describe("integration: scoped reads against @nostrify/indexeddb", () => {
     const cached = await store.query(relayGroupCacheFilters(undefined, ["ga1"]));
     const groups = buildRelayGroups(cached, RELAY_A);
     expect(groups.map((g) => g.id)).toEqual(["ga1"]);
+  });
+});
+
+describe("relay provenance (same-pubkey relays, e.g. zooid)", () => {
+  let store: NIndexedDB;
+  const dbNames: string[] = [];
+
+  // Two DIFFERENT relays that share ONE signing key — the real zooid case where
+  // chat.shakespeare.diy and chat.soapbox.pub both advertise pubkey fc78….
+  const SHARED_KEY = "f".repeat(64);
+  const RELAY_1 = "wss://chat.shakespeare.diy";
+  const RELAY_2 = "wss://chat.soapbox.pub";
+
+  beforeEach(async () => {
+    await __resetProvenanceForTests();
+    const name = `provenance-test-${Date.now()}-${counter++}`;
+    dbNames.push(name);
+    store = new NIndexedDB(name);
+  });
+
+  afterEach(async () => {
+    await store.close();
+    await __resetProvenanceForTests();
+    for (const name of dbNames) {
+      await new Promise<void>((resolve) => {
+        const req = indexedDB.deleteDatabase(name);
+        req.onsuccess = req.onerror = req.onblocked = () => resolve();
+      });
+    }
+    // Wipe the provenance DB between tests too.
+    await new Promise<void>((resolve) => {
+      const req = indexedDB.deleteDatabase("armada-relay-provenance");
+      req.onsuccess = req.onerror = req.onblocked = () => resolve();
+    });
+    dbNames.length = 0;
+  });
+
+  async function persist(...events: NostrEvent[]): Promise<void> {
+    await Promise.all(events.map((e) => store.event(e)));
+  }
+
+  // metadataEvent pads ids to 64 chars; provenance must record the SAME id.
+  const pad = (id: string) => id.padEnd(64, "0").slice(0, 64);
+
+  it("author-scoping ALONE bleeds across same-key relays (the bug)", async () => {
+    // Both relays sign with SHARED_KEY, so an author-scoped read can't tell them
+    // apart — it returns both relays' channels. This is the phantom-rooms bug.
+    await persist(
+      metadataEvent({ id: "s1", pubkey: SHARED_KEY, groupId: "shake-general", name: "Shakespeare" }),
+      metadataEvent({ id: "s2", pubkey: SHARED_KEY, groupId: "soap-general", name: "Soapbox" }),
+    );
+
+    const cached = await store.query(relayGroupCacheFilters(SHARED_KEY, []));
+    // BUG: relay 1 author-scoped read sees relay 2's channel too.
+    expect(buildRelayGroups(cached, RELAY_1).map((g) => g.id).sort()).toEqual([
+      "shake-general",
+      "soap-general",
+    ]);
+  });
+
+  it("provenance isolates same-key relays (the fix)", async () => {
+    await persist(
+      metadataEvent({ id: "s1", pubkey: SHARED_KEY, groupId: "shake-general", name: "Shakespeare" }),
+      metadataEvent({ id: "s2", pubkey: SHARED_KEY, groupId: "soap-general", name: "Soapbox" }),
+    );
+    // Record which relay actually served each event (as NostrBatcher does).
+    await recordRelayProvenanceBatch([pad("s1")], RELAY_1);
+    await recordRelayProvenanceBatch([pad("s2")], RELAY_2);
+
+    const candidates = await store.query(relayGroupCacheFilters(SHARED_KEY, []));
+
+    const idsForRelay1 = await eventIdsForRelay(RELAY_1);
+    const scoped1 = candidates.filter((e) => idsForRelay1.has(e.id));
+    expect(buildRelayGroups(scoped1, RELAY_1).map((g) => g.id)).toEqual(["shake-general"]);
+
+    const idsForRelay2 = await eventIdsForRelay(RELAY_2);
+    const scoped2 = candidates.filter((e) => idsForRelay2.has(e.id));
+    expect(buildRelayGroups(scoped2, RELAY_2).map((g) => g.id)).toEqual(["soap-general"]);
+  });
+
+  it("eventIdsForRelay is empty before anything is recorded", async () => {
+    expect((await eventIdsForRelay(RELAY_1)).size).toBe(0);
+  });
+
+  it("normalizes relay URLs so record and read agree", async () => {
+    await recordRelayProvenanceBatch(["s1"], "wss://chat.soapbox.pub/");
+    const ids = await eventIdsForRelay("wss://chat.soapbox.pub");
+    expect(ids.has("s1")).toBe(true);
   });
 });

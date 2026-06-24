@@ -1,6 +1,11 @@
 import type { NostrEvent, NostrFilter } from '@nostrify/types';
 import type { NPool, NStore } from '@nostrify/nostrify';
 
+import { recordRelayProvenanceBatch } from '@/lib/relayProvenance';
+
+/** kind 39000 — NIP-29 group metadata, the channel-directory event. */
+const KIND_GROUP_METADATA = 39000;
+
 /** The relay/group handle shape we wrap for caching: query + req. */
 type NRelayLike = ReturnType<NPool['relay']>;
 
@@ -626,11 +631,27 @@ export class NostrBatcher {
   }
 
   relay(url: string) {
-    return this.wrapCaching(this.pool.relay(url));
+    return this.wrapCaching(this.pool.relay(url), url);
   }
 
   group(urls: string[]) {
     return this.wrapCaching(this.pool.group(urls));
+  }
+
+  /**
+   * Record which relay served the channel-directory (kind-39000) events, so the
+   * directory cache can be scoped by relay URL. This is the only reliable way to
+   * isolate relays that share a signing key (e.g. zooid's shared relay identity,
+   * where two servers advertise the same NIP-11 `self`/`pubkey`). No-op unless
+   * the events came from a single known relay (`relay(url)`, not `group()`).
+   */
+  private recordDirectoryProvenance(events: NostrEvent[], sourceUrl: string | undefined): void {
+    if (!sourceUrl) return;
+    const ids = events.filter((e) => e.kind === KIND_GROUP_METADATA).map((e) => e.id);
+    if (ids.length === 0) return;
+    void recordRelayProvenanceBatch(ids, sourceUrl).catch(() => {
+      // best-effort
+    });
   }
 
   /**
@@ -642,15 +663,20 @@ export class NostrBatcher {
    * persisted — and chat history could not be read back from IndexedDB after a
    * refresh. The wrapper is transparent: callers see the same NRelay interface
    * and the same results; caching is fire-and-forget on the side.
+   *
+   * When `sourceUrl` is given (the single-relay `relay(url)` path), directory
+   * events are additionally tagged with that relay's provenance.
    */
-  private wrapCaching<R extends NRelayLike>(relay: R): R {
+  private wrapCaching<R extends NRelayLike>(relay: R, sourceUrl?: string): R {
     const cacheEvents = this.cacheEvents.bind(this);
+    const recordProvenance = this.recordDirectoryProvenance.bind(this);
     return new Proxy(relay, {
       get(target, prop, receiver) {
         if (prop === 'query') {
           return async (filters: NostrFilter[], opts?: { signal?: AbortSignal }) => {
             const events = await target.query(filters, opts);
             cacheEvents(events);
+            recordProvenance(events, sourceUrl);
             return events;
           };
         }
@@ -659,7 +685,10 @@ export class NostrBatcher {
             const source = target.req(filters, opts);
             return (async function* () {
               for await (const msg of source) {
-                if (msg[0] === 'EVENT') cacheEvents([msg[2]]);
+                if (msg[0] === 'EVENT') {
+                  cacheEvents([msg[2]]);
+                  recordProvenance([msg[2]], sourceUrl);
+                }
                 yield msg;
               }
             })();

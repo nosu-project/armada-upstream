@@ -10,6 +10,7 @@ import {
   KIND_GROUP_METADATA,
   relayGroupCacheFilters,
 } from "@/lib/nip29";
+import { eventIdsForRelay } from "@/lib/relayProvenance";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -50,20 +51,38 @@ export function useRelayGroups(relayUrl: string | undefined) {
 
   const queryKey = ["nip29", "groups", relayUrl];
 
+  // Read THIS relay's cached kind-39000 metadata from the local event store,
+  // scoped by relay PROVENANCE (which relay actually served each event), not
+  // just by signing key. Author-scoping alone can't isolate relays that share a
+  // key — e.g. zooid ships a shared relay identity, so two servers advertise the
+  // same NIP-11 pubkey and their channels would otherwise bleed into each other
+  // (phantom rooms that "don't exist" when opened). Provenance is recorded by
+  // NostrBatcher when it serves directory events from a specific relay.
+  //
+  // If provenance has entries for this relay, ONLY those events are returned. If
+  // it has none yet (nothing fetched from this relay this install), we return
+  // nothing from cache and let the live single-relay network read populate it —
+  // the network read is correctly isolated, so this never shows bled channels.
+  async function readScopedCache(): Promise<NostrEvent[]> {
+    const filters = relayGroupCacheFilters(relaySelf, rememberedIds);
+    if (filters.length === 0) return [];
+    const [store, provenance] = await Promise.all([eventStore, eventIdsForRelay(relayUrl!)]);
+    if (provenance.size === 0) return [];
+    const candidates = await store.query(filters);
+    return candidates.filter((e) => provenance.has(e.id));
+  }
+
   // Cache-first seed: hydrate the channel list from IndexedDB (where the relay's
   // kind-39000 metadata is persisted by NostrBatcher) so it renders instantly on
   // a fresh mount/reload instead of going blank while the relay round-trips.
-  // Reads are scoped to THIS relay (see relayGroupCacheFilters) so one server's
-  // channels never bleed into another's.
+  // Reads are scoped to THIS relay by provenance so one server's channels never
+  // bleed into another's — even when relays share a signing key.
   useEffect(() => {
     if (!relayUrl) return;
     let cancelled = false;
     void (async () => {
       if (queryClient.getQueryData(queryKey)) return;
-      const filters = relayGroupCacheFilters(relaySelf, rememberedIds);
-      if (filters.length === 0) return;
-      const store = await eventStore;
-      const cached = await store.query(filters);
+      const cached = await readScopedCache();
       if (cancelled || cached.length === 0) return;
       if (queryClient.getQueryData(queryKey)) return;
       queryClient.setQueryData(queryKey, buildRelayGroups(cached, relayUrl));
@@ -89,19 +108,12 @@ export function useRelayGroups(relayUrl: string | undefined) {
         signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
       });
 
-      // Merge with the relay's cached metadata so a sparse or empty relay read
-      // never DROPS channels we already knew about (the disappearing-channels
-      // bug). `buildRelayGroups` dedupes by id keeping the newest, so a relay
-      // edit/delete still wins (newer created_at) and a real kind-5 delete has
-      // already pruned the cache. Cache events go FIRST so the network result
-      // supersedes ties — see buildRelayGroups for the full rationale.
-      const cacheScoped = relayGroupCacheFilters(relaySelf, rememberedIds);
-      let cached: NostrEvent[] = [];
-      if (cacheScoped.length > 0) {
-        const store = await eventStore;
-        cached = await store.query(cacheScoped);
-      }
-
+      // Merge with the relay's PROVENANCE-scoped cached metadata so a sparse or
+      // empty relay read never DROPS channels we already knew about — without
+      // re-introducing the cross-relay bleed for same-key relays. The fresh
+      // network events (correctly isolated to this relay) also get their
+      // provenance recorded by NostrBatcher, so subsequent reads stay scoped.
+      const cached = await readScopedCache();
       return buildRelayGroups([...cached, ...events], relayUrl!);
     },
     enabled: Boolean(relayUrl) && !infoLoading,
