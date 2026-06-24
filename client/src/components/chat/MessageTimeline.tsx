@@ -66,6 +66,9 @@ export function MessageTimeline({
   const { messages, isLoading, loadOlder, hasMore, isLoadingOlder } = transport;
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Inner content wrapper, observed for size changes (images, link previews,
+  // lazily-loaded embeds) so the view stays pinned to the bottom as it grows.
+  const contentRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
   // When backfilling older messages, the scroll height grows above the
   // viewport. Capture the pre-prepend metrics so we can restore the reading
@@ -88,6 +91,27 @@ export function MessageTimeline({
       el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
+
+  // Keep the view pinned to the bottom as the CONTENT grows from async loads
+  // (images, link previews, embeds) that don't change `messages` and so would
+  // otherwise let the bottom-anchored view drift. Only re-pins while the user is
+  // at the bottom; honors a pending backfill restore first.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+    const ro = new ResizeObserver(() => {
+      const restore = restoreScrollRef.current;
+      if (restore) {
+        restoreScrollRef.current = null;
+        el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+        return;
+      }
+      if (isAutoScrollRef.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, []);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -134,6 +158,7 @@ export function MessageTimeline({
 
   return (
     <div ref={scrollRef} onScroll={handleScroll} className={className}>
+      <div ref={contentRef}>
       {isLoading ? (
         <div className="space-y-3 p-2">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -165,6 +190,7 @@ export function MessageTimeline({
           })}
         </>
       )}
+      </div>
     </div>
   );
 }

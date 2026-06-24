@@ -237,6 +237,9 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { config } = useAppContext();
   const { activeCall, joinDmCall } = useCall();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The inner content wrapper, observed for size changes (images/embeds/lazy
+  // decrypts) so we can keep the view pinned to the bottom as it grows.
+  const contentRef = useRef<HTMLDivElement>(null);
   // Pre-prepend scroll metrics, used to hold the reading position when older
   // messages are backfilled above the viewport.
   const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
@@ -268,17 +271,57 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
     [participants, user?.pubkey],
   );
 
+  // Stick-to-bottom behavior. A chat should stay pinned to the newest message
+  // until the USER scrolls up — and crucially it must STAY pinned as async
+  // content (images, link previews, lazily-decrypted messages) loads and grows
+  // the thread, which doesn't trigger a `messages` change. We track whether the
+  // view is currently at the bottom (`pinnedRef`) and a ResizeObserver re-pins
+  // on any content growth while pinned.
+  const pinnedRef = useRef(true);
+  // Distance from the bottom (px) under which we consider the view "pinned".
+  const PIN_THRESHOLD = 80;
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  // Re-pin to bottom whenever the content grows (images/embeds/lazy decrypts) —
+  // but only while the user hasn't scrolled away. Also handles the backfill
+  // scroll-position restore when older history is prepended above the viewport.
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    const content = contentRef.current;
+    if (!el || !content) return;
+
+    const onResize = () => {
+      const restore = restoreScrollRef.current;
+      if (restore) {
+        restoreScrollRef.current = null;
+        el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+        return;
+      }
+      if (pinnedRef.current) el.scrollTop = el.scrollHeight;
+    };
+
+    const ro = new ResizeObserver(onResize);
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [peer]);
+
+  // On a new message (and on first load) pin to bottom if the user is pinned.
+  useEffect(() => {
     const restore = restoreScrollRef.current;
     if (restore) {
-      restoreScrollRef.current = null;
-      el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+      const el = scrollRef.current;
+      if (el) {
+        restoreScrollRef.current = null;
+        el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+      }
       return;
     }
-    el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    if (pinnedRef.current) scrollToBottom();
+  }, [messages, scrollToBottom]);
 
   // Lazy decryption: a single IntersectionObserver (rooted on the scroll
   // container) decrypts placeholder rows as they scroll into view, so opening a
@@ -293,8 +336,14 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   if (!observerRef.current && typeof IntersectionObserver !== "undefined") {
     observerRef.current = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
+        // Decrypt bottom-up: a thread is anchored to the newest message at the
+        // bottom, so the visible rows should fill in from the bottom of the
+        // screen upward, not top-down. Sort the intersecting rows by vertical
+        // position (lowest on screen first) before kicking off their decrypts.
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.boundingClientRect.top - a.boundingClientRect.top);
+        for (const entry of visible) {
           const id = elementIds.current.get(entry.target);
           if (id) decryptVisibleRef.current(id);
         }
@@ -319,10 +368,17 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
     };
   }, []);
 
-  // Backfill older history when the user scrolls near the top.
+  // Track whether the user is at the bottom (so async growth keeps it pinned),
+  // and backfill older history when the user scrolls near the top.
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+
+    // Pinned = within PIN_THRESHOLD px of the bottom. Scrolling up unpins;
+    // scrolling back down re-pins. While unpinned, content growth won't yank.
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    pinnedRef.current = distanceFromBottom <= PIN_THRESHOLD;
+
     if (hasMore && !isLoadingOlder && el.scrollTop < 200) {
       restoreScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
       void loadOlder().then((added) => {
@@ -330,6 +386,12 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       });
     }
   }, [hasMore, isLoadingOlder, loadOlder]);
+
+  // Reset to pinned (and jump to bottom) whenever we switch conversations.
+  useEffect(() => {
+    pinnedRef.current = true;
+    restoreScrollRef.current = null;
+  }, [peer]);
 
   // Mark the thread read up to the newest message while it's visible.
   useEffect(() => {
@@ -419,6 +481,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       <CallStageSlot active={inThisCall} />
 
       <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4">
+        <div ref={contentRef}>
         {isLoading ? (
           <div className="space-y-3 p-2">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -462,6 +525,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             })}
           </>
         )}
+        </div>
       </div>
 
       <ChatComposer
