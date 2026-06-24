@@ -32,12 +32,14 @@ import { useConcordActions } from "@/hooks/useConcordActions";
 import { useConcordCommunity } from "@/hooks/useConcordList";
 import { useConcordCommunityActions } from "@/hooks/useConcordCommunityActions";
 import { useConcordMetadata } from "@/hooks/useConcordMetadata";
+import { useConcordModeration } from "@/hooks/useConcordModeration";
 import { useConcordRosterActions, concordMembers } from "@/hooks/useConcordRoster";
 import { useConcordTransport } from "@/hooks/useConcordTransport";
 import { useConcordVoiceServer } from "@/hooks/useConcordVoice";
 import { useConcordVoicePresence } from "@/hooks/useConcordVoice";
 import { useSendConcordMessage } from "@/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/lib/concord/roles";
 import type { Channel, Community } from "@/lib/concord/types";
@@ -179,6 +181,12 @@ export function ConcordPage() {
   const canManageMetadata = Boolean(
     user && roster && isAuthorized(roster.roster, user.pubkey, ownerHex, Permissions.MANAGE_METADATA),
   );
+  const canKickAny = Boolean(
+    user && roster && isAuthorized(roster.roster, user.pubkey, ownerHex, Permissions.KICK),
+  );
+  const canBanAny = Boolean(
+    user && roster && isAuthorized(roster.roster, user.pubkey, ownerHex, Permissions.BAN),
+  );
   const canWrite = Boolean(user && channel);
 
   const { transport, reactionsFor } = useConcordTransport(community, channel, canWrite, iAmOwner);
@@ -232,6 +240,10 @@ export function ConcordPage() {
     return [...set];
   }, [roster, transport.messages, user]);
 
+  // Moderation: ban (read-cut), kick (cooperative), unban. The recipient set for
+  // a ban's read-cut is everyone we know about minus the banned member.
+  const moderation = useConcordModeration(community, memberPubkeys);
+
   if (!communityId) return <Navigate to="/" replace />;
 
   // Send via the rich composer: the whole content is sealed; the reply target
@@ -273,6 +285,23 @@ export function ConcordPage() {
   /** Map the shared MemberList's role-string action onto Concord's grant model. */
   const handleSetRole = (pubkey: string, roles: string[]) => {
     setAdmin({ member: pubkey, admin: roles.includes("admin") }).catch(() => {});
+  };
+
+  /** Ban a member; warns when this signer can't perform the key read-cut. */
+  const handleBan = async (pubkey: string) => {
+    try {
+      const { rekeyed } = await moderation.ban({ target: pubkey });
+      if (rekeyed) {
+        toast({ title: "Member banned", description: "Keys rotated; they can no longer read new messages." });
+      } else {
+        toast({
+          title: "Member banned",
+          description: "Added to the banlist. Sign in with your key (not a remote signer) to also rotate keys.",
+        });
+      }
+    } catch (e) {
+      toast({ title: "Couldn't ban", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+    }
   };
 
   // The channel-list body, shared verbatim by the desktop sidebar and the
@@ -545,10 +574,14 @@ export function ConcordPage() {
               <MemberList
                 admins={memberAdmins}
                 members={memberPubkeys}
-                canModerate={iAmOwner}
+                canModerate={canManageRoles || canKickAny || canBanAny}
                 viewerIsAdmin={iAmOwner}
                 currentUserPubkey={user?.pubkey}
-                onSetRole={iAmOwner ? handleSetRole : undefined}
+                onSetRole={canManageRoles ? handleSetRole : undefined}
+                onKick={canKickAny ? (pk) => moderation.kick({ target: pk }).catch(() => {}) : undefined}
+                onBan={canBanAny ? handleBan : undefined}
+                onUnban={canBanAny ? (pk) => moderation.unban({ target: pk }).catch(() => {}) : undefined}
+                bannedPubkeys={moderation.banned}
                 onClose={() => setMembersOpen(false)}
               />
             </div>

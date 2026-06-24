@@ -18,7 +18,7 @@ import { finalizeEvent, verifyEvent } from "nostr-tools/pure";
 import type { NostrEvent } from "nostr-tools/pure";
 
 import { open as cipherOpen, seal as cipherSeal } from "@/lib/concord/cipher";
-import { channelPseudonym, grantLocator } from "@/lib/concord/derive";
+import { banlistLocator, channelPseudonym, grantLocator } from "@/lib/concord/derive";
 import {
   buildEditionInner,
   parseEditionInner,
@@ -155,6 +155,24 @@ export function buildChannelMetadataEditionUnsigned(opts: {
     version: opts.version,
     prevHash: opts.prevHash,
     content: JSON.stringify(opts.metadata),
+    createdAtSecs: opts.createdAtSecs,
+  });
+}
+
+/** Build an unsigned Banlist edition (vsk=4, entity_id == banlistLocator(communityId)). */
+export function buildBanlistEditionUnsigned(opts: {
+  communityId: Uint8Array;
+  banned: string[];
+  version: bigint;
+  prevHash?: Uint8Array;
+  createdAtSecs: number;
+}) {
+  return buildEditionInner({
+    vsk: VSK_BANLIST,
+    entityId: banlistLocator(opts.communityId),
+    version: opts.version,
+    prevHash: opts.prevHash,
+    content: JSON.stringify(opts.banned),
     createdAtSecs: opts.createdAtSecs,
   });
 }
@@ -338,6 +356,65 @@ function metadataAuthorized(
   // against the top position (owner can always; non-owner needs the permission bit).
   return canActOnPosition(roster, authorHex, ownerHex, Number.MAX_SAFE_INTEGER, permission);
 }
+
+// ── Banlist fold (vsk=4) ─────────────────────────────────────────────────────
+
+/** The folded banlist + the entity head (for chaining the next ban edition). */
+export interface FoldedBanlist {
+  /** Banned pubkeys (lowercase hex). */
+  banned: Set<string>;
+  head?: { version: bigint; hash: Uint8Array };
+}
+
+/**
+ * Fold the banlist control plane (vsk=4) from the kind-3308 outers. The head
+ * edition's author must hold BAN (or be the owner); an unauthorized banlist is
+ * ignored (fail-closed → empty banlist). The banlist entity is unique per
+ * community (`banlistLocator`).
+ */
+export function foldBanlist(
+  outers: NostrEvent[],
+  serverRoot: Uint8Array,
+  communityId: Uint8Array,
+  roster: CommunityRoles,
+  ownerHex: string | undefined,
+): FoldedBanlist {
+  const eid = bytesToHex(banlistLocator(communityId));
+  const editions: ParsedEdition[] = [];
+  for (const outer of outers) {
+    let inner: NostrEvent;
+    try {
+      inner = openControlEdition(outer, serverRoot);
+    } catch {
+      continue;
+    }
+    let parsed: ParsedEdition;
+    try {
+      parsed = parseEditionInner(inner);
+    } catch {
+      continue;
+    }
+    if (parsed.vsk === VSK_BANLIST && bytesToHex(parsed.entityId) === eid) editions.push(parsed);
+  }
+  if (editions.length === 0) return { banned: new Set() };
+
+  const result = fold(editions.map(toFoldEdition), 0n);
+  if (result.head === null) return { banned: new Set() };
+  const head = editions[result.head];
+  if (!metadataAuthorized(roster, head.author, ownerHex, Permissions.BAN)) {
+    return { banned: new Set() };
+  }
+  try {
+    const list = JSON.parse(head.content) as string[];
+    return {
+      banned: new Set(Array.isArray(list) ? list.filter((s) => typeof s === "string") : []),
+      head: { version: head.version, hash: head.selfHash },
+    };
+  } catch {
+    return { banned: new Set() };
+  }
+}
+
 
 function push(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdition) {
   const list = m.get(key);

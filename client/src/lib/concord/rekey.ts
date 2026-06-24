@@ -120,3 +120,158 @@ function latin1ToBytes(s: string): Uint8Array {
   for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0xff;
   return b;
 }
+
+// ── Rekey EVENT layer (kind 3303 carrying N blobs) ───────────────────────────
+
+import { finalizeEvent, generateSecretKey, verifyEvent } from "nostr-tools/pure";
+import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
+
+import { baseRekeyPseudonym, rekeyPseudonym } from "@/lib/concord/derive";
+import { KIND_COMMUNITY_REKEY } from "@/lib/concord/kinds";
+import { SERVER_ROOT_SCOPE_HEX } from "@/lib/concord/types";
+
+const PROTOCOL_VERSION = "1";
+
+/** Encode a scope to its 32-byte-hex `scope` tag (channel id, or the all-zero server-root sentinel). */
+function scopeToHex(scope: RekeyScope): string {
+  return bytesToHex(rekeyScopeId32(scope));
+}
+
+/** Decode a `scope` tag hex back to a RekeyScope (all-zero ⇒ server root). */
+function scopeFromHex(hex: string): RekeyScope | undefined {
+  if (hex.length !== 64 || !/^[0-9a-f]{64}$/i.test(hex)) return undefined;
+  if (hex.toLowerCase() === SERVER_ROOT_SCOPE_HEX) return { kind: "server-root" };
+  const bytes = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return { kind: "channel", channelId: bytes };
+}
+
+/** The parsed contents of a 3303 rekey outer (after server-root decrypt + inner verify). */
+export interface ParsedRekey {
+  /** The rotator's pubkey (hex), from the inner signature. */
+  rotator: string;
+  scope: RekeyScope;
+  newEpoch: bigint;
+  prevEpoch: bigint;
+  prevKeyCommitment: Uint8Array;
+  blobs: RekeyBlob[];
+}
+
+/** Build the rotator-signed INNER rekey event (kind 3303), shared by both rekey kinds. */
+function buildRekeyInner(
+  rotatorSk: Uint8Array,
+  scope: RekeyScope,
+  newEpoch: bigint,
+  prevEpoch: bigint,
+  prevKeyCommitment: Uint8Array,
+  blobs: RekeyBlob[],
+): NostrEvent {
+  if (newEpoch <= prevEpoch) {
+    throw new Error(`rekey new_epoch ${newEpoch} must exceed prev_epoch ${prevEpoch}`);
+  }
+  const template: EventTemplate = {
+    kind: KIND_COMMUNITY_REKEY,
+    content: JSON.stringify(blobs),
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ["scope", scopeToHex(scope)],
+      ["newepoch", newEpoch.toString()],
+      ["prevepoch", prevEpoch.toString()],
+      ["prevcommit", bytesToHex(prevKeyCommitment)],
+    ],
+  };
+  return finalizeEvent(template, rotatorSk);
+}
+
+/** Seal a signed inner rekey into the ephemeral-signed outer, addressed by `addressHex`. */
+function sealRekeyOuter(inner: NostrEvent, envelopeKey: Uint8Array, addressHex: string): NostrEvent {
+  const content = cipherSeal(envelopeKey, JSON.stringify(inner));
+  const ephemeral = generateSecretKey();
+  return finalizeEvent(
+    {
+      kind: KIND_COMMUNITY_REKEY,
+      content,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [["z", addressHex], ["v", PROTOCOL_VERSION]],
+    },
+    ephemeral,
+  );
+}
+
+/**
+ * Build a signed 3303 CHANNEL rekey: enveloped under the STABLE server-root key
+ * and addressed by `rekeyPseudonym(serverRoot, channelId, newEpoch)`, so any
+ * member recovers any epoch independently. The new channel key lives only in the
+ * per-recipient ECDH `blobs` — a removed member reads the header but recovers no
+ * key.
+ */
+export function buildChannelRekeyEvent(opts: {
+  rotatorSk: Uint8Array;
+  serverRoot: Uint8Array;
+  channelId: Uint8Array;
+  newEpoch: bigint;
+  prevEpoch: bigint;
+  prevKeyCommitment: Uint8Array;
+  blobs: RekeyBlob[];
+}): NostrEvent {
+  const scope: RekeyScope = { kind: "channel", channelId: opts.channelId };
+  const inner = buildRekeyInner(opts.rotatorSk, scope, opts.newEpoch, opts.prevEpoch, opts.prevKeyCommitment, opts.blobs);
+  const address = bytesToHex(rekeyPseudonym(opts.serverRoot, opts.channelId, opts.newEpoch));
+  return sealRekeyOuter(inner, opts.serverRoot, address);
+}
+
+/**
+ * Build a signed 3303 SERVER-ROOT rekey (base rotation): enveloped under the
+ * PRIOR root and addressed by `baseRekeyPseudonym(priorRoot, communityId,
+ * newEpoch)`. The new root reaches members only via ECDH blobs.
+ */
+export function buildServerRootRekeyEvent(opts: {
+  rotatorSk: Uint8Array;
+  priorRoot: Uint8Array;
+  communityId: Uint8Array;
+  newEpoch: bigint;
+  prevEpoch: bigint;
+  prevKeyCommitment: Uint8Array;
+  blobs: RekeyBlob[];
+}): NostrEvent {
+  const scope: RekeyScope = { kind: "server-root" };
+  const inner = buildRekeyInner(opts.rotatorSk, scope, opts.newEpoch, opts.prevEpoch, opts.prevKeyCommitment, opts.blobs);
+  const address = bytesToHex(baseRekeyPseudonym(opts.priorRoot, opts.communityId, opts.newEpoch));
+  return sealRekeyOuter(inner, opts.priorRoot, address);
+}
+
+/**
+ * Open + verify a 3303 rekey outer with the server-root key (which every member
+ * always holds): decrypt, parse the inner, verify the rotator's inner signature,
+ * and read the rekey fields. Does NOT check authority or open any blob — the
+ * caller does both. Throws on a wrong key (non-member) or tampering.
+ */
+export function openRekeyEvent(outer: NostrEvent, envelopeKey: Uint8Array): ParsedRekey {
+  if (outer.kind !== KIND_COMMUNITY_REKEY) throw new Error("not a rekey outer (kind != 3303)");
+  const v = outer.tags.find((t) => t[0] === "v")?.[1];
+  if (v !== PROTOCOL_VERSION) throw new Error(`unsupported rekey version: ${v}`);
+
+  const json = cipherOpen(envelopeKey, outer.content);
+  const inner = JSON.parse(json) as NostrEvent;
+  if (!verifyEvent(inner)) throw new Error("rekey inner signature invalid");
+  if (inner.kind !== KIND_COMMUNITY_REKEY) throw new Error("rekey inner is not kind 3303");
+
+  const scopeHex = inner.tags.find((t) => t[0] === "scope")?.[1];
+  const scope = scopeHex ? scopeFromHex(scopeHex) : undefined;
+  if (!scope) throw new Error("rekey missing/invalid scope");
+  const newEpoch = BigInt(inner.tags.find((t) => t[0] === "newepoch")?.[1] ?? "0");
+  const prevEpoch = BigInt(inner.tags.find((t) => t[0] === "prevepoch")?.[1] ?? "0");
+  const commitHex = inner.tags.find((t) => t[0] === "prevcommit")?.[1] ?? "";
+  const prevKeyCommitment = hexTo32(commitHex);
+  const blobs = JSON.parse(inner.content) as RekeyBlob[];
+
+  return { rotator: inner.pubkey, scope, newEpoch, prevEpoch, prevKeyCommitment, blobs };
+}
+
+function hexTo32(hex: string): Uint8Array {
+  const b = new Uint8Array(32);
+  if (hex.length === 64) for (let i = 0; i < 32; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return b;
+}
+
+export { verifyEvent };

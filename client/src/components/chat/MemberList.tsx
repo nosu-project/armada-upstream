@@ -1,4 +1,4 @@
-import { AtSign, Copy, Crown, IdCard, MoreVertical, Shield, ShieldOff, UserMinus, X } from "lucide-react";
+import { AtSign, Ban, Copy, Crown, IdCard, MoreVertical, Shield, ShieldOff, UserMinus, X } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
@@ -34,6 +34,14 @@ interface MemberRowProps {
   currentUserPubkey?: string;
   onRemove?: (pubkey: string) => void;
   onSetRole?: (pubkey: string, roles: string[]) => void;
+  /** Concord: cooperatively kick (honest clients drop them; they can rejoin). */
+  onKick?: (pubkey: string) => void;
+  /** Concord: ban + read-cut (rotate keys to lock them out). */
+  onBan?: (pubkey: string) => void;
+  /** Concord: unban a currently-banned member. */
+  onUnban?: (pubkey: string) => void;
+  /** Concord: whether this member is currently banned. */
+  isBanned?: boolean;
   /** Open the per-server nickname/label editor (shown only on the viewer's own row). */
   onEditProfile?: () => void;
 }
@@ -46,6 +54,10 @@ function MemberRow({
   currentUserPubkey,
   onRemove,
   onSetRole,
+  onKick,
+  onBan,
+  onUnban,
+  isBanned,
   onEditProfile,
 }: MemberRowProps) {
   const author = useAuthor(pubkey);
@@ -117,7 +129,7 @@ function MemberRow({
             </DropdownMenuItem>
           )}
 
-          {canActOnUser && (onSetRole || onRemove) && (
+          {canActOnUser && (onSetRole || onRemove || onKick || onBan || onUnban) && (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuLabel className="px-2 pb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground/80">
@@ -170,6 +182,28 @@ function MemberRow({
                   Remove from channel
                 </DropdownMenuItem>
               )}
+
+              {onKick && (
+                <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => onKick(pubkey)}>
+                  <UserMinus className="size-4" />
+                  Kick (can rejoin)
+                </DropdownMenuItem>
+              )}
+              {onBan && !isBanned && (
+                <DropdownMenuItem
+                  className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
+                  onClick={() => onBan(pubkey)}
+                >
+                  <Ban className="size-4" />
+                  Ban &amp; lock out
+                </DropdownMenuItem>
+              )}
+              {onUnban && isBanned && (
+                <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => onUnban(pubkey)}>
+                  <ShieldOff className="size-4" />
+                  Unban
+                </DropdownMenuItem>
+              )}
             </>
           )}
         </DropdownMenuContent>
@@ -188,6 +222,12 @@ interface MemberListProps {
   currentUserPubkey?: string;
   onRemove?: (pubkey: string) => void;
   onSetRole?: (pubkey: string, roles: string[]) => void;
+  /** Concord moderation (additive; NIP-29 leaves these unset). */
+  onKick?: (pubkey: string) => void;
+  onBan?: (pubkey: string) => void;
+  onUnban?: (pubkey: string) => void;
+  /** Concord: the set of currently-banned pubkeys (hex). */
+  bannedPubkeys?: Set<string>;
   /** Close the panel (mobile overlay close button). */
   onClose?: () => void;
   /** Open the per-server nickname/label editor for the current user. */
@@ -205,6 +245,10 @@ export function MemberList({
   currentUserPubkey,
   onRemove,
   onSetRole,
+  onKick,
+  onBan,
+  onUnban,
+  bannedPubkeys,
   onClose,
   onEditProfile,
   className,
@@ -253,6 +297,10 @@ export function MemberList({
               currentUserPubkey={currentUserPubkey}
               onRemove={onRemove}
               onSetRole={onSetRole}
+              onKick={onKick}
+              onBan={onBan}
+              onUnban={onUnban}
+              isBanned={bannedPubkeys?.has(admin.pubkey)}
               onEditProfile={onEditProfile}
             />
           ))}
@@ -276,6 +324,10 @@ export function MemberList({
             currentUserPubkey={currentUserPubkey}
             onRemove={onRemove}
             onSetRole={onSetRole}
+            onKick={onKick}
+            onBan={onBan}
+            onUnban={onUnban}
+            isBanned={bannedPubkeys?.has(pubkey)}
             onEditProfile={onEditProfile}
           />
         ))

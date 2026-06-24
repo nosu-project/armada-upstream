@@ -3,9 +3,12 @@ import { generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildBanlistEditionUnsigned,
   buildChannelMetadataEditionUnsigned,
   buildCommunityRootEditionUnsigned,
   buildRoleEditionUnsigned,
+  buildGrantEditionUnsigned,
+  foldBanlist,
   foldMetadata,
   foldRoster,
   sealControlEdition,
@@ -190,5 +193,69 @@ describe("encrypted community image", () => {
       globalThis.fetch = realFetch;
       URL.createObjectURL = realCreate;
     }
+  });
+});
+
+describe("banlist fold (vsk=4)", () => {
+  it("an owner's ban folds; an unauthorized ban is ignored", () => {
+    const { ownerSk, community } = mintWithOwner();
+    const strangerSk = generateSecretKey();
+    const target = "cc".repeat(32);
+    const now = 1700000000;
+
+    const ownerBan = sealAs(
+      ownerSk,
+      buildBanlistEditionUnsigned({ communityId: community.id, banned: [target], version: 1n, createdAtSecs: now }),
+      community.serverRootKey,
+      community.id,
+    );
+    const roster = foldRoster([ownerBan], community.serverRootKey, community.id, community.ownerAttestation);
+    const banlist = foldBanlist([ownerBan], community.serverRootKey, community.id, roster.roster, roster.ownerHex);
+    expect(banlist.banned.has(target)).toBe(true);
+    expect(banlist.head?.version).toBe(1n);
+
+    // A stranger (no BAN permission) trying to ban is dropped.
+    const strangerBan = sealAs(
+      strangerSk,
+      buildBanlistEditionUnsigned({ communityId: community.id, banned: ["dd".repeat(32)], version: 2n, createdAtSecs: now + 5 }),
+      community.serverRootKey,
+      community.id,
+    );
+    const banlist2 = foldBanlist(
+      [strangerBan],
+      community.serverRootKey,
+      community.id,
+      roster.roster,
+      roster.ownerHex,
+    );
+    expect(banlist2.banned.size).toBe(0);
+  });
+
+  it("an admin granted BAN can ban", () => {
+    const { ownerSk, community } = mintWithOwner();
+    const adminSk = generateSecretKey();
+    const adminHex = getPublicKey(adminSk);
+    const target = "cc".repeat(32);
+    const now = 1700000000;
+    const role = adminRole("a".repeat(64));
+
+    const roleEd = sealAs(ownerSk, buildRoleEditionUnsigned({ role, version: 1n, createdAtSecs: now }), community.serverRootKey, community.id);
+    const grantEd = sealAs(
+      ownerSk,
+      buildGrantEditionUnsigned({ communityId: community.id, grant: { member: adminHex, roleIds: [role.roleId] }, version: 1n, createdAtSecs: now }),
+      community.serverRootKey,
+      community.id,
+    );
+    const adminBan = sealAs(
+      adminSk,
+      buildBanlistEditionUnsigned({ communityId: community.id, banned: [target], version: 1n, createdAtSecs: now + 5 }),
+      community.serverRootKey,
+      community.id,
+    );
+
+    const outers = [roleEd, grantEd, adminBan];
+    const roster = foldRoster(outers, community.serverRootKey, community.id, community.ownerAttestation);
+    const banlist = foldBanlist(outers, community.serverRootKey, community.id, roster.roster, roster.ownerHex);
+    expect(banlist.banned.has(target)).toBe(true);
   });
 });

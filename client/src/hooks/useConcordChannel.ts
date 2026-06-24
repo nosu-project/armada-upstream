@@ -1,9 +1,13 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
+import { useConcordBanlist } from "@/hooks/useConcordModeration";
+import { useConcordChannelEpochs } from "@/hooks/useConcordRekey";
+import { useConcordRoster } from "@/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useRotatorSecretKey } from "@/hooks/useRotatorSecretKey";
 import { channelPseudonym } from "@/lib/concord/derive";
 import {
   buildInnerEvent,
@@ -13,6 +17,7 @@ import {
   type OpenedMessage,
 } from "@/lib/concord/envelope";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/lib/concord/kinds";
+import { canActOnMember, Permissions } from "@/lib/concord/roles";
 import { runExclusive } from "@/lib/signerQueue";
 import type { Channel, Community } from "@/lib/concord/types";
 
@@ -62,15 +67,23 @@ function openMessages(
   events: NostrEvent[],
   channelId: Uint8Array,
   epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
+  moderation?: {
+    /** Banned author pubkeys (hex): every event from them is dropped. */
+    banned: Set<string>;
+    /** Whether `deleter` is authorized to moderation-hide a message by `author`. */
+    canHide: (deleter: string, author: string) => boolean;
+  },
 ): { messages: OpenedMessage[]; deletes: Map<string, Set<string>> } {
   const byId = new Map<string, OpenedMessage>();
-  // Tombstones: target message id → set of pubkeys that authored a delete
-  // for it. A delete only takes effect for the original author's own
-  // message (cooperative self-delete), mirroring Vector's hide model.
+  // Tombstones: target message id → set of pubkeys that authored a delete for
+  // it. A delete takes effect when authored by the message's OWN author
+  // (cooperative self-delete) OR by an authorized moderator (moderation-hide).
   const deletes = new Map<string, Set<string>>();
   for (const ev of events) {
     try {
       const opened = openMessageMulti(ev, channelId, epochKeys);
+      // Inbound ban enforcement: drop every event from a banned author.
+      if (moderation?.banned.has(opened.author)) continue;
       if (opened.kind === KIND_COMMUNITY_DELETE) {
         const target = opened.tags.find((t) => t[0] === "e")?.[1];
         if (!target) continue;
@@ -79,14 +92,21 @@ function openMessages(
         authors.add(opened.author);
         continue;
       }
+      // Drop kick/typing/etc. — only message-shaped kinds populate the timeline.
       byId.set(opened.messageId, opened);
     } catch {
       // NoHeldEpoch / splice / bad-sig → not ours or invalid; skip.
     }
   }
-  // Drop any message its own author deleted (within this batch).
+  // Apply deletes: self-delete (author deleted their own) or an authorized
+  // moderation-hide (a deleter who can act on the message's author).
   for (const [id, msg] of byId) {
-    if (deletes.get(id)?.has(msg.author)) byId.delete(id);
+    const deleters = deletes.get(id);
+    if (!deleters) continue;
+    const hidden =
+      deleters.has(msg.author) ||
+      (moderation && [...deleters].some((d) => moderation.canHide(d, msg.author)));
+    if (hidden) byId.delete(id);
   }
   // Return the tombstone map too, so a merge across fetches can prune an
   // already-known message whose author published a delete in THIS batch.
@@ -109,8 +129,39 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   const { nostr } = useNostr();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
+  const roster = useConcordRoster(community);
+  const banlist = useConcordBanlist(community);
+  const mySkHex = useRotatorSecretKey();
+  // Catch up post-rekey epoch keys from the relays (the bundle only conveys the
+  // current key at join). The read path opens messages under ALL retained
+  // epochs, so a member who was present through a ban-rekey keeps reading.
+  const caughtUp = useConcordChannelEpochs(community, channel, mySkHex);
+
+  // Moderation context for the read path: drop banned authors' events, and let
+  // an authorized moderator's 3305 hide another member's message. Verified
+  // against the folded roster so a forged hide/ban has no effect.
+  const moderation = useMemo(() => {
+    const banned = banlist.data?.banned ?? new Set<string>();
+    const r = roster.data;
+    return {
+      banned,
+      canHide: (deleter: string, author: string) =>
+        Boolean(r && canActOnMember(r.roster, deleter, r.ownerHex, author, Permissions.MANAGE_MESSAGES)),
+    };
+  }, [banlist.data, roster.data]);
+
+  /** The full set of epoch keys to decode under: bundle seed ∪ caught-up. */
+  const allEpochKeys = useMemo(() => {
+    if (!channel) return [];
+    const byEpoch = new Map<string, { epoch: bigint; key: Uint8Array }>();
+    for (const ek of readEpochKeys(channel)) byEpoch.set(ek.epoch.toString(), ek);
+    for (const ek of caughtUp.data ?? []) byEpoch.set(ek.epoch.toString(), ek);
+    return [...byEpoch.values()].sort((a, b) => (a.epoch > b.epoch ? -1 : a.epoch < b.epoch ? 1 : 0));
+  }, [channel, caughtUp.data]);
 
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
+  // Epoch signature: changes when a rekey is caught up, so we can re-read.
+  const epochSig = allEpochKeys.map((e) => e.epoch.toString()).join(",");
   const queryKey = ["concord", "channel", channelIdHex];
 
   // Seed from the local store (decrypt sealed blobs by `#z`) before the network
@@ -139,14 +190,21 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelIdHex, community, eventStore, queryClient]);
 
+  // Re-read immediately when the held epoch set changes (a rekey was caught up),
+  // rather than waiting for the next poll.
+  useEffect(() => {
+    if (channelIdHex) queryClient.invalidateQueries({ queryKey: ["concord", "channel", channelIdHex] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [epochSig]);
+
   return useQuery({
     queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
     refetchInterval: 15_000,
     queryFn: async ({ signal }) => {
-      const epochKeys = readEpochKeys(channel!);
-      const zs = channelPseudonyms(channel!);
+      const epochKeys = allEpochKeys;
+      const zs = epochKeys.map((ek) => bytesToHex(channelPseudonym(ek.key, channel!.id, ek.epoch)));
       const relays = community!.relays;
       const results = await Promise.all(
         relays.map((url) =>
@@ -158,7 +216,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
             .catch(() => [] as NostrEvent[]),
         ),
       );
-      const { messages: opened, deletes } = openMessages(results.flat(), channel!.id, epochKeys);
+      const { messages: opened, deletes } = openMessages(results.flat(), channel!.id, epochKeys, moderation);
 
       // Merge with what's already shown rather than replacing it. The network
       // query can transiently return fewer messages than we already have —
@@ -173,7 +231,15 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       for (const m of prev) byId.set(m.messageId, m);
       for (const m of opened) byId.set(m.messageId, m);
       for (const [id, msg] of byId) {
-        if (deletes.get(id)?.has(msg.author)) byId.delete(id);
+        // Drop banned authors and honor self-delete / authorized moderation-hide.
+        if (moderation.banned.has(msg.author)) {
+          byId.delete(id);
+          continue;
+        }
+        const deleters = deletes.get(id);
+        if (deleters && (deleters.has(msg.author) || [...deleters].some((d) => moderation.canHide(d, msg.author)))) {
+          byId.delete(id);
+        }
       }
 
       // Honor optimistic self-deletes: hide ids the user just deleted locally
