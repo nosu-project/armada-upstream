@@ -117,6 +117,33 @@ function Nip29ChatMessage({
   );
 }
 
+/**
+ * A placeholder shaped exactly like {@link ChatComposer}'s input row, shown
+ * while membership is still resolving so an actual member never sees the "join
+ * to message" prompt flash — and so swapping to the real composer doesn't shift
+ * the layout. Mirrors ChatComposer's outer wrapper, `p-2` body, and the
+ * `clip-corner-lg bg-secondary/60` input pill (round + button, text line, round
+ * action button).
+ */
+function ComposerSkeleton() {
+  return (
+    <div
+      className="relative shrink-0 pb-[env(safe-area-inset-bottom,0px)] sidebar:pb-1"
+      aria-hidden
+    >
+      <div className="p-2">
+        <div className="flex items-end gap-0.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
+          <Skeleton className="size-9 shrink-0 rounded-full" />
+          <div className="flex-1 min-w-0 px-1.5 py-2">
+            <Skeleton className="h-5 w-40 max-w-full rounded" />
+          </div>
+          <Skeleton className="size-9 shrink-0 rounded-full" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface GroupChatProps {
   relayUrl: string;
   groupId: string;
@@ -481,11 +508,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           />
         ) : membershipPending ? (
           // Membership is still resolving — don't flash the "join to message"
-          // prompt at an actual member. Show a composer-shaped skeleton, sized
-          // close to the real composer so the swap doesn't jump the scroll.
-          <div className="border-t p-3 shrink-0 pb-safe">
-            <Skeleton className="h-9 w-full rounded-md" />
-          </div>
+          // prompt at an actual member. Show a composer-shaped skeleton (same
+          // frame/padding/pill as ChatComposer) so the swap doesn't jump.
+          <ComposerSkeleton />
         ) : (
           <div className="border-t p-3 shrink-0 pb-safe">
             {user ? (
