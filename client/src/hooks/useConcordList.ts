@@ -158,9 +158,13 @@ function applyAction(list: ConcordList, action: ConcordListAction): ConcordList 
 /**
  * Mutate the Concord membership list: join/create (`add`), leave/removed
  * (`remove`), or follow a rekey/rename forward (`refresh-current`). Each call
- * reads the freshest relay state, merges the local change in deterministically,
- * and republishes — so concurrent edits from other devices converge instead of
- * clobbering. Content is NIP-44 self-encrypted; the event goes to app relays.
+ * reads the freshest relay state, folds in the local optimistic cache, merges
+ * the local change in deterministically, and republishes — so concurrent edits
+ * from other devices converge instead of clobbering. Mutations are serialized
+ * on one scope and stamped with a strictly-increasing `created_at`, so rapid
+ * back-to-back actions (e.g. accepting several invites) can't lose entries to
+ * interleaving or replaceable-event timestamp ties. Content is NIP-44
+ * self-encrypted; the event goes to app relays.
  */
 export function useUpdateConcordList() {
   const { nostr } = useNostr();
@@ -168,17 +172,22 @@ export function useUpdateConcordList() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    // Serialize every list mutation onto one queue. Without this, TanStack runs
+    // mutations concurrently, so back-to-back accepts (e.g. multiple invites)
+    // each read the relay before any has published, both merge in only their own
+    // community, and the last publish drops the others — nuking the list.
+    scope: { id: "concord-list" },
     mutationFn: async (action: ConcordListAction) => {
       if (!user) throw new Error("User is not logged in");
       if (!user.signer.nip44) throw new Error("NIP-44 encryption not supported by this signer");
 
-      // Read-modify-write against fresh relay state, never the query cache.
+      // Read-modify-write against fresh relay state.
       const events = await nostr.query(
         [{ kinds: [CONCORD_LIST_KIND], authors: [user.pubkey], "#d": [CONCORD_LIST_D_TAG], limit: 1 }],
         { signal: AbortSignal.timeout(8000) },
       );
       const prev = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-      const { list: current, decryptFailed } = await readConcordListEvent(prev, user.signer, user.pubkey);
+      const { list: relayList, decryptFailed } = await readConcordListEvent(prev, user.signer, user.pubkey);
       // Refuse to read-modify-write on top of a list we couldn't decrypt: the
       // community keys would read as empty and we'd republish a list that wipes
       // the user's rooms (and their keys → unrecoverable). Fail the action loud.
@@ -186,10 +195,28 @@ export function useUpdateConcordList() {
         throw new Error("Couldn't read your existing communities (decryption failed); not saving to avoid losing room keys.");
       }
 
-      // Merge the existing relay state with itself first (idempotent normalize),
-      // then apply the local action — both go through the deterministic merge.
+      // Fold in what we already have locally (our own just-published optimistic
+      // write). Replaceable-event propagation isn't instant, so a serialized
+      // accept's relay read can still return the pre-previous-accept event; the
+      // cache carries the community the prior accept added. `mergeConcordLists`
+      // is deterministic + tombstone-aware, so a genuine remote removal still
+      // wins — this only prevents losing an add to propagation lag.
+      const cached = queryClient.getQueryData<{ event: NostrEvent | null; list: ConcordList }>([
+        "concord",
+        "list",
+        user.pubkey,
+      ]);
+      const current = cached ? mergeConcordLists(cached.list, relayList) : relayList;
+
+      // Apply the local action on top of the merged base.
       const next = applyAction(mergeConcordLists(current, EMPTY_CONCORD_LIST), action);
 
+      // Replaceable events tie-break on lowest id at equal created_at (NIP-01),
+      // which is NOT "newest content wins". Two accepts in the same wall-clock
+      // second would otherwise collide and the relay could keep the stale one.
+      // Force created_at strictly past the previous event so last-write-wins
+      // always selects this newer, more-complete list.
+      const createdAt = Math.max(Math.floor(Date.now() / 1000), (prev?.created_at ?? 0) + 1);
       const content = await user.signer.nip44.encrypt(user.pubkey, JSON.stringify(next));
       const event = await user.signer.signEvent({
         kind: CONCORD_LIST_KIND,
@@ -198,7 +225,7 @@ export function useUpdateConcordList() {
           ["d", CONCORD_LIST_D_TAG],
           ["title", `${APP_NAME} Encrypted Communities`],
         ],
-        created_at: Math.floor(Date.now() / 1000),
+        created_at: createdAt,
       });
 
       queryClient.setQueryData(["concord", "list", user.pubkey], {
