@@ -1,5 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, Settings, ShieldCheck, UserPlus, Users, Volume2 } from "lucide-react";
+import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, Settings, Shield, ShieldCheck, UserPlus, Users, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -12,6 +12,7 @@ import { MessageTimeline } from "@/components/chat/MessageTimeline";
 import { VoicePresence } from "@/components/VoicePresence";
 import { InviteConcordDialog } from "@/components/dialogs/InviteConcordDialog";
 import { ConcordSettingsDialog } from "@/components/dialogs/ConcordSettingsDialog";
+import { ConcordRolesDialog } from "@/components/dialogs/ConcordRolesDialog";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
@@ -38,7 +39,7 @@ import { useConcordVoicePresence } from "@/hooks/useConcordVoice";
 import { useSendConcordMessage } from "@/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { isAdmin as rosterIsAdmin } from "@/lib/concord/roles";
+import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/lib/concord/roles";
 import type { Channel, Community } from "@/lib/concord/types";
 import { cn } from "@/lib/utils";
 
@@ -172,6 +173,12 @@ export function ConcordPage() {
   const { roster, setAdmin } = useConcordRosterActions(community);
   const ownerHex = roster?.ownerHex;
   const iAmOwner = Boolean(user && ownerHex && user.pubkey === ownerHex);
+  const canManageRoles = Boolean(
+    user && roster && isAuthorized(roster.roster, user.pubkey, ownerHex, Permissions.MANAGE_ROLES),
+  );
+  const canManageMetadata = Boolean(
+    user && roster && isAuthorized(roster.roster, user.pubkey, ownerHex, Permissions.MANAGE_METADATA),
+  );
   const canWrite = Boolean(user && channel);
 
   const { transport, reactionsFor } = useConcordTransport(community, channel, canWrite, iAmOwner);
@@ -191,6 +198,7 @@ export function ConcordPage() {
   const [newChannelName, setNewChannelName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rolesOpen, setRolesOpen] = useState(false);
   /** Desktop: whether the member roster pane is shown. */
   const [membersVisible, setMembersVisible] = useState(true);
   /** Mobile: whether the member sheet is open. */
@@ -428,7 +436,13 @@ export function ConcordPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48 p-2">
-                  {iAmOwner && (
+                  {canManageRoles && (
+                    <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setRolesOpen(true)}>
+                      <Shield className="size-4" />
+                      Manage roles
+                    </DropdownMenuItem>
+                  )}
+                  {canManageMetadata && (
                     <DropdownMenuItem
                       className="gap-3 px-3 py-2.5"
                       onClick={() => setSettingsOpen(true)}
@@ -561,6 +575,7 @@ export function ConcordPage() {
 
       <InviteConcordDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} />
       <ConcordSettingsDialog community={community} open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <ConcordRolesDialog community={community} open={rolesOpen} onOpenChange={setRolesOpen} />
     </>
   );
 }

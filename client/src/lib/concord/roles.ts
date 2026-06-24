@@ -48,6 +48,18 @@ export function permsContain(perms: bigint, bits: bigint): boolean {
   return (perms & bits) === bits;
 }
 
+/** Human-facing labels for the assignable permission bits, in display order. */
+export const PERMISSION_LABELS: Array<{ bit: bigint; label: string; hint: string }> = [
+  { bit: Permissions.MANAGE_ROLES, label: "Manage roles", hint: "Create roles and assign them to members." },
+  { bit: Permissions.MANAGE_CHANNELS, label: "Manage channels", hint: "Create and rename channels." },
+  { bit: Permissions.MANAGE_METADATA, label: "Manage community", hint: "Edit name, description, logo, banner." },
+  { bit: Permissions.KICK, label: "Kick members", hint: "Remove members (they can rejoin via invite)." },
+  { bit: Permissions.BAN, label: "Ban members", hint: "Ban members and rotate keys to lock them out." },
+  { bit: Permissions.MANAGE_MESSAGES, label: "Manage messages", hint: "Hide other members' messages." },
+  { bit: Permissions.CREATE_INVITE, label: "Create invites", hint: "Mint invite links and invite people." },
+  { bit: Permissions.MENTION_EVERYONE, label: "Mention everyone", hint: "Use @everyone." },
+];
+
 export function isManagement(perms: bigint): boolean {
   return (perms & MANAGEMENT_MASK) !== 0n;
 }

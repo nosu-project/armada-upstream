@@ -12,7 +12,7 @@ import {
   type FoldedRoster,
 } from "@/lib/concord/control";
 import { KIND_COMMUNITY_CONTROL } from "@/lib/concord/kinds";
-import { adminRole, type MemberGrant } from "@/lib/concord/roles";
+import { adminRole, type MemberGrant, type Role } from "@/lib/concord/roles";
 import { grantLocator } from "@/lib/concord/derive";
 import { hex32, random32, type Community } from "@/lib/concord/types";
 
@@ -130,10 +130,66 @@ export function useConcordRosterActions(community: Community | undefined) {
     onSuccess: invalidate,
   });
 
+  /** Heads lookup for the role/grant version chains. */
+  const heads = roster.data?.heads;
+
+  /** Create or update a role (name, position, permissions, color). Version-chained. */
+  const saveRole = useMutation<string, Error, { role: Role }>({
+    mutationFn: async ({ role }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      const now = Math.floor(Date.now() / 1000);
+      const key = bytesToHex(hex32(role.roleId));
+      const head = heads?.get(key);
+      await publishControl(
+        nostr,
+        user,
+        community,
+        buildRoleEditionUnsigned({
+          role,
+          version: head ? head.version + 1n : 1n,
+          prevHash: head?.hash,
+          createdAtSecs: now,
+        }),
+      );
+      return role.roleId;
+    },
+    onSuccess: invalidate,
+  });
+
+  /** Set a member's full role-id set directly (general grant, version-chained). */
+  const setMemberRoles = useMutation<void, Error, { member: string; roleIds: string[] }>({
+    mutationFn: async ({ member, roleIds }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      const now = Math.floor(Date.now() / 1000);
+      const key = bytesToHex(grantLocator(community.id, hex32(member)));
+      const head = heads?.get(key);
+      const grant: MemberGrant = { member, roleIds };
+      await publishControl(
+        nostr,
+        user,
+        community,
+        buildGrantEditionUnsigned({
+          communityId: community.id,
+          grant,
+          version: head ? head.version + 1n : 1n,
+          prevHash: head?.hash,
+          createdAtSecs: now,
+        }),
+      );
+    },
+    onSuccess: invalidate,
+  });
+
   return {
     roster: roster.data,
     isLoading: roster.isLoading,
     setAdmin: setAdmin.mutateAsync,
     isSettingAdmin: setAdmin.isPending,
+    saveRole: saveRole.mutateAsync,
+    isSavingRole: saveRole.isPending,
+    setMemberRoles: setMemberRoles.mutateAsync,
+    isSettingRoles: setMemberRoles.isPending,
+    /** A fresh random role id for minting a new role. */
+    newRoleId: () => bytesToHex(random32()),
   };
 }
