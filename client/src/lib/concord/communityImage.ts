@@ -1,6 +1,8 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
+import { readCachedImage, writeCachedImage } from "@/lib/concord/imageBlobCache";
+
 import type { CommunityImage } from "@/lib/concord/types";
 
 /**
@@ -20,7 +22,12 @@ export async function encryptImage(
 ): Promise<{ ciphertext: Uint8Array<ArrayBuffer>; key: string; nonce: string; hash: string; ext: string }> {
   const plaintext = new Uint8Array(await file.arrayBuffer());
   const keyBytes = crypto.getRandomValues(new Uint8Array(32));
-  const nonceBytes = crypto.getRandomValues(new Uint8Array(12)); // 96-bit GCM nonce
+  // 16-byte (128-bit) nonce — matches Vector's `generate_encryption_params`
+  // (`AesGcm::<Aes256, U16>`). Vector's `Nonce::<U16>` requires EXACTLY 16
+  // bytes, so a 12-byte nonce here would make Armada-authored icons/banners
+  // undecryptable on Vector. WebCrypto accepts any IV length, so reading
+  // either client's blobs already works regardless.
+  const nonceBytes = crypto.getRandomValues(new Uint8Array(16));
 
   const cryptoKey = await crypto.subtle.importKey("raw", buf(keyBytes), "AES-GCM", false, ["encrypt"]);
   const ctBuffer = await crypto.subtle.encrypt({ name: "AES-GCM", iv: buf(nonceBytes) }, cryptoKey, buf(plaintext));
@@ -38,11 +45,22 @@ export async function encryptImage(
  * Fetch + decrypt a {@link CommunityImage} to an object URL for display.
  * Verifies the plaintext SHA-256 against `image.hash`. The caller is
  * responsible for `URL.revokeObjectURL` when the image unmounts.
+ *
+ * Cross-reload cache: the decrypted plaintext is content-addressed by
+ * `image.hash` in Cache Storage, so a reload serves the icon/banner from disk
+ * instead of re-fetching the Blossom ciphertext and re-running AES-GCM.
  */
 export async function decryptImageToObjectURL(
   image: CommunityImage,
   signal?: AbortSignal,
 ): Promise<string> {
+  const mime = mimeForExt(image.ext);
+
+  // Disk cache hit (content-addressed by the plaintext hash) — skip the
+  // network fetch + decrypt entirely.
+  const cached = await readCachedImage(image.hash, mime);
+  if (cached) return URL.createObjectURL(cached);
+
   const res = await fetch(image.url, { signal });
   if (!res.ok) throw new Error(`image fetch failed: HTTP ${res.status}`);
   const ciphertext = new Uint8Array(await res.arrayBuffer());
@@ -58,7 +76,8 @@ export async function decryptImageToObjectURL(
   if (bytesToHex(sha256(plaintext)) !== image.hash) {
     throw new Error("image integrity check failed");
   }
-  const mime = mimeForExt(image.ext);
+  // Persist the verified plaintext for future reloads (best-effort).
+  if (image.hash) void writeCachedImage(image.hash, plaintext, mime);
   return URL.createObjectURL(new Blob([plaintext], { type: mime }));
 }
 

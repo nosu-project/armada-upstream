@@ -13,6 +13,14 @@ type NRelayLike = ReturnType<NPool['relay']>;
 const MAX_BATCH_SIZE = 50;
 
 /**
+ * Grace window (ms) after the first relay EOSEs before a replaceable-event
+ * (profile) batch resolves. The pool's global default (300ms) routinely cuts
+ * off slower/cold relays that hold the kind-0 — capped at 1000ms so a profile
+ * still has a real chance to arrive without stalling the UI.
+ */
+const PROFILE_EOSE_GRACE_MS = 1000;
+
+/**
  * Pending request waiting for a batched query result.
  * Each caller gets its own resolve/reject and optional abort signal.
  */
@@ -180,6 +188,28 @@ class ReplaceableCollector {
     private pool: NPool,
   ) {}
 
+  /**
+   * Collect events for a replaceable-event filter, waiting longer than the
+   * pool's global `eoseTimeout` so SLOW/COLD relays get a real chance to return
+   * a profile. Replaceable events (kind 0, etc.) legitimately live on different
+   * relays than the fastest one in the set, and the global 300ms post-EOSE
+   * cutoff routinely drops them — that's the kind-0 "lag/cutoff". We stream via
+   * `pool.req` with a generous per-call `eoseTimeout` and stop at the merged
+   * EOSE (all relays done) or the grace window, whichever comes first.
+   */
+  private async collect(filter: NostrFilter, signal: AbortSignal): Promise<NostrEvent[]> {
+    const events: NostrEvent[] = [];
+    try {
+      for await (const msg of this.pool.req([filter], { signal, eoseTimeout: PROFILE_EOSE_GRACE_MS })) {
+        if (msg[0] === 'EVENT') events.push(msg[2]);
+        else if (msg[0] === 'EOSE' || msg[0] === 'CLOSED') break;
+      }
+    } catch {
+      // Aborted / relay error — return whatever arrived.
+    }
+    return events;
+  }
+
   request(pubkey: string, kind: number, signal?: AbortSignal): Promise<NostrEvent | undefined> {
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {
@@ -239,9 +269,9 @@ class ReplaceableCollector {
     try {
       await Promise.all(
         [...byKindSet.values()].map(async ({ kinds, pubkeys }) => {
-          const events = await this.pool.query(
-            [{ kinds, authors: pubkeys, limit: kinds.length * pubkeys.length }],
-            { signal: controller.signal },
+          const events = await this.collect(
+            { kinds, authors: pubkeys, limit: kinds.length * pubkeys.length },
+            controller.signal,
           );
           // Index by pubkey+kind, pick newest per pair.
           for (const pubkey of pubkeys) {
@@ -282,9 +312,9 @@ class ReplaceableCollector {
 
         await Promise.all(
           chunks.map(async (chunk) => {
-            const retryEvents = await this.pool.query(
-              [{ kinds: [0], authors: chunk, limit: chunk.length }],
-              { signal: controller.signal },
+            const retryEvents = await this.collect(
+              { kinds: [0], authors: chunk, limit: chunk.length },
+              controller.signal,
             );
             for (const event of retryEvents) {
               if (!results.has(event.pubkey)) results.set(event.pubkey, new Map());

@@ -41,10 +41,11 @@ import { useConcordVoiceServer } from "@/hooks/useConcordVoice";
 import { useConcordVoicePresence } from "@/hooks/useConcordVoice";
 import { useSendConcordMessage } from "@/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDecryptedCommunityImage } from "@/hooks/useDecryptedCommunityImage";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/lib/concord/roles";
-import type { Channel, Community } from "@/lib/concord/types";
+import type { Channel, Community, CommunityImage } from "@/lib/concord/types";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
@@ -58,6 +59,32 @@ function ConcordReplyContext({ pubkey }: { pubkey: string | undefined }) {
     <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80 mb-0.5 min-w-0">
       <Reply className="size-3 shrink-0" />
       <span className="font-semibold shrink-0">{displayName}</span>
+    </div>
+  );
+}
+
+/** The community's decrypted GroupRoot logo for the channel-list title, with a
+ *  shield fallback (and a shield accent overlay so the E2E trust model stays
+ *  visually distinct from relay-hosted servers). */
+function CommunityTitleIcon({ icon }: { icon: CommunityImage | undefined }) {
+  const url = useDecryptedCommunityImage(icon);
+  if (!url) return <ShieldCheck className="size-4 text-success shrink-0" />;
+  return (
+    <span className="relative shrink-0">
+      <img src={url} alt="" className="size-5 rounded object-cover" />
+      <ShieldCheck className="absolute -bottom-1 -right-1 size-2.5 text-success" />
+    </span>
+  );
+}
+
+/** The community's decrypted GroupRoot banner above the channel-list header.
+ *  Renders nothing until decrypted (no layout shift / placeholder box). */
+function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
+  const url = useDecryptedCommunityImage(banner);
+  if (!url) return null;
+  return (
+    <div className="h-20 w-full shrink-0 overflow-hidden">
+      <img src={url} alt="" className="size-full object-cover" />
     </div>
   );
 }
@@ -206,6 +233,7 @@ export function ConcordPage() {
   const community = useMemo<Community | undefined>(() => {
     if (!baseCommunity) return undefined;
     if (!folded) return baseCommunity;
+    const channelNames = folded.channelNames instanceof Map ? folded.channelNames : undefined;
     return {
       ...baseCommunity,
       name: folded.root?.name ?? baseCommunity.name,
@@ -213,7 +241,7 @@ export function ConcordPage() {
       icon: folded.root?.icon ?? baseCommunity.icon,
       banner: folded.root?.banner ?? baseCommunity.banner,
       channels: baseCommunity.channels.map((ch) => {
-        const name = folded.channelNames.get(bytesToHex(ch.id));
+        const name = channelNames?.get(bytesToHex(ch.id));
         return name ? { ...ch, name } : ch;
       }),
     };
@@ -285,7 +313,9 @@ export function ConcordPage() {
         ? concordMembers(roster)
             .map((m) => m.pubkey)
             .filter((pk) => pk === ownerHex || rosterIsAdmin(roster.roster, pk))
-            .map((pubkey) => ({ pubkey, roles: ["admin"] }))
+            // Distinguish the proven owner from delegated admins so the roster
+            // can show a distinct owner badge (crown) vs admin badge (shield).
+            .map((pubkey) => ({ pubkey, roles: pubkey === ownerHex ? ["owner"] : ["admin"] }))
         : [],
     [roster, ownerHex],
   );
@@ -408,7 +438,8 @@ export function ConcordPage() {
     <ChannelSidebarView
       className={onNavigate ? "flex-1" : "hidden sidebar:flex"}
       title={community?.name ?? "…"}
-      titleIcon={<ShieldCheck className="size-4 text-success shrink-0" />}
+      titleIcon={<CommunityTitleIcon icon={community?.icon} />}
+      banner={<CommunityBanner banner={community?.banner} />}
       subtitle={<span className="text-success/80">End-to-end encrypted</span>}
       addChannelLabel={user && community ? "Add channel" : undefined}
       onAddChannel={user && community ? () => setCreatingChannel((v) => !v) : undefined}
@@ -653,6 +684,7 @@ export function ConcordPage() {
                 placeholder={user ? "Message (encrypted)…" : "Sign in to send"}
                 sendOverride={handleSend}
                 onTyping={publishTyping}
+                encryptAttachments
               />
             )}
           </div>

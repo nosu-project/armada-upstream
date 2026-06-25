@@ -15,12 +15,15 @@ import { buildEmojiMap } from "@/lib/customEmoji";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
 import { parseImetaMap } from "@/lib/imeta";
-import { EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX } from "@/lib/mediaUrls";
+import { EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
+import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 
 import type { AddrCoords } from "@/hooks/useEvent";
+import type { ImetaEncryption, ImetaEntry } from "@/lib/imeta";
+import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { ReactNode } from "react";
 
@@ -62,11 +65,14 @@ function extractNaddrFromUrl(url: string): AddrCoords | null {
   return null;
 }
 
+/** A possibly-encrypted image reference for the gallery/lightbox. */
+type ImageRef = EncryptedRef;
+
 /** A parsed token from message content. */
 type ContentToken =
   | { type: "text"; value: string }
-  | { type: "image-embed"; url: string }
-  | { type: "image-gallery"; urls: string[] }
+  | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string }
+  | { type: "image-gallery"; urls: ImageRef[] }
   | { type: "media-embed"; url: string }
   | { type: "link-embed"; url: string }
   | { type: "inline-link"; url: string }
@@ -151,7 +157,7 @@ function isOnlyEmojisOrCustom(text: string, emojiMap: Map<string, string>): bool
 }
 
 /** Kinds whose imeta tags describe attached media for the content body. */
-const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 1111, 1222, 1244]);
+const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 1111, 1222, 1244, 3300]);
 
 /**
  * Rich message content renderer. Tokenizes the event content and renders:
@@ -163,26 +169,32 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
   const tokens = useMemo(() => {
     const text = contentOverride ?? event.content;
 
-    // Map of imeta-declared URL → MIME, so extension-less media URLs (e.g.
-    // blossom sha256 filenames) declared in an imeta tag still render as an
-    // embed rather than a bare link followed by a duplicate embed.
+    // Parse imeta tags for media URLs declared out-of-band. Vector/0xChat send
+    // chat attachments by uploading AES-GCM ciphertext to Blossom and putting
+    // the (often extension-less) URL + decryption key/nonce inside an `imeta`
+    // tag — for Concord (kind 3300) the URL is ONLY in the imeta, not in the
+    // content body. We use these to (a) classify extension-less URLs as media
+    // and (b) emit embeds for imeta media not present inline.
+    const isMediaImetaKind = MEDIA_IMETA_KINDS.has(event.kind);
+    const imetaByUrl = isMediaImetaKind
+      ? parseImetaMap(event.tags)
+      : new Map<string, ImetaEntry>();
     const imetaMimeByUrl = new Map<string, string>();
-    if (MEDIA_IMETA_KINDS.has(event.kind)) {
-      for (const tag of event.tags) {
-        if (tag[0] !== "imeta") continue;
-        let rawUrl: string | undefined;
-        let mime: string | undefined;
-        for (let j = 1; j < tag.length; j++) {
-          const sp = tag[j].indexOf(" ");
-          if (sp === -1) continue;
-          const key = tag[j].slice(0, sp);
-          if (key === "url") rawUrl = tag[j].slice(sp + 1);
-          else if (key === "m") mime = tag[j].slice(sp + 1);
-        }
-        const u = sanitizeUrl(rawUrl);
-        if (u && mime) imetaMimeByUrl.set(u, mime);
-      }
+    for (const [u, entry] of imetaByUrl) {
+      const safe = sanitizeUrl(u);
+      if (safe && entry.mime) imetaMimeByUrl.set(safe, entry.mime);
     }
+
+    // Resolve the effective MIME for an imeta URL: explicit `m`, else inferred
+    // from the URL extension, else the `name` field's extension.
+    const imageMimeFor = (entry: { mime?: string; url: string; name?: string }): string | undefined => {
+      if (entry.mime) return entry.mime;
+      const fromUrl = extOfUrl(entry.url);
+      if (fromUrl) return mimeFromExt(fromUrl);
+      const fromName = entry.name ? entry.name.split(".").pop()?.toLowerCase() : undefined;
+      if (fromName) return mimeFromExt(fromName);
+      return undefined;
+    };
 
     // Match: BOLT11 invoices | URLs | nostr:-prefixed NIP-19 ids | @-prefixed or bare NIP-19 ids | hashtags
     const regex = new RegExp(
@@ -233,15 +245,26 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
           continue;
         }
 
-        // Image URLs → render inline at their position in the text
-        if (IMAGE_URL_REGEX.test(url)) {
+        // Image URLs → render inline at their position in the text. Match by
+        // extension, or by an imeta entry declaring an image MIME (covers
+        // extension-less / encrypted Blossom URLs). Encrypted attachments carry
+        // their decryption key/nonce so the embed can fetch+decrypt the blob.
+        const inlineImeta = imetaByUrl.get(url);
+        const inlineImetaMime = inlineImeta ? imageMimeFor(inlineImeta) : undefined;
+        const isImetaImage = inlineImetaMime?.startsWith("image/") ?? false;
+        if (IMAGE_URL_REGEX.test(url) || isImetaImage) {
           if (result.length > 0) {
             const prev = result[result.length - 1];
             if (prev.type === "text") {
               prev.value = prev.value.replace(/\s+$/, "");
             }
           }
-          result.push({ type: "image-embed", url });
+          result.push({
+            type: "image-embed",
+            url,
+            encryption: inlineImeta?.encryption,
+            mime: inlineImetaMime,
+          });
           lastIndex = index + fullMatch.length;
           const leadingWs = text.substring(lastIndex).match(/^\s+/);
           if (leadingWs) lastIndex += leadingWs[0].length;
@@ -350,29 +373,27 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
       }
     }
 
-    // Append media-embed tokens for imeta-declared media URLs not found in
-    // the content (NIP-92 attachments without inline URLs).
-    if (MEDIA_IMETA_KINDS.has(event.kind)) {
-      const contentMediaUrls = new Set(
-        result
-          .filter((t): t is { type: "media-embed"; url: string } => t.type === "media-embed")
-          .map((t) => t.url),
+    // Append embeds for imeta-declared media URLs not found inline in the
+    // content (NIP-92 attachments without an inline URL — the Concord/Vector
+    // case, where the Blossom URL lives ONLY in the imeta tag). Images become
+    // image-embeds (decrypted on display if encrypted); audio/video become
+    // media-embeds.
+    if (isMediaImetaKind) {
+      const renderedUrls = new Set(
+        result.flatMap((t) =>
+          t.type === "media-embed" || t.type === "image-embed" ? [t.url] : [],
+        ),
       );
-      for (const tag of event.tags) {
-        if (tag[0] !== "imeta") continue;
-        let rawUrl: string | undefined;
-        let mime: string | undefined;
-        for (let j = 1; j < tag.length; j++) {
-          const sp = tag[j].indexOf(" ");
-          if (sp === -1) continue;
-          const key = tag[j].slice(0, sp);
-          if (key === "url") rawUrl = tag[j].slice(sp + 1);
-          else if (key === "m") mime = tag[j].slice(sp + 1);
-        }
+      for (const [rawUrl, entry] of imetaByUrl) {
         const url = sanitizeUrl(rawUrl);
-        if (!url || contentMediaUrls.has(url)) continue;
-        if (mime?.startsWith("audio/") || mime?.startsWith("video/")) {
+        if (!url || renderedUrls.has(url)) continue;
+        const mime = imageMimeFor(entry);
+        if (mime?.startsWith("image/")) {
+          result.push({ type: "image-embed", url, encryption: entry.encryption, mime });
+          renderedUrls.add(url);
+        } else if (entry.mime?.startsWith("audio/") || entry.mime?.startsWith("video/")) {
           result.push({ type: "media-embed", url });
+          renderedUrls.add(url);
         }
       }
     }
@@ -440,10 +461,11 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     while (i < tokens.length) {
       const token = tokens[i];
       if (token.type === "image-embed") {
-        const run: string[] = [token.url];
+        const run: ImageRef[] = [{ url: token.url, encryption: token.encryption, mime: token.mime }];
         let j = i + 1;
         while (j < tokens.length && tokens[j].type === "image-embed") {
-          run.push((tokens[j] as { type: "image-embed"; url: string }).url);
+          const t = tokens[j] as Extract<ContentToken, { type: "image-embed" }>;
+          run.push({ url: t.url, encryption: t.encryption, mime: t.mime });
           j++;
         }
         if (run.length >= 2) {
@@ -460,11 +482,11 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     return result;
   }, [tokens]);
 
-  // Collect all inline image URLs (in order) for the shared lightbox
-  const allImages = useMemo(
+  // Collect all inline image refs (in order) for the shared lightbox
+  const allImages = useMemo<ImageRef[]>(
     () =>
       groupedTokens.flatMap((t) => {
-        if (t.type === "image-embed") return [t.url];
+        if (t.type === "image-embed") return [{ url: t.url, encryption: t.encryption, mime: t.mime }];
         if (t.type === "image-gallery") return t.urls;
         return [];
       }),
@@ -523,7 +545,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             return (
               <InlineImage
                 key={i}
-                url={token.url}
+                image={{ url: token.url, encryption: token.encryption, mime: token.mime }}
                 onClick={(e) => {
                   e.stopPropagation();
                   setLightboxIndex(imgIndex);
@@ -669,6 +691,19 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
   );
 }
 
+/** Extract the lowercase file extension from a URL's path, or undefined when there is none. */
+function extOfUrl(url: string): string | undefined {
+  try {
+    const path = new URL(url).pathname;
+    const seg = path.split("/").pop() ?? "";
+    const dot = seg.lastIndexOf(".");
+    if (dot <= 0 || dot === seg.length - 1) return undefined;
+    return seg.slice(dot + 1).toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
 /** Read a named field (e.g. `waveform`, `duration`) from the imeta tag for a URL. */
 function getImetaField(tags: string[][], url: string, field: string): string | undefined {
   for (const tag of tags) {
@@ -682,20 +717,21 @@ function getImetaField(tags: string[][], url: string, field: string): string | u
 }
 
 /** Inline image thumbnail that opens the shared lightbox on click. */
-function InlineImage({ url, onClick }: { url: string; onClick: (e: React.MouseEvent) => void }) {
+function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.MouseEvent) => void }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
+  const resolved = useResolvedMediaSrc(image);
 
-  if (failed) {
+  if (failed || resolved.status === "error") {
     return (
       <a
-        href={url}
+        href={image.url}
         target="_blank"
         rel="noopener noreferrer"
         className="text-primary hover:underline break-all"
         onClick={(e) => e.stopPropagation()}
       >
-        {url}
+        {image.url}
       </a>
     );
   }
@@ -710,27 +746,29 @@ function InlineImage({ url, onClick }: { url: string; onClick: (e: React.MouseEv
         className={cn("relative rounded-lg overflow-hidden", !loaded && "bg-muted")}
         style={!loaded ? { minHeight: 120, minWidth: 160 } : undefined}
       >
-        <img
-          src={url}
-          alt=""
-          className="block max-w-full max-h-80 h-auto rounded-lg hover:opacity-90 transition-opacity"
-          loading="lazy"
-          onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
-        />
+        {resolved.status === "ready" && (
+          <img
+            src={resolved.src}
+            alt=""
+            className="block max-w-full max-h-80 h-auto rounded-lg hover:opacity-90 transition-opacity"
+            loading="lazy"
+            onLoad={() => setLoaded(true)}
+            onError={() => setFailed(true)}
+          />
+        )}
       </div>
     </button>
   );
 }
 
 /** Compact grid for multiple consecutive images, sharing the lightbox. */
-function ImageGrid({ images, onOpen }: { images: string[]; onOpen: (index: number) => void }) {
+function ImageGrid({ images, onOpen }: { images: ImageRef[]; onOpen: (index: number) => void }) {
   const visible = images.slice(0, 4);
   const extra = images.length - visible.length;
 
   return (
     <div className="grid grid-cols-2 gap-1 my-1.5 max-w-sm">
-      {visible.map((url, i) => (
+      {visible.map((image, i) => (
         <button
           key={i}
           type="button"
@@ -740,7 +778,7 @@ function ImageGrid({ images, onOpen }: { images: string[]; onOpen: (index: numbe
             onOpen(i);
           }}
         >
-          <img src={url} alt="" loading="lazy" className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity" />
+          <GridImage image={image} />
           {i === visible.length - 1 && extra > 0 && (
             <span className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-lg font-semibold">
               +{extra}
@@ -749,6 +787,20 @@ function ImageGrid({ images, onOpen }: { images: string[]; onOpen: (index: numbe
         </button>
       ))}
     </div>
+  );
+}
+
+/** A single grid cell image, decrypting on display when encrypted. */
+function GridImage({ image }: { image: ImageRef }) {
+  const resolved = useResolvedMediaSrc(image);
+  if (resolved.status !== "ready") return null;
+  return (
+    <img
+      src={resolved.src}
+      alt=""
+      loading="lazy"
+      className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity"
+    />
   );
 }
 

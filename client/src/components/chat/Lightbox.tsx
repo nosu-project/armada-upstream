@@ -2,8 +2,12 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 
+import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+
+import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
+
 interface LightboxProps {
-  images: string[];
+  images: EncryptedRef[];
   currentIndex: number;
   onClose: () => void;
   onNext: () => void;
@@ -22,8 +26,11 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose, onNext, onPrev]);
 
-  const src = images[currentIndex];
-  if (!src) return null;
+  const image = images[currentIndex];
+  // Hooks must run unconditionally; resolve even when index is out of range
+  // (falls back to a stable empty ref).
+  const resolved = useResolvedMediaSrc(image ?? { url: "" });
+  if (!image) return null;
 
   return createPortal(
     <div
@@ -71,12 +78,14 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
         </>
       )}
 
-      <img
-        src={src}
-        alt=""
-        className="max-w-[95vw] max-h-[92vh] object-contain"
-        onClick={(e) => e.stopPropagation()}
-      />
+      {resolved.status === "ready" && (
+        <img
+          src={resolved.src}
+          alt=""
+          className="max-w-[95vw] max-h-[92vh] object-contain"
+          onClick={(e) => e.stopPropagation()}
+        />
+      )}
     </div>,
     document.body,
   );

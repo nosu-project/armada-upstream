@@ -82,36 +82,58 @@ export function adminRole(roleId: string): Role {
 }
 
 /**
- * The on-wire JSON shape of a Role. `permissions` is a u64 bitfield carried as a
- * DECIMAL STRING (JSON has no bigint, and a JS number loses precision past
- * 2^53), matching the rest of the protocol's bigint-as-string convention.
+ * The on-wire JSON shape of a Role — byte-compatible with Vector's serde
+ * (`community/roles.rs`), so a role authored by either client deserializes on
+ * the other. Field names are snake_case; `permissions` is a u64 bitfield
+ * serialized as a BARE JSON NUMBER (Vector's `Permissions(u64)` is
+ * `#[serde(transparent)]`). Permission bitfields stay well under 2^53, so a JS
+ * number is lossless here; `scope` matches Vector's internally-tagged enum
+ * (`{"kind":"server"}` / `{"kind":"channel","channel_id":"<hex>"}`).
  */
 interface RoleWire {
-  roleId: string;
+  role_id: string;
   name: string;
   position: number;
-  permissions: string;
-  scope: RoleScope;
+  permissions: number;
+  scope: { kind: "server" } | { kind: "channel"; channel_id: string };
   color: number;
 }
 
-/** Serialize a Role to its wire JSON (permissions → decimal string). */
+/** Serialize a Role to its Vector-compatible wire JSON. */
 export function roleToJSON(role: Role): string {
-  const wire: RoleWire = { ...role, permissions: role.permissions.toString() };
+  const scope: RoleWire["scope"] =
+    role.scope.kind === "channel" ? { kind: "channel", channel_id: role.scope.channelId } : { kind: "server" };
+  const wire: RoleWire = {
+    role_id: role.roleId,
+    name: role.name,
+    position: role.position,
+    permissions: Number(role.permissions),
+    scope,
+    color: role.color,
+  };
   return JSON.stringify(wire);
 }
 
-/** Parse a Role from wire JSON, or undefined if malformed. */
+/** Parse a Role from Vector-compatible wire JSON, or undefined if malformed. */
 export function roleFromJSON(json: string): Role | undefined {
   try {
     const w = JSON.parse(json) as RoleWire;
-    if (typeof w.roleId !== "string" || typeof w.permissions !== "string") return undefined;
+    if (typeof w.role_id !== "string") return undefined;
+    // permissions: accept a bare number (Vector) or a decimal string (forward-compat).
+    let permissions: bigint;
+    if (typeof w.permissions === "number" && Number.isFinite(w.permissions)) permissions = BigInt(Math.trunc(w.permissions));
+    else if (typeof w.permissions === "string" && /^\d+$/.test(w.permissions)) permissions = BigInt(w.permissions);
+    else return undefined;
+    const scope: RoleScope =
+      w.scope?.kind === "channel" && typeof w.scope.channel_id === "string"
+        ? { kind: "channel", channelId: w.scope.channel_id }
+        : { kind: "server" };
     return {
-      roleId: w.roleId,
+      roleId: w.role_id,
       name: typeof w.name === "string" ? w.name : "",
       position: typeof w.position === "number" ? w.position : Number.MAX_SAFE_INTEGER,
-      permissions: BigInt(w.permissions),
-      scope: w.scope?.kind === "channel" ? w.scope : { kind: "server" },
+      permissions,
+      scope,
       color: typeof w.color === "number" ? w.color : 0,
     };
   } catch {
@@ -123,6 +145,33 @@ export interface MemberGrant {
   /** Grantee pubkey, lowercase hex. */
   member: string;
   roleIds: string[];
+}
+
+/**
+ * Wire JSON for a MemberGrant — Vector-compatible serde (`member`, `role_ids`).
+ * An empty `role_ids` is a revoke (folds to no roster entry).
+ */
+interface MemberGrantWire {
+  member: string;
+  role_ids: string[];
+}
+
+/** Serialize a MemberGrant to its Vector-compatible wire JSON. */
+export function grantToJSON(grant: MemberGrant): string {
+  const wire: MemberGrantWire = { member: grant.member, role_ids: grant.roleIds };
+  return JSON.stringify(wire);
+}
+
+/** Parse a MemberGrant from Vector-compatible wire JSON, or undefined if malformed. */
+export function grantFromJSON(json: string): MemberGrant | undefined {
+  try {
+    const w = JSON.parse(json) as MemberGrantWire;
+    if (typeof w.member !== "string") return undefined;
+    const roleIds = Array.isArray(w.role_ids) ? w.role_ids.filter((r): r is string => typeof r === "string") : [];
+    return { member: w.member, roleIds };
+  } catch {
+    return undefined;
+  }
 }
 
 /** The role graph a client aggregates from fetched per-entity RoleMetadata + Grant editions. */

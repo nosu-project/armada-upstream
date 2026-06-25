@@ -10,7 +10,9 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
-import { useConcordList } from "@/hooks/useConcordList";
+import { useConcordList, useConcordCommunity } from "@/hooks/useConcordList";
+import { useConcordMetadata } from "@/hooks/useConcordMetadata";
+import { useDecryptedCommunityImage } from "@/hooks/useDecryptedCommunityImage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
@@ -262,6 +264,13 @@ function ConcordButton({
   onNavigate?: () => void;
 }) {
   const initials = name.trim().slice(0, 2).toUpperCase() || "··";
+  // Resolve the community's authoritative GroupRoot icon: rehydrate from the
+  // membership bundle, overlay the folded metadata (the owner-controlled icon),
+  // then decrypt the encrypted Blossom blob for display. Falls back to initials.
+  const community = useConcordCommunity(communityId);
+  const { data: folded } = useConcordMetadata(community);
+  const icon = folded?.root?.icon ?? community?.icon;
+  const iconUrl = useDecryptedCommunityImage(icon);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -275,13 +284,17 @@ function ConcordButton({
             <span className="relative block size-12">
               <span
                 className={cn(
-                  "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                  "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
                   "bg-muted text-success opacity-60 saturate-75",
                   "group-hover:opacity-100 group-hover:saturate-100",
                   isActive && "opacity-100 saturate-100 is-active",
                 )}
               >
-                <span className="text-sm font-semibold">{initials}</span>
+                {iconUrl ? (
+                  <img src={iconUrl} alt="" className="size-full object-cover" />
+                ) : (
+                  <span className="text-sm font-semibold">{initials}</span>
+                )}
               </span>
               {/* Shield sits in the lower-left corner, OUTSIDE the clipped box so
                   the corner-clip can't crop it. */}

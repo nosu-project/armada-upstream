@@ -1,53 +1,41 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 
-import { useConcordRoster } from "@/hooks/useConcordRoster";
+import { useConcordControlEvents, useConcordRoster } from "@/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRotatorSecretKey } from "@/hooks/useRotatorSecretKey";
 import { useUpdateConcordList } from "@/hooks/useConcordList";
 import { publishChannelRekey } from "@/hooks/useConcordRekey";
 import {
   buildBanlistEditionUnsigned,
-  controlPseudonym,
   foldBanlist,
   sealControlEdition,
 } from "@/lib/concord/control";
 import { banlistLocator } from "@/lib/concord/derive";
 import { buildInnerEvent, sealWithSignedInner } from "@/lib/concord/envelope";
 import { buildInvite } from "@/lib/concord/invite";
-import { KIND_COMMUNITY_CONTROL, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_KICK } from "@/lib/concord/kinds";
+import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_KICK } from "@/lib/concord/kinds";
 import { canActOnMember, Permissions } from "@/lib/concord/roles";
 import type { Community } from "@/lib/concord/types";
 import type { ConcordKeyBundle } from "@/lib/concord";
 
-import type { NostrEvent } from "@nostrify/nostrify";
-
-/** Read the community's folded banlist (vsk=4). */
+/** Read the community's folded banlist (vsk=4). Folds the SHARED control-plane fetch. */
 export function useConcordBanlist(community: Community | undefined) {
-  const { nostr } = useNostr();
+  const control = useConcordControlEvents(community);
   const roster = useConcordRoster(community);
+  const events = control.data;
+  const folded = roster.data;
 
-  return useQuery<{ banned: Set<string>; head?: { version: bigint; hash: Uint8Array } }>({
-    queryKey: ["concord", "banlist", community ? bytesToHex(community.id) : null],
-    enabled: Boolean(community) && Boolean(roster.data),
-    staleTime: 15_000,
-    refetchInterval: 30_000,
-    queryFn: async ({ signal }) => {
-      const z = controlPseudonym(community!.serverRootKey, community!.id, community!.serverRootEpoch);
-      const results = await Promise.all(
-        community!.relays.map((url) =>
-          nostr
-            .relay(url)
-            .query([{ kinds: [KIND_COMMUNITY_CONTROL], "#z": [z], limit: 500 }], {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-            })
-            .catch(() => [] as NostrEvent[]),
-        ),
-      );
-      return foldBanlist(results.flat(), community!.serverRootKey, community!.id, roster.data!.roster, roster.data!.ownerHex);
-    },
-  });
+  const data = useMemo(() => {
+    if (!community || !events || !folded) return undefined;
+    return foldBanlist(events, community.serverRootKey, community.id, folded.roster, folded.ownerHex);
+  }, [community, events, folded]);
+
+  return { ...control, data } as typeof control & {
+    data: { banned: Set<string>; head?: { version: bigint; hash: Uint8Array } } | undefined;
+  };
 }
 
 /**
@@ -74,7 +62,7 @@ export function useConcordModeration(community: Community | undefined, recipient
   const invalidate = () => {
     if (!community) return;
     const cid = bytesToHex(community.id);
-    queryClient.invalidateQueries({ queryKey: ["concord", "banlist", cid] });
+    queryClient.invalidateQueries({ queryKey: ["concord", "control", cid] });
     queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
     queryClient.invalidateQueries({ queryKey: ["concord", "epochs"] });
   };

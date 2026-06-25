@@ -1,60 +1,47 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 
-import { useConcordRoster } from "@/hooks/useConcordRoster";
+import { useConcordControlEvents, useConcordRoster } from "@/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { usePersistedFold } from "@/hooks/usePersistedFold";
 import {
   buildChannelMetadataEditionUnsigned,
   buildCommunityRootEditionUnsigned,
-  controlPseudonym,
   foldMetadata,
   sealControlEdition,
   type FoldedMetadata,
 } from "@/lib/concord/control";
-import { KIND_COMMUNITY_CONTROL } from "@/lib/concord/kinds";
 import { communityMetadataOf, type CommunityMetadata } from "@/lib/concord/metadata";
 import { hex32, type Community, type CommunityImage } from "@/lib/concord/types";
 
-import type { NostrEvent } from "@nostrify/nostrify";
-
 /**
- * Fetch + fold the community's metadata control plane (GroupRoot vsk=0 +
- * ChannelMetadata vsk=2 kind-3308 editions) into the authoritative name,
- * description, icon/banner, and per-channel name overrides. Authority is
- * enforced against the folded roster (MANAGE_METADATA / MANAGE_CHANNELS), so a
- * forged metadata edit is dropped on every client.
+ * Fold the community's metadata control plane (GroupRoot vsk=0 +
+ * ChannelMetadata vsk=2) into the authoritative name, description, icon/banner,
+ * and per-channel name overrides. Reuses the SHARED control-plane fetch (same
+ * kind-3308 / `#z` events the roster folds), so opening a channel doesn't
+ * re-query the same filter or wait on a roster→metadata `enabled` waterfall.
+ * Authority is enforced against the folded roster (MANAGE_METADATA /
+ * MANAGE_CHANNELS), so a forged metadata edit is dropped on every client.
  */
 export function useConcordMetadata(community: Community | undefined) {
-  const { nostr } = useNostr();
+  const control = useConcordControlEvents(community);
   const roster = useConcordRoster(community);
+  const events = control.data;
+  const folded = roster.data;
 
-  return useQuery<FoldedMetadata>({
-    queryKey: ["concord", "metadata", community ? bytesToHex(community.id) : null],
-    enabled: Boolean(community) && Boolean(roster.data),
-    staleTime: 15_000,
-    refetchInterval: 30_000,
-    queryFn: async ({ signal }) => {
-      const z = controlPseudonym(community!.serverRootKey, community!.id, community!.serverRootEpoch);
-      const results = await Promise.all(
-        community!.relays.map((url) =>
-          nostr
-            .relay(url)
-            .query([{ kinds: [KIND_COMMUNITY_CONTROL], "#z": [z], limit: 500 }], {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-            })
-            .catch(() => [] as NostrEvent[]),
-        ),
-      );
-      return foldMetadata(
-        results.flat(),
-        community!.serverRootKey,
-        community!.id,
-        roster.data!.roster,
-        roster.data!.ownerHex,
-      );
-    },
-  });
+  const live = useMemo<FoldedMetadata | undefined>(() => {
+    if (!community || !events || !folded) return undefined;
+    return foldMetadata(events, community.serverRootKey, community.id, folded.roster, folded.ownerHex);
+  }, [community, events, folded]);
+
+  // Paint the last-folded metadata (name, icon/banner descriptors, channel
+  // names) from IndexedDB on reload until the live re-fold is ready; then
+  // persist the live result for next time.
+  const data = usePersistedFold(community ? `metadata:${bytesToHex(community.id)}` : null, live);
+
+  return { ...control, data } as typeof control & { data: FoldedMetadata | undefined };
 }
 
 /**
@@ -71,7 +58,7 @@ export function useConcordMetadataActions(community: Community | undefined) {
 
   const invalidate = () => {
     if (community) {
-      queryClient.invalidateQueries({ queryKey: ["concord", "metadata", bytesToHex(community.id)] });
+      queryClient.invalidateQueries({ queryKey: ["concord", "control", bytesToHex(community.id)] });
     }
   };
 

@@ -13,6 +13,8 @@ interface ChannelSidebarViewProps {
   subtitle?: ReactNode;
   /** Optional leading icon before the title (e.g. a shield for Concord). */
   titleIcon?: ReactNode;
+  /** Optional full-width banner image rendered above the header (Concord). */
+  banner?: ReactNode;
   /** Optional badge shown under the header (e.g. "AUTH required"). */
   badge?: ReactNode;
   /** Tooltip/label for the add-channel action. Action hidden when omitted. */
@@ -41,6 +43,7 @@ export function ChannelSidebarView({
   title,
   subtitle,
   titleIcon,
+  banner,
   badge,
   addChannelLabel,
   onAddChannel,
@@ -70,6 +73,7 @@ export function ChannelSidebarView({
         className,
       )}
     >
+      {banner}
       {/* Header — aligned with the channel rows' text gutter below (container
           px-1 + row pl-4 = pl-5 here) so the grid lines up. The header reaches
           the top screen edge on mobile, so it carries the status-bar safe-area

@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -258,15 +258,21 @@ export function useUpdateConcordList() {
  */
 export function useConcordCommunity(communityIdHex: string | undefined): Community | undefined {
   const { data } = useConcordList();
-  if (!communityIdHex || !data) return undefined;
-  const entry = data.list.entries.find((e) => e.communityId === communityIdHex);
-  if (!entry) return undefined;
-  const bundle = entry.current.keys.invite as CommunityInvite | undefined;
-  if (!bundle) return undefined;
-  try {
-    const community = acceptInvite(bundle);
-    return { ...community, relays: capRelays([...community.relays, ...APP_RELAYS]) };
-  } catch {
-    return undefined;
-  }
+  // Memoize so the rehydrated Community keeps a STABLE identity across renders.
+  // `acceptInvite` + the spread would otherwise mint a new object every render,
+  // cascading fresh `community`/`channel` objects (and thus re-renders of the
+  // whole Concord page subtree) on every parent render / query tick.
+  return useMemo(() => {
+    if (!communityIdHex || !data) return undefined;
+    const entry = data.list.entries.find((e) => e.communityId === communityIdHex);
+    if (!entry) return undefined;
+    const bundle = entry.current.keys.invite as CommunityInvite | undefined;
+    if (!bundle) return undefined;
+    try {
+      const community = acceptInvite(bundle);
+      return { ...community, relays: capRelays([...community.relays, ...APP_RELAYS]) };
+    } catch {
+      return undefined;
+    }
+  }, [data, communityIdHex]);
 }

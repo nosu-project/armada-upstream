@@ -33,14 +33,24 @@ export interface ParkedInvite {
 export function useConcordInvites() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
-  const { data: list } = useConcordList();
+  const { data: list, isFetched: listFetched } = useConcordList();
 
   const known = new Set((list?.list.entries ?? []).map((e) => e.communityId));
   const tombstoned = new Set((list?.list.tombstones ?? []).map((t) => t.communityId));
 
+  // The membership list is "ready" once it has data (the cache seed populated
+  // it, or the network resolved) OR the network query has at least completed.
+  // Either way `known`/`tombstoned` then reflect real membership.
+  const listReady = list !== undefined || listFetched;
+
   return useQuery<ParkedInvite[]>({
     queryKey: ["concord", "invites", user?.pubkey, [...known].sort().join(","), [...tombstoned].sort().join(",")],
-    enabled: Boolean(user?.signer.nip44),
+    // Don't scan the invite inbox until the membership list is ready. During the
+    // post-refresh warmup the list is undefined/empty → the "already-joined"
+    // filter (`known`) would be empty → every gift-wrap invite, INCLUDING
+    // already-joined communities, would be re-parked and the invites prompt
+    // would wrongly pop for rooms we're already in.
+    enabled: Boolean(user?.signer.nip44) && listReady,
     staleTime: 30_000,
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {

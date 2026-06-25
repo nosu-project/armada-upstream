@@ -9,8 +9,9 @@
  * Every client fetches the union, folds per-entity version chains, and resolves
  * authority against the owner attestation + the delegation chain.
  *
- * Content JSON is TS-native here (internal consistency drives the fold);
- * cross-wire parity with Vector's serde shapes is a later concern.
+ * Content JSON is Vector-serde-compatible (snake_case fields, integer
+ * permission bitfields, internally-tagged role scope), so roles, grants, and
+ * metadata authored by either client deserialize on the other.
  */
 
 import { bytesToHex } from "@noble/hashes/utils.js";
@@ -30,6 +31,8 @@ import type { ChannelMetadata, CommunityMetadata } from "@/lib/concord/metadata"
 import { verifyOwnerAttestation } from "@/lib/concord/owner";
 import {
   canActOnPosition,
+  grantFromJSON,
+  grantToJSON,
   Permissions,
   roleFromJSON,
   roleToJSON,
@@ -120,7 +123,7 @@ export function buildGrantEditionUnsigned(opts: {
     entityId,
     version: opts.version,
     prevHash: opts.prevHash,
-    content: JSON.stringify(opts.grant),
+    content: grantToJSON(opts.grant),
     createdAtSecs: opts.createdAtSecs,
   });
 }
@@ -247,14 +250,10 @@ export function foldRoster(
   }
   const grants: Array<{ grant: MemberGrant; author: string }> = [];
   for (const p of grantHeads) {
-    try {
-      const grant = JSON.parse(p.content) as MemberGrant;
-      // entity must be the member's grant locator (anti-spoofing).
-      if (grant.member && bytesToHex(grantLocator(communityId, hex32(grant.member))) === bytesToHex(p.entityId)) {
-        grants.push({ grant, author: p.author });
-      }
-    } catch {
-      // skip malformed
+    const grant = grantFromJSON(p.content);
+    // entity must be the member's grant locator (anti-spoofing).
+    if (grant && grant.member && bytesToHex(grantLocator(communityId, hex32(grant.member))) === bytesToHex(p.entityId)) {
+      grants.push({ grant, author: p.author });
     }
   }
 

@@ -38,6 +38,7 @@ import { useUploadFile } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
+import { encryptFileForUpload } from "@/lib/encryptedMedia";
 import { IMETA_MEDIA_URL_REGEX, IMETA_MEDIA_URL_TEST_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
@@ -45,6 +46,7 @@ import { parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCommand 
 import { cn } from "@/lib/utils";
 
 import type { AddrCoords } from "@/hooks/useEvent";
+import type { ImetaEncryption } from "@/lib/imeta";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
@@ -210,6 +212,14 @@ interface ChatComposerProps {
    * caller, which owns the NIP-29 moderation mutations and member roster.
    */
   onSlashAction?: (action: SlashAction) => void | Promise<void>;
+  /**
+   * Encrypt file attachments client-side (AES-256-GCM) before uploading to
+   * Blossom, à la Vector / 0xChat: the blob on Blossom is ciphertext, and the
+   * per-file key/nonce ride in the message's `imeta` (`decryption-key` /
+   * `decryption-nonce`). Used by Concord so media is confidential at rest and
+   * interoperable with Vector. Without this, attachments upload as plaintext.
+   */
+  encryptAttachments?: boolean;
 }
 
 /**
@@ -222,7 +232,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
@@ -260,6 +270,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const [uploadedFileGroups, setUploadedFileGroups] = useState<Map<string, string[][]>>(
     () => new Map(readDraft(draftKey).attachments),
   );
+  /**
+   * Per-upload AES-GCM encryption params (Concord encrypted attachments),
+   * keyed by the uploaded ciphertext URL. Held in a ref (not state/draft):
+   * these are ephemeral secrets that must never be persisted, and the
+   * ciphertext blob is useless without them, so encrypted attachments are not
+   * restorable from a saved draft.
+   */
+  const attachmentEncryption = useRef<Map<string, ImetaEncryption & { ox: string }>>(new Map());
 
   // Poll mode state
   const [mode, setMode] = useState<"post" | "poll">("post");
@@ -384,12 +402,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   // Auto-save draft (debounced): persists the text and any uploaded attachments
   // (already-uploaded Blossom URLs, so safe to serialize) per channel.
+  // Encrypted attachments are excluded — their decryption params live only in
+  // an in-memory ref (never persisted), so a restored ciphertext URL would be
+  // undecryptable; drop them from the draft rather than persist a dead blob.
   useEffect(() => {
     const timer = setTimeout(() => {
-      writeDraft(draftKey, content, uploadedFileGroups);
+      const persistable = encryptAttachments
+        ? new Map([...uploadedFileGroups].filter(([url]) => !attachmentEncryption.current.has(url)))
+        : uploadedFileGroups;
+      writeDraft(draftKey, content, persistable);
     }, 300);
     return () => clearTimeout(timer);
-  }, [content, uploadedFileGroups, draftKey]);
+  }, [content, uploadedFileGroups, draftKey, encryptAttachments]);
 
   // Detect quote embeds in content (nevent, note, naddr) for preview + q tags.
   const detectedEmbeds = useMemo(() => {
@@ -452,6 +476,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       next.delete(url);
       return next;
     });
+    attachmentEncryption.current.delete(url);
     // Also drop the URL from the text if it was typed/pasted there.
     setContent((prev) =>
       prev
@@ -477,6 +502,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setPickerOpen(false);
     setRemovedEmbeds(new Set());
     setUploadedFileGroups(new Map());
+    attachmentEncryption.current.clear();
     setMode("post");
     setPollOptions([{ id: pollOptionId(), label: "" }, { id: pollOptionId(), label: "" }]);
     setPollType("singlechoice");
@@ -506,18 +532,45 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         resizedDim = resized.dimensions;
       }
 
+      // Compute image preview metadata from the PLAINTEXT (before any
+      // encryption) — dim/blurhash must describe the visible image, not the
+      // ciphertext. Captured here so it's available regardless of encryption.
+      let dimTag = resizedDim;
+      let blurhashTag: string | undefined;
+      if (isImage) {
+        const meta = await getImageMeta(uploadableFile);
+        if (!dimTag && meta.dim) dimTag = meta.dim;
+        blurhashTag = meta.blurhash || undefined;
+      }
+      const originalMime = uploadableFile.type;
+
+      // Concord: encrypt the blob client-side (AES-256-GCM) so Blossom only
+      // ever holds ciphertext; the key/nonce ride in the message imeta.
+      let encryption: (ImetaEncryption & { ox: string }) | undefined;
+      if (encryptAttachments) {
+        const enc = await encryptFileForUpload(uploadableFile);
+        uploadableFile = enc.file;
+        encryption = { algorithm: "aes-gcm", key: enc.key, nonce: enc.nonce, ox: enc.originalHash };
+      }
+
       const tags = await uploadFile(uploadableFile);
       const url = tags[0][1];
 
-      // Compute dim + blurhash and inject into the NIP-94 tags.
       if (isImage) {
         const hasTag = (name: string) => tags.some((t) => t[0] === name);
-        if (resizedDim && !hasTag("dim")) tags.push(["dim", resizedDim]);
-        if (!hasTag("blurhash")) {
-          const { blurhash } = await getImageMeta(uploadableFile);
-          if (blurhash) tags.push(["blurhash", blurhash]);
+        // For encrypted uploads the server's NIP-94 `m`/`x`/`size`/`dim` all
+        // describe the ciphertext; overwrite `m` with the real image MIME and
+        // attach the plaintext-derived dim/blurhash so the embed renders right.
+        if (encryption) {
+          const mTag = tags.find((t) => t[0] === "m");
+          if (mTag) mTag[1] = originalMime;
+          else tags.push(["m", originalMime]);
         }
+        if (dimTag && !hasTag("dim")) tags.push(["dim", dimTag]);
+        if (blurhashTag && !hasTag("blurhash")) tags.push(["blurhash", blurhashTag]);
       }
+
+      if (encryption) attachmentEncryption.current.set(url, encryption);
 
       setUploadedFileGroups((prev) => new Map(prev).set(url, tags));
       // The URL is tracked as an attachment chip (rendered above the input)
@@ -525,7 +578,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } catch {
       toast({ title: "Upload failed", description: "Could not upload file.", variant: "destructive" });
     }
-  }, [uploadFile, toast]);
+  }, [uploadFile, toast, encryptAttachments]);
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
@@ -669,7 +722,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       const fileTags = uploadedFileGroups.get(url);
       if (fileTags) {
-        tags.push(["imeta", ...fileTags.map((tag) => `${tag[0]} ${tag[1]}`)]);
+        const fields = fileTags.map((tag) => `${tag[0]} ${tag[1]}`);
+        // Append AES-GCM decryption params for client-encrypted attachments
+        // (Concord), matching Vector / 0xChat's imeta format so members and
+        // Vector can decrypt the Blossom ciphertext.
+        const enc = attachmentEncryption.current.get(url);
+        if (enc) {
+          fields.push(`encryption-algorithm ${enc.algorithm}`);
+          fields.push(`decryption-key ${enc.key}`);
+          fields.push(`decryption-nonce ${enc.nonce}`);
+          fields.push(`ox ${enc.ox}`);
+        }
+        tags.push(["imeta", ...fields]);
       } else {
         tags.push(["imeta", `url ${url}`, `m ${mimeFromExt(match[1].toLowerCase())}`]);
       }

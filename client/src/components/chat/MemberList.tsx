@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 
 import type { Nip29Admin } from "@/lib/nip29";
 
+const ROLE_OWNER = "owner";
 const ROLE_ADMIN = "admin";
 const ROLE_MODERATOR = "moderator";
 
@@ -65,11 +66,16 @@ function MemberRow({
   const { displayName, color } = useScopedIdentity(pubkey, metadata);
 
   const roleSet = new Set((roles ?? []).map((r) => r.toLowerCase()));
-  const isAdmin = roleSet.has(ROLE_ADMIN);
+  const isOwner = roleSet.has(ROLE_OWNER);
+  // The owner holds every permission implicitly, so treat them as an admin for
+  // moderation gating (e.g. don't offer "Make admin" on the owner) even if the
+  // explicit "admin" role string isn't present.
+  const isAdmin = isOwner || roleSet.has(ROLE_ADMIN);
   const isModerator = roleSet.has(ROLE_MODERATOR);
   const isSelf = currentUserPubkey === pubkey;
-  // Moderation acts on others only; everyone gets the basic items.
-  const canActOnUser = canModerate && !isSelf;
+  // Moderation acts on others only; the owner is never a valid target (they're
+  // supreme and unremovable — mirrors canActOnMember in the roster engine).
+  const canActOnUser = canModerate && !isSelf && !isOwner;
 
   const copyNpub = () => {
     const npub = tryNpubEncode(pubkey);
@@ -101,6 +107,31 @@ function MemberRow({
           {displayName}
         </button>
       </ProfilePreviewCard>
+      {isOwner ? (
+        <span
+          title="Owner"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500"
+        >
+          <Crown className="size-3" aria-hidden />
+          Owner
+        </span>
+      ) : isAdmin ? (
+        <span
+          title="Admin"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+        >
+          <Shield className="size-3" aria-hidden />
+          Admin
+        </span>
+      ) : isModerator ? (
+        <span
+          title="Moderator"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+        >
+          <Shield className="size-3" aria-hidden />
+          Mod
+        </span>
+      ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -256,8 +287,13 @@ export function MemberList({
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
   // NIP-29 relays don't guarantee a stable order for the `p` tags in the
   // members/admins events, so each 30s refetch could otherwise reshuffle the
-  // roster. Sort by pubkey for a stable, deterministic display order.
-  const sortedAdmins = [...admins].sort((a, b) => a.pubkey.localeCompare(b.pubkey));
+  // roster. Sort the owner first, then by pubkey for a stable order.
+  const isOwnerRole = (a: Nip29Admin) => a.roles.some((r) => r.toLowerCase() === "owner");
+  const sortedAdmins = [...admins].sort((a, b) => {
+    const ao = isOwnerRole(a) ? 0 : 1;
+    const bo = isOwnerRole(b) ? 0 : 1;
+    return ao - bo || a.pubkey.localeCompare(b.pubkey);
+  });
   const regulars = members
     .filter((pubkey) => !adminMap.has(pubkey))
     .sort((a, b) => a.localeCompare(b));

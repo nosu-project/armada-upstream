@@ -218,11 +218,89 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epochSig]);
 
+  // Live subscription for new messages — the same streaming `req()` NIP-29 chat
+  // uses (useGroupMessages), so a member's message lands in the UI the instant
+  // the relay forwards it instead of waiting for the 15s poll. Each arriving
+  // sealed outer is opened incrementally (binding triad + moderation enforced)
+  // and upserted into the existing query cache by message id; the periodic poll
+  // remains a backstop for missed events / reconnection.
+  useEffect(() => {
+    if (!community || !channel || !channelIdHex || allEpochKeys.length === 0) return;
+    const zs = allEpochKeys.map((ek) => bytesToHex(channelPseudonym(ek.key, channel.id, ek.epoch)));
+    const relays = community.relays;
+    const controller = new AbortController();
+    const since = Math.floor(Date.now() / 1000) - 5;
+
+    /** Open one batch of sealed outers and fold them into the cached timeline. */
+    const apply = (events: NostrEvent[]) => {
+      if (events.length === 0) return;
+      const { messages: opened, deletes } = openMessages(events, channel.id, allEpochKeys, moderation);
+      if (opened.length === 0 && deletes.size === 0) return;
+      queryClient.setQueryData<OpenedMessage[]>(queryKey, (old = []) => {
+        const byId = new Map<string, OpenedMessage>();
+        for (const m of old) byId.set(m.messageId, m);
+        let changed = false;
+        for (const m of opened) {
+          if (moderation.banned.has(m.author)) continue;
+          const existing = byId.get(m.messageId);
+          // Skip if we already have an identical copy (the relay echoes our own
+          // optimistic send and re-forwards on reconnect); upsert otherwise.
+          if (existing && existing.content === m.content && existing.ms === m.ms) continue;
+          byId.set(m.messageId, m);
+          changed = true;
+        }
+        // Honor self-delete / authorized moderation-hide arriving live.
+        for (const [id, deleters] of deletes) {
+          const msg = byId.get(id);
+          if (!msg) continue;
+          if (deleters.has(msg.author) || [...deleters].some((d) => moderation.canHide(d, msg.author))) {
+            byId.delete(id);
+            changed = true;
+          }
+        }
+        if (!changed) return old;
+        // Clear optimistic "pending"/"failed" for anything the relay echoed back.
+        const confirmed = opened.map((m) => m.messageId);
+        if (confirmed.length > 0) {
+          queryClient.setQueryData<ConcordSendStatusMap>(statusKey(channelIdHex), (s = {}) => {
+            let touched = false;
+            const next = { ...s };
+            for (const id of confirmed) if (id in next) { delete next[id]; touched = true; }
+            return touched ? next : s;
+          });
+        }
+        return [...byId.values()].sort((a, b) => a.ms - b.ms);
+      });
+    };
+
+    for (const url of relays) {
+      void (async () => {
+        try {
+          for await (const msg of nostr.relay(url).req(
+            [{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, since }],
+            { signal: controller.signal },
+          )) {
+            if (msg[0] === "EVENT") apply([msg[2] as NostrEvent]);
+          }
+        } catch {
+          // Subscription ended (abort or relay closed) — the poll covers gaps.
+        }
+      })();
+    }
+
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nostr, community, channelIdHex, epochSig, moderation, queryClient]);
+
   return useQuery({
     queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
-    refetchInterval: 15_000,
+    // Backstop only — the live subscription above delivers new messages
+    // instantly. The poll re-decrypts/re-verifies the whole window, so keep it
+    // infrequent to avoid burning CPU on every tick; it just heals gaps from a
+    // dropped subscription or a relay that missed an event.
+    refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const epochKeys = allEpochKeys;
       const zs = epochKeys.map((ek) => bytesToHex(channelPseudonym(ek.key, channel!.id, ek.epoch)));
@@ -618,7 +696,9 @@ export function useConcordReactions(community: Community | undefined, channel: C
     queryKey: ["concord", "reactions", channel ? bytesToHex(channel.id) : null],
     enabled: Boolean(community && channel),
     staleTime: 10_000,
-    refetchInterval: 15_000,
+    // Reactions are less latency-critical than messages and re-tally the whole
+    // window per poll; keep the cadence modest to limit repeated decryption.
+    refetchInterval: 30_000,
     queryFn: async ({ signal }) => {
       const epochKeys = readEpochKeys(channel!);
       const zs = channelPseudonyms(channel!);

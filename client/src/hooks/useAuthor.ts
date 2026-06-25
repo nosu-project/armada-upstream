@@ -68,8 +68,19 @@ export function useAuthor(pubkey: string | undefined) {
       return parseAuthorEvent(event);
     },
     enabled: !!pubkey,
-    staleTime: 5 * 60 * 1000,   // 5 minutes
-    gcTime: 10 * 60 * 1000,     // 10 minutes
+    // A FOUND profile is cached long (5 min); a MISS is kept only briefly so a
+    // profile that was cut off by the relay EOSE race (or simply hadn't synced
+    // yet) is re-checked soon instead of staying blank for 5 minutes. Authors
+    // with no kind 0 at all just re-check cheaply (batched) on the next access
+    // and keep showing their fallback — no spinner, no tight retry loop.
+    staleTime: (query) => (query.state.data?.event ? 5 * 60 * 1000 : 30 * 1000),
+    gcTime: 10 * 60 * 1000,
+    // While a profile is missing AND the component is mounted, retry in the
+    // background at a relaxed cadence so it fills in without a manual reload.
+    // Found profiles never poll. Bounded + batched, so a profileless author is
+    // a cheap periodic no-op, not a hammer.
+    refetchInterval: (query) => (query.state.data?.event ? false : 60 * 1000),
+    refetchOnWindowFocus: false,
     retry: 1,
   });
 }

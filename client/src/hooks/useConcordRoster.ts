@@ -1,8 +1,11 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
+import { usePersistedFold } from "@/hooks/usePersistedFold";
 import {
   buildGrantEditionUnsigned,
   buildRoleEditionUnsigned,
@@ -20,17 +23,60 @@ import { hex32, random32, type Community } from "@/lib/concord/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/**
- * Fetch + fold the control plane (kind-3308 editions) of a Concord community
- * into its authorized roster: roles, member grants, and the proven owner. This
- * is the data behind the member list, the admin crown, and every moderation
- * permission check. Folded client-side — no host asserts it.
- */
-export function useConcordRoster(community: Community | undefined) {
-  const { nostr } = useNostr();
+/** Merge two control-event sets by id (dedup), so a partial network round
+ *  doesn't drop editions the cache/seed already held. */
+function mergeById(a: NostrEvent[], b: NostrEvent[]): NostrEvent[] {
+  const byId = new Map<string, NostrEvent>();
+  for (const e of a) byId.set(e.id, e);
+  for (const e of b) byId.set(e.id, e);
+  return [...byId.values()];
+}
 
-  return useQuery<FoldedRoster>({
-    queryKey: ["concord", "roster", community ? bytesToHex(community.id) : null],
+/**
+ * Fetch the community's control plane ONCE: the sealed kind-3308 editions at
+ * the control pseudonym (`#z`), from every community relay. The roster,
+ * metadata (GroupRoot/channels), and banlist are all folds of this SAME event
+ * set — so they share this single fan-out instead of each re-querying the same
+ * filter (which previously tripled the relay traffic AND chained `enabled`
+ * gates into a serial waterfall on channel open). Folding is cheap, in-memory,
+ * and done per-consumer with `useMemo`.
+ *
+ * Cache-first: the sealed 3308 editions are mirrored into IndexedDB by the
+ * batcher, so on reload we read them back (by `#z`) and seed the query
+ * immediately — roster/metadata/icon/banner/banlist paint from cache without
+ * waiting on the network (which still runs and reconciles). Mirrors the
+ * channel-message seed in `useConcordChannelMessages`.
+ */
+export function useConcordControlEvents(community: Community | undefined) {
+  const { nostr } = useNostr();
+  const eventStore = useEventStore();
+  const queryClient = useQueryClient();
+
+  const cidHex = community ? bytesToHex(community.id) : null;
+  const queryKey = ["concord", "control", cidHex] as const;
+
+  // Seed from the local store before the network resolves.
+  useEffect(() => {
+    if (!community) return;
+    let cancelled = false;
+    void (async () => {
+      if ((queryClient.getQueryData<NostrEvent[]>(queryKey)?.length ?? 0) > 0) return;
+      const store = await eventStore;
+      const z = controlPseudonym(community.serverRootKey, community.id, community.serverRootEpoch);
+      const cached = await store.query([{ kinds: [KIND_COMMUNITY_CONTROL], "#z": [z], limit: 500 }]);
+      if (cancelled || cached.length === 0) return;
+      queryClient.setQueryData<NostrEvent[]>(queryKey, (old) =>
+        old && old.length > 0 ? old : cached,
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cidHex, eventStore, queryClient]);
+
+  return useQuery<NostrEvent[]>({
+    queryKey,
     enabled: Boolean(community),
     staleTime: 15_000,
     refetchInterval: 30_000,
@@ -46,9 +92,37 @@ export function useConcordRoster(community: Community | undefined) {
             .catch(() => [] as NostrEvent[]),
         ),
       );
-      return foldRoster(results.flat(), community!.serverRootKey, community!.id, community!.ownerAttestation);
+      // Union with what we already have (seed/prior fetch): control editions are
+      // append-only version chains, so a relay returning a partial page must
+      // never drop editions we already hold — the fold picks the head per entity.
+      const fetched = results.flat();
+      const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
+      return mergeById(prev, fetched);
     },
   });
+}
+
+/**
+ * Fetch + fold the control plane (kind-3308 editions) of a Concord community
+ * into its authorized roster: roles, member grants, and the proven owner. This
+ * is the data behind the member list, the admin crown, and every moderation
+ * permission check. Folded client-side — no host asserts it.
+ */
+export function useConcordRoster(community: Community | undefined) {
+  const control = useConcordControlEvents(community);
+  const events = control.data;
+
+  const live = useMemo<FoldedRoster | undefined>(() => {
+    if (!community || !events) return undefined;
+    return foldRoster(events, community.serverRootKey, community.id, community.ownerAttestation);
+  }, [community, events]);
+
+  // Paint the last-folded roster from IndexedDB on reload (admin badges, member
+  // list) until the freshly re-read control events re-fold; then persist the
+  // live result for next time.
+  const data = usePersistedFold(community ? `roster:${bytesToHex(community.id)}` : null, live);
+
+  return { ...control, data } as typeof control & { data: FoldedRoster | undefined };
 }
 
 /**
@@ -124,7 +198,7 @@ export function useConcordRosterActions(community: Community | undefined) {
   const roster = useConcordRoster(community);
 
   const invalidate = () => {
-    if (community) queryClient.invalidateQueries({ queryKey: ["concord", "roster", bytesToHex(community.id)] });
+    if (community) queryClient.invalidateQueries({ queryKey: ["concord", "control", bytesToHex(community.id)] });
   };
 
   /** The Admin role id in the current roster, or undefined if none defined yet. */
