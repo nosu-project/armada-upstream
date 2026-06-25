@@ -91,8 +91,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const { data: groupList } = useUserGroupList();
   const { data: concordData } = useConcordList();
 
-  // Start dormant; the auto-enable effect below flips this on at launch when
-  // the OS permission is already granted (opt-out behaviour, like Ditto).
+  // Start dormant; the auto-enable effect below flips this on at launch (after
+  // requesting the OS permission if it hasn't been granted yet).
   const [enabled, setEnabled] = useState<boolean>(false);
   const [busy, setBusy] = useState(false);
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPrefs);
@@ -200,22 +200,35 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   }, [supported, enabled, user, relayUrls, groupIds, prefsRecord, concordSubs, dmRelays]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
-  // off and the OS notification permission is already granted, start the
-  // service silently — no user gesture needed. A first-run user with permission
-  // still "default" keeps the intent on, so flipping the toggle once (which
-  // prompts) sticks across launches thereafter.
+  // off, start the background service. Android lets us request the OS
+  // notification permission on launch without a user gesture (unlike the web,
+  // which gates requestPermission() behind a click), so we surface the system
+  // permission dialog directly here rather than via an in-app modal:
+  //   - already granted          → enable silently.
+  //   - still "default" (unasked) → fire the native OS prompt; enable on grant.
+  //   - denied                    → checkPermission stays false, request is a
+  //                                 no-op; the Settings toggle remains.
+  // The intent persists across launches, so a user who dismisses the OS prompt
+  // is re-asked next launch (until granted/denied), and once granted it sticks.
   const autoTried = useRef(false);
   useEffect(() => {
     if (!supported || enabled || busy || autoTried.current) return;
     if (!loadIntent()) return;
     autoTried.current = true;
-    ArmadaNotification.checkPermission()
-      .then(({ granted }) => {
-        if (granted) setEnabled(true);
-      })
-      .catch(() => {
-        // Permission check failed — leave dormant.
-      });
+    (async () => {
+      try {
+        const { granted } = await ArmadaNotification.checkPermission();
+        if (granted) {
+          setEnabled(true);
+          return;
+        }
+        // Not granted yet — surface the system permission dialog on launch.
+        const res = await ArmadaNotification.requestPermission();
+        if (res.granted) setEnabled(true);
+      } catch {
+        // Permission check/request failed — leave dormant.
+      }
+    })();
   }, [supported, enabled, busy]);
 
   // The complete set of relays we actually told the native service to watch.
