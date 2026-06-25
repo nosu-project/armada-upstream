@@ -96,14 +96,14 @@ export function RelayListEditor({
   return (
     <div className="space-y-1.5">
       {pinned.map((url) => (
-        <div key={url} className="flex items-center gap-2 rounded-lg border p-3">
+        <div key={url} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
           <RelayIdentity url={url} />
           <span className="text-xs text-muted-foreground shrink-0 ml-1">Pinned</span>
         </div>
       ))}
 
       {relays.map((url) => (
-        <div key={url} className="flex items-center gap-2 rounded-lg border p-3">
+        <div key={url} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
           <div className="flex-1 min-w-0">
             <RelayIdentity url={url} />
           </div>
@@ -120,7 +120,7 @@ export function RelayListEditor({
       ))}
 
       {relays.length === 0 && pinned.length === 0 && (
-        <p className="text-sm text-muted-foreground py-2">{emptyText}</p>
+        <p className="text-sm text-muted-foreground py-1">{emptyText}</p>
       )}
 
       <form
@@ -136,15 +136,15 @@ export function RelayListEditor({
           placeholder={placeholder}
           aria-label="Add relay"
           autoComplete="off"
-          className="text-base md:text-sm"
+          className="text-base md:text-sm bg-background/40 border-transparent"
         />
-        <Button type="submit" variant="outline" disabled={!newUrl.trim()}>
+        <Button type="submit" disabled={!newUrl.trim()} className="clip-corner-lg shrink-0">
           <Plus className="size-4 mr-1.5" /> Add
         </Button>
       </form>
 
       {onReset && (
-        <Button type="button" variant="ghost" size="sm" className="text-muted-foreground" onClick={onReset}>
+        <Button type="button" variant="ghost" size="sm" className="text-muted-foreground -ml-2" onClick={onReset}>
           <RotateCcw className="size-3.5 mr-1.5" /> Reset to defaults
         </Button>
       )}

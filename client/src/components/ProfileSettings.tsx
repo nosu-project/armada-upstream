@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Loader2, Plus, Trash2, ChevronDown, ChevronUp,
-  Wallet, Upload, Music, ImageIcon, Film, Mail, Link2, Pencil, AlertTriangle,
+  Wallet, Upload, Music, ImageIcon, Film, Mail, Link2, Pencil, AlertTriangle, Save,
 } from 'lucide-react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -709,92 +709,8 @@ export function ProfileSettings() {
             </div>
           )}
 
-          {/* Profile fields */}
-          <div>
-            <h2 className="text-sm font-medium py-2">Profile Fields</h2>
-
-            <div className="space-y-3 pt-1">
-              {/* Website — always first */}
-              <FormField
-                control={form.control}
-                name="website"
-                render={({ field }) => (
-                  <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
-                    <div className="w-6" />
-                    <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
-                      <span>Website</span>
-                    </div>
-                    <Input placeholder="https://yourwebsite.com" {...field} className="h-9" />
-                    <div className="size-9" />
-                  </div>
-                )}
-              />
-
-              {/* Lightning address */}
-              <FormField
-                control={form.control}
-                name="lud16"
-                render={({ field }) => (
-                  <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
-                    <div className="w-6" />
-                    <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
-                      <span>Lightning</span>
-                    </div>
-                    <Input placeholder="you@walletofsatoshi.com" {...field} className="h-9" />
-                    <div className="size-9" />
-                  </div>
-                )}
-              />
-
-              {fields.map((field, index) => (
-                <FieldRow
-                  key={field.id}
-                  index={index}
-                  type={form.watch(`fields.${index}.type`) ?? 'text'}
-                  accept={form.watch(`fields.${index}.accept`)}
-                  valuePlaceholder={form.watch(`fields.${index}.placeholder`)}
-                  isUploading={uploadingFieldIndex === index}
-                  control={form.control}
-                  canMoveUp={index > 0}
-                  canMoveDown={index < fields.length - 1}
-                  onRemove={() => remove(index)}
-                  onMoveUp={() => moveField(index, index - 1)}
-                  onMoveDown={() => moveField(index, index + 1)}
-                  onMediaPick={() => handleMediaPick(index)}
-                  onTickerChange={(ticker) => form.setValue(`fields.${index}.label`, ticker, { shouldDirty: true })}
-                />
-              ))}
-
-              {/* Add field — visible pill buttons */}
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {[...FIELD_PRESETS, CUSTOM_PRESET].map((preset) => {
-                  const Icon = preset.icon;
-                  return (
-                    <Tooltip key={preset.id}>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 rounded-full px-3 text-xs gap-1.5"
-                          onClick={() => handleAddPreset(preset)}
-                        >
-                          <Plus className="size-3 text-muted-foreground" />
-                          <Icon className="size-3.5 text-muted-foreground" />
-                          {preset.label}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" className="text-xs">
-                        {preset.description}
-                      </TooltipContent>
-                    </Tooltip>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Advanced */}
+          {/* Profile fields + account flags live behind Advanced to keep the
+              core profile (card + save) uncluttered. */}
           <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
             <CollapsibleTrigger asChild>
               <Button type="button" variant="ghost" className="w-full justify-between px-0 h-auto hover:bg-transparent hover:text-foreground">
@@ -803,6 +719,91 @@ export function ProfileSettings() {
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-3 space-y-4">
+              {/* Profile fields */}
+              <div>
+                <h2 className="text-sm font-medium py-2">Profile Fields</h2>
+
+                <div className="space-y-3 pt-1">
+                  {/* Website — always first */}
+                  <FormField
+                    control={form.control}
+                    name="website"
+                    render={({ field }) => (
+                      <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
+                        <div className="w-6" />
+                        <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
+                          <span>Website</span>
+                        </div>
+                        <Input placeholder="https://yourwebsite.com" {...field} className="h-9" />
+                        <div className="size-9" />
+                      </div>
+                    )}
+                  />
+
+                  {/* Lightning address */}
+                  <FormField
+                    control={form.control}
+                    name="lud16"
+                    render={({ field }) => (
+                      <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
+                        <div className="w-6" />
+                        <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
+                          <span>Lightning</span>
+                        </div>
+                        <Input placeholder="you@walletofsatoshi.com" {...field} className="h-9" />
+                        <div className="size-9" />
+                      </div>
+                    )}
+                  />
+
+                  {fields.map((field, index) => (
+                    <FieldRow
+                      key={field.id}
+                      index={index}
+                      type={form.watch(`fields.${index}.type`) ?? 'text'}
+                      accept={form.watch(`fields.${index}.accept`)}
+                      valuePlaceholder={form.watch(`fields.${index}.placeholder`)}
+                      isUploading={uploadingFieldIndex === index}
+                      control={form.control}
+                      canMoveUp={index > 0}
+                      canMoveDown={index < fields.length - 1}
+                      onRemove={() => remove(index)}
+                      onMoveUp={() => moveField(index, index - 1)}
+                      onMoveDown={() => moveField(index, index + 1)}
+                      onMediaPick={() => handleMediaPick(index)}
+                      onTickerChange={(ticker) => form.setValue(`fields.${index}.label`, ticker, { shouldDirty: true })}
+                    />
+                  ))}
+
+                  {/* Add field — visible pill buttons */}
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {[...FIELD_PRESETS, CUSTOM_PRESET].map((preset) => {
+                      const Icon = preset.icon;
+                      return (
+                        <Tooltip key={preset.id}>
+                          <TooltipTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 rounded-full px-3 text-xs gap-1.5"
+                              onClick={() => handleAddPreset(preset)}
+                            >
+                              <Plus className="size-3 text-muted-foreground" />
+                              <Icon className="size-3.5 text-muted-foreground" />
+                              {preset.label}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" className="text-xs">
+                            {preset.description}
+                          </TooltipContent>
+                        </Tooltip>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
               <FormField
                 control={form.control}
                 name="bot"
@@ -822,8 +823,8 @@ export function ProfileSettings() {
           </Collapsible>
 
           <div>
-            <Button type="submit" disabled={busy} className="w-full sm:w-auto">
-              {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : 'Save Profile'}
+            <Button type="submit" disabled={busy} className="w-full sm:w-auto clip-corner-lg">
+              {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : <><Save className="size-4 mr-2" /> Save Profile</>}
             </Button>
           </div>
 

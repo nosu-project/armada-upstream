@@ -3,14 +3,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ColorPicker } from "@/components/ui/color-picker";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useTheme } from "@/hooks/useTheme";
@@ -170,7 +163,7 @@ export function ThemeSelector() {
         </div>
       )}
 
-      <Button variant="outline" className="w-full" onClick={() => setBuilderOpen(true)}>
+      <Button className="w-full clip-corner-lg" onClick={() => setBuilderOpen(true)}>
         <Palette className="size-4 mr-2" />
         {isCustomBuild ? "Edit custom theme" : "Create a custom theme"}
       </Button>
@@ -205,62 +198,74 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Custom theme</DialogTitle>
-          <DialogDescription>
+      <ChromeDialogContent title="Custom theme">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
+            <Palette className="size-6" />
+          </div>
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+            custom theme
+          </h2>
+          <p className="text-sm text-muted-foreground">
             Pick three colors — every other shade is derived automatically.
-          </DialogDescription>
-        </DialogHeader>
-
-        {/* Live preview */}
-        <div
-          className="rounded-xl border p-4 space-y-3"
-          style={{ backgroundColor: `hsl(${tokens.background})`, color: `hsl(${tokens.foreground})` }}
-        >
-          <div className="flex items-center gap-2">
-            <span className="size-8 rounded-full" style={{ backgroundColor: `hsl(${tokens.primary})` }} />
-            <div className="flex-1">
-              <div className="text-sm font-semibold">{title || "Preview"}</div>
-              <div className="text-xs" style={{ color: `hsl(${tokens.mutedForeground})` }}>
-                The quick brown fox.
-              </div>
-            </div>
-            <span
-              className="rounded-md px-2 py-1 text-xs font-medium"
-              style={{ backgroundColor: `hsl(${tokens.primary})`, color: `hsl(${tokens.primaryForeground})` }}
-            >
-              Button
-            </span>
-          </div>
-          <div className="rounded-md p-2 text-xs" style={{ backgroundColor: `hsl(${tokens.secondary})` }}>
-            A muted surface row.
-          </div>
+          </p>
         </div>
 
-        <div className="flex items-start justify-around py-2">
-          <ColorPicker label="Background" value={hslStringToHex(colors.background)} onChange={update("background")} />
-          <ColorPicker label="Text" value={hslStringToHex(colors.text)} onChange={update("text")} />
-          <ColorPicker label="Primary" value={hslStringToHex(colors.primary)} onChange={update("primary")} />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="theme-title">Name</Label>
-          <Input id="theme-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={40} />
-        </div>
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button
-            onClick={() => {
-              onApply({ title: title.trim() || "Custom", colors });
-              onOpenChange(false);
-            }}
+        <div className="mt-6 space-y-5">
+          {/* Live preview */}
+          <div
+            className="clip-corner-lg p-4 space-y-3"
+            style={{ backgroundColor: `hsl(${tokens.background})`, color: `hsl(${tokens.foreground})` }}
           >
-            Apply theme
-          </Button>
-        </DialogFooter>
-      </DialogContent>
+            <div className="flex items-center gap-2">
+              <span className="size-8 rounded-full" style={{ backgroundColor: `hsl(${tokens.primary})` }} />
+              <div className="flex-1">
+                <div className="text-sm font-semibold">{title || "Preview"}</div>
+                <div className="text-xs" style={{ color: `hsl(${tokens.mutedForeground})` }}>
+                  The quick brown fox.
+                </div>
+              </div>
+              <span
+                className="clip-corner-lg px-2 py-1 text-xs font-medium"
+                style={{ backgroundColor: `hsl(${tokens.primary})`, color: `hsl(${tokens.primaryForeground})` }}
+              >
+                Button
+              </span>
+            </div>
+            <div className="rounded-md p-2 text-xs" style={{ backgroundColor: `hsl(${tokens.secondary})` }}>
+              A muted surface row.
+            </div>
+          </div>
+
+          <div className="flex items-start justify-around">
+            <ColorPicker label="Background" value={hslStringToHex(colors.background)} onChange={update("background")} />
+            <ColorPicker label="Text" value={hslStringToHex(colors.text)} onChange={update("text")} />
+            <ColorPicker label="Primary" value={hslStringToHex(colors.primary)} onChange={update("primary")} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="theme-title" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Name
+            </Label>
+            <Input id="theme-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={40} />
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <Button type="button" variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="flex-1 clip-corner-lg"
+              onClick={() => {
+                onApply({ title: title.trim() || "Custom", colors });
+                onOpenChange(false);
+              }}
+            >
+              Apply theme
+            </Button>
+          </div>
+        </div>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

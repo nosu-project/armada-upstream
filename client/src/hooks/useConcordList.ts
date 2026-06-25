@@ -1,3 +1,4 @@
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
@@ -15,8 +16,16 @@ import {
   removeFromConcordList,
   type ConcordKeyBundle,
   type ConcordList,
+  type ConcordListEntry,
 } from "@/lib/concord";
-import { acceptInvite, type CommunityInvite } from "@/lib/concord/invite";
+import { unwrapGiftWrap } from "@/lib/concord/giftwrap";
+import {
+  acceptInvite,
+  buildInvite,
+  parseInviteRumor,
+  type CommunityInvite,
+} from "@/lib/concord/invite";
+import { KIND_GIFT_WRAP } from "@/lib/concord/kinds";
 import { capRelays, type Community } from "@/lib/concord/types";
 import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
 
@@ -299,6 +308,319 @@ export function useUpdateConcordList() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
+    },
+  });
+}
+
+/** Where a recovered community was found, so the UI can explain provenance. */
+export type ConcordRecoverySource = "list-history" | "invite";
+
+/**
+ * One community surfaced by a read-only resync scan, classified so the user can
+ * decide what to restore. `status`:
+ *   - "current": already in your active list (shown for context, not restorable);
+ *   - "recovered": found in an old list version or an invite, NOT currently in
+ *     your list and NOT deliberately left — a candidate to restore;
+ *   - "left": you have a newer tombstone for it (you left/declined). Restoring
+ *     it would override that leave, so it's opt-in and called out separately.
+ */
+export interface ConcordScanItem {
+  communityId: string;
+  name: string;
+  /** Whether it's already active, recoverable, or a deliberate leave. */
+  status: "current" | "recovered" | "left";
+  /** Where the recovered entry came from (for "recovered"/"left"). */
+  source: ConcordRecoverySource;
+  /** The reconstructed entry to merge in if the user restores this one. */
+  entry: ConcordListEntry;
+}
+
+/** The result of a read-only resync scan — nothing is published. */
+export interface ConcordScanResult {
+  /** Every community found across all sources, classified + sorted by name. */
+  items: ConcordScanItem[];
+  /** Count of communities already in the active list. */
+  currentCount: number;
+  /** The authoritative list at scan time (basis the apply step builds on). */
+  baseList: ConcordList;
+}
+
+/** A read of one 30078 list blob into a {@link ConcordList} (best-effort). */
+async function decodeListBlob(
+  event: NostrEvent | null | undefined,
+  signer: NUser["signer"],
+  selfPubkey: string,
+): Promise<ConcordList | null> {
+  if (!event?.content) return null;
+  try {
+    const { list, decryptFailed } = await readConcordListEvent(event, signer, selfPubkey);
+    return decryptFailed ? null : list;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Turn a recovered {@link CommunityInvite} into a list entry. Stamped with the
+ * EARLIEST possible `addedAt` (epoch second 1) so the deterministic merge treats
+ * it as the oldest possible join: a community the user genuinely LEFT (which has
+ * a real, newer tombstone) stays buried, while a community merely dropped by a
+ * bad overwrite (no tombstone) is restored. We never resurrect an intentional
+ * leave — only undo data loss.
+ */
+function inviteToEntry(invite: CommunityInvite): ConcordListEntry | null {
+  let community: Community;
+  try {
+    community = acceptInvite(invite);
+  } catch {
+    return null;
+  }
+  const bundle: ConcordKeyBundle = {
+    communityId: bytesToHex(community.id),
+    epoch: Number(community.serverRootEpoch),
+    name: community.name,
+    relays: community.relays,
+    keys: { invite: buildInvite(community) },
+  };
+  return { communityId: bundle.communityId, seed: bundle, current: bundle, addedAt: 1 };
+}
+
+/**
+ * Read-only scan to recover Concord communities lost to a bad kind-30078
+ * overwrite — WITHOUT publishing anything. The list is a single replaceable
+ * event, so an older/out-of-sync client could replace it with a shorter list
+ * and drop rooms (and their keys). This gathers membership/keys from every
+ * source that still holds them and classifies each community so the user can
+ * SEE what would be restored and choose, rather than firing a blind republish:
+ *
+ *   1. the local plaintext folded cache (survives a remote overwrite locally);
+ *   2. EVERY 30078 `d=armada/concord` blob the local event store still holds;
+ *   3. EVERY 30078 blob the relays return — queried WITHOUT `limit:1`, so a
+ *      relay that retained a prior version contributes it;
+ *   4. the gift-wrap invite inbox (kind 1059 addressed to me): each direct
+ *      invite carries the FULL key bundle for a room you're allowed into, so
+ *      this surfaces communities that aren't in the list at all.
+ *
+ * Each found community is classified as already-current, recoverable, or a
+ * deliberate leave (it has a newer tombstone) so the UI can present them
+ * distinctly. The apply step ({@link useApplyConcordResync}) does the writing.
+ */
+export function useScanConcordList() {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const eventStore = useEventStore();
+  const queryClient = useQueryClient();
+
+  return useMutation<ConcordScanResult, Error, void>({
+    mutationFn: async () => {
+      if (!user) throw new Error("Sign in to scan your communities.");
+      const signer = user.signer;
+      if (!signer.nip44) {
+        throw new Error("This signer can't decrypt your communities (NIP-44 unsupported).");
+      }
+      const pubkey = user.pubkey;
+
+      // Sources that may contain entries. Track which provided each community so
+      // we can show provenance (an old list version vs. a received invite).
+      const listSources: ConcordList[] = [];
+      const inviteEntries: ConcordListEntry[] = [];
+
+      // 1. Local plaintext cache.
+      const persisted = await readFolded<PersistedList>(`concord-list:${pubkey}`);
+      if (persisted?.list) listSources.push(persisted.list);
+
+      // 2. Every 30078 list blob the local event store holds.
+      try {
+        const store = await eventStore;
+        const local = await store.query([
+          { kinds: [CONCORD_LIST_KIND], authors: [pubkey], "#d": [CONCORD_LIST_D_TAG] },
+        ]);
+        for (const ev of local) {
+          const list = await decodeListBlob(ev, signer, pubkey);
+          if (list) listSources.push(list);
+        }
+      } catch {
+        // Best-effort.
+      }
+
+      // 3. Every 30078 list blob the relays return (no limit:1).
+      let prev: NostrEvent | null = null;
+      try {
+        const remote = await nostr.query(
+          [{ kinds: [CONCORD_LIST_KIND], authors: [pubkey], "#d": [CONCORD_LIST_D_TAG], limit: 100 }],
+          { signal: AbortSignal.timeout(10_000) },
+        );
+        prev = remote.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+        for (const ev of remote) {
+          const list = await decodeListBlob(ev, signer, pubkey);
+          if (list) listSources.push(list);
+        }
+      } catch {
+        // Best-effort.
+      }
+
+      // 4. Gift-wrap invite inbox: each direct invite carries a full key bundle.
+      try {
+        const wraps = await nostr.query(
+          [{ kinds: [KIND_GIFT_WRAP], "#p": [pubkey], limit: 500 }],
+          { signal: AbortSignal.timeout(10_000) },
+        );
+        for (const wrap of wraps) {
+          const unwrapped = await unwrapGiftWrap(wrap, signer).catch(() => null);
+          if (!unwrapped) continue;
+          const invite = parseInviteRumor(unwrapped.rumor.kind, unwrapped.rumor.content);
+          if (!invite) continue;
+          const entry = inviteToEntry(invite);
+          if (entry) inviteEntries.push(entry);
+        }
+      } catch {
+        // Best-effort.
+      }
+
+      // The authoritative basis: the active in-memory list, falling back to the
+      // freshest decrypted relay blob. This is what "current"/"left" are judged
+      // against and what the apply step merges chosen recoveries onto.
+      const active =
+        queryClient.getQueryData<{ list: ConcordList }>(["concord", "list", pubkey])?.list ??
+        (await decodeListBlob(prev, signer, pubkey)) ??
+        EMPTY_CONCORD_LIST;
+
+      const currentIds = new Set(active.entries.map((e) => e.communityId));
+      const tombstones = new Map(active.tombstones.map((t) => [t.communityId, t.removedAt]));
+
+      // Fold every recovered entry per community, keeping the freshest bundle.
+      // Track provenance: invite-sourced entries are the strongest signal that a
+      // room is genuinely joinable, so prefer "invite" when both apply.
+      const found = new Map<string, { entry: ConcordListEntry; source: ConcordRecoverySource }>();
+      const absorb = (entries: ConcordListEntry[], source: ConcordRecoverySource) => {
+        for (const e of entries) {
+          const prevFound = found.get(e.communityId);
+          if (!prevFound) {
+            found.set(e.communityId, { entry: e, source });
+          } else {
+            const merged = mergeConcordLists(
+              { entries: [prevFound.entry], tombstones: [] },
+              { entries: [e], tombstones: [] },
+            ).entries[0];
+            found.set(e.communityId, {
+              entry: merged,
+              source: source === "invite" ? "invite" : prevFound.source,
+            });
+          }
+        }
+      };
+      for (const list of listSources) absorb(list.entries, "list-history");
+      absorb(inviteEntries, "invite");
+
+      const items: ConcordScanItem[] = [];
+      for (const [communityId, { entry, source }] of found) {
+        const name = entry.current.name || communityId.slice(0, 8);
+        if (currentIds.has(communityId)) {
+          items.push({ communityId, name, status: "current", source, entry });
+        } else if (tombstones.has(communityId)) {
+          // A real, deliberate leave — restoring overrides the tombstone.
+          items.push({ communityId, name, status: "left", source, entry });
+        } else {
+          // Not in the list, not left → lost to a bad overwrite. Recoverable.
+          items.push({ communityId, name, status: "recovered", source, entry });
+        }
+      }
+      // Surface active communities not seen in any recovery source too, so the
+      // "current" count reflects the real list.
+      for (const e of active.entries) {
+        if (!found.has(e.communityId)) {
+          items.push({
+            communityId: e.communityId,
+            name: e.current.name || e.communityId.slice(0, 8),
+            status: "current",
+            source: "list-history",
+            entry: e,
+          });
+        }
+      }
+
+      items.sort((a, b) => a.name.localeCompare(b.name));
+      return {
+        items,
+        currentCount: items.filter((i) => i.status === "current").length,
+        baseList: active,
+      };
+    },
+  });
+}
+
+/**
+ * Publish a resync: merge the user-chosen recovered entries onto the active
+ * list and republish the kind-30078 event. Only the communities the user
+ * selected in the scan are restored; everything else is left exactly as-is.
+ */
+export function useApplyConcordResync() {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const queryClient = useQueryClient();
+
+  return useMutation<{ restored: number }, Error, { baseList: ConcordList; chosen: ConcordListEntry[] }>({
+    // Share the mutation queue with normal list writes so an apply can't
+    // interleave with an in-flight add/remove and clobber it.
+    scope: { id: "concord-list" },
+    mutationFn: async ({ baseList, chosen }) => {
+      if (!user) throw new Error("Sign in to restore your communities.");
+      const nip44 = user.signer.nip44;
+      if (!nip44) {
+        throw new Error("This signer can't encrypt your communities (NIP-44 unsupported).");
+      }
+      const signer = user.signer;
+      const pubkey = user.pubkey;
+      if (chosen.length === 0) return { restored: 0 };
+
+      // Re-read the freshest relay state and fold it in, so an apply built on a
+      // slightly stale scan still merges onto the latest list (never clobbers).
+      const remote = await nostr
+        .query(
+          [{ kinds: [CONCORD_LIST_KIND], authors: [pubkey], "#d": [CONCORD_LIST_D_TAG], limit: 1 }],
+          { signal: AbortSignal.timeout(8000) },
+        )
+        .catch(() => [] as NostrEvent[]);
+      const prev = remote.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+      const relayList = (await decodeListBlob(prev, signer, pubkey)) ?? EMPTY_CONCORD_LIST;
+
+      // For a "left" community the user chose to restore, the recovered entry's
+      // addedAt=1 would lose to its newer tombstone. Re-stamp those choices with
+      // a fresh addedAt so the merge resurrects them (an explicit re-join).
+      const now = Date.now();
+      const tombstoned = new Set(
+        [...baseList.tombstones, ...relayList.tombstones].map((t) => t.communityId),
+      );
+      const chosenEntries = chosen.map((e) =>
+        tombstoned.has(e.communityId) ? { ...e, addedAt: now } : e,
+      );
+
+      const base = mergeConcordLists(baseList, relayList);
+      const next = mergeConcordLists(base, { entries: chosenEntries, tombstones: [] });
+
+      const createdAt = Math.max(Math.floor(now / 1000), (prev?.created_at ?? 0) + 1);
+      const content = await nip44.encrypt(pubkey, JSON.stringify(next));
+      const event = await signer.signEvent({
+        kind: CONCORD_LIST_KIND,
+        content,
+        tags: [
+          ["d", CONCORD_LIST_D_TAG],
+          ["title", `${APP_NAME} Encrypted Communities`],
+        ],
+        created_at: createdAt,
+      });
+      queryClient.setQueryData(["concord", "list", pubkey], { event, list: next });
+      void writeFolded(`concord-list:${pubkey}`, { event, list: next } satisfies PersistedList);
+      await nostr.event(event, { signal: AbortSignal.timeout(10_000) });
+
+      const restored = next.entries.filter(
+        (e) => !base.entries.some((b) => b.communityId === e.communityId),
+      ).length;
+      return { restored };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
+      queryClient.invalidateQueries({ queryKey: ["concord", "invites"] });
     },
   });
 }

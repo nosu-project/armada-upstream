@@ -1,4 +1,4 @@
-import { Mic, MicOff, Volume2 } from "lucide-react";
+import { Mic, MicOff, ShieldCheck, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import {
   getPreferredConcordVoiceServer,
   getPreferredMicId,
@@ -214,11 +215,17 @@ export function VoiceDeviceSettings() {
   }, [playingTone, speakerId]);
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Microphone</label>
+    <div className="space-y-5">
+      {/* Microphone */}
+      <div className="space-y-2.5">
+        <div className="flex items-center gap-2">
+          <Mic className="size-4 text-muted-foreground shrink-0" />
+          <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Microphone
+          </label>
+        </div>
         <Select value={micId} onValueChange={onMicChange}>
-          <SelectTrigger>
+          <SelectTrigger className="bg-background/40 border-transparent">
             <SelectValue placeholder="System default" />
           </SelectTrigger>
           <SelectContent>
@@ -236,33 +243,51 @@ export function VoiceDeviceSettings() {
         <div className="flex items-center gap-3">
           <Button
             type="button"
-            variant="outline"
             size="sm"
-            className="shrink-0 gap-2"
+            variant={testing ? "secondary" : "default"}
+            className="shrink-0 gap-2 clip-corner-lg w-28 justify-center"
             onClick={() => (testing ? stopMicTest() : void startMicTest())}
           >
             {testing ? <MicOff className="size-4" /> : <Mic className="size-4" />}
-            {testing ? "Stop test" : "Test mic"}
+            {testing ? "Stop" : "Test mic"}
           </Button>
-          {/* Input level meter. */}
-          <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-secondary">
-            <div
-              className="absolute inset-y-0 left-0 rounded-full bg-success transition-[width] duration-75"
-              style={{ width: `${Math.round(level * 100)}%` }}
-            />
+          {/* Segmented input-level meter — neon HUD style. */}
+          <div className="flex flex-1 items-center gap-0.5" aria-hidden>
+            {Array.from({ length: 16 }).map((_, i) => {
+              const lit = level * 16 > i;
+              return (
+                <div
+                  key={i}
+                  className={cn(
+                    "h-2.5 flex-1 rounded-[1px] transition-colors duration-75",
+                    lit
+                      ? i > 12
+                        ? "bg-destructive"
+                        : "bg-success"
+                      : "bg-background/60",
+                  )}
+                />
+              );
+            })}
           </div>
         </div>
         {permissionError && <p className="text-xs text-destructive">{permissionError}</p>}
         {testing && !permissionError && (
-          <p className="text-xs text-muted-foreground">Speak — the bar should move.</p>
+          <p className="text-xs text-muted-foreground">Speak — the meter should move.</p>
         )}
       </div>
 
+      {/* Speaker */}
       {supportsSpeakerSelection && (
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Speaker</label>
+        <div className="space-y-2.5">
+          <div className="flex items-center gap-2">
+            <Volume2 className="size-4 text-muted-foreground shrink-0" />
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Speaker
+            </label>
+          </div>
           <Select value={speakerId} onValueChange={onSpeakerChange}>
-            <SelectTrigger>
+            <SelectTrigger className="bg-background/40 border-transparent">
               <SelectValue placeholder="System default" />
             </SelectTrigger>
             <SelectContent>
@@ -278,24 +303,28 @@ export function VoiceDeviceSettings() {
           </Select>
           <Button
             type="button"
-            variant="outline"
             size="sm"
-            className="gap-2"
+            className="gap-2 clip-corner-lg w-28 justify-center"
             disabled={playingTone}
             onClick={() => void playTestTone()}
           >
             <Volume2 className="size-4" />
-            {playingTone ? "Playing…" : "Test speaker"}
+            {playingTone ? "Playing…" : "Test"}
           </Button>
         </div>
       )}
 
-      {/* Concord (encrypted community) voice server. Advanced: the blind LiveKit
-          broker your client uses to START a call in an empty channel. Once
-          anyone is in a call, everyone converges on whoever's already there, so
-          this only matters for cold-starting / running your own SFU. */}
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Encrypted voice server</label>
+      {/* Encrypted voice server (advanced). The blind LiveKit broker your client
+          uses to START a call in an empty channel; once anyone's in a call,
+          everyone converges on them, so this only matters for cold-starting or
+          running your own SFU. */}
+      <div className="space-y-2.5">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="size-4 text-muted-foreground shrink-0" />
+          <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Encrypted voice server
+          </label>
+        </div>
         <Input
           value={concordServer}
           placeholder={CONCORD_VOICE_SERVERS[0] ?? "https://your-armada-host"}
@@ -307,11 +336,11 @@ export function VoiceDeviceSettings() {
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
+          className="bg-background/40 border-transparent font-mono text-sm"
         />
-        <p className="text-xs text-muted-foreground">
-          The LiveKit server your client uses to start a Concord voice call. When
-          others are already in a call, you’ll join wherever they are. Leave blank
-          to use this app’s default.
+        <p className="text-xs text-muted-foreground leading-snug">
+          Used to start a Concord voice call. When others are already in a call,
+          you join wherever they are. Leave blank for this app&apos;s default.
         </p>
       </div>
     </div>
