@@ -41,13 +41,15 @@ export interface ArmadaNotificationPlugin {
     /** Per-type notification prefs (mentions/reactions/replies/directMessages/allGroupMessages). */
     prefs?: Record<string, boolean>;
     /**
-     * Concord (E2E) channel subscriptions. The service can't decrypt these, so
-     * it subscribes by `#z` pseudonym (kind 3300) and fires a generic
-     * "New message in <community> / #<channel>" notification.
+     * Concord (E2E) channel subscriptions. The service subscribes by `#z`
+     * pseudonym (kind 3300) and uses the supplied per-`z` channel key to open
+     * the sealed message (NIP-44 v2) for a rich "<sender>: <preview>"
+     * notification in <community> / #<channel>.
      */
     concordSubs?: Array<{
       relays: string[];
       zs: string[];
+      keys: Array<{ z: string; key: string; channelId: string; epoch: string }>;
       communityId: string;
       communityName: string;
       channelName: string;

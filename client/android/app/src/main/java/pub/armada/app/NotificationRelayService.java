@@ -101,9 +101,12 @@ public class NotificationRelayService extends Service {
     // Concord (E2E) channel subscriptions, keyed for fast lookup:
     //   zToName: #z pseudonym (hex) → "Community / #channel" display name
     //   zToUrl:  #z pseudonym (hex) → in-app deep-link (/c/<communityId>)
+    //   zToKey:  #z pseudonym (hex) → decrypt material (raw key + channel/epoch
+    //            binding) so the service can open the sealed message
     //   relayToZs: relay url → the #z values that live on that relay
     private final java.util.Map<String, String> zToName = new java.util.HashMap<>();
     private final java.util.Map<String, String> zToUrl = new java.util.HashMap<>();
+    private final java.util.Map<String, ConcordKey> zToKey = new java.util.HashMap<>();
     private final java.util.Map<String, Set<String>> relayToZs = new java.util.HashMap<>();
     // De-dupe notifications across relays/reconnects for this service lifetime.
     private final Set<String> notifiedIds = new HashSet<>();
@@ -118,6 +121,11 @@ public class NotificationRelayService extends Service {
     private final Map<String, List<ProfileCallback>> pendingProfiles = new HashMap<>();
     // avatar URL → circle-cropped bitmap, decoded once and reused.
     private final Map<String, Bitmap> avatarCache = new HashMap<>();
+    // groupId → resolved group name (kind 39000). Cached for the service lifetime
+    // so the room name in a notification doesn't re-fetch on every event.
+    private final Map<String, String> groupNameCache = new HashMap<>();
+    // groupId → waiters for an in-flight kind-39000 fetch.
+    private final Map<String, List<GroupNameCallback>> pendingGroupNames = new HashMap<>();
     // Largest dimension (px) we keep for an avatar large-icon.
     private static final int AVATAR_PX = 128;
     // How long to wait for a kind-0 profile before firing a name-less fallback.
@@ -133,8 +141,29 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /**
+     * Per-`z` Concord decrypt material: the raw NIP-44 channel key and the
+     * channel id + epoch the sealed message is bound to. Used to open a kind-3300
+     * outer event and recover the inner author + plaintext.
+     */
+    private static final class ConcordKey {
+        final byte[] key;        // raw 32-byte channel key (NIP-44 conversation key)
+        final String channelId;  // hex; the inner `channel` tag must match (best-effort)
+        final String epoch;      // decimal string; the inner `epoch` tag must match
+        ConcordKey(byte[] key, String channelId, String epoch) {
+            this.key = key;
+            this.channelId = channelId;
+            this.epoch = epoch;
+        }
+    }
+
     private interface ProfileCallback {
         void onProfile(Profile profile);
+    }
+
+    private interface GroupNameCallback {
+        /** Receives the group's display name, or null if unresolved. */
+        void onName(String name);
     }
 
     // Live instance so the plugin can route a signed AUTH event back to us.
@@ -256,13 +285,15 @@ public class NotificationRelayService extends Service {
 
     /**
      * Parse the Concord subscriptions JSON
-     * ([{relays:[],zs:[],communityName,channelName}, …]) into the lookup maps:
-     * z→display-name and relay→{z…}. Concord messages are E2E-encrypted, so we
-     * only ever fire a generic "New message in <community>/#<channel>".
+     * ([{relays:[],zs:[],keys:[{z,key,channelId,epoch}],communityName,channelName}, …])
+     * into the lookup maps: z→display-name, z→deep-link, z→decrypt-key, and
+     * relay→{z…}. Concord messages are E2E-encrypted; the per-`z` key lets the
+     * service open the sealed message for a rich "<sender>: <preview>" body.
      */
     private void parseConcordSubs(String json) {
         zToName.clear();
         zToUrl.clear();
+        zToKey.clear();
         relayToZs.clear();
         if (json == null) return;
         try {
@@ -286,6 +317,18 @@ public class NotificationRelayService extends Service {
                         zList.add(z);
                         zToName.put(z, name);
                         zToUrl.put(z, url);
+                    }
+                }
+                // Per-`z` decrypt material (key + channel/epoch binding).
+                JSONArray keys = sub.optJSONArray("keys");
+                if (keys != null) {
+                    for (int j = 0; j < keys.length(); j++) {
+                        JSONObject k = keys.optJSONObject(j);
+                        if (k == null) continue;
+                        String z = k.optString("z", null);
+                        byte[] raw = ConcordCrypto.hexToBytes(k.optString("key", null));
+                        if (z == null || z.isEmpty() || raw == null || raw.length != 32) continue;
+                        zToKey.put(z, new ConcordKey(raw, k.optString("channelId", ""), k.optString("epoch", "")));
                     }
                 }
                 for (int j = 0; j < relays.length(); j++) {
@@ -317,6 +360,8 @@ public class NotificationRelayService extends Service {
         final String subDm = "am-" + Long.toHexString(System.nanoTime() + 3);
         // Prefix for one-shot kind-0 profile lookups (sub id = prefix + pubkey).
         final String profilePrefix = "ap-" + Long.toHexString(System.nanoTime() + 4) + "-";
+        // Prefix for one-shot kind-39000 group-metadata lookups (sub id = prefix + groupId).
+        final String groupPrefix = "ah-" + Long.toHexString(System.nanoTime() + 5) + "-";
         // id of the last kind-22242 we sent; used to match the AUTH OK so a
         // relay's OK for some other event can't trigger a REQ re-send.
         String authEventId;
@@ -436,6 +481,24 @@ public class NotificationRelayService extends Service {
             }
         }
 
+        /**
+         * Fire a one-shot kind-39000 (NIP-29 group metadata) REQ for
+         * {@code groupId}, scoped with a `#d` filter. The EVENT is picked up in
+         * {@link #onRelayMessage} (sub id starts with {@link #groupPrefix}).
+         */
+        void fetchGroupName(String groupId) {
+            if (closed || ws == null) return;
+            try {
+                JSONObject f = new JSONObject();
+                f.put("kinds", new JSONArray().put(39000));
+                f.put("#d", new JSONArray().put(groupId));
+                f.put("limit", 1);
+                ws.send(reqMessage(groupPrefix + groupId, f));
+            } catch (JSONException e) {
+                if (BuildConfig.DEBUG) Log.w(TAG, "Failed to build group-name REQ", e);
+            }
+        }
+
         void closeSub(String subId) {
             if (ws == null) return;
             try {
@@ -503,6 +566,13 @@ public class NotificationRelayService extends Service {
                 if (pk != null) {
                     closeProfileSub(relayUrl, sub);
                     resolveProfile(pk, null);
+                    return;
+                }
+                // A group-name lookup with no kind-39000: resolve waiters null.
+                String gid = groupIdForSub(sub);
+                if (gid != null) {
+                    closeProfileSub(relayUrl, sub);
+                    resolveGroupName(gid, null);
                 }
                 return;
             }
@@ -537,6 +607,13 @@ public class NotificationRelayService extends Service {
             if (pk != null) {
                 closeProfileSub(relayUrl, sub);
                 resolveProfile(pk, parseProfile(event));
+                return;
+            }
+            // A kind-39000 from a group-name lookup: cache the name + resolve.
+            String gid = groupIdForSub(sub);
+            if (gid != null) {
+                closeProfileSub(relayUrl, sub);
+                resolveGroupName(gid, parseGroupName(event));
                 return;
             }
             handleEvent(event, relayUrl);
@@ -641,7 +718,102 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    // ── Group name (kind 39000) resolution ────────────────────────────────────
+
+    /**
+     * If {@code sub} is one of our one-shot group-name lookups, return the group
+     * id it was issued for; otherwise null.
+     */
+    private String groupIdForSub(String sub) {
+        if (sub == null || sub.isEmpty()) return null;
+        for (RelayConnection rc : connections) {
+            if (sub.startsWith(rc.groupPrefix)) {
+                return sub.substring(rc.groupPrefix.length());
+            }
+        }
+        return null;
+    }
+
+    /** Parse a kind-39000 group-metadata event's name (the `name` tag). */
+    private static String parseGroupName(JSONObject event) {
+        return tagValue(event, "name");
+    }
+
+    /**
+     * Resolve {@code groupId} to a display name, then invoke {@code cb} (always
+     * on the main handler). Serves from cache, else issues a kind-39000 REQ on
+     * {@code relayUrl} and waits up to {@link #PROFILE_TIMEOUT_MS}.
+     */
+    private void resolveGroupName(String groupId, String relayUrl, GroupNameCallback cb) {
+        String cached = groupNameCache.get(groupId);
+        if (cached != null) {
+            cb.onName(cached);
+            return;
+        }
+        List<GroupNameCallback> waiters = pendingGroupNames.get(groupId);
+        if (waiters != null) {
+            waiters.add(cb);
+            return;
+        }
+        waiters = new ArrayList<>();
+        waiters.add(cb);
+        pendingGroupNames.put(groupId, waiters);
+
+        RelayConnection rc = connectionFor(relayUrl);
+        if (rc == null) {
+            resolveGroupName(groupId, (String) null);
+            return;
+        }
+        rc.fetchGroupName(groupId);
+        handler.postDelayed(() -> {
+            if (pendingGroupNames.containsKey(groupId)) {
+                resolveGroupName(groupId, (String) null);
+            }
+        }, PROFILE_TIMEOUT_MS);
+    }
+
+    /** Cache the name (if any) and flush all pending waiters for this group. */
+    private void resolveGroupName(String groupId, String name) {
+        if (name != null && !name.isEmpty()) {
+            groupNameCache.put(groupId, name);
+        }
+        List<GroupNameCallback> waiters = pendingGroupNames.remove(groupId);
+        if (waiters == null) return;
+        for (GroupNameCallback cb : waiters) {
+            cb.onName(name);
+        }
+    }
+
     // ── Event → notification ──────────────────────────────────────────────────
+
+    /**
+     * Open a Concord sealed outer event with the supplied channel key: NIP-44
+     * v2-decrypt the {@code content}, parse the inner authorship event, and
+     * return it (with {@code pubkey} = real author, {@code content} = message).
+     * Best-effort: returns {@code null} on decrypt/parse failure or if the inner
+     * channel/epoch binding doesn't match (a spliced/foreign payload). We do not
+     * verify the inner Schnorr signature here (see {@link ConcordCrypto}).
+     */
+    private static JSONObject openConcord(JSONObject outer, ConcordKey ck) {
+        try {
+            String payload = outer.optString("content", "");
+            if (payload.isEmpty()) return null;
+            String json = ConcordCrypto.decrypt(ck.key, payload);
+            if (json == null) return null;
+            JSONObject inner = new JSONObject(json);
+            // Binding: the inner kind must equal the outer's, and the inner
+            // channel/epoch tags must match the key we decrypted with — cheap
+            // anti-splice checks that don't need secp256k1.
+            if (inner.optInt("kind", -1) != outer.optInt("kind", -2)) return null;
+            String ch = tagValue(inner, "channel");
+            String ep = tagValue(inner, "epoch");
+            if (!ck.channelId.isEmpty() && ch != null && !ck.channelId.equals(ch)) return null;
+            if (!ck.epoch.isEmpty() && ep != null && !ck.epoch.equals(ep)) return null;
+            return inner;
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     private void handleEvent(JSONObject event, String relayUrl) {
         String id = event.optString("id");
@@ -651,21 +823,58 @@ public class NotificationRelayService extends Service {
 
         int kind = event.optInt("kind");
 
-        // Concord (E2E): we can't decrypt, so fire a generic notification keyed
-        // off the #z pseudonym → community/channel name. Outer events are signed
-        // by ephemeral keys, so there's no author/self check to apply.
+        // Concord (E2E): the outer event is signed by an ephemeral key with
+        // NIP-44-encrypted content. Open it with the channel key we were handed
+        // (derived in the WebView, where membership lives) to recover the inner
+        // author + plaintext, then notify just like a group message. If we have
+        // no key (or decryption fails) fall back to a keyless room notification.
         if (kind == 3300) {
             String z = tagValue(event, "z");
-            String name = z != null ? zToName.get(z) : null;
-            if (name == null) {
+            String room = z != null ? zToName.get(z) : null;
+            if (room == null) {
                 return;
             }
             String url = zToUrl.get(z);
             long cts = event.optLong("created_at", 0);
             if (cts + 1 > sinceSec) sinceSec = cts + 1;
             notifiedIds.add(id);
-            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + name);
-            showNotification(hashId(id), name, "New message", url != null ? url : "/");
+
+            ConcordKey ck = zToKey.get(z);
+            JSONObject inner = ck != null ? openConcord(event, ck) : null;
+            if (inner == null) {
+                // Couldn't decrypt — still tell the user something arrived, and
+                // where. (Generic body, but a real room title.)
+                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord (opaque): " + room);
+                if (!prefBool("allGroupMessages", true)) return;
+                showNotification(hashId(id), room, "New message", url != null ? url : "/");
+                return;
+            }
+
+            String author = inner.optString("pubkey");
+            if (author.equals(userPubkey)) {
+                return; // our own message echoed back
+            }
+            boolean mentionsMe = pTags(inner).contains(userPubkey);
+            // Concord rooms reuse the group-message prefs: always notify on a
+            // mention; otherwise honour the all-messages toggle.
+            if (!(mentionsMe ? prefBool("mentions", true) : prefBool("allGroupMessages", true))) {
+                return;
+            }
+            final String fRoom = room;
+            final String fUrl = url != null ? url : "/";
+            final boolean fMention = mentionsMe;
+            final String preview = truncate(inner.optString("content"));
+            resolveAuthor(author, relayUrl, profile -> {
+                String name = displayName(profile, author);
+                String picture = profile != null ? profile.picture : null;
+                String title = fMention ? name + " mentioned you" : name;
+                // Body: "<message> · <community / #channel>" so the room is always
+                // visible. Fall back to a verb when there's no text (e.g. media).
+                String text = !preview.isEmpty() ? preview : (fMention ? "Mentioned you" : "Sent a message");
+                String body = text + " · " + fRoom;
+                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + title);
+                showNotification(hashId(id), title, body, fUrl, picture);
+            });
             return;
         }
 
@@ -691,13 +900,15 @@ public class NotificationRelayService extends Service {
         // Resolve the author's name + avatar, then build a "<name> did X" body.
         resolveAuthor(author, relayUrl, profile -> {
             String name = displayName(profile, author);
-            String picture = profile != null ? profile.picture : null;
+            final String picture = profile != null ? profile.picture : null;
             String title;
             String body;
             String url;
+            // The NIP-29 group this happened in (kinds 9/7/1111). Null for DMs.
+            String groupId = null;
             switch (kind) {
                 case 9: {
-                    String groupId = tagValue(event, "h");
+                    groupId = tagValue(event, "h");
                     title = mention ? name + " mentioned you" : name;
                     body = truncate(event.optString("content"));
                     if (body.isEmpty()) body = mention ? "Mentioned you" : "Sent a message";
@@ -709,7 +920,7 @@ public class NotificationRelayService extends Service {
                 case 7: {
                     title = name;
                     body = "Reacted " + reactionEmoji(event) + " to your message";
-                    String groupId = tagValue(event, "h");
+                    groupId = tagValue(event, "h");
                     url = groupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(groupId)
                             : "/";
@@ -719,7 +930,7 @@ public class NotificationRelayService extends Service {
                     title = name + " replied to you";
                     body = truncate(event.optString("content"));
                     if (body.isEmpty()) body = "Replied to you";
-                    String groupId = tagValue(event, "h");
+                    groupId = tagValue(event, "h");
                     url = groupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(groupId)
                             : "/";
@@ -734,8 +945,24 @@ public class NotificationRelayService extends Service {
                 default:
                     return;
             }
-            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " title=" + title);
-            showNotification(notifId, title, body, url, picture);
+            final String fTitle = title;
+            final String fBody = body;
+            final String fUrl = url;
+            if (groupId == null) {
+                // No room to name (DM) — post as-is.
+                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " title=" + fTitle);
+                showNotification(notifId, fTitle, fBody, fUrl, picture);
+                return;
+            }
+            // Resolve the group's display name and append " · <group>" so the
+            // notification always says which room the event happened in.
+            resolveGroupName(groupId, relayUrl, groupName -> {
+                String finalBody = (groupName != null && !groupName.isEmpty())
+                        ? fBody + " · " + groupName
+                        : fBody;
+                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " title=" + fTitle);
+                showNotification(notifId, fTitle, finalBody, fUrl, picture);
+            });
         });
     }
 
