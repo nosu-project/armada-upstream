@@ -83,6 +83,33 @@
   html, body, #root {
     height: 100%;
   }
+
+  /*
+   * Native date/time inputs. Tie `color-scheme` to the active theme so the
+   * browser draws the calendar-picker indicator with a glyph that contrasts
+   * against the input (on dark themes the default near-black indicator is
+   * invisible — it reads as "cut off"). The indicator also gets an obvious
+   * pointer cursor and a touch of padding so it's never flush against the edge.
+   */
+  /*
+   * Native date/time inputs. Tie `color-scheme` to the active theme so the
+   * text and dropdown render legibly. We hide the native calendar-picker
+   * indicator entirely — it crops inside our fixed-height styled input.
+   */
+  input[type="date"],
+  input[type="datetime-local"],
+  input[type="time"],
+  input[type="month"],
+  input[type="week"] {
+    color-scheme: light;
+  }
+  .dark input[type="date"],
+  .dark input[type="datetime-local"],
+  .dark input[type="time"],
+  .dark input[type="month"],
+  .dark input[type="week"] {
+    color-scheme: dark;
+  }
 }
 
 @layer utilities {
@@ -288,5 +315,25 @@
     /* ~9cqw of the card width, clamped to a sane min/max. */
     font-size: clamp(1.25rem, 9cqw, 1.6rem);
     overflow-wrap: anywhere;
+  }
+
+  /*
+   * Terminal-style expand: the picker overlay unfurls from the top. Kept to a
+   * cheap GPU-composited transform + opacity (no `filter`, which forces a
+   * full-subtree repaint every frame and made opening the heavy calendar lag).
+   */
+  @keyframes terminal-expand {
+    from {
+      transform: scaleY(0.4);
+      opacity: 0;
+    }
+    to {
+      transform: scaleY(1);
+      opacity: 1;
+    }
+  }
+  .animate-terminal-expand {
+    animation: terminal-expand 0.16s ease-out;
+    will-change: transform, opacity;
   }
 }

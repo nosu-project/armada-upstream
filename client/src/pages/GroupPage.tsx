@@ -1,11 +1,13 @@
-import { DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
+import { CalendarClock, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
+import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { GroupChat } from "@/components/chat/GroupChat";
 import { MemberList } from "@/components/chat/MemberList";
 import { PinnedMessagesBar } from "@/components/chat/PinnedMessagesBar";
+import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
 import { GroupSettingsDialog } from "@/components/dialogs/GroupSettingsDialog";
 import { InvitePeopleDialog } from "@/components/dialogs/InvitePeopleDialog";
 import { ServerProfileDialog } from "@/components/dialogs/ServerProfileDialog";
@@ -30,6 +32,7 @@ import { useGroup } from "@/hooks/useGroup";
 import { useGroupMembership, useJoinGroup, useLeaveGroup } from "@/hooks/useGroupMembership";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
+import { useCalendarEvents } from "@/hooks/useCalendarEvents";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { toast } from "@/hooks/useToast";
@@ -117,6 +120,9 @@ export function GroupPage() {
   const [searchQuery, setSearchQuery] = useState("");
   /** Whether the pinned-messages bar is expanded below the header. */
   const [pinsOpen, setPinsOpen] = useState(false);
+  /** Whether the events bar is expanded below the header, and the create/edit dialog. */
+  const [eventsOpen, setEventsOpen] = useState(false);
+  const [createEventOpen, setCreateEventOpen] = useState(false);
   const [serverProfileOpen, setServerProfileOpen] = useState(false);
   /** Server whose channels are shown in the mobile drawer (defaults to current). */
   const [drawerServer, setDrawerServer] = useState(relayUrl ?? "");
@@ -128,6 +134,9 @@ export function GroupPage() {
 
   const { pinnedIds, unpin } = usePinnedMessages(relayUrl, groupId);
   const hasPins = pinnedIds.length > 0;
+
+  const { events: calendarEvents, remove: removeEvent } = useCalendarEvents(relayUrl, groupId);
+  const hasEvents = calendarEvents.length > 0;
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Lets the pinned-messages bar jump to a message in the timeline; GroupChat
@@ -277,6 +286,24 @@ export function GroupPage() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Pinned messages</TooltipContent>
+            </Tooltip>
+          )}
+          {/* Calendar events — toggles the events bar below the header. */}
+          {(hasEvents || isAdmin) && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Events"
+                  aria-pressed={eventsOpen}
+                  className={cn("size-8 text-muted-foreground", eventsOpen && "text-foreground")}
+                  onClick={() => setEventsOpen((v) => !v)}
+                >
+                  <CalendarClock className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Events</TooltipContent>
             </Tooltip>
           )}
           {/* Search messages in this channel — expands inline below. */}
@@ -438,6 +465,18 @@ export function GroupPage() {
           onClose={() => setPinsOpen(false)}
         />
 
+        {/* Calendar events bar — slides open below the header. */}
+        <CalendarEventsBar
+          open={eventsOpen}
+          events={calendarEvents}
+          relayUrl={relayUrl}
+          groupId={groupId}
+          canModerate={isAdmin}
+          onClose={() => setEventsOpen(false)}
+          onCreate={() => setCreateEventOpen(true)}
+          onDelete={(event) => { void removeEvent(event); }}
+        />
+
         {/* Top-of-chat call stage: the active call's participants + video tiles
             portal in here (dismissable, toggled from the corner call panel)
             when this channel is the one in call. */}
@@ -553,6 +592,12 @@ export function GroupPage() {
         relayUrl={relayUrl}
         open={serverProfileOpen}
         onOpenChange={setServerProfileOpen}
+      />
+      <CreateEventDialog
+        relayUrl={relayUrl}
+        groupId={groupId}
+        open={createEventOpen}
+        onOpenChange={setCreateEventOpen}
       />
     </ServerScopeProvider>
   );

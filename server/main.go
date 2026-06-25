@@ -139,6 +139,9 @@ func main() {
 	// Admin-pinned messages (kind 39041). See pins.go.
 	setupPinnedMessages()
 
+	// NIP-52 calendar events (31922/31923) + RSVPs (31925). See calendar.go.
+	setupCalendarEvents()
+
 	relay.RejectEvent = append(relay.RejectEvent,
 		policies.PreventLargeTags(64),
 		// Rich chat messages legitimately stack indexable tags: `h` + NIP-10
@@ -150,6 +153,8 @@ func main() {
 			// group content
 			9, 10, 11, 12, 1111,
 			30023, 31922, 31923, 9802,
+			// NIP-52 calendar RSVP (31922/31923 events listed above).
+			31925,
 			// NIP-25 reactions (kind 7), scoped to the group via `h`
 			7,
 			// NIP-88 polls (1068) + votes (1018), scoped to the group via `h`

@@ -60,6 +60,25 @@ export const KIND_CREATE_INVITE = 9009;
  */
 export const KIND_GROUP_PINS = 39041;
 
+/**
+ * NIP-52 date-based calendar event (all-day). `start`/`end` are `YYYY-MM-DD`
+ * strings (`end` exclusive). Addressable on a random `d`. Scoped to a group by
+ * an `h` tag so the relay routes/authorizes it. One event per occurrence.
+ * https://github.com/nostr-protocol/nips/blob/master/52.md
+ */
+export const KIND_CALENDAR_DATE = 31922;
+/**
+ * NIP-52 time-based calendar event. `start`/`end` are Unix-timestamp strings,
+ * optionally with `start_tzid`/`end_tzid`. Addressable; group-scoped via `h`.
+ */
+export const KIND_CALENDAR_TIME = 31923;
+/**
+ * NIP-52 calendar event RSVP. Addressable; references the event via an `a`
+ * coordinate (and `e` id when known) and carries a `status` tag
+ * (accepted/declined/tentative). Group-scoped via `h`.
+ */
+export const KIND_CALENDAR_RSVP = 31925;
+
 /** User: request to join a group. */
 export const KIND_JOIN_REQUEST = 9021;
 /** User: request to leave a group. */
@@ -189,6 +208,233 @@ export interface UserGroupList {
   groups: GroupRef[];
   /** Servers in use: `["r", relayUrl]`. Normalized, de-duplicated. */
   servers: string[];
+}
+
+// ── Calendar events (NIP-52) ─────────────────────────────────────────────────
+
+/** RSVP status (NIP-52). */
+export type RsvpStatus = "accepted" | "declined" | "tentative";
+
+/** A participant referenced by a calendar event's `p` tag. */
+export interface CalendarParticipant {
+  pubkey: string;
+  /** Optional relay hint (tag slot 2). */
+  relay?: string;
+  /** Optional role, e.g. "host" / "speaker" (tag slot 3). */
+  role?: string;
+}
+
+/**
+ * A parsed NIP-52 calendar event (kind 31922 date-based or 31923 time-based),
+ * scoped to a NIP-29 group via its `h` tag.
+ */
+export interface CalendarEvent {
+  /** Addressable `d` identifier (unique per event within the author+kind). */
+  identifier: string;
+  /** 31922 (all-day, date strings) or 31923 (timestamped). */
+  kind: typeof KIND_CALENDAR_DATE | typeof KIND_CALENDAR_TIME;
+  title: string;
+  /** Markdown/freeform description (event content). */
+  description: string;
+  summary?: string;
+  image?: string;
+  /** Human-readable location string. */
+  location?: string;
+  /**
+   * Start. For 31922: `YYYY-MM-DD`. For 31923: a Unix timestamp (seconds, as a
+   * number). Always present on a valid event.
+   */
+  start: string;
+  /** End (exclusive). Optional. Same format as `start`. */
+  end?: string;
+  /** IANA timezone for a time-based event's start (e.g. "America/New_York"). */
+  startTzid?: string;
+  /** Hashtags (`t` tags). */
+  hashtags: string[];
+  /** External links (`r` tags). */
+  references: string[];
+  participants: CalendarParticipant[];
+  /** Group id this event belongs to (`h` tag). */
+  groupId?: string;
+  /** The raw signed event. */
+  event: NostrEvent;
+}
+
+/** Input for building a calendar-event template (kind 31922/31923). */
+export interface CalendarEventInput {
+  identifier: string;
+  kind: typeof KIND_CALENDAR_DATE | typeof KIND_CALENDAR_TIME;
+  title: string;
+  description?: string;
+  summary?: string;
+  image?: string;
+  location?: string;
+  /** 31922: `YYYY-MM-DD`. 31923: Unix-timestamp string. */
+  start: string;
+  end?: string;
+  startTzid?: string;
+  hashtags?: string[];
+  references?: string[];
+  participants?: CalendarParticipant[];
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TS_RE = /^\d+$/;
+
+/** A short random identifier suitable for a NIP-52 `d` tag. */
+export function randomCalendarId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Build the addressable coordinate (`kind:pubkey:d`) for a calendar event. */
+export function calendarEventCoord(kind: number, pubkey: string, identifier: string): string {
+  return `${kind}:${pubkey}:${identifier}`;
+}
+
+/**
+ * Parse a kind 31922/31923 event into a {@link CalendarEvent}. Returns
+ * `undefined` when it isn't a calendar kind or is missing required fields
+ * (`d`, `title`, a valid `start`).
+ */
+export function parseCalendarEvent(event: NostrEvent): CalendarEvent | undefined {
+  if (event.kind !== KIND_CALENDAR_DATE && event.kind !== KIND_CALENDAR_TIME) return undefined;
+  const identifier = tag(event, "d")?.[1];
+  const title = tag(event, "title")?.[1];
+  const start = tag(event, "start")?.[1];
+  if (!identifier || !title || !start) return undefined;
+
+  // Validate the start format for the kind so a malformed event can't render
+  // garbage dates.
+  if (event.kind === KIND_CALENDAR_DATE && !DATE_RE.test(start)) return undefined;
+  if (event.kind === KIND_CALENDAR_TIME && !TS_RE.test(start)) return undefined;
+
+  const end = tag(event, "end")?.[1];
+  const hashtags: string[] = [];
+  const references: string[] = [];
+  const participants: CalendarParticipant[] = [];
+  for (const [n, v, slot2, slot3] of event.tags) {
+    if (n === "t" && v) hashtags.push(v);
+    else if (n === "r" && v) references.push(v);
+    else if (n === "p" && HEX64.test(v ?? "")) {
+      participants.push({ pubkey: v, relay: slot2 || undefined, role: slot3 || undefined });
+    }
+  }
+
+  return {
+    identifier,
+    kind: event.kind,
+    title,
+    description: event.content ?? "",
+    summary: tag(event, "summary")?.[1],
+    image: tag(event, "image")?.[1],
+    location: tag(event, "location")?.[1],
+    start,
+    end: end || undefined,
+    startTzid: tag(event, "start_tzid")?.[1],
+    hashtags,
+    references,
+    participants,
+    groupId: tag(event, "h")?.[1],
+    event,
+  };
+}
+
+/**
+ * Build the tags for a NIP-52 calendar event (kind 31922/31923) scoped to a
+ * NIP-29 group. Always emits `d`, `h`, `title`, and `start`; everything else is
+ * conditional. The group `h` tag is what lets relay29 route/authorize the write
+ * and serve it back on a group-scoped query.
+ */
+export function buildCalendarEventTags(groupId: string, input: CalendarEventInput): string[][] {
+  const tags: string[][] = [
+    ["d", input.identifier],
+    ["h", groupId],
+    ["title", input.title],
+    ["start", input.start],
+  ];
+  if (input.end) tags.push(["end", input.end]);
+  if (input.kind === KIND_CALENDAR_TIME && input.startTzid) {
+    tags.push(["start_tzid", input.startTzid]);
+  }
+  if (input.summary) tags.push(["summary", input.summary]);
+  if (input.image) tags.push(["image", input.image]);
+  if (input.location) tags.push(["location", input.location]);
+  for (const t of input.hashtags ?? []) {
+    if (t.trim()) tags.push(["t", t.trim()]);
+  }
+  for (const r of input.references ?? []) {
+    if (r.trim()) tags.push(["r", r.trim()]);
+  }
+  for (const p of input.participants ?? []) {
+    if (!HEX64.test(p.pubkey)) continue;
+    const t = ["p", p.pubkey, p.relay ?? ""];
+    if (p.role) t.push(p.role);
+    tags.push(t);
+  }
+  return tags;
+}
+
+/** Format a calendar event's date/time range for display. */
+export function formatCalendarEventWhen(event: CalendarEvent): string {
+  if (event.kind === KIND_CALENDAR_TIME) {
+    const start = new Date(Number(event.start) * 1000);
+    const end = event.end ? new Date(Number(event.end) * 1000) : undefined;
+    const dateFmt: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric" };
+    const timeFmt: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+    const startStr = `${start.toLocaleDateString(undefined, dateFmt)}, ${start.toLocaleTimeString(undefined, timeFmt)}`;
+    if (!end) return startStr;
+    const sameDay = start.toDateString() === end.toDateString();
+    if (sameDay) return `${startStr} – ${end.toLocaleTimeString(undefined, timeFmt)}`;
+    return `${startStr} – ${end.toLocaleDateString(undefined, dateFmt)}, ${end.toLocaleTimeString(undefined, timeFmt)}`;
+  }
+  // Date-based (all-day). Parse as UTC to avoid TZ drift.
+  const dateFmt: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" };
+  const start = new Date(`${event.start}T00:00:00Z`);
+  const startStr = start.toLocaleDateString(undefined, dateFmt);
+  if (!event.end || event.end === event.start) return `${startStr} · All day`;
+  // `end` is exclusive — show the last included day.
+  const endExclusive = new Date(`${event.end}T00:00:00Z`);
+  endExclusive.setUTCDate(endExclusive.getUTCDate() - 1);
+  if (endExclusive.toDateString() === start.toDateString()) return `${startStr} · All day`;
+  return `${startStr} – ${endExclusive.toLocaleDateString(undefined, dateFmt)}`;
+}
+
+/** Parse the `status` tag of a kind 31925 RSVP into a {@link RsvpStatus}. */
+export function parseRsvpStatus(event: NostrEvent): RsvpStatus | undefined {
+  if (event.kind !== KIND_CALENDAR_RSVP) return undefined;
+  const status = tag(event, "status")?.[1];
+  if (status === "accepted" || status === "declined" || status === "tentative") return status;
+  return undefined;
+}
+
+/** The event coordinate (`a` tag) a kind 31925 RSVP points at. */
+export function parseRsvpCoord(event: NostrEvent): string | undefined {
+  return tag(event, "a")?.[1];
+}
+
+/**
+ * Build the tags for a kind 31925 RSVP to a calendar event. The `a` tag is the
+ * event coordinate; a stable `d` tag (derived from the coordinate) makes the
+ * RSVP addressable so re-RSVPing replaces the prior one. The `h` tag scopes it
+ * to the group; `e`/`p` reference the event and its author when known.
+ */
+export function buildRsvpTags(params: {
+  groupId: string;
+  eventCoord: string;
+  eventId?: string;
+  eventAuthor?: string;
+  status: RsvpStatus;
+}): string[][] {
+  const tags: string[][] = [
+    ["a", params.eventCoord],
+    ["d", `rsvp:${params.eventCoord}`],
+    ["h", params.groupId],
+    ["status", params.status],
+  ];
+  if (params.eventId && HEX64.test(params.eventId)) tags.push(["e", params.eventId]);
+  if (params.eventAuthor && HEX64.test(params.eventAuthor)) tags.push(["p", params.eventAuthor]);
+  return tags;
 }
 
 // ── Parsing ──────────────────────────────────────────────────────────────────
