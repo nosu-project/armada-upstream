@@ -351,11 +351,11 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
         }
       }}
     >
-      <TabsList className="grid w-full grid-cols-2 bg-background/40 clip-corner-lg mb-4">
-        <TabsTrigger value="key" className="flex items-center gap-2">
+      <TabsList className="grid w-full grid-cols-2 bg-background/40 clip-corner-lg mb-4 p-1">
+        <TabsTrigger value="key" className="flex items-center gap-2 clip-corner-lg">
           <span>Secret Key</span>
         </TabsTrigger>
-        <TabsTrigger value="remote" className="flex items-center gap-2">
+        <TabsTrigger value="remote" className="flex items-center gap-2 clip-corner-lg">
           <span>Remote Signer</span>
         </TabsTrigger>
       </TabsList>

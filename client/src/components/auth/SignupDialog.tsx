@@ -118,7 +118,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
           {step === 'generate' && (
             <div className='text-center space-y-6'>
               <p className="text-sm text-muted-foreground">
-                We&apos;ll generate a secret key — your one and only login. Keep it safe.
+                We&apos;ll generate a secret key, your one and only login. Keep it safe.
               </p>
               <Button className="w-full h-12 clip-corner-lg" onClick={generateKey}>
                 Generate key
