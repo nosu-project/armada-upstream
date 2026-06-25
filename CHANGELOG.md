@@ -4,6 +4,37 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.8.0] - 2026-06-25
+
+Notifications now tell you who did what. On Android, a message, mention, reply,
+or reaction shows the sender's name and avatar, the reaction's actual emoji, and
+a preview of the message — instead of a generic "someone reacted." Settings has
+been redesigned into clean grouped sections, communities and direct messages
+open instantly from a local cache, and there's a new recovery tool to restore
+encrypted communities that went missing from your list.
+
+### Added
+- Recover encrypted communities that dropped off your list: an advanced settings
+  tool scans your local cache, every copy of your list across relays, and your
+  invites to find communities you've lost, then lets you choose which to restore.
+
+### Changed
+- Notifications now show the sender's name and avatar, the emoji someone reacted
+  with, and a preview of the message, so you can tell at a glance who did what.
+- Settings has been redesigned into grouped sections with cleaner labels and
+  rows, and the theme builder now opens in a dialog.
+- Communities, channels, and direct messages now open instantly from a local
+  cache and refresh in the background, removing the loading skeletons on a cold
+  start.
+- Refined the login, signup, and community settings dialogs.
+- Refreshed the app icon to a cleaner mark.
+- Logging out of your last account now wipes cached data from the device, and
+  private pages can no longer be reached once you're signed out.
+
+### Fixed
+- Desktop and Android builds no longer show a phantom "localhost" server when no
+  relay is configured.
+
 ## [0.7.0] - 2026-06-24
 
 Plan together and share what you're up to. Admins and moderators can now create
