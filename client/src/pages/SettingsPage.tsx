@@ -13,6 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { APP_NAME, APP_RELAYS, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
@@ -31,6 +32,7 @@ export function SettingsPage() {
   const { user } = useCurrentUser();
   const { updateSettings, hasNip44Support } = useEncryptedSettings();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
+  const dmRelayList = useDmRelayList();
 
   // Voice mic-processing prefs are device-local (stored in localStorage, not
   // synced AppConfig — a setting right for a laptop mic is wrong on a phone).
@@ -50,9 +52,10 @@ export function SettingsPage() {
   /**
    * Update a relay field locally and sync to encrypted settings when logged in.
    * The added-server list (`addedRelays`) is handled separately by
-   * `setAddedRelays` — it lives in the NIP-29 kind 10009 list, not 30078.
+   * `setAddedRelays` (NIP-29 kind 10009), and the DM relays by `setDmRelays`
+   * (also republishes the NIP-17 kind 10050 list).
    */
-  const setRelays = (key: "appRelays" | "searchRelays" | "dmRelays") => (relays: string[]) => {
+  const setRelays = (key: "appRelays" | "searchRelays") => (relays: string[]) => {
     updateConfig((current) => ({ ...current, [key]: relays }));
     if (hasNip44Support) {
       updateSettings({ [key]: relays } as Partial<EncryptedSettings>).catch((err) =>
@@ -83,12 +86,41 @@ export function SettingsPage() {
     }
   };
 
+  /**
+   * Persist the user's DM relays. Updates local config + encrypted settings
+   * (cross-device), and — since kind 10050 is the canonical, discoverable
+   * "where to send me DMs" list — republishes it so other clients stay in
+   * sync. `publish: false` skips the republish when we just seeded the editor
+   * from an already-published 10050 (no edit to write back).
+   */
+  const setDmRelays = (relays: string[], opts: { publish?: boolean } = {}) => {
+    updateConfig((current) => ({ ...current, dmRelays: relays }));
+    if (hasNip44Support) {
+      updateSettings({ dmRelays: relays }).catch((err) =>
+        console.warn("Relay sync failed:", err));
+    }
+    if (opts.publish !== false && user) {
+      dmRelayList.publish(relays).catch((err) =>
+        console.warn("DM relay list (kind 10050) publish failed:", err));
+    }
+  };
+
   /** Toggle whether DMs use the user's own relays; sync to encrypted settings. */
   const setUseOwnDmRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useOwnDmRelays: value }));
     if (hasNip44Support) {
       updateSettings({ useOwnDmRelays: value }).catch((err) =>
         console.warn("DM relay setting sync failed:", err));
+    }
+    // On opt-in, seed from the user's published NIP-17 DM relay list (kind
+    // 10050) if they have one, so the editor — and the relays DMs actually use
+    // (effectiveDmRelays) — reflect their canonical, discoverable list rather
+    // than the app-relay default.
+    if (value) {
+      dmRelayList.refetch().then((res) => {
+        const fetched = res.data ?? [];
+        if (fetched.length > 0) setDmRelays(fetched, { publish: false });
+      });
     }
   };
 
@@ -220,7 +252,9 @@ export function SettingsPage() {
             <CardTitle>Direct messages</CardTitle>
             <CardDescription>
               Direct messages use your app relays by default. Turn this on to store and read
-              DMs on your own relays instead.
+              DMs on your own relays instead — seeded from your published DM relay list
+              (kind 10050) when you have one, and republished there as you edit so other
+              clients know where to reach you.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -231,8 +265,8 @@ export function SettingsPage() {
             {config.useOwnDmRelays && (
               <RelayListEditor
                 relays={config.dmRelays}
-                onChange={setRelays("dmRelays")}
-                onReset={() => setRelays("dmRelays")([...APP_RELAYS])}
+                onChange={setDmRelays}
+                onReset={() => setDmRelays([...APP_RELAYS])}
                 emptyText="No DM relays — add at least one, or DMs fall back to your app relays."
                 placeholder="wss://dm-relay.example.com"
               />
