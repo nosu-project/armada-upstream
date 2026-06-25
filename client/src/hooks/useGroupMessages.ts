@@ -103,14 +103,47 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   const query = useQuery<NostrEvent[]>({
     queryKey: messagesKey(relayUrl, groupId),
     queryFn: async ({ signal }) => {
-      const events = await nostr.relay(relayUrl!).query(
-        [{ kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-      );
-      // A short first page means there's nothing older to backfill.
-      setHasMore(events.length >= PAGE_SIZE);
-      cursorRef.current = paginationCursor(events);
-      return sortDedupe(events);
+      const store = await eventStore;
+
+      // 1. LOCAL-FIRST: resolve from the append-only IndexedDB store immediately
+      //    so `isLoading` reflects only the (fast) local read, never the relay
+      //    round-trip. A refresh / channel switch paints the cached timeline at
+      //    once instead of behind the skeleton. NostrBatcher mirrors every
+      //    `#h`-scoped event the relay returns into this store, so it holds the
+      //    group's history after the first visit.
+      const cached = await store.query([
+        { kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE },
+      ]);
+      const local = sortDedupe(cached);
+
+      // 2. BACKGROUND refresh: fetch the newest page from the relay, mirror it
+      //    into the store, and merge into the cache. NOT awaited — the network
+      //    never gates the visible timeline.
+      void (async () => {
+        if (signal.aborted) return;
+        try {
+          const events = await nostr.relay(relayUrl!).query(
+            [{ kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE }],
+            { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+          );
+          // A short first page means there's nothing older to backfill.
+          setHasMore(events.length >= PAGE_SIZE);
+          cursorRef.current = paginationCursor(events);
+          if (signal.aborted || events.length === 0) return;
+          queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) =>
+            sortDedupe([...old, ...events]),
+          );
+        } catch {
+          // Best-effort background refresh; the local-first result already rendered.
+        }
+      })();
+
+      // Seed the cursor from local history too, so scroll-up backfill works even
+      // before the network refresh lands.
+      if (cursorRef.current === undefined && local.length > 0) {
+        cursorRef.current = paginationCursor(local);
+      }
+      return local;
     },
     enabled: Boolean(relayUrl && groupId),
     staleTime: 10_000,
@@ -118,33 +151,6 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     // switching channels never flashes the skeleton (cache-first feel).
     placeholderData: (prev) => prev,
   });
-
-  // Cache-first seed: while the network query is in flight, hydrate from
-  // IndexedDB so a channel we've visited renders instantly — and survives a
-  // page refresh. The local store now indexes by tag, so we query the group's
-  // timeline directly by `#h` (the same filter we send to the relay), no
-  // sibling id-list bookkeeping required.
-  useEffect(() => {
-    if (!relayUrl || !groupId) return;
-    let cancelled = false;
-    void (async () => {
-      // Don't clobber a network result that already landed.
-      if ((queryClient.getQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId)) ?? []).length > 0) {
-        return;
-      }
-      const store = await eventStore;
-      const cached = await store.query([
-        { kinds: TIMELINE_KINDS, "#h": [groupId], limit: PAGE_SIZE },
-      ]);
-      if (cancelled || cached.length === 0) return;
-      queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old) =>
-        old && old.length > 0 ? old : sortDedupe(cached),
-      );
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [relayUrl, groupId, eventStore, queryClient]);
 
   // Send-status for optimistic messages (kept in its own cache entry).
   const { data: status = {} } = useQuery<SendStatusMap>({

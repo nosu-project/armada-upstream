@@ -18,9 +18,13 @@ import {
 } from "@/lib/concord";
 import { acceptInvite, type CommunityInvite } from "@/lib/concord/invite";
 import { capRelays, type Community } from "@/lib/concord/types";
+import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
+
+/** The decrypted membership list persisted locally, with the event id it came from. */
+type PersistedList = { event: NostrEvent; list: ConcordList };
 
 /**
  * The user's Concord membership list — a NIP-44 self-encrypted, kind-30078
@@ -46,7 +50,17 @@ interface ReadConcordListResult {
   decryptFailed: boolean;
 }
 
-/** Decrypt and parse the list event's NIP-44 self-encrypted content. */
+/**
+ * Decode-once cache for the membership-list decrypt, keyed by the list event id.
+ * `useConcordList` is instantiated in many places (rail, page, action hooks,
+ * notifications), and each seed effect / network refetch would otherwise run the
+ * full NIP-44 decrypt of the same event independently (~100-200ms each, ×N on a
+ * single load). The list event id + content are immutable, so a single in-flight
+ * decrypt is shared and its result reused for the session.
+ */
+const listDecryptMemo = new Map<string, Promise<ReadConcordListResult>>();
+
+/** Decrypt and parse the list event's NIP-44 self-encrypted content (memoized by event id). */
 async function readConcordListEvent(
   event: NostrEvent | null,
   signer: NUser["signer"] | undefined,
@@ -57,20 +71,31 @@ async function readConcordListEvent(
   if (!event?.content) return { list: EMPTY_CONCORD_LIST, decryptFailed: false };
   // An event exists but we can't decrypt it yet (no nip44 signer): untrusted.
   if (!signer?.nip44) return { list: EMPTY_CONCORD_LIST, decryptFailed: true };
-  try {
-    const decrypted = await signer.nip44.decrypt(selfPubkey, event.content);
-    const parsed = JSON.parse(decrypted) as Partial<ConcordList>;
-    return {
-      list: {
-        entries: Array.isArray(parsed.entries) ? parsed.entries : [],
-        tombstones: Array.isArray(parsed.tombstones) ? parsed.tombstones : [],
-      },
-      decryptFailed: false,
-    };
-  } catch (err) {
-    console.warn("Failed to decrypt Concord membership list:", err);
-    return { list: EMPTY_CONCORD_LIST, decryptFailed: true };
-  }
+
+  const cached = listDecryptMemo.get(event.id);
+  if (cached) return cached;
+
+  const nip44 = signer.nip44;
+  const work = (async (): Promise<ReadConcordListResult> => {
+    try {
+      const decrypted = await nip44.decrypt(selfPubkey, event.content);
+      const parsed = JSON.parse(decrypted) as Partial<ConcordList>;
+      return {
+        list: {
+          entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+          tombstones: Array.isArray(parsed.tombstones) ? parsed.tombstones : [],
+        },
+        decryptFailed: false,
+      };
+    } catch (err) {
+      console.warn("Failed to decrypt Concord membership list:", err);
+      // Don't memoize a transient failure — let a later call retry.
+      listDecryptMemo.delete(event.id);
+      return { list: EMPTY_CONCORD_LIST, decryptFailed: true };
+    }
+  })();
+  listDecryptMemo.set(event.id, work);
+  return work;
 }
 
 /** Query the latest Concord membership list from the app relays. */
@@ -81,24 +106,46 @@ export function useConcordList() {
   const queryClient = useQueryClient();
 
   const queryKey = ["concord", "list", user?.pubkey];
+  const foldKey = user ? `concord-list:${user.pubkey}` : null;
 
-  // Cache-first seed: hydrate the community list (the room keys) from IndexedDB
-  // so rooms survive a refresh and render before the network resolves. The
-  // 30078 list event is persisted by NostrBatcher; read it back by its addr
-  // coordinate and decrypt locally.
+  // Vector-style: the membership list (room keys) is NIP-44 self-encrypted, and
+  // decrypting it through a remote/extension signer on every boot is slow
+  // (seconds for a bunker/NIP-07). So we decrypt ONCE, persist the DECRYPTED
+  // list to local storage (same device-trust as the keys it holds), and read
+  // that plaintext back on every subsequent boot — no signer round-trip. The
+  // raw 30078 blob in IndexedDB stays the cross-device source of truth; the
+  // network query reconciles it and refreshes this plaintext cache.
   useEffect(() => {
-    if (!user?.signer.nip44) return;
+    if (!user?.signer.nip44 || !foldKey) return;
     let cancelled = false;
     void (async () => {
       if (queryClient.getQueryData(queryKey)) return;
-      const store = await eventStore;
-      const [cached] = await store.query([
-        { kinds: [CONCORD_LIST_KIND], authors: [user.pubkey], "#d": [CONCORD_LIST_D_TAG] },
-      ]);
-      if (cancelled || !cached) return;
-      const { list } = await readConcordListEvent(cached, user.signer, user.pubkey);
-      if (cancelled || queryClient.getQueryData(queryKey)) return;
-      queryClient.setQueryData(queryKey, { event: cached as NostrEvent | null, list });
+
+      // 1. Plaintext-first: a previously-decrypted list paints instantly with no
+      //    decrypt. We keep the event id it came from so a newer blob re-decrypts.
+      const persisted = await readFolded<PersistedList>(foldKey);
+      if (cancelled) return;
+      if (persisted) {
+        queryClient.setQueryData(queryKey, {
+          event: persisted.event ?? null,
+          list: persisted.list,
+        });
+      }
+
+      // 2. If we have no plaintext yet (first run / first join), fall back to
+      //    decrypting the cached blob once, then persist it for next time.
+      if (!persisted) {
+        const store = await eventStore;
+        const [cached] = await store.query([
+          { kinds: [CONCORD_LIST_KIND], authors: [user.pubkey], "#d": [CONCORD_LIST_D_TAG] },
+        ]);
+        if (cancelled || !cached) return;
+        const { list } = await readConcordListEvent(cached, user.signer, user.pubkey);
+        if (cancelled) return;
+        const data = { event: cached as NostrEvent | null, list };
+        if (!queryClient.getQueryData(queryKey)) queryClient.setQueryData(queryKey, data);
+        void writeFolded(foldKey, { event: cached as NostrEvent, list } satisfies PersistedList);
+      }
     })();
     return () => {
       cancelled = true;
@@ -106,7 +153,9 @@ export function useConcordList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.pubkey, user?.signer.nip44, eventStore, queryClient]);
 
-  return useQuery({
+  type ConcordListData = { event: NostrEvent | null; list: ConcordList };
+
+  return useQuery<ConcordListData>({
     queryKey,
     enabled: Boolean(user?.signer.nip44),
     staleTime: 30_000,
@@ -116,9 +165,16 @@ export function useConcordList() {
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
       const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-      const { list, decryptFailed } = await readConcordListEvent(latest, user!.signer, user!.pubkey);
 
-      const prev = queryClient.getQueryData<{ event: NostrEvent | null; list: ConcordList }>(queryKey);
+      const prev = queryClient.getQueryData<ConcordListData>(queryKey);
+
+      // Skip the signer decrypt entirely when the network event is the same one
+      // we already decrypted (matched by id) — the common case on every refresh.
+      if (latest && prev?.event?.id === latest.id) {
+        return prev;
+      }
+
+      const { list, decryptFailed } = await readConcordListEvent(latest, user!.signer, user!.pubkey);
 
       // Never let a flaky/untrusted network read clobber a populated list. If we
       // couldn't decrypt the event (signer not ready, transient error), keep
@@ -133,7 +189,10 @@ export function useConcordList() {
       // `mergeConcordLists` is deterministic (tombstone-aware), so a genuine
       // remote removal still wins; this only prevents data loss from flaky reads.
       const merged = prev ? mergeConcordLists(prev.list, list) : list;
-      return { event: latest, list: merged };
+      const next: ConcordListData = { event: latest, list: merged };
+      // Persist the decrypted result so the NEXT boot reads plaintext (no signer).
+      if (foldKey && latest) void writeFolded(foldKey, { event: latest, list: merged } satisfies PersistedList);
+      return next;
     },
   });
 }
@@ -232,6 +291,9 @@ export function useUpdateConcordList() {
         event,
         list: next,
       });
+      // Update the local plaintext cache so the next boot reads it without a
+      // signer decrypt (we just produced `next` in the clear here).
+      void writeFolded(`concord-list:${user.pubkey}`, { event, list: next } satisfies PersistedList);
       await nostr.event(event, { signal: AbortSignal.timeout(8000) });
       return next;
     },

@@ -90,6 +90,27 @@ export function openControlEdition(outer: NostrEvent, serverRoot: Uint8Array): N
   return inner;
 }
 
+/**
+ * Decode-once cache for opened control editions, keyed by the outer event id.
+ * The roster/metadata/banlist folds re-run on every mount and every 30s poll,
+ * each re-decrypting (NIP-44) every control edition — the same wasteful pattern
+ * Vector avoids by folding only on a fresh relay fetch. An outer event id is
+ * globally unique and its decryption is immutable, so memoizing the opened inner
+ * makes every re-fold after the first nearly free (just the pure version-chain
+ * replay), without persisting anything new. Lives for the page session.
+ */
+const openedEditionMemo = new Map<string, NostrEvent>();
+
+/** Memoized {@link openControlEdition}: decrypt+parse once per outer id, then reuse. */
+export function openControlEditionMemo(outer: NostrEvent, serverRoot: Uint8Array): NostrEvent {
+  const hit = openedEditionMemo.get(outer.id);
+  if (hit) return hit;
+  const inner = openControlEdition(outer, serverRoot);
+  openedEditionMemo.set(outer.id, inner);
+  return inner;
+}
+
+
 // ── Edition builders ──────────────────────────────────────────────────────────
 
 /** Build an unsigned RoleMetadata edition (vsk=1, entity_id == role_id bytes). */
@@ -212,6 +233,35 @@ export function foldRoster(
   ownerAttestation: string | undefined,
 ): FoldedRoster {
   const cidHex = bytesToHex(communityId);
+
+  // Fold-once cache: useConcordRoster is instantiated by several hooks
+  // (metadata, banlist, messages, page) that all fold the SAME shared control
+  // events, so without this each instance re-runs the full fold. Key on the
+  // community + the set of edition ids; an append-only edition set means a new
+  // id only appears when there's genuinely new control state to fold.
+  const memoKey = `${cidHex}:${ownerAttestation ?? ""}:${outers.map((o) => o.id).sort().join(",")}`;
+  const cached = foldRosterMemo.get(memoKey);
+  if (cached) return cached;
+
+  const result = foldRosterUncached(outers, serverRoot, communityId, ownerAttestation, cidHex);
+  // Single-entry-per-community cache: drop other keys for this community so the
+  // map doesn't grow unbounded as editions accrue.
+  for (const k of foldRosterMemo.keys()) {
+    if (k.startsWith(`${cidHex}:`)) foldRosterMemo.delete(k);
+  }
+  foldRosterMemo.set(memoKey, result);
+  return result;
+}
+
+const foldRosterMemo = new Map<string, FoldedRoster>();
+
+function foldRosterUncached(
+  outers: NostrEvent[],
+  serverRoot: Uint8Array,
+  communityId: Uint8Array,
+  ownerAttestation: string | undefined,
+  cidHex: string,
+): FoldedRoster {
   const ownerHex = ownerAttestation ? verifyOwnerAttestation(ownerAttestation, cidHex) : undefined;
 
   // 1. Decrypt + verify + group editions by (vsk, entity).
@@ -220,7 +270,7 @@ export function foldRoster(
   for (const outer of outers) {
     let inner: NostrEvent;
     try {
-      inner = openControlEdition(outer, serverRoot);
+      inner = openControlEditionMemo(outer, serverRoot);
     } catch {
       continue;
     }
@@ -295,7 +345,7 @@ export function foldMetadata(
   for (const outer of outers) {
     let inner: NostrEvent;
     try {
-      inner = openControlEdition(outer, serverRoot);
+      inner = openControlEditionMemo(outer, serverRoot);
     } catch {
       continue;
     }
@@ -385,7 +435,7 @@ export function foldBanlist(
   for (const outer of outers) {
     let inner: NostrEvent;
     try {
-      inner = openControlEdition(outer, serverRoot);
+      inner = openControlEditionMemo(outer, serverRoot);
     } catch {
       continue;
     }

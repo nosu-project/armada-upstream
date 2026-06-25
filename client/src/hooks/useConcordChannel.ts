@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useConcordBanlist } from "@/hooks/useConcordModeration";
 import { useConcordChannelEpochs } from "@/hooks/useConcordRekey";
@@ -8,11 +8,11 @@ import { useConcordRoster } from "@/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useRotatorSecretKey } from "@/hooks/useRotatorSecretKey";
+import { forgetSkips, openMemoized, openMemoizedBatch } from "@/lib/concord/decodeCache";
 import { channelPseudonym } from "@/lib/concord/derive";
 import {
   buildInnerEvent,
   openedFromSealed,
-  openMessageMulti,
   sealWithSignedInner,
   type OpenedMessage,
 } from "@/lib/concord/envelope";
@@ -22,7 +22,7 @@ import { runExclusive } from "@/lib/signerQueue";
 import type { Channel, Community } from "@/lib/concord/types";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /** Optimistic delivery status for a Concord message we sent, keyed by message id. */
 export type ConcordSendStatus = "pending" | "failed";
@@ -57,22 +57,27 @@ function channelPseudonyms(channel: Channel): string[] {
   return readEpochKeys(channel).map((ek) => bytesToHex(channelPseudonym(ek.key, channel.id, ek.epoch)));
 }
 
+/** Moderation context the read path applies while folding. */
+interface ModerationContext {
+  /** Banned author pubkeys (hex): every event from them is dropped. */
+  banned: Set<string>;
+  /** Whether `deleter` is authorized to moderation-hide a message by `author`. */
+  canHide: (deleter: string, author: string) => boolean;
+}
+
 /**
- * Open + tally a batch of sealed outer events for a channel: decode each under
- * the held epoch keys (binding triad enforced), drop author-deleted messages,
- * and return the surviving messages sorted by time. Shared by the network query
- * and the IndexedDB cache-first seed.
+ * Fold a batch of ALREADY-OPENED Concord events into the channel timeline: drop
+ * banned authors, apply edits (latest by ms, author-only) and deletes
+ * (self-delete or authorized moderation-hide), and return the surviving
+ * messages sorted by time plus the tombstone map (so a merge across fetches can
+ * prune an already-known message whose author deleted it in THIS batch).
+ *
+ * Decoding (the expensive NIP-44 + verify) is done up front by the memoized
+ * batch opener; this is the cheap, pure fold over the results.
  */
-function openMessages(
-  events: NostrEvent[],
-  channelId: Uint8Array,
-  epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
-  moderation?: {
-    /** Banned author pubkeys (hex): every event from them is dropped. */
-    banned: Set<string>;
-    /** Whether `deleter` is authorized to moderation-hide a message by `author`. */
-    canHide: (deleter: string, author: string) => boolean;
-  },
+function foldOpened(
+  opened: OpenedMessage[],
+  moderation?: ModerationContext,
 ): { messages: OpenedMessage[]; deletes: Map<string, Set<string>> } {
   const byId = new Map<string, OpenedMessage>();
   // Tombstones: target message id → set of pubkeys that authored a delete for
@@ -82,35 +87,30 @@ function openMessages(
   // Edits (3302): target id → newest {author, content, ms}. Applied only when
   // the edit's author IS the original message's author.
   const edits = new Map<string, { author: string; content: string; ms: number }>();
-  for (const ev of events) {
-    try {
-      const opened = openMessageMulti(ev, channelId, epochKeys);
-      // Inbound ban enforcement: drop every event from a banned author.
-      if (moderation?.banned.has(opened.author)) continue;
-      if (opened.kind === KIND_COMMUNITY_DELETE) {
-        const target = opened.tags.find((t) => t[0] === "e")?.[1];
-        if (!target) continue;
-        let authors = deletes.get(target);
-        if (!authors) deletes.set(target, (authors = new Set()));
-        authors.add(opened.author);
-        continue;
-      }
-      if (opened.kind === KIND_COMMUNITY_EDIT) {
-        const target = opened.tags.find((t) => t[0] === "e")?.[1];
-        if (!target) continue;
-        const prev = edits.get(target);
-        if (!prev || opened.ms > prev.ms) {
-          edits.set(target, { author: opened.author, content: opened.content, ms: opened.ms });
-        }
-        continue;
-      }
-      // Reactions are tallied elsewhere (useConcordReactions); keep them out of
-      // the message timeline.
-      if (opened.kind === KIND_COMMUNITY_REACTION) continue;
-      byId.set(opened.messageId, opened);
-    } catch {
-      // NoHeldEpoch / splice / bad-sig → not ours or invalid; skip.
+  for (const om of opened) {
+    // Inbound ban enforcement: drop every event from a banned author.
+    if (moderation?.banned.has(om.author)) continue;
+    if (om.kind === KIND_COMMUNITY_DELETE) {
+      const target = om.tags.find((t) => t[0] === "e")?.[1];
+      if (!target) continue;
+      let authors = deletes.get(target);
+      if (!authors) deletes.set(target, (authors = new Set()));
+      authors.add(om.author);
+      continue;
     }
+    if (om.kind === KIND_COMMUNITY_EDIT) {
+      const target = om.tags.find((t) => t[0] === "e")?.[1];
+      if (!target) continue;
+      const prev = edits.get(target);
+      if (!prev || om.ms > prev.ms) {
+        edits.set(target, { author: om.author, content: om.content, ms: om.ms });
+      }
+      continue;
+    }
+    // Reactions are tallied elsewhere (useConcordReactions); keep them out of
+    // the message timeline.
+    if (om.kind === KIND_COMMUNITY_REACTION) continue;
+    byId.set(om.messageId, om);
   }
   // Apply edits: only the original author may edit; latest edit (by ms) wins.
   for (const [id, edit] of edits) {
@@ -132,6 +132,110 @@ function openMessages(
   // Return the tombstone map too, so a merge across fetches can prune an
   // already-known message whose author published a delete in THIS batch.
   return { messages: [...byId.values()].sort((a, b) => a.ms - b.ms), deletes };
+}
+
+/**
+ * Open + fold a batch of sealed outer events into the channel timeline. Decode
+ * is memoized per wrapper id and chunked off the main thread (so re-reading the
+ * append-only local store costs near-nothing after the first pass, and a large
+ * first decode never freezes the UI); the surviving messages are then folded
+ * (edits/deletes/bans applied) and returned sorted by time. Shared by the live
+ * subscription, the network backfill, and the IndexedDB cache-first seed.
+ */
+async function openMessages(
+  events: NostrEvent[],
+  channelId: Uint8Array,
+  epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
+  moderation?: ModerationContext,
+  signal?: AbortSignal,
+): Promise<{ messages: OpenedMessage[]; deletes: Map<string, Set<string>> }> {
+  const opened = await openMemoizedBatch(events, channelId, epochKeys, { signal });
+  return foldOpened(opened, moderation);
+}
+
+/**
+ * Read a channel's sealed blobs back from the append-only local event store and
+ * fold them into the timeline. The store (NIndexedDB, `armada-events`) mirrors
+ * every sealed outer the relays ever returned, so it is the complete local
+ * source of truth — like Vector's SQLite. Reading + decoding from it (rather
+ * than re-querying relays) is what makes a visited channel paint instantly and
+ * survive offline; decode-once memoization makes repeat reads cheap.
+ */
+async function readAndFold(
+  store: { query: (filters: NostrFilter[]) => Promise<NostrEvent[]> },
+  channel: Channel,
+  epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
+  zs: string[],
+  moderation?: ModerationContext,
+  signal?: AbortSignal,
+): Promise<{ messages: OpenedMessage[]; deletes: Map<string, Set<string>> }> {
+  // No limit: the local store is the source of truth and is append-only, so we
+  // want every sealed blob it holds, not a truncated window. Decode-once keeps
+  // this cheap on repeat reads.
+  const sealed = await store.query([
+    { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs },
+  ]);
+  return openMessages(sealed, channel.id, epochKeys, moderation, signal);
+}
+
+/** A page size for relay backfill; the local store is unbounded, this just bounds each REQ. */
+const BACKFILL_PAGE = 500;
+/** How many `until`-pages to walk per backfill pass, so one tick can't loop forever. */
+const BACKFILL_MAX_PAGES = 6;
+
+/**
+ * Backfill the local store from the relays, walking older history with `until`
+ * pagination so a channel with more than {@link BACKFILL_PAGE} events isn't
+ * permanently truncated to its newest page (the old single `limit: 500` query
+ * silently lost everything older). Each relay query is mirrored into the local
+ * store by NostrBatcher's `relay()` wrapper, so this just populates the
+ * append-only store; the caller re-reads from the store afterward.
+ *
+ * Returns the OLDEST `created_at` seen across the pass, so a caller tracking a
+ * per-channel backfill cursor can resume from there next time instead of
+ * re-walking the same window. Stops early when a page comes back short (the
+ * relays have no older events) or the page budget is exhausted.
+ */
+async function backfillStore(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  relays: string[],
+  zs: string[],
+  signal: AbortSignal,
+  until?: number,
+): Promise<number | undefined> {
+  let cursor = until;
+  let oldest: number | undefined;
+  for (let page = 0; page < BACKFILL_MAX_PAGES; page++) {
+    if (signal.aborted) break;
+    const filter: NostrFilter = {
+      kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT],
+      "#z": zs,
+      limit: BACKFILL_PAGE,
+    };
+    if (cursor !== undefined) filter.until = cursor;
+    const results = await Promise.all(
+      relays.map((url) =>
+        nostr
+          .relay(url)
+          .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) })
+          .catch(() => [] as NostrEvent[]),
+      ),
+    );
+    const flat = results.flat();
+    if (flat.length === 0) break;
+    let pageOldest = Infinity;
+    for (const ev of flat) if (ev.created_at < pageOldest) pageOldest = ev.created_at;
+    if (Number.isFinite(pageOldest)) oldest = pageOldest;
+    // A page shorter than a full window means the relays have no older events
+    // past this point — stop walking.
+    if (flat.length < BACKFILL_PAGE) break;
+    // Step the cursor strictly older than the oldest event we just saw.
+    if (!Number.isFinite(pageOldest) || pageOldest <= 0) break;
+    const next = pageOldest - 1;
+    if (cursor !== undefined && next >= cursor) break; // no forward progress
+    cursor = next;
+  }
+  return oldest;
 }
 
 /**
@@ -185,36 +289,18 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   const epochSig = allEpochKeys.map((e) => e.epoch.toString()).join(",");
   const queryKey = ["concord", "channel", channelIdHex];
 
-  // Seed from the local store (decrypt sealed blobs by `#z`) before the network
-  // resolves. Survives refresh because NostrBatcher mirrors the sealed events.
-  useEffect(() => {
-    if (!community || !channel) return;
-    let cancelled = false;
-    void (async () => {
-      if ((queryClient.getQueryData<OpenedMessage[]>(queryKey) ?? []).length > 0) return;
-      const store = await eventStore;
-      const epochKeys = readEpochKeys(channel);
-      const zs = channelPseudonyms(channel);
-      const sealed = await store.query([
-        { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, limit: 500 },
-      ]);
-      if (cancelled || sealed.length === 0) return;
-      const { messages: opened } = openMessages(sealed, channel.id, epochKeys);
-      if (cancelled || opened.length === 0) return;
-      queryClient.setQueryData<OpenedMessage[]>(queryKey, (old) =>
-        old && old.length > 0 ? old : opened,
-      );
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelIdHex, community, eventStore, queryClient]);
+  // Per-channel backfill cursor (oldest created_at walked so far). Lets each
+  // poll resume paging OLDER history into the local store instead of re-walking
+  // the newest window every time, so a channel with >500 events fills in fully.
+  const backfillCursor = useRef<Map<string, number | undefined>>(new Map());
 
   // Re-read immediately when the held epoch set changes (a rekey was caught up),
-  // rather than waiting for the next poll.
+  // rather than waiting for the next poll. Forget remembered decode FAILURES so
+  // blobs previously skipped as `no-held-epoch` retry under the new keys.
   useEffect(() => {
-    if (channelIdHex) queryClient.invalidateQueries({ queryKey: ["concord", "channel", channelIdHex] });
+    if (!channelIdHex) return;
+    forgetSkips();
+    queryClient.invalidateQueries({ queryKey: ["concord", "channel", channelIdHex] });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epochSig]);
 
@@ -232,9 +318,9 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     const since = Math.floor(Date.now() / 1000) - 5;
 
     /** Open one batch of sealed outers and fold them into the cached timeline. */
-    const apply = (events: NostrEvent[]) => {
+    const apply = async (events: NostrEvent[]) => {
       if (events.length === 0) return;
-      const { messages: opened, deletes } = openMessages(events, channel.id, allEpochKeys, moderation);
+      const { messages: opened, deletes } = await openMessages(events, channel.id, allEpochKeys, moderation);
       if (opened.length === 0 && deletes.size === 0) return;
       queryClient.setQueryData<OpenedMessage[]>(queryKey, (old = []) => {
         const byId = new Map<string, OpenedMessage>();
@@ -280,7 +366,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
             [{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, since }],
             { signal: controller.signal },
           )) {
-            if (msg[0] === "EVENT") apply([msg[2] as NostrEvent]);
+            if (msg[0] === "EVENT") await apply([msg[2] as NostrEvent]);
           }
         } catch {
           // Subscription ended (abort or relay closed) — the poll covers gaps.
@@ -296,85 +382,114 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
-    // Backstop only — the live subscription above delivers new messages
-    // instantly. The poll re-decrypts/re-verifies the whole window, so keep it
-    // infrequent to avoid burning CPU on every tick; it just heals gaps from a
-    // dropped subscription or a relay that missed an event.
+    // Backstop + backfill. The live subscription delivers NEW messages
+    // instantly; this poll heals gaps (dropped subscription / missed event) and
+    // walks OLDER history into the append-only local store via `until`
+    // pagination, then renders from the store. Decode-once memoization keeps the
+    // re-read cheap, so re-reading the whole local window each tick is fine.
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const epochKeys = allEpochKeys;
       const zs = epochKeys.map((ek) => bytesToHex(channelPseudonym(ek.key, channel!.id, ek.epoch)));
       const relays = community!.relays;
-      const results = await Promise.all(
-        relays.map((url) =>
-          nostr
-            .relay(url)
-            .query([{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, limit: 500 }], {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-            })
-            .catch(() => [] as NostrEvent[]),
-        ),
-      );
-      const { messages: opened, deletes } = openMessages(results.flat(), channel!.id, epochKeys, moderation);
+      const store = await eventStore;
 
-      // Merge with what's already shown rather than replacing it. The network
-      // query can transiently return fewer messages than we already have —
-      // relays time out, return partial pages, or one trips empty
-      // (`.catch(() => [])`) — and replacing the cache wholesale makes the whole
-      // chat blink out. Union by message id: keep every message we (or the
-      // seed) already know, fold in the freshly decoded ones (network wins on
-      // conflict), then honor any self-delete from this batch against the
-      // already-known copies too.
-      const prev = queryClient.getQueryData<OpenedMessage[]>(queryKey) ?? [];
-      const byId = new Map<string, OpenedMessage>();
-      for (const m of prev) byId.set(m.messageId, m);
-      for (const m of opened) byId.set(m.messageId, m);
-      for (const [id, msg] of byId) {
-        // Drop banned authors and honor self-delete / authorized moderation-hide.
-        if (moderation.banned.has(msg.author)) {
-          byId.delete(id);
-          continue;
-        }
-        const deleters = deletes.get(id);
-        if (deleters && (deleters.has(msg.author) || [...deleters].some((d) => moderation.canHide(d, msg.author)))) {
-          byId.delete(id);
-        }
-      }
+      /**
+       * Re-read the append-only local store, fold it together with whatever is
+       * already shown (live/optimistic messages not yet in the store), apply
+       * moderation + optimistic-delete + send-status reconciliation, and return
+       * the timeline. Used for BOTH the immediate local-first result and the
+       * post-backfill refresh.
+       */
+      const composeFromStore = async (): Promise<OpenedMessage[]> => {
+        const { messages: opened, deletes } = await readAndFold(
+          store,
+          channel!,
+          epochKeys,
+          zs,
+          moderation,
+          signal,
+        );
 
-      // Honor optimistic self-deletes: hide ids the user just deleted locally
-      // until the relay's own delete event lands (at which point `openMessages`
-      // already drops the message and we can forget the optimistic hint).
-      const optimisticDeleted =
-        queryClient.getQueryData<string[]>(deletedKey(channelIdHex)) ?? [];
-      if (optimisticDeleted.length > 0) {
-        const stillHidden: string[] = [];
-        for (const id of optimisticDeleted) {
-          if (byId.has(id)) {
-            // Relay hasn't confirmed the delete yet — keep it hidden.
+        // Union by message id with what's already shown; the store read wins on
+        // conflict (it's verified), but a just-arrived live message / optimistic
+        // send not yet in the store survives.
+        const prev = queryClient.getQueryData<OpenedMessage[]>(queryKey) ?? [];
+        const byId = new Map<string, OpenedMessage>();
+        for (const m of prev) byId.set(m.messageId, m);
+        for (const m of opened) byId.set(m.messageId, m);
+        for (const [id, msg] of byId) {
+          // Drop banned authors and honor self-delete / authorized moderation-hide.
+          if (moderation.banned.has(msg.author)) {
             byId.delete(id);
-            stillHidden.push(id);
+            continue;
           }
-          // else: the relay already dropped it; clear the optimistic hint.
+          const deleters = deletes.get(id);
+          if (deleters && (deleters.has(msg.author) || [...deleters].some((d) => moderation.canHide(d, msg.author)))) {
+            byId.delete(id);
+          }
         }
-        if (stillHidden.length !== optimisticDeleted.length) {
-          queryClient.setQueryData<string[]>(deletedKey(channelIdHex), stillHidden);
+
+        // Honor optimistic self-deletes: hide ids the user just deleted locally
+        // until the relay's own delete event lands (at which point `readAndFold`
+        // already drops the message and we can forget the optimistic hint).
+        const optimisticDeleted =
+          queryClient.getQueryData<string[]>(deletedKey(channelIdHex)) ?? [];
+        if (optimisticDeleted.length > 0) {
+          const stillHidden: string[] = [];
+          for (const id of optimisticDeleted) {
+            if (byId.has(id)) {
+              byId.delete(id);
+              stillHidden.push(id);
+            }
+            // else: the relay already dropped it; clear the optimistic hint.
+          }
+          if (stillHidden.length !== optimisticDeleted.length) {
+            queryClient.setQueryData<string[]>(deletedKey(channelIdHex), stillHidden);
+          }
         }
-      }
 
-      // Reconcile optimistic send-status: clear "pending"/"failed" for any
-      // message the relays have now echoed back (present in this round's
-      // freshly-decoded `opened`).
-      const status = queryClient.getQueryData<ConcordSendStatusMap>(statusKey(channelIdHex)) ?? {};
-      const confirmed = opened.filter((m) => status[m.messageId]).map((m) => m.messageId);
-      if (confirmed.length > 0) {
-        queryClient.setQueryData<ConcordSendStatusMap>(statusKey(channelIdHex), (old = {}) => {
-          const next = { ...old };
-          for (const id of confirmed) delete next[id];
-          return next;
-        });
-      }
+        // Reconcile optimistic send-status: clear "pending"/"failed" for any
+        // message the relays have now echoed back into the local store.
+        const status = queryClient.getQueryData<ConcordSendStatusMap>(statusKey(channelIdHex)) ?? {};
+        const confirmed = opened.filter((m) => status[m.messageId]).map((m) => m.messageId);
+        if (confirmed.length > 0) {
+          queryClient.setQueryData<ConcordSendStatusMap>(statusKey(channelIdHex), (old = {}) => {
+            const next = { ...old };
+            for (const id of confirmed) delete next[id];
+            return next;
+          });
+        }
 
-      return [...byId.values()].sort((a, b) => a.ms - b.ms);
+        return [...byId.values()].sort((a, b) => a.ms - b.ms);
+      };
+
+      // 1. LOCAL-FIRST: resolve the query from the local store immediately, so
+      //    `isLoading` reflects only the (fast) IndexedDB read + decode — never
+      //    the multi-relay network walk. A refresh / offline launch paints the
+      //    full local history at once instead of behind the skeleton.
+      const local = await composeFromStore();
+
+      // 2. BACKGROUND BACKFILL: walk the relays (newest window + older-history
+      //    continuation) into the append-only store, then re-read and update the
+      //    cache. NOT awaited — the network never gates the visible timeline.
+      void (async () => {
+        if (signal.aborted) return;
+        const cursorKey = channelIdHex ?? "";
+        await backfillStore(nostr, relays, zs, signal); // newest window
+        const resumeFrom = backfillCursor.current.get(cursorKey);
+        const oldest = await backfillStore(nostr, relays, zs, signal, resumeFrom);
+        if (oldest !== undefined && (resumeFrom === undefined || oldest < resumeFrom)) {
+          backfillCursor.current.set(cursorKey, oldest);
+        }
+        if (signal.aborted) return;
+        const refreshed = await composeFromStore();
+        queryClient.setQueryData<OpenedMessage[]>(queryKey, refreshed);
+      })().catch(() => {
+        // Best-effort background heal; the local-first result already rendered.
+      });
+
+      return local;
     },
   });
 }
@@ -715,23 +830,22 @@ export function useConcordReactions(community: Community | undefined, channel: C
       // target id → emoji → { reactors, url }
       const tally = new Map<string, Map<string, ConcordReactionTally>>();
       for (const ev of results.flat()) {
-        try {
-          const opened = openMessageMulti(ev, channel!.id, epochKeys);
-          const target = opened.tags.find((t) => t[0] === "e")?.[1];
-          if (!target || !opened.content) continue;
-          // NIP-30 custom emoji: content is `:shortcode:`, the `emoji` tag holds
-          // its image URL (`["emoji", shortcode, url]`). Keep it so the pill can
-          // render the image instead of the literal shortcode text.
-          const url = opened.tags.find((t) => t[0] === "emoji")?.[2];
-          let byEmoji = tally.get(target);
-          if (!byEmoji) tally.set(target, (byEmoji = new Map()));
-          let entry = byEmoji.get(opened.content);
-          if (!entry) byEmoji.set(opened.content, (entry = { reactors: new Set() }));
-          entry.reactors.add(opened.author);
-          if (url && !entry.url) entry.url = url;
-        } catch {
-          // not ours / invalid → skip
-        }
+        // Memoized open: a re-tally each poll re-reads the same blobs, so
+        // decode-once keeps the repeated verify cost off the main thread.
+        const opened = openMemoized(ev, channel!.id, epochKeys);
+        if (!opened) continue; // not ours / invalid
+        const target = opened.tags.find((t) => t[0] === "e")?.[1];
+        if (!target || !opened.content) continue;
+        // NIP-30 custom emoji: content is `:shortcode:`, the `emoji` tag holds
+        // its image URL (`["emoji", shortcode, url]`). Keep it so the pill can
+        // render the image instead of the literal shortcode text.
+        const url = opened.tags.find((t) => t[0] === "emoji")?.[2];
+        let byEmoji = tally.get(target);
+        if (!byEmoji) tally.set(target, (byEmoji = new Map()));
+        let entry = byEmoji.get(opened.content);
+        if (!entry) byEmoji.set(opened.content, (entry = { reactors: new Set() }));
+        entry.reactors.add(opened.author);
+        if (url && !entry.url) entry.url = url;
       }
       return tally;
     },

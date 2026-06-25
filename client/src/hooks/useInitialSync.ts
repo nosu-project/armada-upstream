@@ -10,7 +10,8 @@ import {
   type ConcordList,
 } from "@/lib/concord";
 import { channelPseudonym } from "@/lib/concord/derive";
-import { openMessageMulti, type OpenedMessage } from "@/lib/concord/envelope";
+import { openMemoizedBatch } from "@/lib/concord/decodeCache";
+import { type OpenedMessage } from "@/lib/concord/envelope";
 import { acceptInvite, type CommunityInvite } from "@/lib/concord/invite";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/lib/concord/kinds";
 import type { Channel, Community } from "@/lib/concord/types";
@@ -117,21 +118,19 @@ async function catchUpConcordChannel(
 
   const byId = new Map<string, OpenedMessage>();
   const deletes = new Map<string, Set<string>>();
-  for (const ev of results.flat()) {
-    try {
-      const opened = openMessageMulti(ev, channel.id, epochKeys);
-      if (opened.kind === KIND_COMMUNITY_DELETE) {
-        const target = opened.tags.find((t) => t[0] === "e")?.[1];
-        if (!target) continue;
-        let authors = deletes.get(target);
-        if (!authors) deletes.set(target, (authors = new Set()));
-        authors.add(opened.author);
-        continue;
-      }
-      byId.set(opened.messageId, opened);
-    } catch {
-      // NoHeldEpoch / bad-sig → not ours or invalid; skip.
+  // Memoized + chunked open so the catch-up shares the channel hook's
+  // decode-once cache (no double-decrypt) and never freezes the boot UI.
+  const allOpened = await openMemoizedBatch(results.flat(), channel.id, epochKeys, { signal });
+  for (const opened of allOpened) {
+    if (opened.kind === KIND_COMMUNITY_DELETE) {
+      const target = opened.tags.find((t) => t[0] === "e")?.[1];
+      if (!target) continue;
+      let authors = deletes.get(target);
+      if (!authors) deletes.set(target, (authors = new Set()));
+      authors.add(opened.author);
+      continue;
     }
+    byId.set(opened.messageId, opened);
   }
   for (const [id, msg] of byId) {
     if (deletes.get(id)?.has(msg.author)) byId.delete(id);

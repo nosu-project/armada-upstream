@@ -13,12 +13,16 @@ import {
   type UserGroupList,
 } from "@/lib/nip29";
 import { normalizeRelayUrl } from "@/lib/platform";
+import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
 
 /** Empty list, used before any 10009 event exists. */
 const EMPTY_LIST: UserGroupList = { groups: [], servers: [] };
+
+/** The decrypted group list persisted locally, with the event id it came from. */
+type PersistedGroupList = { event: NostrEvent; groups: GroupRef[]; servers: string[] };
 
 /** Result of reading a 10009 event, with a flag for a failed private-item decrypt. */
 interface ReadGroupListResult extends UserGroupList {
@@ -32,37 +36,55 @@ interface ReadGroupListResult extends UserGroupList {
 }
 
 /**
+ * Decode-once cache for the 10009 private-items decrypt, keyed by event id.
+ * `useUserGroupList` is mounted by several always-on surfaces (NostrSync,
+ * notifications, badge), and each seed effect / queryFn would otherwise run the
+ * full NIP-44 decrypt of the same event independently — which on a remote/
+ * extension signer costs seconds EACH. The event id + content are immutable, so
+ * a single in-flight decrypt is shared and reused for the session.
+ */
+const groupListDecryptMemo = new Map<string, Promise<ReadGroupListResult>>();
+
+/**
  * Decrypt the NIP-44 private items of a kind 10009 event (NIP-51) and merge
  * them with the public tags. Private items live in `.content` as a stringified
  * tag array, encrypted to self. Falls back to public-only when there is no
- * signer or decryption fails.
+ * signer or decryption fails. Memoized by event id so concurrent callers share
+ * one signer round-trip.
  */
 async function readGroupListEvent(
   event: NostrEvent | null,
   signer: NUser["signer"] | undefined,
 ): Promise<ReadGroupListResult> {
   if (!event) return { ...EMPTY_LIST, decryptFailed: false };
+  // No encrypted content → pure public-tag parse, no signer needed.
+  if (!event.content) return { ...parseGroupListTags([...event.tags]), decryptFailed: false };
+  // Encrypted items present but no signer to read them.
+  if (!signer?.nip44) return { ...parseGroupListTags([...event.tags]), decryptFailed: true };
 
-  const tags = [...event.tags];
-  let decryptFailed = false;
-  if (event.content && signer?.nip44) {
+  const cached = groupListDecryptMemo.get(event.id);
+  if (cached) return cached;
+
+  const nip44 = signer.nip44;
+  const work = (async (): Promise<ReadGroupListResult> => {
+    const tags = [...event.tags];
     try {
-      const decrypted = await signer.nip44.decrypt(event.pubkey, event.content);
+      const decrypted = await nip44.decrypt(event.pubkey, event.content);
       const privateTags = JSON.parse(decrypted);
       if (Array.isArray(privateTags)) {
         for (const tag of privateTags) {
           if (Array.isArray(tag)) tags.push(tag as string[]);
         }
       }
+      return { ...parseGroupListTags(tags), decryptFailed: false };
     } catch (err) {
       console.warn("Failed to decrypt group list private items:", err);
-      decryptFailed = true;
+      groupListDecryptMemo.delete(event.id); // don't memoize a transient failure
+      return { ...parseGroupListTags(tags), decryptFailed: true };
     }
-  } else if (event.content && !signer?.nip44) {
-    // There ARE encrypted items but we can't decrypt them (no nip44 signer).
-    decryptFailed = true;
-  }
-  return { ...parseGroupListTags(tags), decryptFailed };
+  })();
+  groupListDecryptMemo.set(event.id, work);
+  return work;
 }
 
 /**
@@ -78,16 +100,34 @@ export function useUserGroupList() {
   const queryClient = useQueryClient();
 
   const queryKey = ["nip29", "user-groups", user?.pubkey];
+  const foldKey = user ? `nip29-grouplist:${user.pubkey}` : null;
 
-  // Cache-first seed: hydrate the joined-channels list from IndexedDB so it
-  // survives a refresh and renders before the network resolves. The 10009 event
-  // is persisted by NostrBatcher; we read it back by (kind, author) and decrypt
-  // its private items locally.
+  // Plaintext-first (Vector-style): the 10009 private items are NIP-44
+  // self-encrypted, and decrypting them through a remote/extension signer on
+  // every boot is slow (seconds on a bunker) — which stalls discovery of WHICH
+  // groups/relays to load, gating the whole NIP-29 UI. So we decrypt ONCE,
+  // persist the DECRYPTED list locally (same device-trust as the keys it
+  // holds), and read that plaintext on every subsequent boot — no signer call.
   useEffect(() => {
-    if (!user) return;
+    if (!user || !foldKey) return;
     let cancelled = false;
     void (async () => {
       if (queryClient.getQueryData(queryKey)) return;
+
+      // 1. Plaintext-first: a previously-decrypted list paints instantly.
+      const persisted = await readFolded<PersistedGroupList>(foldKey);
+      if (cancelled) return;
+      if (persisted) {
+        queryClient.setQueryData(queryKey, {
+          event: persisted.event ?? null,
+          groups: persisted.groups,
+          servers: persisted.servers,
+          decryptFailed: false,
+        });
+        return;
+      }
+
+      // 2. First run / no plaintext yet: decrypt the cached blob once, persist it.
       const store = await eventStore;
       const [cached] = await store.query([{ kinds: [KIND_USER_GROUPS], authors: [user.pubkey] }]);
       if (cancelled || !cached) return;
@@ -99,6 +139,13 @@ export function useUserGroupList() {
         servers: list.servers,
         decryptFailed: list.decryptFailed,
       });
+      if (!list.decryptFailed) {
+        void writeFolded(foldKey, {
+          event: cached as NostrEvent,
+          groups: list.groups,
+          servers: list.servers,
+        } satisfies PersistedGroupList);
+      }
     })();
     return () => {
       cancelled = true;
@@ -114,13 +161,31 @@ export function useUserGroupList() {
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
       const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+
+      const prev = queryClient.getQueryData<{ event: NostrEvent | null; groups: GroupRef[]; servers: string[]; decryptFailed: boolean }>(queryKey);
+
+      // Skip the signer decrypt entirely when the network event is the same one
+      // we already decrypted (matched by id) — the common case on every refresh.
+      if (latest && prev?.event?.id === latest.id && !prev.decryptFailed) {
+        return prev;
+      }
+
       const list = await readGroupListEvent(latest, user!.signer);
-      return {
+      const result = {
         event: latest as NostrEvent | null,
         groups: list.groups,
         servers: list.servers,
         decryptFailed: list.decryptFailed,
       };
+      // Persist the decrypted result so the NEXT boot reads plaintext (no signer).
+      if (foldKey && latest && !list.decryptFailed) {
+        void writeFolded(foldKey, {
+          event: latest,
+          groups: list.groups,
+          servers: list.servers,
+        } satisfies PersistedGroupList);
+      }
+      return result;
     },
     enabled: Boolean(user),
     staleTime: 30_000,
@@ -227,12 +292,22 @@ export function useUpdateUserGroupList() {
         JSON.stringify(privateTags),
       );
 
-      return publishEvent({
+      const published = await publishEvent({
         kind: KIND_USER_GROUPS,
         content,
         tags: otherTags,
         prev: prev ?? undefined,
       });
+      // Persist the decrypted result (we have `next` in the clear here) so the
+      // next boot reads plaintext without a signer decrypt.
+      if (published) {
+        void writeFolded(`nip29-grouplist:${user.pubkey}`, {
+          event: published,
+          groups: next.groups,
+          servers: next.servers,
+        } satisfies PersistedGroupList);
+      }
+      return published;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["nip29", "user-groups"] });

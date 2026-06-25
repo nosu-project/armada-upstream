@@ -220,46 +220,45 @@ export function useDMConversations() {
     enabled: !!user?.pubkey,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
-      const events = await nostr.group(relays).query(
-        [
-          { kinds: [KIND_DM], authors: [pubkey], limit: 500 },
-          { kinds: [KIND_DM], "#p": [pubkey], limit: 500 },
-        ],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-      );
-      // Merge with whatever is already cached (seed or a previous fetch) so a
-      // sparse/empty relay read can never SHRINK the conversation list. Relays
-      // legitimately return partial pages or nothing on a flaky connection; that
-      // doesn't mean the conversations are gone. (Same floor as Concord.)
+      const store = await eventStore;
+
+      // 1. LOCAL-FIRST: our own kind-4 set is mirrored into IndexedDB by
+      //    NostrBatcher, so the conversation list paints instantly from cache on
+      //    reload instead of behind a relay round-trip.
+      const cachedEvents = await store.query([
+        { kinds: [KIND_DM], authors: [pubkey], limit: 500 },
+        { kinds: [KIND_DM], "#p": [pubkey], limit: 500 },
+      ]);
       const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
-      return mergeDmEvents(prev, events);
+      const local = mergeDmEvents(prev, cachedEvents);
+
+      // 2. BACKGROUND refresh from the DM relays, merged in. NOT awaited — the
+      //    network never gates the visible conversation list. Merge floor: a
+      //    sparse/empty relay read can never SHRINK the list.
+      void (async () => {
+        if (signal.aborted) return;
+        try {
+          const events = await nostr.group(relays).query(
+            [
+              { kinds: [KIND_DM], authors: [pubkey], limit: 500 },
+              { kinds: [KIND_DM], "#p": [pubkey], limit: 500 },
+            ],
+            { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+          );
+          if (signal.aborted || events.length === 0) return;
+          queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) => mergeDmEvents(old, events));
+        } catch {
+          // Best-effort; the local-first list already rendered.
+        }
+      })();
+
+      return local;
     },
     staleTime: 15_000,
   });
 
-  // Cache-first seed: hydrate the conversation list from IndexedDB so it
-  // survives a refresh and renders before the network resolves.
-  useEffect(() => {
-    if (!user?.pubkey) return;
-    const pubkey = user.pubkey;
-    let cancelled = false;
-    void (async () => {
-      if ((queryClient.getQueryData<NostrEvent[]>(queryKey) ?? []).length > 0) return;
-      const store = await eventStore;
-      const events = await store.query([
-        { kinds: [KIND_DM], authors: [pubkey], limit: 500 },
-        { kinds: [KIND_DM], "#p": [pubkey], limit: 500 },
-      ]);
-      if (cancelled || events.length === 0) return;
-      queryClient.setQueryData<NostrEvent[]>(queryKey, (old) =>
-        old && old.length > 0 ? old : events,
-      );
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.pubkey, eventStore, queryClient, relayKey]);
+  // The live subscription below (since=now-5s) surfaces new conversations; the
+  // local-first queryFn handles cold-load rendering, so no separate seed effect.
 
   // Live subscription so new conversations/messages surface without a refetch.
   useEffect(() => {
@@ -386,95 +385,68 @@ export function useDirectMessages(peer: string | undefined) {
     enabled: !!self && !!peer && !!user?.signer.nip04,
     queryFn: async ({ signal }) => {
       const nip04 = user!.signer.nip04!;
-      // Query ONLY self-scoped filters. Relays enforce that you may only read
-      // your own DMs and reject (closing the whole REQ) any filter naming
-      // another pubkey — so `authors:[peer]`/`#p:[peer]` would return nothing.
-      // Our own kind-4 set covers both directions of every conversation:
-      //   - sent to peer  → authored by self (`authors:[self]`)
-      //   - received      → addressed to self (`#p:[self]`)
-      // We then narrow to this peer client-side.
-      const events = await nostr.group(relays).query(
-        [
-          { kinds: [KIND_DM], authors: [self!], limit: 1000 },
-          { kinds: [KIND_DM], "#p": [self!], limit: 1000 },
-        ],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-      );
+      const store = await eventStore;
 
-      // Keep only events that belong to this 1:1 conversation.
-      const inThread = events.filter((e) => dmCounterparty(e, self!) === peer);
+      // 1. LOCAL-FIRST: read our own kind-4 set from the append-only IndexedDB
+      //    store (mirrored by NostrBatcher), narrow to this peer, and return
+      //    placeholders IMMEDIATELY so the thread structure paints on the first
+      //    frame after a refresh instead of behind the skeleton. Decryption of
+      //    the newest screenful streams in via the plaintext cache.
+      const localEvents = await store.query([
+        { kinds: [KIND_DM], authors: [self!], limit: 1000 },
+        { kinds: [KIND_DM], "#p": [self!], limit: 1000 },
+      ]);
+      const localThread = localEvents.filter((e) => dmCounterparty(e, self!) === peer);
+      const prevLocal = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
+      const localPlaceholders = mergeDmThread(prevLocal, buildThreadPlaceholders(localThread));
+      if (localThread.length > 0) {
+        void decryptThreadRows(
+          localThread,
+          self!,
+          peer!,
+          (cp, ct) => nip04.decrypt(cp, ct),
+          EAGER_DECRYPT_COUNT,
+          (row) => patchRow(queryClient, queryKey, row),
+        );
+      }
 
-      // Render the whole thread as placeholders IMMEDIATELY (cached messages are
-      // already plaintext), so structure + scroll are correct on the first frame
-      // instead of pausing while a batch decrypts. Then decrypt the newest
-      // screenful one at a time, streaming each into the cache the instant it
-      // resolves (decryptThreadRows + patchRow) so messages reveal individually,
-      // newest-first. Older messages stay placeholders for scroll-into-view
-      // decryption (decryptVisible).
-      //
-      // Merge with the already-cached thread (seed or previous fetch) so a sparse
-      // relay read or a transient decrypt failure can never DROP shown messages.
-      const prev = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
-      const placeholders = mergeDmThread(prev, buildThreadPlaceholders(inThread));
+      // 2. BACKGROUND network refresh: query the relays for newer DMs, merge into
+      //    the cache, stream their decrypts in. NOT awaited — the network never
+      //    gates the visible thread.
+      void (async () => {
+        if (signal.aborted) return;
+        try {
+          // Query ONLY self-scoped filters (relays reject filters naming another
+          // pubkey). Our own kind-4 set covers both directions.
+          const events = await nostr.group(relays).query(
+            [
+              { kinds: [KIND_DM], authors: [self!], limit: 1000 },
+              { kinds: [KIND_DM], "#p": [self!], limit: 1000 },
+            ],
+            { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+          );
+          const inThread = events.filter((e) => dmCounterparty(e, self!) === peer);
+          if (signal.aborted || inThread.length === 0) return;
+          queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
+            mergeDmThread(old, buildThreadPlaceholders(inThread)),
+          );
+          void decryptThreadRows(
+            inThread,
+            self!,
+            peer!,
+            (cp, ct) => nip04.decrypt(cp, ct),
+            EAGER_DECRYPT_COUNT,
+            (row) => patchRow(queryClient, queryKey, row),
+          );
+        } catch {
+          // Best-effort background refresh; the local-first result already rendered.
+        }
+      })();
 
-      void decryptThreadRows(
-        inThread,
-        self!,
-        peer!,
-        (cp, ct) => nip04.decrypt(cp, ct),
-        EAGER_DECRYPT_COUNT,
-        (row) => patchRow(queryClient, queryKey, row),
-      );
-
-      return placeholders;
+      return localPlaceholders;
     },
     staleTime: 10_000,
   });
-
-  // Cache-first seed: decrypt this thread from IndexedDB before the network
-  // resolves, so a conversation we've opened renders instantly and survives a
-  // page refresh. The store holds the raw kind-4 events (mirrored by
-  // NostrBatcher); we read our own DM set by tag/author, narrow to this peer,
-  // and decrypt locally.
-  useEffect(() => {
-    if (!self || !peer || !user?.signer.nip04) return;
-    const nip04 = user.signer.nip04;
-    let cancelled = false;
-    void (async () => {
-      if ((queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? []).length > 0) return;
-      const store = await eventStore;
-      const events = await store.query([
-        { kinds: [KIND_DM], authors: [self], limit: 1000 },
-        { kinds: [KIND_DM], "#p": [self], limit: 1000 },
-      ]);
-      if (cancelled || events.length === 0) return;
-
-      const inThread = events.filter((e) => dmCounterparty(e, self) === peer);
-      if (inThread.length === 0) return;
-
-      // Show placeholders immediately, then stream each decrypt in (same as the
-      // network path) so a cold reload reveals the thread progressively.
-      const placeholders = buildThreadPlaceholders(inThread);
-      if (cancelled || placeholders.length === 0) return;
-      queryClient.setQueryData<DecryptedDM[]>(queryKey, (old) =>
-        old && old.length > 0 ? old : placeholders,
-      );
-      void decryptThreadRows(
-        inThread,
-        self,
-        peer,
-        (cp, ct) => nip04.decrypt(cp, ct),
-        EAGER_DECRYPT_COUNT,
-        (row) => {
-          if (!cancelled) patchRow(queryClient, queryKey, row);
-        },
-      );
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [self, peer, user?.signer.nip04, eventStore, queryClient]);
 
   // Live subscription for new messages in this thread.
   useEffect(() => {
