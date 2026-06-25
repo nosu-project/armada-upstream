@@ -4,6 +4,37 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.6.0] - 2026-06-24
+
+Better interop with other community chat apps, plus faster and more reliable
+loading. Encrypted images shared from other clients now decrypt and display
+inline, and images you send are encrypted to match. Community names, icons, and
+member lists now paint instantly from a local cache on refresh instead of
+reloading from scratch, and avatars and names fill in more reliably. Owners and
+admins are now distinguished in the member list.
+
+### Added
+- Encrypted images shared from other community chat apps now decrypt and display
+  inline, and images you send are encrypted the same way so they show correctly
+  for everyone.
+- Encrypted community icons and banners now display in the server rail, header,
+  and sidebar.
+- Owners and admins are distinguished in the member list with separate badges (a
+  crown for owners, a shield for admins).
+
+### Changed
+- Community names, icons, and member lists now paint instantly from a local
+  cache when you refresh, instead of reloading from scratch each time.
+- New messages in communities now appear live, and busy rooms load faster.
+- Avatars and display names fill in more reliably instead of occasionally
+  freezing as missing for several minutes.
+
+### Fixed
+- Member roles and permissions set by owners and admins now resolve correctly
+  for communities created in other apps.
+- The invite prompt no longer pops up for communities you have already joined
+  while the app is warming up.
+
 ## [0.5.2] - 2026-06-24
 
 A community chat fix-up release. Accepting several invites in a row no longer
