@@ -1,7 +1,9 @@
 import {
+  Anchor,
   ArrowLeft,
   Bell,
   ChevronDown,
+  ChevronRight,
   MessageSquareLock,
   Mic,
   Palette,
@@ -298,6 +300,16 @@ export function SettingsPage() {
               </Collapsible>
             </SettingsSection>
           )}
+
+          <SettingsSection title="About" icon={Anchor}>
+            <SettingsRow
+              label="How Armada works"
+              description="The two ways to talk, and what stays private."
+              onClick={() => navigate("/about")}
+            >
+              <ChevronRight className="size-4 text-muted-foreground" />
+            </SettingsRow>
+          </SettingsSection>
           </div>
         </div>
       </div>

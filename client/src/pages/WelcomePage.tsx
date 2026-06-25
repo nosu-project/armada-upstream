@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
@@ -53,6 +53,12 @@ export function WelcomePage() {
           >
             Join
           </Button>
+          <Link
+            to="/about"
+            className="mt-4 block text-center text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            How does Armada work?
+          </Link>
         </div>
 
         <LoginDialog

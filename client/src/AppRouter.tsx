@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import type { ReactNode } from "react";
 
 import { MainLayout } from "@/components/layout/MainLayout";
+import { AboutPage } from "@/pages/AboutPage";
 import { ConcordPage } from "@/pages/ConcordPage";
 import { DMsPage } from "@/pages/DMsPage";
 import { GroupPage } from "@/pages/GroupPage";
@@ -67,6 +68,7 @@ export function AppRouter() {
           <Route path="/s/:server/:groupId" element={<GroupPage />} />
           <Route path="/c/:communityId" element={<ConcordPage />} />
           <Route path="/invite" element={<InvitePage />} />
+          <Route path="/about" element={<AboutPage />} />
           <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
           <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
           <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
