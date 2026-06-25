@@ -1,7 +1,10 @@
-import { AtSign, Ban, Copy, Crown, IdCard, MoreVertical, Shield, ShieldOff, UserMinus, X } from "lucide-react";
+import { AtSign, Ban, Copy, Crown, IdCard, MoreVertical, Shield, ShieldOff, Smile, UserMinus, X } from "lucide-react";
+
+import { useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
+import { StatusDialog } from "@/components/dialogs/StatusDialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -11,8 +14,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
+import { useUserStatus } from "@/hooks/useUserStatus";
 import { requestMention } from "@/hooks/useMentionBus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -64,6 +69,8 @@ function MemberRow({
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   const { displayName, color } = useScopedIdentity(pubkey, metadata);
+  const status = useUserStatus(pubkey).data?.status;
+  const [statusOpen, setStatusOpen] = useState(false);
 
   const roleSet = new Set((roles ?? []).map((r) => r.toLowerCase()));
   const isOwner = roleSet.has(ROLE_OWNER);
@@ -87,6 +94,7 @@ function MemberRow({
   };
 
   return (
+    <>
     <div className="gutter-tick group flex items-center gap-2.5 pl-3 pr-2 py-2 clip-corner-lg transition-colors hover:bg-accent/50 hover:text-foreground">
       <ProfilePreviewCard pubkey={pubkey}>
         <button type="button" className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -101,10 +109,19 @@ function MemberRow({
       <ProfilePreviewCard pubkey={pubkey}>
         <button
           type="button"
-          className="text-sm truncate flex-1 text-left focus:outline-none"
-          style={color ? { color } : undefined}
+          className="min-w-0 flex-1 text-left focus:outline-none"
         >
-          {displayName}
+          <span className="block text-sm truncate" style={color ? { color } : undefined}>
+            {displayName}
+          </span>
+          {status?.content && (
+            <span
+              className="block text-xs text-muted-foreground truncate"
+              title={status.content}
+            >
+              <EmojifiedText tags={status.event.tags}>{status.content}</EmojifiedText>
+            </span>
+          )}
         </button>
       </ProfilePreviewCard>
       {isOwner ? (
@@ -152,6 +169,13 @@ function MemberRow({
             <Copy className="size-4" />
             Copy npub
           </DropdownMenuItem>
+
+          {isSelf && (
+            <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setStatusOpen(true)}>
+              <Smile className="size-4" />
+              Set status
+            </DropdownMenuItem>
+          )}
 
           {isSelf && onEditProfile && (
             <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={onEditProfile}>
@@ -240,6 +264,8 @@ function MemberRow({
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+    {isSelf && <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />}
+    </>
   );
 }
 

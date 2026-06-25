@@ -2,7 +2,7 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import { useState } from 'react';
-import { ChevronDown, IdCard, LogOut, UserIcon, UserPlus } from 'lucide-react';
+import { ChevronDown, IdCard, LogOut, Smile, UserIcon, UserPlus } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +16,7 @@ import { Skeleton } from '@/components/ui/skeleton.tsx';
 import { useLoggedInAccounts, type Account } from '@/hooks/useLoggedInAccounts';
 import { useServerScope } from '@/contexts/ServerScopeContext';
 import { ServerProfileDialog } from '@/components/dialogs/ServerProfileDialog';
+import { StatusDialog } from '@/components/dialogs/StatusDialog';
 
 interface AccountSwitcherProps {
   onAddAccountClick: () => void;
@@ -28,6 +29,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   // "Server identity" item (per-server nickname/label/color).
   const serverScope = useServerScope();
   const [serverIdentityOpen, setServerIdentityOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
 
   if (!currentUser) return null;
 
@@ -86,6 +88,13 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onClick={() => setStatusOpen(true)}
+          className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
+        >
+          <Smile className='w-4 h-4' />
+          <span>Set status</span>
+        </DropdownMenuItem>
         {serverScope && (
           <DropdownMenuItem
             onClick={() => setServerIdentityOpen(true)}
@@ -118,6 +127,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
         onOpenChange={setServerIdentityOpen}
       />
     )}
+    <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />
     </>
   );
 }

@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { requestMention } from "@/hooks/useMentionBus";
+import { useUserStatus } from "@/hooks/useUserStatus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -27,6 +28,7 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
+  const status = useUserStatus(pubkey).data?.status;
   const displayName = getDisplayName(metadata, pubkey);
   const avatarShape = getAvatarShape(metadata);
   const npub = tryNpubEncode(pubkey);
@@ -83,6 +85,25 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
             ? <EmojifiedText tags={author.data.event.tags}>{displayName}</EmojifiedText>
             : displayName}
         </div>
+
+        {/* NIP-38 status */}
+        {status?.content && (
+          status.link ? (
+            <a
+              href={status.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 block text-sm text-muted-foreground truncate hover:text-foreground transition-colors"
+              title={status.content}
+            >
+              <EmojifiedText tags={status.event.tags}>{status.content}</EmojifiedText>
+            </a>
+          ) : (
+            <div className="mt-1 text-sm text-muted-foreground truncate" title={status.content}>
+              <EmojifiedText tags={status.event.tags}>{status.content}</EmojifiedText>
+            </div>
+          )
+        )}
 
         {/* npub (copyable) */}
         {npub && (

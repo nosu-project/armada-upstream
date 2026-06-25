@@ -341,6 +341,120 @@ class ReplaceableCollector {
   }
 }
 
+/**
+ * Batches addressable-event queries that share a fixed kind + `d` tag across
+ * many AUTHORS in a microtask window. The motivating case is NIP-38 user
+ * statuses (kind 30315, `d: "general"`): a member list mounts dozens of rows
+ * that each want one author's status, and without batching that's one REQ per
+ * member. This collector merges them into a single
+ *   { kinds: [k], authors: [...], '#d': [d], limit: authors.length }
+ * REQ and hands each caller back only its own author's event.
+ *
+ * Note this is the opposite axis from `dTagCollectors`/`executeDTagBatch`,
+ * which batch many `d` tags for ONE author. Here the kind and `d` are fixed
+ * and the authors vary.
+ */
+class FixedDTagAuthorCollector {
+  private pending: Array<{
+    author: string;
+    resolve: (event: NostrEvent | undefined) => void;
+    reject: (error: unknown) => void;
+    signal?: AbortSignal;
+  }> = [];
+  private scheduled = false;
+
+  constructor(
+    private pool: NPool,
+    private kind: number,
+    private dTag: string,
+  ) {}
+
+  request(author: string, signal?: AbortSignal): Promise<NostrEvent | undefined> {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      this.pending.push({ author, resolve, reject, signal });
+      if (!this.scheduled) {
+        this.scheduled = true;
+        queueMicrotask(() => this.flush());
+      }
+    });
+  }
+
+  private async flush(): Promise<void> {
+    const batch = this.pending;
+    this.pending = [];
+    this.scheduled = false;
+
+    if (batch.length === 0) return;
+
+    const live = batch.filter((r) => !r.signal?.aborted);
+    for (const r of batch.filter((r) => r.signal?.aborted)) {
+      r.reject(r.signal!.reason);
+    }
+    if (live.length === 0) return;
+
+    // Unique authors, preserving order.
+    const authors: string[] = [];
+    const seen = new Set<string>();
+    for (const r of live) {
+      if (!seen.has(r.author)) {
+        seen.add(r.author);
+        authors.push(r.author);
+      }
+    }
+
+    // Combined abort: only abort when ALL callers have aborted.
+    const controller = new AbortController();
+    const liveSignals = live.map((r) => r.signal).filter(Boolean) as AbortSignal[];
+    if (liveSignals.length > 0 && liveSignals.length === live.length) {
+      const checkAllAborted = () => {
+        if (liveSignals.every((s) => s.aborted)) controller.abort(liveSignals[0].reason);
+      };
+      for (const sig of liveSignals) sig.addEventListener('abort', checkAllAborted, { once: true });
+    }
+
+    const byAuthor = new Map<string, NostrEvent>();
+    try {
+      // Chunk authors to respect relay filter limits.
+      const chunks: string[][] = [];
+      for (let i = 0; i < authors.length; i += MAX_BATCH_SIZE) {
+        chunks.push(authors.slice(i, i + MAX_BATCH_SIZE));
+      }
+      await Promise.all(
+        chunks.map(async (chunk) => {
+          const events = await this.pool.query(
+            [{ kinds: [this.kind], authors: chunk, '#d': [this.dTag], limit: chunk.length }],
+            { signal: controller.signal },
+          );
+          for (const event of events) {
+            // Defensive: relays may return events that don't match the d-tag.
+            const d = event.tags.find(([name]) => name === 'd')?.[1] ?? '';
+            if (d !== this.dTag) continue;
+            const existing = byAuthor.get(event.pubkey);
+            if (!existing || event.created_at > existing.created_at) {
+              byAuthor.set(event.pubkey, event);
+            }
+          }
+        }),
+      );
+    } catch (error) {
+      for (const r of live) r.reject(error);
+      return;
+    }
+
+    for (const r of live) {
+      if (r.signal?.aborted) {
+        r.reject(r.signal.reason);
+      } else {
+        r.resolve(byAuthor.get(r.author));
+      }
+    }
+  }
+}
+
 /** A filter for kind:7 reactions by a single author to a single event. */
 function isReactionFilter(filter: NostrFilter): boolean {
   const keys = Object.keys(filter);
@@ -433,6 +547,32 @@ function isMultiFilterETagBatchable(filters: NostrFilter[]): string | null {
   return commonId;
 }
 
+/**
+ * Addressable kinds whose `{ kinds:[k], authors:[a], '#d':[d] }` queries should
+ * batch across AUTHORS (one REQ for many users) rather than across `d` tags.
+ * These are per-user singletons fetched for whole rosters at once — NIP-38 user
+ * statuses (30315) are the canonical case.
+ */
+const AUTHOR_BATCHED_DTAG_KINDS = new Set([30315]);
+
+/**
+ * A fixed-kind, fixed-`d`-tag, single-author filter for a kind we batch across
+ * authors: `{ kinds: [k], authors: [a], '#d': [d], limit?: n }` with
+ * `k ∈ AUTHOR_BATCHED_DTAG_KINDS`.
+ */
+function isAuthorBatchedDTagFilter(filter: NostrFilter): boolean {
+  const keys = Object.keys(filter);
+  return (
+    keys.every((k) => k === 'kinds' || k === 'authors' || k === '#d' || k === 'limit') &&
+    filter.kinds?.length === 1 &&
+    AUTHOR_BATCHED_DTAG_KINDS.has(filter.kinds[0]) &&
+    filter.authors?.length === 1 &&
+    (filter as Record<string, unknown>)['#d'] !== undefined &&
+    Array.isArray((filter as Record<string, unknown>)['#d']) &&
+    ((filter as Record<string, unknown>)['#d'] as string[]).length === 1
+  );
+}
+
 /** A filter for addressable events by d-tag: `{ kinds: [k], authors: [a], '#d': [d], limit?: n }` */
 function isDTagFilter(filter: NostrFilter): boolean {
   const keys = Object.keys(filter);
@@ -470,6 +610,8 @@ export class NostrBatcher {
   private repostCollectors = new Map<string, BatchCollector<NostrEvent | undefined>>();
   /** Keyed by `${kind}:${author}` for d-tag batching. */
   private dTagCollectors = new Map<string, BatchCollector<NostrEvent | undefined>>();
+  /** Keyed by `${kind}:${dTag}` for author batching of fixed-d-tag addressable kinds (e.g. NIP-38 statuses). */
+  private fixedDTagAuthorCollectors = new Map<string, FixedDTagAuthorCollector>();
   /** Keyed by sorted kinds string for #e-tag batching. Returns arrays. */
   private eTagCollectors = new Map<string, BatchCollector<NostrEvent[]>>();
   /** Keyed by serialized filter shapes for multi-filter #e/#q batching. */
@@ -592,6 +734,22 @@ export class NostrBatcher {
           this.eTagCollectors.set(collectorKey, collector);
         }
         return collector.request(eventId, opts?.signal);
+      }
+
+      // { kinds: [30315], authors: [a], '#d': [d] } — batch across authors.
+      // Must precede the generic d-tag check (same shape, different axis).
+      if (isAuthorBatchedDTagFilter(filter)) {
+        const kind = filter.kinds![0];
+        const author = filter.authors![0];
+        const dTag = ((filter as Record<string, unknown>)['#d'] as string[])[0];
+        const collectorKey = `${kind}:${dTag}`;
+        let collector = this.fixedDTagAuthorCollectors.get(collectorKey);
+        if (!collector) {
+          collector = new FixedDTagAuthorCollector(this.pool, kind, dTag);
+          this.fixedDTagAuthorCollectors.set(collectorKey, collector);
+        }
+        const event = await collector.request(author, opts?.signal);
+        return event ? [event] : [];
       }
 
       // { kinds: [k], authors: [a], '#d': [d] }
