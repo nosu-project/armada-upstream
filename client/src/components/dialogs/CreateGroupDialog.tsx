@@ -121,7 +121,7 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
                 maxLength={64}
                 autoComplete="off"
                 autoFocus
-                className="pl-9"
+                className="pl-9 bg-background/40 border-transparent"
               />
             </div>
             {slug && (
@@ -142,6 +142,7 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
               placeholder="What's this channel about?"
               maxLength={300}
               rows={2}
+              className="bg-background/40 border-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
             />
           </div>
 
@@ -199,8 +200,8 @@ export function PrivacyToggle({ id, icon, title, description, checked, onChecked
     <label
       htmlFor={id}
       className={cn(
-        "flex items-center gap-3 clip-corner-lg border p-3 cursor-pointer transition-colors",
-        checked ? "border-primary/50 bg-primary/5" : "border-border/70 hover:bg-secondary/40",
+        "flex items-center gap-3 clip-corner-lg p-3 cursor-pointer transition-colors",
+        checked ? "bg-primary/10" : "bg-background/40 hover:bg-background/70",
       )}
     >
       <span className={cn(

@@ -1,4 +1,4 @@
-import { Loader2, RotateCcw } from "lucide-react";
+import { Loader2, RotateCcw, UserCog } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -6,11 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
+  ChromeDialogContent,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -94,21 +90,26 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md p-0 overflow-hidden gap-0">
-        <DialogHeader className="px-6 pt-6 pb-4">
-          <DialogTitle>Server identity</DialogTitle>
-          <DialogDescription>
+      <ChromeDialogContent title="Server identity">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
+            <UserCog className="size-6" />
+          </div>
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+            server identity
+          </h2>
+          <p className="text-sm text-muted-foreground">
             A nickname, label and color that apply only on this server — never on other
             servers or your global profile.
-          </DialogDescription>
-        </DialogHeader>
+          </p>
+        </div>
 
         {/* Live preview — mirrors a real chat message row. */}
-        <div className="px-6 pb-5">
+        <div className="mt-6">
           <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70 mb-2">
             Preview
           </div>
-          <div className="rounded-xl border bg-secondary/30 p-3">
+          <div className="clip-corner-lg bg-background/40 p-3">
             <div className="flex items-start gap-3">
               <Avatar shape={getAvatarShape(metadata)} className="size-10 shrink-0">
                 <AvatarImage src={metadata?.picture} alt={previewName} />
@@ -144,7 +145,7 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
             e.preventDefault();
             handleSave();
           }}
-          className="px-6 pb-6 space-y-4"
+          className="mt-6 space-y-4"
         >
           <div className="space-y-2">
             <Label htmlFor="server-nickname">Nickname</Label>
@@ -156,6 +157,7 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
               autoComplete="off"
               maxLength={64}
               disabled={isLoading}
+              className="bg-background/40 border-transparent"
             />
           </div>
 
@@ -169,6 +171,7 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
               autoComplete="off"
               maxLength={32}
               disabled={isLoading}
+              className="bg-background/40 border-transparent"
             />
           </div>
 
@@ -193,8 +196,8 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
             <div className="flex items-center gap-2">
               {/* Custom color well. */}
               <label
-                className="relative size-9 shrink-0 cursor-pointer rounded-lg border overflow-hidden"
-                style={{ backgroundColor: colorEnabled ? swatch : "transparent" }}
+                className="relative size-9 shrink-0 cursor-pointer clip-corner-lg overflow-hidden"
+                style={{ backgroundColor: colorEnabled ? swatch : "hsl(var(--background) / 0.4)" }}
                 title="Custom color"
               >
                 <input
@@ -229,16 +232,16 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
             </div>
           </div>
 
-          <DialogFooter className="pt-2">
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+          <div className="flex gap-2 pt-2">
+            <Button type="button" variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={isPending || isLoading}>
+            <Button type="submit" className="flex-1 clip-corner-lg" disabled={isPending || isLoading}>
               {isPending ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : "Save"}
             </Button>
-          </DialogFooter>
+          </div>
         </form>
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }
