@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.8.2] - 2026-06-25
+
+Notifications for encrypted communities now show who sent the message and a
+preview of it, alongside the community and channel it came from. There's also a
+new About page explaining the two ways to talk in Armada and what stays private.
+
+### Added
+- An About page that explains the two ways to talk — running your own server or
+  decentralized encrypted chat — and what each keeps private. Reachable from
+  Settings and the welcome screen.
+
+### Changed
+- Notifications for encrypted communities now show the sender's name and a
+  preview of the message, along with the community and channel it came from,
+  instead of a generic "new message" notice.
+
 ## [0.8.1] - 2026-06-25
 
 Voice calls now work on the Android and desktop apps, the encrypted-community
