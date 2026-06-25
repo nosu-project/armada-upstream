@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import type { ReactNode } from "react";
 
 import { MainLayout } from "@/components/layout/MainLayout";
 import { ConcordPage } from "@/pages/ConcordPage";
@@ -41,6 +42,20 @@ function HomeRedirect() {
   return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
 }
 
+/**
+ * Gate a route behind being signed in. Public chat (servers, groups, Concord
+ * communities), the invite landing, and the welcome screen render for
+ * logged-out users; everything else (DMs, settings) bounces a signed-out user
+ * to the landing page rather than showing them an empty, account-scoped shell.
+ */
+function RequireAuth({ children }: { children: ReactNode }) {
+  const { user } = useCurrentUser();
+  if (!user) {
+    return <Navigate to="/welcome" replace />;
+  }
+  return <>{children}</>;
+}
+
 export function AppRouter() {
   return (
     <BrowserRouter>
@@ -52,9 +67,9 @@ export function AppRouter() {
           <Route path="/s/:server/:groupId" element={<GroupPage />} />
           <Route path="/c/:communityId" element={<ConcordPage />} />
           <Route path="/invite" element={<InvitePage />} />
-          <Route path="/dms" element={<DMsPage />} />
-          <Route path="/dms/:peer" element={<DMsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
+          <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
+          <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
         </Route>
         <Route path="*" element={<NotFound />} />
       </Routes>

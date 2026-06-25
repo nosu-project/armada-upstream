@@ -10,6 +10,7 @@ import {
 import { useAppContext } from "@/hooks/useAppContext";
 import { clearPlaintextCache } from "@/lib/plaintextCache";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
+import { purgeClientStorage } from "@/lib/purgeClientStorage";
 
 export type { NostrConnectParams, NostrConnectStatus };
 export { generateNostrConnectParams, generateNostrConnectURI } from "@nostrify/react/login";
@@ -71,6 +72,16 @@ export function useLoginActions() {
       // Drop any decrypted plaintext memoized this session so it can't be read
       // after logout or by the next account.
       clearPlaintextCache();
+
+      // If that was the last identity, wipe all client-side persistence (event
+      // cache, drafts, read-state, relay-info, theme, added servers, decrypted
+      // images…) and hard-redirect to the landing page so nothing is held onto
+      // and the next session boots from clean storage. When other accounts
+      // remain, leave their caches intact.
+      if (logins.length <= 1) {
+        await purgeClientStorage();
+        window.location.assign("/welcome");
+      }
     },
   };
 }

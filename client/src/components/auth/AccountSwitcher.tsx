@@ -17,6 +17,8 @@ import { useLoggedInAccounts, type Account } from '@/hooks/useLoggedInAccounts';
 import { useServerScope } from '@/contexts/ServerScopeContext';
 import { ServerProfileDialog } from '@/components/dialogs/ServerProfileDialog';
 import { StatusDialog } from '@/components/dialogs/StatusDialog';
+import { clearPlaintextCache } from '@/lib/plaintextCache';
+import { purgeClientStorage } from '@/lib/purgeClientStorage';
 
 interface AccountSwitcherProps {
   onAddAccountClick: () => void;
@@ -36,9 +38,17 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const handleLogout = () => {
     // Close the dropdown first to avoid React error #300
     setIsOpen(false);
+    // Is this the last logged-in identity? If so we do a full storage purge
+    // and hard-redirect to the landing page so a fresh logout holds onto
+    // nothing; otherwise we just drop this account and keep the others' caches.
+    const isLastAccount = otherUsers.length === 0;
     // Use setTimeout to ensure the dropdown closes before removing login
     setTimeout(() => {
       removeLogin(currentUser.id);
+      clearPlaintextCache();
+      if (isLastAccount) {
+        void purgeClientStorage().finally(() => window.location.assign('/welcome'));
+      }
     }, 0);
   };
 
