@@ -40,7 +40,7 @@ func setupConcordVoice() {
 // handleConcordVoiceCapability advertises that this broker speaks Concord voice
 // (registered only when LiveKit is configured, so a 204 means "voice works").
 func handleConcordVoiceCapability(w http.ResponseWriter, r *http.Request) {
-	corsHeaders(w)
+	corsHeaders(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -103,7 +103,7 @@ func verifyVoiceGrant(r *http.Request, room, expectedURL string) bool {
 }
 
 func handleConcordVoiceToken(w http.ResponseWriter, r *http.Request) {
-	corsHeaders(w)
+	corsHeaders(w, r)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return

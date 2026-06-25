@@ -82,27 +82,41 @@ func setupLivekit() {
 	})
 }
 
-// corsHeaders sets CORS response headers restricted to the relay's own public
-// origin (the web client is served from the same origin). NIP-98/grant auth
-// lives in the Authorization header rather than cookies, so a wildcard origin
-// isn't directly exploitable, but scoping it to the known origin is tighter and
-// costs nothing. The OPTIONS preflight is answered by the individual handlers.
-func corsHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", allowedOrigin())
+// corsHeaders sets CORS response headers for the token/capability endpoints.
+//
+// These endpoints are consumed not only by the same-origin web client but also
+// by the native clients — the Android (Capacitor) WebView, served from
+// `https://localhost`, and the Electron desktop shell — whose browser `Origin`
+// is NOT the relay's public origin. A hard-coded single allowed origin silently
+// breaks those clients: the WebView blocks the cross-origin response, the
+// capability/token `fetch` rejects, and voice (group, DM, and Concord) appears
+// unavailable on the APK/desktop even though the relay is healthy.
+//
+// So reflect the request's Origin instead (echo it back with `Vary: Origin`).
+// This is safe here because auth lives in the `Authorization` header (NIP-98 /
+// Concord grant), never in cookies — the responses carry no ambient-credential
+// risk a permissive origin could exploit. Requests without an Origin (curl,
+// server-to-server) fall back to the relay's public origin.
+func corsHeaders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", allowedOrigin(r))
 	w.Header().Set("Vary", "Origin")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Concord-Identity")
 }
 
-// allowedOrigin is the single origin permitted to call the token/capability
-// endpoints from a browser: the relay's configured public origin, which is the
-// same origin the SPA is served from in the single-domain deployment.
-func allowedOrigin() string {
+// allowedOrigin returns the origin to echo in Access-Control-Allow-Origin: the
+// caller's own Origin when present (so native-client WebViews on a different
+// origin than the relay are permitted), else the relay's configured public
+// origin as a fallback for origin-less callers.
+func allowedOrigin(r *http.Request) string {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return origin
+	}
 	return strings.TrimRight(s.PublicBaseURL, "/")
 }
 
 func handleLivekitCapability(w http.ResponseWriter, r *http.Request) {
-	corsHeaders(w)
+	corsHeaders(w, r)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -179,7 +193,7 @@ func verifyNip98(r *http.Request, expectedURL string) (string, bool) {
 }
 
 func handleLivekitToken(w http.ResponseWriter, r *http.Request) {
-	corsHeaders(w)
+	corsHeaders(w, r)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -305,7 +319,7 @@ func isHex64(s string) bool {
 // id". Presence (kind 39004) reuses the same webhook-driven `rooms` registry,
 // keyed by the DM room id.
 func handleLivekitDMToken(w http.ResponseWriter, r *http.Request) {
-	corsHeaders(w)
+	corsHeaders(w, r)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return

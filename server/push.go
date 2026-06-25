@@ -168,13 +168,13 @@ func vapidSubject() string {
 		}
 		return s.RelayContact
 	}
-	return allowedOrigin()
+	return strings.TrimRight(s.PublicBaseURL, "/")
 }
 
 // ── HTTP handlers ────────────────────────────────────────────────────────────
 
 func handlePushVapid(w http.ResponseWriter, r *http.Request) {
-	corsHeaders(w)
+	corsHeaders(w, r)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -194,7 +194,7 @@ type pushRegisterBody struct {
 }
 
 func handlePushSubscription(w http.ResponseWriter, r *http.Request) {
-	corsHeaders(w)
+	corsHeaders(w, r)
 	// Reflect the methods this endpoint actually supports for preflight.
 	w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS")
 	if r.Method == http.MethodOptions {

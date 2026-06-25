@@ -173,6 +173,13 @@
     top: calc(var(--top-bar-height) + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
   }
 
+  /* Absolute-position a control below the top safe-area inset (status bar /
+   * notch), keeping a base 1rem gap. Used by the fullscreen lightbox close
+   * button so it clears the APK status bar instead of hiding behind it. */
+  .top-safe-4 {
+    top: calc(1rem + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  }
+
   /* Bottom padding so content clears the fixed bottom nav + home-indicator. */
   .pb-mobile-nav {
     padding-bottom: calc(var(--bottom-nav-height) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));

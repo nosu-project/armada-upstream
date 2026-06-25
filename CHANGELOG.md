@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.8.1] - 2026-06-25
+
+Voice calls now work on the Android and desktop apps, the encrypted-community
+message actions work on touch, and a couple of mobile layout glitches are gone.
+
+### Fixed
+- Voice call buttons now appear in the app on Android and desktop, not just the
+  web client — group, direct-message, and encrypted-community calls can all be
+  started from the native apps.
+- Message actions (react, reply, delete) now work in encrypted communities when
+  tapping on a touch screen.
+- The close button on the fullscreen image viewer no longer hides behind the
+  status bar on Android.
+- The Settings header now matches the rest of the app's headers.
+
 ## [0.8.0] - 2026-06-25
 
 Notifications now tell you who did what. On Android, a message, mention, reply,

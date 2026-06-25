@@ -91,7 +91,7 @@ func (rl *rateLimiter) limit(h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if !rl.allow(clientIP(r)) {
-			corsHeaders(w)
+			corsHeaders(w, r)
 			http.Error(w, "rate limited", http.StatusTooManyRequests)
 			return
 		}

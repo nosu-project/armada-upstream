@@ -42,7 +42,7 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
       <button
         type="button"
         aria-label="Close"
-        className="absolute top-4 right-4 p-2 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+        className="absolute top-safe-4 right-4 p-2 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition-colors"
         onClick={onClose}
       >
         <X className="size-6" />

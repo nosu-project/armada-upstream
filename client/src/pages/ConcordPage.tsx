@@ -1,6 +1,6 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, Settings, Shield, ShieldCheck, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
@@ -102,6 +102,10 @@ interface ConcordChatMessageProps {
   canWrite: boolean;
   canModerate: boolean;
   sendStatus: SendStatus | undefined;
+  /** Whether this row's tap-to-reveal toolbar is open (touch only). */
+  active: boolean;
+  /** Toggle this row's tap-to-reveal toolbar (touch only). */
+  onToggleActive: (id: string) => void;
   onReply: ((event: ChatMsg) => void) | undefined;
   onDelete: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
@@ -126,6 +130,8 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   canWrite,
   canModerate,
   sendStatus,
+  active,
+  onToggleActive,
   onReply,
   onDelete,
   onRetry,
@@ -139,6 +145,8 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       reactions={reactions}
       sendStatus={sendStatus}
       continuation={continuation}
+      active={active}
+      onToggleActive={onToggleActive}
       replyContext={<ConcordReplyContext pubkey={replyPubkey} />}
       onReply={onReply}
       onDelete={onDelete}
@@ -299,6 +307,14 @@ export function ConcordPage() {
   /** Mobile: whether the channel-list drawer is open. */
   const [channelsOpen, setChannelsOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
+  // The single message whose tap-to-reveal toolbar is open (touch only). Mirrors
+  // GroupChat: without this, the action toolbar stays `touch:pointer-events-none`
+  // and the react/reply/delete buttons never become tappable on the APK.
+  const [activeId, setActiveId] = useState<string | undefined>(undefined);
+  const toggleActive = useCallback(
+    (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
+    [],
+  );
 
   // Adapt the folded Concord roster to the shared MemberList's props. The
   // control-plane roster only enumerates the owner + members granted a role —
@@ -660,6 +676,8 @@ export function ConcordPage() {
                     canWrite={transport.canWrite}
                     canModerate={transport.canModerate}
                     sendStatus={transport.sendStatusFor?.(msg.id)}
+                    active={activeId === msg.id}
+                    onToggleActive={toggleActive}
                     onReply={onReplyCb}
                     onDelete={transport.deleteMessage}
                     onRetry={transport.retry}

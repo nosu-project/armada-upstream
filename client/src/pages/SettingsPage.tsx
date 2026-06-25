@@ -141,16 +141,20 @@ export function SettingsPage() {
   };
 
   return (
-    <main className="flex-1 min-w-0 overflow-y-auto safe-area-top safe-area-bottom">
-      <div className="max-w-2xl mx-auto px-4 sm:px-6 pb-12">
-        <div className="flex items-center gap-2 h-14 sticky top-0 z-10 bg-background/80 backdrop-blur-sm">
-          <Button variant="ghost" size="icon" className="size-9 -ml-1.5 shrink-0" aria-label="Back" onClick={() => navigate(-1)}>
-            <ArrowLeft className="size-5" />
-          </Button>
-          <h1 className="text-xl font-bold">Settings</h1>
-        </div>
+    <main className="flex-1 min-w-0 flex flex-col safe-area-top">
+      {/* Header — a detached floating command bar matching the group/Concord/DM
+          chrome (cut-corner card, recessed shade), but capped to the settings
+          content width and centered on desktop. */}
+      <header className="relative h-12 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={() => navigate(-1)}>
+          <ArrowLeft className="size-5" />
+        </Button>
+        <h1 className="font-semibold truncate leading-tight">Settings</h1>
+      </header>
 
-        <div className="space-y-6 pt-2">
+      <div className="flex-1 min-h-0 overflow-y-auto safe-area-bottom">
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 pb-12">
+          <div className="space-y-6 pt-4">
           <SettingsSection title="Account" icon={UserCircle}>
             <SettingsRow>
               <LoginArea className="w-full flex" />
@@ -294,6 +298,7 @@ export function SettingsPage() {
               </Collapsible>
             </SettingsSection>
           )}
+          </div>
         </div>
       </div>
     </main>
