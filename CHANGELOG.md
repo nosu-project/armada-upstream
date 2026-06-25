@@ -4,6 +4,31 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.7.0] - 2026-06-24
+
+Plan together and share what you're up to. Admins and moderators can now create
+date- and time-based events in a channel, and any member can RSVP Going, Maybe,
+or Can't go with live attendee tallies. Set a personal status that shows next to
+your name across the member list and profile cards. On Android, Armada now asks
+to turn on notifications right when you open it instead of leaving them buried
+in Settings, and you can point your direct messages at your own relays.
+
+### Added
+- Channel events: admins and moderators can schedule date- and time-based
+  events in a channel, and any member can RSVP Going, Maybe, or Can't go.
+  Upcoming events appear in a slide-down bar from the channel header with live
+  attendee counts.
+- Personal statuses: set a short status (with an optional emoji) that shows next
+  to your name in the member list and on profile cards. Set or clear it from the
+  account menu or your own member-list menu.
+- Direct messages can now use your own relays: when you turn this on, Armada
+  picks up the direct-message relays you've already published and keeps them in
+  sync so other apps know where to reach you.
+
+### Changed
+- On Android, Armada now prompts to enable notifications when you first open the
+  app, rather than only offering the toggle in Settings.
+
 ## [0.6.0] - 2026-06-24
 
 Better interop with other community chat apps, plus faster and more reliable
