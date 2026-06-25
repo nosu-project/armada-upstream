@@ -51,21 +51,22 @@ export function routeParamToRelay(param: string): string | undefined {
 export const APP_NAME: string = import.meta.env.VITE_APP_NAME || "Armada";
 
 /**
- * Pinned platform relays. Always present; not user-removable.
+ * Pinned platform relays. Always present (when set); not user-removable.
  *
- * `VITE_PLATFORM_RELAYS` is treated three ways, and the distinction matters:
- *   - unset (`undefined`): local dev → default to `ws://localhost:5577`.
- *   - empty string (`""`): an explicit "no pinned relays" — this is how the
- *     standalone/sovereign (Electron, rogue) builds ship. The user starts with
- *     zero servers and adds their own.
- *   - non-empty: the hosted deployment's comma-separated pinned relays.
+ * `VITE_PLATFORM_RELAYS` is set only by a *hosted* deployment (the operator
+ * pins their own relay). Every other build — the Android APK, the Electron
+ * desktop app, and local `npm run dev` — leaves it unset/empty and therefore
+ * ships with NO pinned relays: the user starts with zero servers and adds their
+ * own. This is deliberate: a baked-in `ws://localhost:5577` is meaningless (and
+ * actively confusing) on a phone or a sovereign desktop client, so we never
+ * default to one. For local dev against a relay, set `VITE_PLATFORM_RELAYS`
+ * yourself (e.g. `VITE_PLATFORM_RELAYS=ws://localhost:5577 npm run dev`).
  *
- * The empty-string case is why we can't use `... || "ws://localhost:5577"`:
- * `""` is falsy, so that fallback would resurrect a phantom `ws://localhost`
- * server in sovereign builds (a relay that does not exist for those clients).
+ * Unset (`undefined`) and empty (`""`) are treated identically — both mean "no
+ * pinned relays". A non-empty value is the hosted deployment's comma-separated
+ * pinned relays.
  */
-const RAW_PLATFORM_RELAYS: string =
-  import.meta.env.VITE_PLATFORM_RELAYS ?? "ws://localhost:5577";
+const RAW_PLATFORM_RELAYS: string = import.meta.env.VITE_PLATFORM_RELAYS ?? "";
 export const PLATFORM_RELAYS: string[] = RAW_PLATFORM_RELAYS
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
@@ -99,14 +100,24 @@ export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "w
  * a new Concord community is seeded with. A member joins voice through the
  * first that answers the capability probe. The broker authorizes by
  * channel-key-possession proof (not membership), so it learns nothing about the
- * community; armada's own relay hosts the broker endpoint, so the platform
- * relays' HTTP origins are the natural default. Operators can override with
- * `VITE_CONCORD_VOICE_SERVERS` (comma-separated https origins) or set it empty
- * to disable Concord voice.
+ * community.
+ *
+ * Resolution order when `VITE_CONCORD_VOICE_SERVERS` is unset:
+ *   - Hosted build (PLATFORM_RELAYS non-empty): armada's own relay hosts the
+ *     broker endpoint, so the platform relays' HTTP origins are the natural
+ *     default.
+ *   - Non-hosted build (APK / Electron / dev, PLATFORM_RELAYS empty): there is
+ *     no platform relay to host a broker, so default to the public Armada
+ *     instance at `https://armada.dreamith.to`.
+ * Operators can override with `VITE_CONCORD_VOICE_SERVERS` (comma-separated
+ * https origins) or set it empty to disable Concord voice.
  */
+const DEFAULT_PUBLIC_CONCORD_VOICE_SERVER = "https://armada.dreamith.to";
 export const CONCORD_VOICE_SERVERS: string[] = (
   import.meta.env.VITE_CONCORD_VOICE_SERVERS ??
-  PLATFORM_RELAYS.map((url) => relayToHttpUrl(url)).join(",")
+  (PLATFORM_RELAYS.length > 0
+    ? PLATFORM_RELAYS.map((url) => relayToHttpUrl(url)).join(",")
+    : DEFAULT_PUBLIC_CONCORD_VOICE_SERVER)
 )
   .split(",")
   .map((s: string) => s.trim())
