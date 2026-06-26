@@ -21,6 +21,16 @@ const LIVE_KINDS = [KIND_GROUP_CHAT, KIND_POLL, KIND_DELETE];
 const PAGE_SIZE = 30;
 
 /**
+ * How far back the live subscription's `since` reaches on mount. A few seconds
+ * isn't enough: a message that already exists when the group opens (e.g. one
+ * that arrived via an Android push and is several seconds/minutes old by the
+ * time the user taps it) would fall outside a tiny window and never be replayed
+ * by the live `req`. A wider lookback replays it; `sortDedupe` removes overlap
+ * with the initial page so there are no duplicates.
+ */
+const LIVE_SINCE_LOOKBACK_SECONDS = 5 * 60;
+
+/**
  * Largest gap (seconds) between the cursor message and the next-oldest before
  * we treat it as a stale-relay outlier and don't trust it as a cursor. Mirrors
  * Ditto's `getPaginationCursor` gap guard. 6 hours.
@@ -105,20 +115,32 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     queryFn: async ({ signal }) => {
       const store = await eventStore;
 
+      // Whatever is already in the cache (the live subscription merges new
+      // messages in via `upsertMessage`, and prior fetches/backfills accumulate
+      // here). We MUST fold this into our return value: a `queryFn` return is an
+      // authoritative overwrite of the cache, so returning a bare local snapshot
+      // would DROP any event the subscription delivered before it had been
+      // mirrored into IndexedDB. Re-runs of this queryFn (cheap `staleTime` +
+      // prop/`enabled` churn during initial load) made that the common case —
+      // the "new message fetched but not shown until you re-focus the group" bug.
+      const existing = queryClient.getQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId)) ?? [];
+
       // 1. LOCAL-FIRST: resolve from the append-only IndexedDB store immediately
       //    so `isLoading` reflects only the (fast) local read, never the relay
       //    round-trip. A refresh / channel switch paints the cached timeline at
       //    once instead of behind the skeleton. NostrBatcher mirrors every
       //    `#h`-scoped event the relay returns into this store, so it holds the
-      //    group's history after the first visit.
+      //    group's history after the first visit. Merge with `existing` so a
+      //    re-run never clobbers subscription-delivered messages.
       const cached = await store.query([
         { kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE },
       ]);
-      const local = sortDedupe(cached);
+      const local = sortDedupe([...existing, ...cached]);
 
       // 2. BACKGROUND refresh: fetch the newest page from the relay, mirror it
       //    into the store, and merge into the cache. NOT awaited — the network
-      //    never gates the visible timeline.
+      //    never gates the visible timeline. The merge is append-only (functional
+      //    updater) so it can't drop live-subscription events either.
       void (async () => {
         if (signal.aborted) return;
         try {
@@ -264,8 +286,16 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
 
     (async () => {
       try {
+        // `since` reaches back a generous window (not just a few seconds) so a
+        // message that already exists when we open the group — e.g. the one that
+        // triggered an Android notification, received natively and therefore NOT
+        // in the WebView's IndexedDB nor the live stream's future — is still
+        // replayed by this `req` and merged into the timeline. `sortDedupe`
+        // collapses any overlap with the initial background page, so the wider
+        // window is free of duplicates.
+        const since = Math.floor(Date.now() / 1000) - LIVE_SINCE_LOOKBACK_SECONDS;
         for await (const msg of nostr.relay(relayUrl).req(
-          [{ kinds: LIVE_KINDS, "#h": [groupId], since: Math.floor(Date.now() / 1000) - 5 }],
+          [{ kinds: LIVE_KINDS, "#h": [groupId], since }],
           { signal: controller.signal },
         )) {
           if (msg[0] === "EVENT") {
