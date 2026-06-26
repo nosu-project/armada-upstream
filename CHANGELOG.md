@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.8.3] - 2026-06-26
+
+Encrypted communities load and scroll much faster, with reactions and images
+that just work, and message notifications now arrive by default.
+
+### Changed
+- Message notifications for communities are on by default, so you're notified of
+  new messages unless you turn them off in settings.
+
+### Fixed
+- Images and other attachments sent in encrypted communities now display
+  correctly for everyone, both in the message and in the composer preview before
+  you send.
+- Opening and scrolling encrypted communities is much faster: the channel no
+  longer stalls while loading long histories, and reactions now appear together
+  with the messages instead of lagging behind.
+
 ## [0.8.2] - 2026-06-25
 
 Notifications for encrypted communities now show who sent the message and a
