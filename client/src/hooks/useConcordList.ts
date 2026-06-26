@@ -125,13 +125,20 @@ export function useConcordList() {
   // raw 30078 blob in IndexedDB stays the cross-device source of truth; the
   // network query reconciles it and refreshes this plaintext cache.
   useEffect(() => {
-    if (!user?.signer.nip44 || !foldKey) return;
+    if (!user || !foldKey) return;
     let cancelled = false;
     void (async () => {
       if (queryClient.getQueryData(queryKey)) return;
 
-      // 1. Plaintext-first: a previously-decrypted list paints instantly with no
-      //    decrypt. We keep the event id it came from so a newer blob re-decrypts.
+      // 1. Plaintext-first: a previously-decrypted list paints instantly with NO
+      //    decrypt and NO signer. This step is deliberately NOT gated on a ready
+      //    signer: on reopen with a slow remote/bunker (NIP-46) signer, `nip44`
+      //    can be unavailable for seconds, and gating this read on it would leave
+      //    the membership list empty for that whole window — the Concord rail
+      //    would show zero communities AND `useConcordInvites` would see an empty
+      //    "already joined" set and re-park invites for rooms you're already in
+      //    (a spam of invite modals on launch). The plaintext cache holds the
+      //    same secrets as the device's keys, so reading it needs no signer.
       const persisted = await readFolded<PersistedList>(foldKey);
       if (cancelled) return;
       if (persisted) {
@@ -139,22 +146,23 @@ export function useConcordList() {
           event: persisted.event ?? null,
           list: persisted.list,
         });
+        return;
       }
 
-      // 2. If we have no plaintext yet (first run / first join), fall back to
-      //    decrypting the cached blob once, then persist it for next time.
-      if (!persisted) {
-        const store = await eventStore;
-        const [cached] = await store.query([
-          { kinds: [CONCORD_LIST_KIND], authors: [user.pubkey], "#d": [CONCORD_LIST_D_TAG] },
-        ]);
-        if (cancelled || !cached) return;
-        const { list } = await readConcordListEvent(cached, user.signer, user.pubkey);
-        if (cancelled) return;
-        const data = { event: cached as NostrEvent | null, list };
-        if (!queryClient.getQueryData(queryKey)) queryClient.setQueryData(queryKey, data);
-        void writeFolded(foldKey, { event: cached as NostrEvent, list } satisfies PersistedList);
-      }
+      // 2. No plaintext yet (first run / first join): decrypt the cached blob
+      //    once, then persist it for next time. This DOES need the signer, so it
+      //    only runs once `nip44` is ready.
+      if (!user.signer.nip44) return;
+      const store = await eventStore;
+      const [cached] = await store.query([
+        { kinds: [CONCORD_LIST_KIND], authors: [user.pubkey], "#d": [CONCORD_LIST_D_TAG] },
+      ]);
+      if (cancelled || !cached) return;
+      const { list } = await readConcordListEvent(cached, user.signer, user.pubkey);
+      if (cancelled) return;
+      const data = { event: cached as NostrEvent | null, list };
+      if (!queryClient.getQueryData(queryKey)) queryClient.setQueryData(queryKey, data);
+      void writeFolded(foldKey, { event: cached as NostrEvent, list } satisfies PersistedList);
     })();
     return () => {
       cancelled = true;
@@ -162,7 +170,7 @@ export function useConcordList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.pubkey, user?.signer.nip44, eventStore, queryClient]);
 
-  type ConcordListData = { event: NostrEvent | null; list: ConcordList };
+  type ConcordListData = { event: NostrEvent | null; list: ConcordList; decryptFailed?: boolean };
 
   return useQuery<ConcordListData>({
     queryKey,
@@ -179,7 +187,7 @@ export function useConcordList() {
 
       // Skip the signer decrypt entirely when the network event is the same one
       // we already decrypted (matched by id) — the common case on every refresh.
-      if (latest && prev?.event?.id === latest.id) {
+      if (latest && prev?.event?.id === latest.id && !prev.decryptFailed) {
         return prev;
       }
 
@@ -188,9 +196,12 @@ export function useConcordList() {
       // Never let a flaky/untrusted network read clobber a populated list. If we
       // couldn't decrypt the event (signer not ready, transient error), keep
       // whatever we already have — the community keys live here and a wrongful
-      // empty would make the rooms (and their keys) vanish from the UI.
+      // empty would make the rooms (and their keys) vanish from the UI. The
+      // `decryptFailed` flag rides along on the result so consumers (e.g.
+      // useConcordInvites) can tell an UNTRUSTED empty from a genuine empty and
+      // avoid acting (like re-parking already-joined invites) on a bad read.
       if (decryptFailed) {
-        return prev ?? { event: latest, list: EMPTY_CONCORD_LIST };
+        return prev ?? { event: latest, list: EMPTY_CONCORD_LIST, decryptFailed: true };
       }
 
       // Merge the network read with what we already had (seed/cache) rather than
@@ -198,7 +209,7 @@ export function useConcordList() {
       // `mergeConcordLists` is deterministic (tombstone-aware), so a genuine
       // remote removal still wins; this only prevents data loss from flaky reads.
       const merged = prev ? mergeConcordLists(prev.list, list) : list;
-      const next: ConcordListData = { event: latest, list: merged };
+      const next: ConcordListData = { event: latest, list: merged, decryptFailed: false };
       // Persist the decrypted result so the NEXT boot reads plaintext (no signer).
       if (foldKey && latest) void writeFolded(foldKey, { event: latest, list: merged } satisfies PersistedList);
       return next;

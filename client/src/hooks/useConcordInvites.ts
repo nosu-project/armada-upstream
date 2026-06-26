@@ -41,7 +41,14 @@ export function useConcordInvites() {
   // The membership list is "ready" once it has data (the cache seed populated
   // it, or the network resolved) OR the network query has at least completed.
   // Either way `known`/`tombstoned` then reflect real membership.
-  const listReady = list !== undefined || listFetched;
+  //
+  // BUT: a read we couldn't decrypt (remote/bunker signer not ready yet) yields
+  // an UNTRUSTED empty list that is still `isFetched`. Treating that as ready
+  // would make `known` empty and re-park invites for communities we're already
+  // in — a spam of invite modals on launch with a slow NIP-46 signer. So a
+  // decrypt-failed list is explicitly NOT ready; we wait for a trusted read.
+  const decryptFailed = Boolean(list?.decryptFailed);
+  const listReady = !decryptFailed && (list !== undefined || listFetched);
 
   return useQuery<ParkedInvite[]>({
     queryKey: ["concord", "invites", user?.pubkey, [...known].sort().join(","), [...tombstoned].sort().join(",")],
