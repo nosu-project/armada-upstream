@@ -29,6 +29,8 @@ import android.os.Looper;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
+import androidx.core.app.Person;
+import androidx.core.graphics.drawable.IconCompat;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -63,7 +65,8 @@ import okhttp3.WebSocketListener;
  *   - {@code {kinds:[7,1111,4], #p:[userPubkey], since}} reactions/replies/DMs
  *
  * On each EVENT we apply the user's prefs (mention vs all-group, per-type
- * toggles), dedupe by id, skip self, and {@code showNotification}.
+ * toggles), dedupe by id, skip self, and post it into its room's grouped
+ * notification (see {@code enqueueRoomMessage}).
  *
  * Resilience:
  *   - Exponential reconnect backoff per relay (1s → 5min cap), reset on open.
@@ -75,10 +78,30 @@ public class NotificationRelayService extends Service {
 
     private static final String TAG = "ArmadaNotifSvc";
     private static final String SVC_CHANNEL_ID = "armada_background_service";
-    private static final String MSG_CHANNEL_ID = "armada_notifications";
+    // Bumped to _v2 so the stronger vibration + HIGH importance take effect on
+    // installs that already created the old channel (channel settings are
+    // immutable once created; only a new id picks up new settings). The old
+    // channel is deleted in createChannels().
+    private static final String MSG_CHANNEL_ID = "armada_notifications_v2";
+    private static final String MSG_CHANNEL_ID_LEGACY = "armada_notifications";
+    // A firm, attention-grabbing buzz for messages: wait, buzz, gap, buzz again.
+    private static final long[] MSG_VIBRATION_PATTERN = { 0L, 400L, 200L, 400L };
     private static final int FOREGROUND_ID = 1;
-    private static final int MAX_NOTIFICATION_ID = 2147483646;
+    // Room notification ids are hashed into [2, ROOM_ID_MODULUS+1]; the group
+    // summary lives ABOVE that band so it can never collide with a room id.
+    private static final int ROOM_ID_MODULUS = 2_000_000_000;
     private static final int CONTENT_CAP = 140;
+    // ── Grouped (per-room) notifications ──────────────────────────────────────
+    // All message notifications share one group so the system collapses them
+    // under a single summary (Discord/Signal style). Each ROOM (NIP-29 group,
+    // Concord channel, or DM peer) gets ONE notification that accumulates its
+    // recent messages via MessagingStyle, rather than one flat notification per
+    // event. The summary is an InboxStyle digest of the active rooms.
+    private static final String GROUP_KEY = "armada_messages";
+    // The group summary's own notification id, reserved above the room id band.
+    private static final int SUMMARY_NOTIFICATION_ID = 2_000_000_001;
+    // Most recent messages kept per room for the MessagingStyle expansion.
+    private static final int MAX_MESSAGES_PER_ROOM = 8;
 
     private static final long INITIAL_BACKOFF_MS = 1_000;
     private static final long MAX_BACKOFF_MS = 5 * 60 * 1_000;
@@ -112,6 +135,13 @@ public class NotificationRelayService extends Service {
     private final Set<String> notifiedIds = new HashSet<>();
     // Connect time; we only notify for events at/after this to avoid backfill spam.
     private long sinceSec;
+
+    // roomKey → the accumulating per-room notification (Signal/Discord style).
+    // The roomKey is a stable identifier for the conversation (NIP-29 groupId,
+    // Concord `z` pseudonym, or "dm:<peer>"), so successive messages UPDATE the
+    // same notification instead of stacking a new one per event.
+    private final Map<String, RoomNotif> roomNotifs = new HashMap<>();
+
 
     // pubkey → resolved profile (kind 0). Cached for the service lifetime so we
     // don't re-fetch the same author's name/avatar on every notification.
@@ -164,6 +194,28 @@ public class NotificationRelayService extends Service {
     private interface GroupNameCallback {
         /** Receives the group's display name, or null if unresolved. */
         void onName(String name);
+    }
+
+    /**
+     * One conversation's accumulating notification. Holds the room's display
+     * title + deep-link, a bounded history of recent messages (for the
+     * MessagingStyle expansion), and the stable notification id derived from the
+     * roomKey. New messages append here and re-post the SAME id so a busy room
+     * shows as a single, growing thread — not a flat stack of per-event notifs.
+     */
+    private static final class RoomNotif {
+        final String roomKey;
+        final int notifId;
+        String title;                // conversation/room name shown as the notif title
+        String url;                  // in-app deep-link for the tap intent
+        boolean isGroupConversation; // true for rooms (group title), false for 1:1 DMs
+        final List<NotificationCompat.MessagingStyle.Message> messages = new ArrayList<>();
+        long lastTimestampMs;
+
+        RoomNotif(String roomKey, int notifId) {
+            this.roomKey = roomKey;
+            this.notifId = notifId;
+        }
     }
 
     // Live instance so the plugin can route a signed AUTH event back to us.
@@ -846,7 +898,10 @@ public class NotificationRelayService extends Service {
                 // where. (Generic body, but a real room title.)
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord (opaque): " + room);
                 if (!prefBool("allGroupMessages", true)) return;
-                showNotification(hashId(id), room, "New message", url != null ? url : "/");
+                enqueueRoomMessage(
+                        "z:" + z, room, url != null ? url : "/", /*isGroup=*/true,
+                        /*senderPubkey=*/null, "Someone", /*picture=*/null,
+                        "New message", System.currentTimeMillis());
                 return;
             }
 
@@ -860,20 +915,23 @@ public class NotificationRelayService extends Service {
             if (!(mentionsMe ? prefBool("mentions", true) : prefBool("allGroupMessages", true))) {
                 return;
             }
+            final String fZ = z;
             final String fRoom = room;
             final String fUrl = url != null ? url : "/";
             final boolean fMention = mentionsMe;
             final String preview = truncate(inner.optString("content"));
+            final long fTs = (cts > 0 ? cts * 1000L : System.currentTimeMillis());
             resolveAuthor(author, relayUrl, profile -> {
                 String name = displayName(profile, author);
                 String picture = profile != null ? profile.picture : null;
-                String title = fMention ? name + " mentioned you" : name;
-                // Body: "<message> · <community / #channel>" so the room is always
-                // visible. Fall back to a verb when there's no text (e.g. media).
-                String text = !preview.isEmpty() ? preview : (fMention ? "Mentioned you" : "Sent a message");
-                String body = text + " · " + fRoom;
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + title);
-                showNotification(hashId(id), title, body, fUrl, picture);
+                // The room is the conversation title (MessagingStyle); a mention
+                // is reflected in the line text so it stands out in the thread.
+                String text = !preview.isEmpty() ? preview : "Sent a message";
+                if (fMention) text = "@you " + text;
+                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fRoom + " / " + name);
+                enqueueRoomMessage(
+                        "z:" + fZ, fRoom, fUrl, /*isGroup=*/true,
+                        author, name, picture, text, fTs);
             });
             return;
         }
@@ -895,31 +953,31 @@ public class NotificationRelayService extends Service {
         long ts = event.optLong("created_at", 0);
         if (ts + 1 > sinceSec) sinceSec = ts + 1;
 
-        final int notifId = hashId(id);
         final boolean mention = mentionsMe;
-        // Resolve the author's name + avatar, then build a "<name> did X" body.
+        final long fTs = (ts > 0 ? ts * 1000L : System.currentTimeMillis());
+        // Resolve the author's name + avatar, then feed a per-room message line.
+        // MessagingStyle shows WHO via the sender Person, so the line is just the
+        // message/verb; the room name is the conversation title.
         resolveAuthor(author, relayUrl, profile -> {
             String name = displayName(profile, author);
             final String picture = profile != null ? profile.picture : null;
-            String title;
-            String body;
+            String line;
             String url;
             // The NIP-29 group this happened in (kinds 9/7/1111). Null for DMs.
             String groupId = null;
             switch (kind) {
                 case 9: {
                     groupId = tagValue(event, "h");
-                    title = mention ? name + " mentioned you" : name;
-                    body = truncate(event.optString("content"));
-                    if (body.isEmpty()) body = mention ? "Mentioned you" : "Sent a message";
+                    line = truncate(event.optString("content"));
+                    if (line.isEmpty()) line = "Sent a message";
+                    if (mention) line = "@you " + line;
                     url = groupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(groupId)
                             : "/";
                     break;
                 }
                 case 7: {
-                    title = name;
-                    body = "Reacted " + reactionEmoji(event) + " to your message";
+                    line = "Reacted " + reactionEmoji(event) + " to your message";
                     groupId = tagValue(event, "h");
                     url = groupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(groupId)
@@ -927,9 +985,9 @@ public class NotificationRelayService extends Service {
                     break;
                 }
                 case 1111: {
-                    title = name + " replied to you";
-                    body = truncate(event.optString("content"));
-                    if (body.isEmpty()) body = "Replied to you";
+                    line = truncate(event.optString("content"));
+                    if (line.isEmpty()) line = "Replied to you";
+                    else line = "↪ " + line;
                     groupId = tagValue(event, "h");
                     url = groupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(groupId)
@@ -937,31 +995,33 @@ public class NotificationRelayService extends Service {
                     break;
                 }
                 case 4:
-                    title = name;
                     // kind-4 DMs are NIP-04 encrypted; the service has no key.
-                    body = "Sent you a direct message";
+                    line = "Sent you a direct message";
                     url = "/dms/" + author;
                     break;
                 default:
                     return;
             }
-            final String fTitle = title;
-            final String fBody = body;
+            final String fName = name;
+            final String fLine = line;
             final String fUrl = url;
             if (groupId == null) {
-                // No room to name (DM) — post as-is.
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " title=" + fTitle);
-                showNotification(notifId, fTitle, fBody, fUrl, picture);
+                // DM: the conversation is 1:1 with the sender, so the sender's
+                // name is the room title and it's not a "group" conversation.
+                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm from=" + fName);
+                enqueueRoomMessage(
+                        "dm:" + author, fName, fUrl, /*isGroup=*/false,
+                        author, fName, picture, fLine, fTs);
                 return;
             }
-            // Resolve the group's display name and append " · <group>" so the
-            // notification always says which room the event happened in.
+            // Resolve the group's display name; it becomes the conversation title.
+            final String fGroupId = groupId;
             resolveGroupName(groupId, relayUrl, groupName -> {
-                String finalBody = (groupName != null && !groupName.isEmpty())
-                        ? fBody + " · " + groupName
-                        : fBody;
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " title=" + fTitle);
-                showNotification(notifId, fTitle, finalBody, fUrl, picture);
+                String roomTitle = (groupName != null && !groupName.isEmpty()) ? groupName : "Group";
+                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " room=" + roomTitle);
+                enqueueRoomMessage(
+                        "h:" + relayUrl + "|" + fGroupId, roomTitle, fUrl, /*isGroup=*/true,
+                        author, fName, picture, fLine, fTs);
             });
         });
     }
@@ -1013,56 +1073,213 @@ public class NotificationRelayService extends Service {
 
     // ── Notifications ───────────────────────────────────────────────────────
 
-    /** Avatar-less notification (Concord E2E, where there's no resolvable author). */
-    private void showNotification(int id, String title, String body, String url) {
-        postNotification(id, title, body, url, null);
+    /**
+     * Append a message to its room's accumulating MessagingStyle notification and
+     * (re)post it under the shared group, plus refresh the group summary. This is
+     * the single entry point for all message-like notifications (groups, Concord
+     * channels, DMs), giving the Discord/Signal-style "one growing thread per
+     * conversation, collapsed under a summary" presentation.
+     *
+     * @param roomKey   stable conversation id (groupId / Concord `z` / "dm:<peer>")
+     * @param roomTitle conversation display name (room name, or peer name for DMs)
+     * @param url       in-app deep-link opened on tap
+     * @param isGroup   true for multi-party rooms (shows the room title), false for 1:1 DMs
+     * @param senderPubkey  message author (for the MessagingStyle Person key)
+     * @param senderName    author display name
+     * @param senderPicture author avatar URL (resolved async; optional)
+     * @param text          the message line (already truncated/verb-substituted)
+     * @param timestampMs   message time in ms (for ordering in the expansion)
+     */
+    private void enqueueRoomMessage(
+            String roomKey, String roomTitle, String url, boolean isGroup,
+            String senderPubkey, String senderName, String senderPicture,
+            String text, long timestampMs) {
+        // Build the Person now (without an avatar); post immediately, then re-post
+        // with the avatar once loaded so image I/O never delays the notification.
+        Bitmap cachedAvatar = senderPicture != null ? avatarCache.get(senderPicture) : null;
+        postRoomMessage(roomKey, roomTitle, url, isGroup, senderPubkey, senderName,
+                cachedAvatar, text, timestampMs, /*replaceLast=*/false, /*alert=*/true);
+
+        if (senderPicture != null && !senderPicture.isEmpty() && cachedAvatar == null) {
+            fetchAvatar(senderPicture, bmp -> {
+                if (bmp != null) {
+                    // Replace the just-added message line in-place with one that
+                    // carries the avatar, then re-post the same room id. This is a
+                    // silent refresh — the initial post already alerted, so don't
+                    // vibrate/sound again just because the avatar finished loading.
+                    postRoomMessage(roomKey, roomTitle, url, isGroup, senderPubkey, senderName,
+                            bmp, text, timestampMs, /*replaceLast=*/true, /*alert=*/false);
+                }
+            });
+        }
     }
 
     /**
-     * Notification with an optional avatar URL for the large icon. The avatar is
-     * fetched + circle-cropped off the main thread; the notification posts
-     * immediately without it if the fetch is slow or fails.
+     * Core builder: accumulate a message into its {@link RoomNotif} and post the
+     * room's MessagingStyle notification + the group summary. When
+     * {@code replaceLast} is set, the most recently appended message for this room
+     * is swapped out (used to re-post the same line once its avatar resolves)
+     * rather than appended again. {@code alert} false posts silently (no
+     * vibration/sound) for in-place refreshes like a late-arriving avatar.
      */
-    private void showNotification(int id, String title, String body, String url, String pictureUrl) {
-        if (pictureUrl == null || pictureUrl.isEmpty()) {
-            postNotification(id, title, body, url, null);
-            return;
-        }
-        Bitmap cached = avatarCache.get(pictureUrl);
-        if (cached != null) {
-            postNotification(id, title, body, url, cached);
-            return;
-        }
-        // Post now (no avatar), then re-post with the avatar once it's loaded so
-        // the notification isn't delayed by image I/O.
-        postNotification(id, title, body, url, null);
-        fetchAvatar(pictureUrl, bmp -> {
-            if (bmp != null) postNotification(id, title, body, url, bmp);
-        });
-    }
-
-    private void postNotification(int id, String title, String body, String url, Bitmap largeIcon) {
+    private void postRoomMessage(
+            String roomKey, String roomTitle, String url, boolean isGroup,
+            String senderPubkey, String senderName, Bitmap avatar,
+            String text, long timestampMs, boolean replaceLast, boolean alert) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
 
+        RoomNotif room = roomNotifs.get(roomKey);
+        if (room == null) {
+            room = new RoomNotif(roomKey, hashId(roomKey));
+            roomNotifs.put(roomKey, room);
+        }
+        room.title = roomTitle;
+        room.url = url;
+        room.isGroupConversation = isGroup;
+        room.lastTimestampMs = Math.max(room.lastTimestampMs, timestampMs);
+
+        Person.Builder pb = new Person.Builder()
+                .setName(senderName != null ? senderName : "Someone")
+                .setKey(senderPubkey != null ? senderPubkey : roomKey);
+        if (avatar != null) pb.setIcon(IconCompat.createWithBitmap(avatar));
+        Person sender = pb.build();
+
+        NotificationCompat.MessagingStyle.Message msg =
+                new NotificationCompat.MessagingStyle.Message(
+                        text != null ? text : "", timestampMs, sender);
+
+        if (replaceLast && !room.messages.isEmpty()) {
+            room.messages.set(room.messages.size() - 1, msg);
+        } else {
+            room.messages.add(msg);
+            // Bound the retained history so a chatty room can't grow unbounded.
+            while (room.messages.size() > MAX_MESSAGES_PER_ROOM) {
+                room.messages.remove(0);
+            }
+        }
+
+        // Drop rooms the user already dismissed from the tray so the summary's
+        // count/lines reflect only what's still showing (else a tapped/swiped
+        // room lingers in the digest until the service restarts).
+        pruneDismissedRooms(manager, room.notifId);
+
+        manager.notify(room.notifId, buildRoomNotification(room, alert));
+        manager.notify(SUMMARY_NOTIFICATION_ID, buildSummaryNotification());
+    }
+
+    /**
+     * Remove from {@link #roomNotifs} any room whose notification is no longer in
+     * the status bar (the user tapped/swiped it away), except {@code keepNotifId}
+     * (the one we're about to (re)post). API 23+; a no-op on older devices.
+     */
+    private void pruneDismissedRooms(NotificationManager manager, int keepNotifId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        try {
+            Set<Integer> active = new HashSet<>();
+            for (android.service.notification.StatusBarNotification sbn : manager.getActiveNotifications()) {
+                active.add(sbn.getId());
+            }
+            java.util.Iterator<Map.Entry<String, RoomNotif>> it = roomNotifs.entrySet().iterator();
+            while (it.hasNext()) {
+                RoomNotif r = it.next().getValue();
+                if (r.notifId != keepNotifId && !active.contains(r.notifId)) {
+                    it.remove();
+                }
+            }
+        } catch (Exception ignored) {
+            // getActiveNotifications can throw on some OEM builds — best-effort.
+        }
+    }
+
+    /** Build a room's MessagingStyle notification from its accumulated messages. */
+    private Notification buildRoomNotification(RoomNotif room, boolean alert) {
+        // "You" is the local user; MessagingStyle needs a self Person to anchor
+        // incoming vs. outgoing (we only post incoming, so this is just the label).
+        Person self = new Person.Builder().setName("You").setKey(userPubkey != null ? userPubkey : "self").build();
+        NotificationCompat.MessagingStyle style = new NotificationCompat.MessagingStyle(self);
+        if (room.isGroupConversation) {
+            style.setConversationTitle(room.title);
+            style.setGroupConversation(true);
+        } else {
+            style.setGroupConversation(false);
+        }
+        for (NotificationCompat.MessagingStyle.Message m : room.messages) {
+            style.addMessage(m);
+        }
+
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, MSG_CHANNEL_ID)
+                .setStyle(style)
+                .setSmallIcon(R.drawable.ic_stat_armada)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(roomPendingIntent(room))
+                .setGroup(GROUP_KEY)
+                .setAutoCancel(true)
+                .setWhen(room.lastTimestampMs)
+                // A silent refresh (e.g. late avatar) must not re-buzz; only a
+                // genuine new message alerts.
+                .setOnlyAlertOnce(!alert);
+        if (alert) {
+            b.setVibrate(MSG_VIBRATION_PATTERN)
+                    .setDefaults(NotificationCompat.DEFAULT_LIGHTS | NotificationCompat.DEFAULT_SOUND);
+        }
+        return b.build();
+    }
+
+    /**
+     * Build the InboxStyle group summary: a digest of the active rooms with the
+     * total unread count. Android shows this when the room notifications are
+     * collapsed into the group (Discord/Signal-style stack).
+     */
+    private Notification buildSummaryNotification() {
+        NotificationCompat.InboxStyle inbox = new NotificationCompat.InboxStyle();
+        int totalMessages = 0;
+        // Newest rooms first.
+        List<RoomNotif> rooms = new ArrayList<>(roomNotifs.values());
+        rooms.sort((a, c) -> Long.compare(c.lastTimestampMs, a.lastTimestampMs));
+        for (RoomNotif room : rooms) {
+            int count = room.messages.size();
+            totalMessages += count;
+            // One digest line per room: "<room> · <N new>" or the latest sender.
+            NotificationCompat.MessagingStyle.Message last =
+                    room.messages.isEmpty() ? null : room.messages.get(room.messages.size() - 1);
+            CharSequence whoCs = last != null && last.getPerson() != null ? last.getPerson().getName() : null;
+            String who = whoCs != null ? whoCs.toString() : null;
+            String line = room.isGroupConversation && room.title != null
+                    ? room.title + (count > 1 ? " · " + count + " new" : (who != null ? " · " + who : ""))
+                    : (room.title != null ? room.title : (who != null ? who : "New message"));
+            inbox.addLine(line);
+        }
+        String summaryText = roomNotifs.size() == 1
+                ? totalMessages + (totalMessages == 1 ? " new message" : " new messages")
+                : roomNotifs.size() + " conversations";
+        inbox.setSummaryText(summaryText);
+
+        return new NotificationCompat.Builder(this, MSG_CHANNEL_ID)
+                .setContentTitle("Armada")
+                .setContentText(summaryText)
+                .setStyle(inbox)
+                .setSmallIcon(R.drawable.ic_stat_armada)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setGroup(GROUP_KEY)
+                .setGroupSummary(true)
+                // The child (room) notification owns the alert (vibration/sound),
+                // so posting the summary alongside it doesn't double-buzz.
+                .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+                .setAutoCancel(true)
+                .build();
+    }
+
+    /** Deep-link tap intent for a room, keyed by the room's stable notif id. */
+    private PendingIntent roomPendingIntent(RoomNotif room) {
         Intent intent = new Intent(this, MainActivity.class);
+        String url = room.url != null ? room.url : "/";
         intent.setData(Uri.parse("armada://open" + url));
         intent.putExtra("armada_path", url);
         intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent pi = PendingIntent.getActivity(
-                this, id, intent,
+        return PendingIntent.getActivity(
+                this, room.notifId, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
-        NotificationCompat.Builder b = new NotificationCompat.Builder(this, MSG_CHANNEL_ID)
-                .setContentTitle(title)
-                .setContentText(body)
-                .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-                .setSmallIcon(R.drawable.ic_stat_armada)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                .setContentIntent(pi)
-                .setAutoCancel(true);
-        if (largeIcon != null) b.setLargeIcon(largeIcon);
-        manager.notify(id, b.build());
     }
 
     private interface BitmapCallback {
@@ -1154,9 +1371,20 @@ public class NotificationRelayService extends Service {
         svc.setShowBadge(false);
         m.createNotificationChannel(svc);
 
+        // Retire the old message channel so the stronger vibration + HIGH
+        // importance below apply on upgrades (channel settings can't be edited
+        // in place — only a fresh channel id picks up the new config).
+        try {
+            m.deleteNotificationChannel(MSG_CHANNEL_ID_LEGACY);
+        } catch (Exception ignored) {
+            // Channel may not exist (fresh install) — nothing to retire.
+        }
+
         NotificationChannel msg = new NotificationChannel(
-                MSG_CHANNEL_ID, "Notifications", NotificationManager.IMPORTANCE_DEFAULT);
+                MSG_CHANNEL_ID, "Notifications", NotificationManager.IMPORTANCE_HIGH);
         msg.setDescription("Mentions, replies, reactions and direct messages");
+        msg.enableVibration(true);
+        msg.setVibrationPattern(MSG_VIBRATION_PATTERN);
         m.createNotificationChannel(msg);
     }
 
@@ -1280,11 +1508,19 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /**
+     * Stable, collision-resistant notification id for a key (a room key or event
+     * id). Hashes the WHOLE string (not a prefix) so distinct rooms sharing a
+     * common prefix — e.g. two groups on the same relay ("h:wss://r|a" vs
+     * "h:wss://r|b") — never collapse into one notification. Kept below the
+     * summary's reserved id.
+     */
     private static int hashId(String id) {
+        if (id == null) return 2;
         int hash = 0;
-        for (int i = 0; i < Math.min(id.length(), 16); i++) {
+        for (int i = 0; i < id.length(); i++) {
             hash = ((hash << 5) - hash) + id.charAt(i);
         }
-        return (Math.abs(hash) % MAX_NOTIFICATION_ID) + 2;
+        return (Math.abs(hash) % ROOM_ID_MODULUS) + 2;
     }
 }
