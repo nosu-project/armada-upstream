@@ -402,13 +402,20 @@ interface InCallViewProps {
   onLabelClick?: () => void;
   /** Stack the label above the controls (for narrow side-panel placement). */
   stacked?: boolean;
+  /**
+   * Compact single-row layout for the fixed mobile bar: header + controls on
+   * one line, no inline participant roster (the full roster/tiles live in the
+   * expandable call stage, toggled from the header). Keeps the bar from
+   * dominating the small screen.
+   */
+  compact?: boolean;
 }
 
 /**
  * In-call controls + live participant avatars. Must be rendered inside a
  * LiveKitRoom context (uses room hooks).
  */
-export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
+export function InCallView({ label, onLabelClick, stacked, compact }: InCallViewProps) {
   const { stageOpen, toggleStage } = useCall();
   const participants = useParticipants();
   const remoteParticipants = useRemoteParticipants();
@@ -463,7 +470,7 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
         )
       ) : (
         <span className="flex-1 min-w-0 truncate text-xs font-semibold text-success">
-          Voice connected
+          {compact ? "Connected" : "Voice connected"}
         </span>
       )}
       <button
@@ -581,6 +588,20 @@ export function InCallView({ label, onLabelClick, stacked }: InCallViewProps) {
   // A stacked panel (à la Discord): header → participant roster → control bar.
   // `stacked` only widens the layout (desktop side-panel); the structure is the
   // same on mobile so the controls are never crammed onto the activity row.
+  if (compact) {
+    // Mobile: a single compact row. The roster/tiles live in the expandable
+    // call stage (toggled from the header count), so the bar stays small.
+    return (
+      <div className="flex items-center gap-1.5 px-2 py-1.5 min-h-12">
+        <div className="flex-1 min-w-0">{headerEl}</div>
+        {micBtn}
+        {cameraBtn}
+        {supportsScreenShare && screenShareBtn}
+        {hangupBtn}
+      </div>
+    );
+  }
+
   return (
     <div className={cn("flex flex-col gap-1.5 px-2 py-2", stacked && "min-w-0")}>
       {headerEl}

@@ -125,20 +125,67 @@ function ErrorBar({ placeBar, error, onLeave }: { placeBar: PlaceBar; error: unk
 
 type PlaceBar = (mobile: React.ReactNode, desktop?: React.ReactNode) => React.ReactNode;
 
+/**
+ * The fixed mobile call bar. Measures its own rendered height and writes it to
+ * `--call-bar-h` on the shell, so the shell reserves *exactly* the bar's height
+ * as bottom padding (the bar grows/shrinks with participant count). A fixed
+ * estimate was wrong both ways — too short (covered the DM composer) and too
+ * tall (left a big gap below the group composer).
+ */
+function MobileCallBar({
+  shellRef,
+  exiting,
+  children,
+}: {
+  shellRef: React.RefObject<HTMLDivElement | null>;
+  exiting: boolean;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const bar = ref.current;
+    const shell = shellRef.current;
+    if (!bar || !shell) return;
+    const apply = () => {
+      shell.style.setProperty("--call-bar-h", `${bar.offsetHeight}px`);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(bar);
+    return () => {
+      ro.disconnect();
+      // Release the reservation when the bar unmounts.
+      shell.style.removeProperty("--call-bar-h");
+    };
+  }, [shellRef]);
+
+  return (
+    <div
+      ref={ref}
+      className={cn(
+        "fixed bottom-0 inset-x-0 z-40 px-2 pb-safe sidebar:hidden",
+        exiting
+          ? "animate-out fade-out-0 slide-out-to-bottom-4 duration-200 fill-mode-forwards"
+          : "animate-in fade-in-0 slide-in-from-bottom-4 duration-300",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 /** Build the place-bar renderer (fixed mobile bar + portaled desktop slots). */
-function makePlaceBar(slots: HTMLElement[], exiting: boolean): PlaceBar {
+function makePlaceBar(
+  slots: HTMLElement[],
+  exiting: boolean,
+  shellRef: React.RefObject<HTMLDivElement | null>,
+): PlaceBar {
   return (mobile, desktop) => (
     <>
-      <div
-        className={cn(
-          "fixed bottom-0 inset-x-0 z-40 px-2 pb-safe sidebar:hidden",
-          exiting
-            ? "animate-out fade-out-0 slide-out-to-bottom-4 duration-200 fill-mode-forwards"
-            : "animate-in fade-in-0 slide-in-from-bottom-4 duration-300",
-        )}
-      >
+      <MobileCallBar shellRef={shellRef} exiting={exiting}>
         {mobile}
-      </div>
+      </MobileCallBar>
       {slots.map((el, i) =>
         createPortal(
           <div
@@ -208,7 +255,7 @@ function VoiceRoomShell({
   const mobileBar = (
     <ServerScopeProvider relayUrl={scopeRelayUrl}>
       <div className="clip-corner-lg bg-chrome-deep shadow-lg">
-        <InCallView label={label} />
+        <InCallView label={label} compact />
       </div>
     </ServerScopeProvider>
   );
@@ -301,7 +348,9 @@ function Nip29VoiceRoom({
     </button>
   ) : (
     <button type="button" onClick={goToChannel} className="hover:underline text-left">
-      <span className="text-muted-foreground/70">{serverName}</span> #{channelName}
+      {/* The server name is desktop-only; on the compact mobile bar we show just
+          the channel (e.g. "#general"). */}
+      <span className="hidden sidebar:inline text-muted-foreground/70">{serverName} </span>#{channelName}
     </button>
   );
 
@@ -461,6 +510,7 @@ function PersistentVoiceRoom({
   stageSlots,
   stageOpen,
   exiting,
+  shellRef,
 }: {
   call: ActiveCall;
   onLeave: () => void;
@@ -468,8 +518,9 @@ function PersistentVoiceRoom({
   stageSlots: HTMLElement[];
   stageOpen: boolean;
   exiting: boolean;
+  shellRef: React.RefObject<HTMLDivElement | null>;
 }) {
-  const placeBar = useMemo(() => makePlaceBar(slots, exiting), [slots, exiting]);
+  const placeBar = useMemo(() => makePlaceBar(slots, exiting, shellRef), [slots, exiting, shellRef]);
   const placeStage = useMemo(() => makePlaceStage(stageSlots), [stageSlots]);
 
   if (call.concord) {
@@ -506,6 +557,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const [stageSlots, setStageSlots] = useState<HTMLElement[]>([]);
   const [stageOpen, setStageOpen] = useState(false);
   const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The app shell; the mobile call bar writes its measured height to
+  // `--call-bar-h` here so the shell reserves exactly that as bottom padding.
+  const shellRef = useRef<HTMLDivElement>(null);
 
   const joinCall = useCallback((relayUrl: string, groupId: string) => {
     if (exitTimer.current) {
@@ -588,26 +642,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       }}
     >
       <div
+        ref={shellRef}
         className={cn(
           "relative flex h-full w-full overflow-hidden",
-          // On mobile the call bar is a fixed bottom overlay; reserve space so
-          // it doesn't cover the chat composer. On desktop the bar lives in the
-          // sidebar slot, so no reservation is needed.
-          user && activeCall && "max-sidebar:pb-[var(--call-bar-h)]",
+          // On mobile the call bar is a fixed bottom overlay; reserve exactly
+          // its measured height (written to --call-bar-h by MobileCallBar) so it
+          // never covers the composer and leaves no gap. The fallback covers the
+          // first frame before the bar measures itself. On desktop the bar lives
+          // in the sidebar slot, so no reservation is needed.
+          user && activeCall && "max-sidebar:pb-[var(--call-bar-h,0px)]",
         )}
-        style={
-          user && activeCall
-            ? ({
-                // Reserve the stacked call panel's height so the fixed mobile
-                // bar doesn't cover the composer. The panel is header +
-                // roster (scrolls past its cap) + control bar; reserve a
-                // typical few-participant height plus the bar's own pb-safe
-                // bottom inset (0.75rem + the home-indicator inset).
-                "--call-bar-h":
-                  "calc(11rem + 0.75rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))",
-              } as React.CSSProperties)
-            : undefined
-        }
       >
         {children}
         {user && activeCall && (
@@ -624,6 +668,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             stageSlots={stageSlots}
             stageOpen={stageOpen}
             exiting={exiting}
+            shellRef={shellRef}
           />
         )}
       </div>
