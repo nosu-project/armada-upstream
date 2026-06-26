@@ -4,6 +4,41 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.9.0] - 2026-06-26
+
+Navigating channels on mobile now feels like Discord: swipe from the left edge
+to reveal the channel list and swipe back (or tap a channel) to return, and
+Armada reopens you in the last channel you were reading instead of a list.
+One-to-one voice calls now work out of the box, Android groups a busy room's
+messages into a single notification with a firmer buzz, and reopening encrypted
+communities is more reliable.
+
+### Added
+- Swipe navigation on phones: drag from the left edge to reveal the channel
+  list and drag back or tap a channel to slide into the conversation, on
+  servers, communities, and direct messages.
+- Armada remembers the last channel you had open in each server and community
+  and reopens it on return, instead of dropping you on the channel list.
+
+### Changed
+- Android now bundles all the messages from one conversation into a single
+  notification (showing the sender's name and avatar) instead of a separate
+  notification per message, and gives new messages a stronger buzz.
+- The mobile call bar is now a compact single row that no longer covers the
+  message box or leaves a gap above it.
+
+### Fixed
+- One-to-one voice calls now work out of the box, falling back to a voice-capable
+  relay when your own relays don't support calls.
+- Community icons no longer flicker to a blank placeholder when reloading.
+- New messages no longer briefly go missing when first opening a server channel
+  (including when opening one by tapping a notification).
+- You're no longer wrongly shown a "Join channel" banner in a channel you've
+  already joined when reopening the app.
+- Reopening the app with a remote signer no longer briefly shows zero
+  communities or re-prompts you with invites to communities you've already
+  joined.
+
 ## [0.8.3] - 2026-06-26
 
 Encrypted communities load and scroll much faster, with reactions and images
