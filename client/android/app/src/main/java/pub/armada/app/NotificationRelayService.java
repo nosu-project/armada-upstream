@@ -996,7 +996,7 @@ public class NotificationRelayService extends Service {
         switch (kind) {
             case 9:
                 if (mentionsMe) return prefBool("mentions", true);
-                return prefBool("allGroupMessages", false);
+                return prefBool("allGroupMessages", true);
             case 7:
                 return prefBool("reactions", true);
             case 1111:

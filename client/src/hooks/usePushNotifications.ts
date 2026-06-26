@@ -63,7 +63,7 @@ export interface PushPrefs {
   replies: boolean;
   /** Direct messages. Default on. */
   directMessages: boolean;
-  /** Every message in your groups (not just mentions). Default off. */
+  /** Every message in your groups (not just mentions). Default on. */
   allGroupMessages: boolean;
 }
 
@@ -72,7 +72,7 @@ export const DEFAULT_PUSH_PREFS: PushPrefs = {
   reactions: true,
   replies: true,
   directMessages: true,
-  allGroupMessages: false,
+  allGroupMessages: true,
 };
 
 function loadPrefs(): PushPrefs {
