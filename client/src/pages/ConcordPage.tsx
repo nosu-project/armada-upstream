@@ -1,5 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { Hash, Headphones, Loader2, LogOut, Menu, MoreVertical, Phone, Plus, Reply, Settings, Shield, ShieldCheck, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { ChevronLeft, Hash, Headphones, Loader2, LogOut, MoreVertical, Phone, Plus, Reply, Settings, Shield, ShieldCheck, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -15,6 +15,7 @@ import { ConcordSettingsDialog } from "@/components/dialogs/ConcordSettingsDialo
 import { ConcordRolesDialog } from "@/components/dialogs/ConcordRolesDialog";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
+import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -23,10 +24,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useConcordActions } from "@/hooks/useConcordActions";
 import { useConcordCommunity } from "@/hooks/useConcordList";
@@ -47,7 +48,7 @@ import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/lib/concord/roles";
 import type { Channel, Community, CommunityImage } from "@/lib/concord/types";
-import { cn } from "@/lib/utils";
+import { cn, pickDefaultChannel } from "@/lib/utils";
 
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
 
@@ -233,6 +234,9 @@ function ConcordChannelRow({
 export function ConcordPage() {
   const { communityId } = useParams<{ communityId: string }>();
   const { user } = useCurrentUser();
+  const { config, updateConfig } = useAppContext();
+  // Storage key for this community's last-opened channel (local preference).
+  const lastChannelKey = communityId ? `c:${communityId}` : "";
   const baseCommunity = useConcordCommunity(communityId);
   // Overlay the folded GroupRoot/channel metadata (vsk=0/2) onto the community
   // rehydrated from the membership-list bundle, so name/description/icon/banner
@@ -267,11 +271,35 @@ export function ConcordPage() {
 
   const channel = useMemo(() => {
     if (!community) return undefined;
-    const selected = channelIdHex
-      ? community.channels.find((c) => bytesToHex(c.id) === channelIdHex)
-      : community.channels[0];
-    return selected ?? community.channels[0];
-  }, [community, channelIdHex]);
+    // Explicit selection wins; otherwise open the last-used channel for this
+    // community (Discord-style), falling back to "general" or the first.
+    if (channelIdHex) {
+      return (
+        community.channels.find((c) => bytesToHex(c.id) === channelIdHex) ??
+        community.channels[0]
+      );
+    }
+    return pickDefaultChannel(
+      community.channels,
+      config.lastChannelByServer[lastChannelKey],
+      (c) => bytesToHex(c.id),
+      (c) => c.name,
+    );
+  }, [community, channelIdHex, config.lastChannelByServer, lastChannelKey]);
+
+  // Persist the open channel as this community's last-opened (local preference).
+  useEffect(() => {
+    if (!lastChannelKey || !channel) return;
+    const hex = bytesToHex(channel.id);
+    updateConfig((c) =>
+      c.lastChannelByServer[lastChannelKey] === hex
+        ? c
+        : {
+            ...c,
+            lastChannelByServer: { ...c.lastChannelByServer, [lastChannelKey]: hex },
+          },
+    );
+  }, [channel, lastChannelKey, updateConfig]);
 
   const { roster, setAdmin } = useConcordRosterActions(community);
   const ownerHex = roster?.ownerHex;
@@ -459,9 +487,9 @@ export function ConcordPage() {
 
   // The channel-list body, shared verbatim by the desktop sidebar and the
   // mobile drawer (so the two never drift — same chrome, same rows).
-  const channelList = (onNavigate?: () => void) => (
+  const channelList = (onNavigate?: () => void, className?: string) => (
     <ChannelSidebarView
-      className={onNavigate ? "flex-1" : "hidden sidebar:flex"}
+      className={className ?? (onNavigate ? "flex-1" : "hidden sidebar:flex")}
       title={community?.name ?? "…"}
       titleIcon={<CommunityTitleIcon icon={community?.icon} />}
       banner={<CommunityBanner banner={community?.banner} />}
@@ -527,29 +555,34 @@ export function ConcordPage() {
 
   return (
     <>
-      {/* Desktop panes (hidden on mobile — the chat is the full screen). */}
-      <ServerRail className="hidden sidebar:flex" />
-      {channelList()}
-
+      <SwipeReveal
+        open={channelsOpen}
+        onReveal={() => setChannelsOpen(true)}
+        onClose={() => setChannelsOpen(false)}
+        underlay={
+          <>
+            <ServerRail onNavigate={() => setChannelsOpen(false)} />
+            {channelList(() => setChannelsOpen(false), "flex-1 sidebar:flex-none")}
+          </>
+        }
+      >
       {/* Chat */}
-      <main className="flex-1 min-w-0 flex flex-col safe-area-top">
+      <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
         <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-          {/* Mobile menu → reveals the channel list as a left drawer. */}
+          {/* Mobile back → slides the chat away to reveal the channel list.
+              (The same reveal is also driven by a left-edge swipe.) */}
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Open channels"
+            aria-label="Back to channels"
             className="size-9 shrink-0 sidebar:hidden"
             onClick={() => setChannelsOpen(true)}
           >
-            <Menu className="size-5" />
+            <ChevronLeft className="size-5" />
           </Button>
 
           <Hash className="size-5 text-muted-foreground shrink-0" />
           <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
-          <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-success">
-            <ShieldCheck className="size-3" /> Encrypted
-          </span>
           <div className="ml-auto flex items-center gap-0.5">
             {hasVoice && voicePubkeys.length > 0 && (
               <VoicePresence participants={voicePubkeys} className="mr-1" />
@@ -759,23 +792,7 @@ export function ConcordPage() {
           </div>
         </div>
       </main>
-
-      {/* Mobile channel list drawer (server rail + channels) */}
-      <Sheet open={channelsOpen} onOpenChange={setChannelsOpen}>
-        <SheetContent
-          side="left"
-          className="flex w-[min(20rem,85vw)] gap-0 p-0 sidebar:hidden [&>button]:hidden"
-          aria-label="Channels"
-          onOpenAutoFocus={(e) => e.preventDefault()}
-        >
-          {/* The rail + channel-list header own their own top safe-area inset,
-              so this wrapper must not add it again (would double-pad). */}
-          <div className="flex h-full w-full">
-            <ServerRail onNavigate={() => setChannelsOpen(false)} />
-            {channelList(() => setChannelsOpen(false))}
-          </div>
-        </SheetContent>
-      </Sheet>
+      </SwipeReveal>
 
       <InviteConcordDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} />
       <ConcordSettingsDialog community={community} open={settingsOpen} onOpenChange={setSettingsOpen} />

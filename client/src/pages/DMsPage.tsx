@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowLeft, Headphones, Loader2, MessageSquare, Phone, Plus, RotateCw, Search, X } from "lucide-react";
+import { AlertCircle, ChevronLeft, Headphones, Loader2, MessageSquare, Phone, Plus, RotateCw, Search, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -9,6 +9,7 @@ import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageRow } from "@/components/chat/MessageRow";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
+import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { VoicePresence } from "@/components/VoicePresence";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -33,7 +34,7 @@ import { effectiveDmRelays } from "@/contexts/AppContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
 import { getDisplayName } from "@/lib/getDisplayName";
-import { PLATFORM_RELAYS } from "@/lib/platform";
+import { DM_VOICE_RELAYS, PLATFORM_RELAYS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -251,7 +252,13 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const roomId = user ? deriveDmRoomId(user.pubkey, peer) : undefined;
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
   const voiceCandidates = useMemo(
-    () => [...PLATFORM_RELAYS, ...dmRelays.filter((r) => !PLATFORM_RELAYS.includes(r))],
+    () => {
+      // Prefer the user's pinned/DM relays, then fall back to the platform's
+      // default LiveKit-capable relay so 1:1 voice works even when none of the
+      // user's own relays host the NIP-29 LiveKit extension. Deduped.
+      const ordered = [...PLATFORM_RELAYS, ...dmRelays, ...DM_VOICE_RELAYS];
+      return ordered.filter((r, i) => ordered.indexOf(r) === i);
+    },
     [dmRelays],
   );
   const { data: voiceRelay } = useDmVoiceRelay(voiceCandidates);
@@ -454,7 +461,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           className="size-9 shrink-0 sidebar:hidden"
           onClick={onBack}
         >
-          <ArrowLeft className="size-5" />
+          <ChevronLeft className="size-5" />
         </Button>
         <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-7">
           <AvatarImage src={author.data?.metadata?.picture} alt={name} />
@@ -644,7 +651,13 @@ function ConversationList({
   // re-resolving the relay per row.
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
   const voiceCandidates = useMemo(
-    () => [...PLATFORM_RELAYS, ...dmRelays.filter((r) => !PLATFORM_RELAYS.includes(r))],
+    () => {
+      // Prefer the user's pinned/DM relays, then fall back to the platform's
+      // default LiveKit-capable relay so 1:1 voice works even when none of the
+      // user's own relays host the NIP-29 LiveKit extension. Deduped.
+      const ordered = [...PLATFORM_RELAYS, ...dmRelays, ...DM_VOICE_RELAYS];
+      return ordered.filter((r, i) => ordered.indexOf(r) === i);
+    },
     [dmRelays],
   );
   const { data: voiceRelay } = useDmVoiceRelay(voiceCandidates);
@@ -801,46 +814,45 @@ export function DMsPage() {
     return <Navigate to="/" replace />;
   }
 
+  // Reveal the conversation list (slide the thread fully away) by clearing the
+  // active peer; return to the still-mounted thread by re-selecting it.
+  const revealList = () => navigate("/dms");
+  const returnToThread = () => {
+    if (renderedPeer) navigate(`/dms/${nip19.npubEncode(renderedPeer)}`);
+  };
+
   return (
-    <>
-      {/* Leftmost rail + conversation list — the persistent DM-list view. On
-          mobile they stay in place underneath while the thread slides over
-          them, so going back is a smooth slide-out (not a hard cut). */}
-      <ServerRail className={cn(activePeer && "hidden sidebar:flex")} />
-
-      <ConversationList
-        rows={rows}
-        previews={previews}
-        activePeer={activePeer}
-        dmSupported={dmSupported}
-        isLoading={isLoading}
-        composing={composing}
-        setComposing={setComposing}
-        openPeer={openPeer}
-        className={cn(
-          "flex-1 sidebar:flex-none sidebar:w-60",
-          activePeer && "hidden sidebar:flex",
-        )}
-      />
-
-      {/* Thread pane. On mobile it's an overlay that slides in from the right
-          when a peer is active and slides out on back; on desktop it's a static
-          side-by-side pane. */}
-      <main
-        className={cn(
-          "flex flex-col safe-area-top bg-background",
-          // Mobile: full-screen overlay that slides horizontally.
-          "absolute inset-0 z-10 transition-transform duration-200 ease-out",
-          activePeer ? "translate-x-0" : "translate-x-full",
-          // Desktop: static pane, no transform/overlay.
-          "sidebar:static sidebar:z-auto sidebar:flex-1 sidebar:min-w-0 sidebar:translate-x-0 sidebar:transition-none",
-        )}
-      >
+    <SwipeReveal
+      open={!activePeer}
+      onReveal={revealList}
+      onClose={returnToThread}
+      underlay={
+        <>
+          {/* Leftmost rail + conversation list — the persistent DM-list view,
+              revealed underneath as the thread slides away. */}
+          <ServerRail />
+          <ConversationList
+            rows={rows}
+            previews={previews}
+            activePeer={activePeer}
+            dmSupported={dmSupported}
+            isLoading={isLoading}
+            composing={composing}
+            setComposing={setComposing}
+            openPeer={openPeer}
+            className="flex-1 sidebar:flex-none sidebar:w-60"
+          />
+        </>
+      }
+    >
+      {/* Thread pane. On mobile it's the swipeable overlay; on desktop a static
+          side-by-side pane (SwipeReveal renders it inline). */}
+      <main className="flex flex-col flex-1 min-w-0 safe-area-top bg-background h-full">
         {renderedPeer ? (
           <Conversation
             key={renderedPeer}
             peer={renderedPeer}
-            onBack={() => navigate("/dms")}
+            onBack={revealList}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-muted-foreground">
@@ -851,6 +863,6 @@ export function DMsPage() {
           </div>
         )}
       </main>
-    </>
+    </SwipeReveal>
   );
 }

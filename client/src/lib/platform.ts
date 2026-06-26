@@ -124,6 +124,30 @@ export const CONCORD_VOICE_SERVERS: string[] = (
   .filter((s: string) => Boolean(s));
 
 /**
+ * Default LiveKit-capable NIP-29 relay(s) to host **DM** voice rooms, when none
+ * of the user's own DM/platform relays speak the NIP-29 LiveKit extension.
+ *
+ * DM voice (unlike Concord's blind broker) runs over a relay's NIP-29 LiveKit
+ * token endpoint. On a hosted build the platform relay already hosts it; on a
+ * non-hosted build (APK / Electron / dev, `PLATFORM_RELAYS` empty) there's no
+ * such relay among the default app relays, so — mirroring the Concord voice
+ * fallback — default to the public Armada instance (`wss://armada.dreamith.to`)
+ * so 1:1 calls work out of the box. Operators can override with
+ * `VITE_DM_VOICE_RELAYS` (comma-separated ws/wss URLs) or set it empty to
+ * disable the fallback.
+ */
+const DEFAULT_PUBLIC_DM_VOICE_RELAY = DEFAULT_PUBLIC_CONCORD_VOICE_SERVER
+  .replace(/^https:\/\//i, "wss://")
+  .replace(/^http:\/\//i, "ws://");
+export const DM_VOICE_RELAYS: string[] = (
+  import.meta.env.VITE_DM_VOICE_RELAYS ??
+  (PLATFORM_RELAYS.length > 0 ? PLATFORM_RELAYS.join(",") : DEFAULT_PUBLIC_DM_VOICE_RELAY)
+)
+  .split(",")
+  .map((url: string) => normalizeRelayUrl(url))
+  .filter((url: string | undefined): url is string => Boolean(url));
+
+/**
  * Parse a build-time boolean env var. Vite env vars are always strings (or
  * undefined when unset), so we treat "true"/"1" as true, "false"/"0" as false,
  * and fall back to `dflt` when unset/unrecognised.

@@ -1,4 +1,4 @@
-import { CalendarClock, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, Menu, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
+import { CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -13,6 +13,7 @@ import { InvitePeopleDialog } from "@/components/dialogs/InvitePeopleDialog";
 import { ServerProfileDialog } from "@/components/dialogs/ServerProfileDialog";
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
+import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -23,9 +24,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
 import { useGroup } from "@/hooks/useGroup";
@@ -102,6 +103,7 @@ export function GroupPage() {
   const groupId = rawGroupId ? decodeURIComponent(rawGroupId) : undefined;
 
   const { user } = useCurrentUser();
+  const { updateConfig } = useAppContext();
   const { data: details, isLoading } = useGroup(relayUrl, groupId);
   const { data: membership, isLoading: membershipLoading } = useGroupMembership(relayUrl, groupId);
   const { data: relayHasLivekit } = useRelayLivekitSupport(relayUrl);
@@ -115,7 +117,6 @@ export function GroupPage() {
   const [membersOpen, setMembersOpen] = useState(false);
   /** Whether the desktop member roster is shown (toggled from the header). */
   const [membersVisible, setMembersVisible] = useState(true);
-  const [channelsOpen, setChannelsOpen] = useState(false);
   /** Whether the header search bar is expanded, and its current query text. */
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -125,8 +126,6 @@ export function GroupPage() {
   const [eventsOpen, setEventsOpen] = useState(false);
   const [createEventOpen, setCreateEventOpen] = useState(false);
   const [serverProfileOpen, setServerProfileOpen] = useState(false);
-  /** Server whose channels are shown in the mobile drawer (defaults to current). */
-  const [drawerServer, setDrawerServer] = useState(relayUrl ?? "");
 
   const isAdmin = useMemo(
     () => Boolean(user && details?.admins.some((a) => a.pubkey === user.pubkey)),
@@ -157,6 +156,31 @@ export function GroupPage() {
     setSearchOpen(false);
     setSearchQuery("");
   }, []);
+
+  // Discord-style "back": slide the chat away to reveal this server's channel
+  // list (the parent drill-down level), and HOLD it open so the user can pick a
+  // channel. Driven by the left-edge swipe and the header chevron. Tapping a
+  // channel navigates and closes; the list stays put otherwise.
+  const [channelsOpen, setChannelsOpen] = useState(false);
+  // Closing on navigation away from this group (a channel tap pushes a new
+  // route → this component re-renders for the new groupId) keeps the freshly
+  // opened chat flush instead of leaving the list revealed.
+  useEffect(() => {
+    setChannelsOpen(false);
+  }, [groupId]);
+  // Remember this as the server's last-opened channel, so returning to the
+  // server re-opens it (see ServerPage's auto-open). Local-only preference.
+  useEffect(() => {
+    if (!relayUrl || !groupId) return;
+    updateConfig((c) =>
+      c.lastChannelByServer[relayUrl] === groupId
+        ? c
+        : {
+            ...c,
+            lastChannelByServer: { ...c.lastChannelByServer, [relayUrl]: groupId },
+          },
+    );
+  }, [relayUrl, groupId, updateConfig]);
 
   if (!relayUrl || !groupId) {
     return <Navigate to="/" replace />;
@@ -231,23 +255,35 @@ export function GroupPage() {
 
   return (
     <ServerScopeProvider relayUrl={relayUrl}>
-      {/* Desktop panes (hidden on mobile — the chat is the full screen). */}
-      <ServerRail className="hidden sidebar:flex" />
-      <ChannelSidebar relayUrl={relayUrl} className="hidden sidebar:flex" />
-
-      <main className="flex-1 min-w-0 flex flex-col safe-area-top">
+      <SwipeReveal
+        open={channelsOpen}
+        onReveal={() => setChannelsOpen(true)}
+        onClose={() => setChannelsOpen(false)}
+        underlay={
+          <>
+            <ServerRail onNavigate={() => setChannelsOpen(false)} />
+            <ChannelSidebar
+              relayUrl={relayUrl}
+              onNavigate={() => setChannelsOpen(false)}
+              className="flex-1 sidebar:flex-none"
+            />
+          </>
+        }
+      >
+        <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
         {/* Channel header — detached floating command bar, matching the right
             roster: same margin, cut-corner card, and recessed chrome shade. */}
         <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-          {/* Mobile menu → reveals the channel list as a left drawer. */}
+          {/* Mobile back → slides the chat away to reveal the channel list.
+              (The same reveal is also driven by a left-edge swipe.) */}
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Open channels"
+            aria-label="Back to channels"
             className="size-9 shrink-0 sidebar:hidden"
             onClick={() => setChannelsOpen(true)}
           >
-            <Menu className="size-5" />
+            <ChevronLeft className="size-5" />
           </Button>
 
           {group?.hasLivekit
@@ -556,36 +592,8 @@ export function GroupPage() {
             </div>
           </div>
         </div>
-      </main>
-
-      {/* Mobile channel list drawer (server rail + channels) */}
-      <Sheet
-        open={channelsOpen}
-        onOpenChange={(open) => {
-          setChannelsOpen(open);
-          if (open) setDrawerServer(relayUrl);        }}
-      >
-        <SheetContent
-          side="left"
-          className="flex w-[min(20rem,85vw)] gap-0 p-0 sidebar:hidden [&>button]:hidden"
-          aria-label="Channels"
-          onOpenAutoFocus={(e) => e.preventDefault()}
-        >
-          {/* The rail + channel-list header own their own top safe-area inset,
-              so this wrapper must not add it again (would double-pad). */}
-          <div className="flex h-full w-full">
-            <ServerRail
-              selectedServer={drawerServer}
-              onServerSelect={setDrawerServer}
-            />
-            <ChannelSidebar
-              relayUrl={drawerServer}
-              onNavigate={() => setChannelsOpen(false)}
-              className="flex-1"
-            />
-          </div>
-        </SheetContent>
-      </Sheet>
+        </main>
+      </SwipeReveal>
 
       {group && (
         <GroupSettingsDialog

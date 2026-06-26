@@ -67,6 +67,14 @@ export interface AppConfig {
    * `useOwnDmRelays` is true. Seeded from the app relays.
    */
   dmRelays: string[];
+  /**
+   * The last channel/room the user had open in each server/community, so we
+   * can re-open it on return instead of dumping them on a channel list. Keyed
+   * by `relayUrl` (NIP-29 servers, value = groupId) and by `c:${communityId}`
+   * (Concord communities, value = channel id hex). Falls back to a "general"
+   * channel or the first channel when there's no record.
+   */
+  lastChannelByServer: Record<string, string>;
 }
 
 export interface AppContextType {
@@ -83,6 +91,7 @@ export const defaultConfig: AppConfig = {
   searchRelays: [...SEARCH_RELAYS],
   useOwnDmRelays: false,
   dmRelays: [...APP_RELAYS],
+  lastChannelByServer: {},
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);

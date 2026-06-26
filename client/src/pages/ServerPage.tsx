@@ -1,6 +1,6 @@
 import { Hash, IdCard, Link2, MoreVertical, Trash2, Volume2 } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
@@ -22,6 +22,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { pickDefaultChannel } from "@/lib/utils";
 
 /**
  * Server home (drill-down level 1). On mobile the server rail + channel list
@@ -38,6 +39,28 @@ export function ServerPage() {
   const [profileOpen, setProfileOpen] = useState(false);
 
   const { data: groups, isLoading, isError, relayInfo } = useRelayGroups(relayUrl);
+
+  // Discord-style: landing on a server opens the room you last had open there
+  // (or a "general"/first channel), rather than dumping you on a channel list.
+  // Replace-navigate so the bare server URL doesn't pile up in history. Guarded
+  // to fire once per server so it never fights the user navigating back here.
+  const autoOpened = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!relayUrl || !groups || groups.length === 0) return;
+    if (autoOpened.current === relayUrl) return;
+    const target = pickDefaultChannel(
+      groups,
+      config.lastChannelByServer[relayUrl],
+      (g) => g.id,
+      (g) => g.name,
+    );
+    if (!target) return;
+    autoOpened.current = relayUrl;
+    navigate(
+      `/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(target.id)}`,
+      { replace: true },
+    );
+  }, [relayUrl, groups, config.lastChannelByServer, navigate]);
 
   if (!relayUrl) {
     return <Navigate to="/" replace />;
