@@ -1,11 +1,10 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
 
 import { useConcordControlEvents, useConcordRoster } from "@/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { usePersistedFold } from "@/hooks/usePersistedFold";
+import { useDeferredFold } from "@/hooks/useDeferredFold";
 import {
   buildChannelMetadataEditionUnsigned,
   buildCommunityRootEditionUnsigned,
@@ -31,15 +30,16 @@ export function useConcordMetadata(community: Community | undefined) {
   const events = control.data;
   const folded = roster.data;
 
-  const live = useMemo<FoldedMetadata | undefined>(() => {
-    if (!community || !events || !folded) return undefined;
-    return foldMetadata(events, community.serverRootKey, community.id, folded.roster, folded.ownerHex);
-  }, [community, events, folded]);
-
-  // Paint the last-folded metadata (name, icon/banner descriptors, channel
-  // names) from IndexedDB on reload until the live re-fold is ready; then
-  // persist the live result for next time.
-  const data = usePersistedFold(community ? `metadata:${bytesToHex(community.id)}` : null, live);
+  // Deferred fold (after paint) + persisted snapshot, so the verify-heavy
+  // metadata fold doesn't block the first frame on a large control plane.
+  const data = useDeferredFold<FoldedMetadata>(
+    community ? `metadata:${bytesToHex(community.id)}` : null,
+    () =>
+      community && events && folded
+        ? foldMetadata(events, community.serverRootKey, community.id, folded.roster, folded.ownerHex)
+        : undefined,
+    [community, events, folded],
+  );
 
   return { ...control, data } as typeof control & { data: FoldedMetadata | undefined };
 }

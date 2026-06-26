@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { buildCommentTags, KIND_COMMENT } from "@/lib/nip29";
@@ -69,8 +69,9 @@ export function useThread(root: NostrEvent | undefined, relayUrl: string, groupI
           queryClient.setQueryData<NostrEvent[]>(threadKey(relayUrl, rootId), (old = []) =>
             old.some((e) => e.id === event.id) ? old : [...old, event],
           );
-          // Keep the parent message's "N replies" badge in sync.
-          queryClient.invalidateQueries({ queryKey: ["thread-count", relayUrl, rootId] });
+          // Keep the parent message's "N replies" badge in sync (the batched
+          // reply-count query also has its own live sub, but nudge it too).
+          queryClient.invalidateQueries({ queryKey: ["nip29", "reply-counts", relayUrl, groupId] });
         }
       } catch {
         // Subscription ended (abort or relay closed).
@@ -99,8 +100,8 @@ export function useThread(root: NostrEvent | undefined, relayUrl: string, groupI
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey });
-      // The reply-count badge on the parent message reads a sibling query.
-      queryClient.invalidateQueries({ queryKey: ["thread-count", relayUrl, root?.id] });
+      // The reply-count badge reads the batched group reply-count query.
+      queryClient.invalidateQueries({ queryKey: ["nip29", "reply-counts", relayUrl, groupId] });
     },
   });
 
@@ -113,26 +114,99 @@ export function useThread(root: NostrEvent | undefined, relayUrl: string, groupI
 }
 
 /**
- * The number of threaded replies to a message, for the inline "N replies"
- * badge. A lightweight count-only query per message (one request each, as with
- * reactions) so the badge can render without opening the thread panel.
+ * Threaded-reply counts for a whole group's visible messages, in ONE batched
+ * query keyed by the root ids in view. Replaces the previous per-message
+ * `useReplyCount` (one `limit:500` relay query PER message, re-polled every 60s)
+ * with a single query for all replies referencing any loaded message, tallied
+ * into a `Map<rootId, count>` and exposed via `replyCountFor(id)`.
+ *
+ * Replies (NIP-22 kind 1111) name their root via the uppercase `#E` tag, so we
+ * query all roots at once (`#h` is REQUIRED for relay29 to serve the filter —
+ * see {@link useThread}) and bucket the results by their `E` tag. A single live
+ * subscription folds in new replies so counts stay current without polling.
  */
-export function useReplyCount(eventId: string, relayUrl: string, groupId: string) {
+export function useGroupReplyCounts(
+  relayUrl: string | undefined,
+  groupId: string | undefined,
+  messageIds: string[],
+): { replyCountFor: (id: string) => number } {
   const { nostr } = useNostr();
+  const queryClient = useQueryClient();
+  const queryKey = ["nip29", "reply-counts", relayUrl, groupId] as const;
 
-  const { data = 0 } = useQuery({
-    queryKey: ["thread-count", relayUrl, eventId],
+  // Stable primitive dep for the id set (not a fresh array each render).
+  const idsSig = useMemo(() => [...messageIds].sort().join(","), [messageIds]);
+
+  const query = useQuery<Map<string, Set<string>>>({
+    queryKey,
     queryFn: async ({ signal }) => {
+      const ids = idsSig ? idsSig.split(",") : [];
+      if (!relayUrl || !groupId || ids.length === 0) return new Map();
       const events = await nostr.relay(relayUrl).query(
         // `#h` is required for relay29 to serve the query (see useThread).
-        [{ kinds: [KIND_COMMENT], "#E": [eventId], "#h": [groupId], limit: 500 }],
+        [{ kinds: [KIND_COMMENT], "#E": ids, "#h": [groupId], limit: ids.length * 20 }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
-      return new Set(events.map((e) => e.id)).size;
+      return bucketReplies(events);
     },
+    enabled: Boolean(relayUrl && groupId) && Boolean(idsSig),
     staleTime: 30_000,
-    refetchInterval: 60_000,
   });
 
-  return data;
+  // One live subscription for the whole group's threads (replaces per-message
+  // polling), so a new reply bumps its root's badge instantly.
+  useEffect(() => {
+    if (!relayUrl || !groupId || !idsSig) return;
+    const ids = idsSig.split(",");
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        for await (const msg of nostr.relay(relayUrl).req(
+          [{ kinds: [KIND_COMMENT], "#E": ids, "#h": [groupId], since: Math.floor(Date.now() / 1000) - 5 }],
+          { signal: controller.signal },
+        )) {
+          if (msg[0] !== "EVENT") continue;
+          const event = msg[2] as NostrEvent;
+          queryClient.setQueryData<Map<string, Set<string>>>(queryKey, (old) => {
+            const next = new Map<string, Set<string>>();
+            if (old) for (const [k, v] of old) next.set(k, new Set(v));
+            for (const [, root] of event.tags.filter(([n]) => n === "E")) {
+              if (!root) continue;
+              const set = next.get(root) ?? new Set<string>();
+              set.add(event.id);
+              next.set(root, set);
+            }
+            return next;
+          });
+        }
+      } catch {
+        // Subscription ended (abort or relay closed).
+      }
+    })();
+
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nostr, relayUrl, groupId, idsSig, queryClient]);
+
+  const replyCountFor = useCallback(
+    (id: string) => query.data?.get(id)?.size ?? 0,
+    [query.data],
+  );
+
+  return { replyCountFor };
+}
+
+/** Bucket kind-1111 replies by their root id (`#E` tag), de-duped by reply id. */
+function bucketReplies(events: NostrEvent[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const event of events) {
+    for (const [, root] of event.tags.filter(([n]) => n === "E")) {
+      if (!root) continue;
+      const set = out.get(root) ?? new Set<string>();
+      set.add(event.id);
+      out.set(root, set);
+    }
+  }
+  return out;
 }

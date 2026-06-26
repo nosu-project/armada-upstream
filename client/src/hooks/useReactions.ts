@@ -1,11 +1,13 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { KIND_REACTION } from "@/lib/nip29";
 
+import type { MessageReactions } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
@@ -28,14 +30,6 @@ export interface ReactionTally {
   mineEvent?: NostrEvent;
 }
 
-/** Normalize a kind 7 reaction's content into a display key. */
-function reactionKey(event: NostrEvent): string {
-  const content = event.content;
-  if (content === "+" || content === "") return "👍";
-  if (content === "-") return "👎";
-  return content;
-}
-
 export interface ReactInput {
   /** The display key being toggled (emoji, 👍/👎, or `:shortcode:`). */
   key: string;
@@ -45,46 +39,139 @@ export interface ReactInput {
   emojiUrl?: string;
 }
 
+/** Normalize a kind 7 reaction's content into a display key. */
+function reactionKey(event: NostrEvent): string {
+  const content = event.content;
+  if (content === "+" || content === "") return "👍";
+  if (content === "-") return "👎";
+  return content;
+}
+
+/** Tally a flat list of reaction events into per-key tallies for one message. */
+function tallyReactions(reactions: NostrEvent[], userPubkey: string | undefined): ReactionTally[] {
+  // One reaction per (pubkey, key); the latest event wins.
+  const latest = new Map<string, NostrEvent>();
+  for (const reaction of reactions) {
+    const key = `${reaction.pubkey}:${reactionKey(reaction)}`;
+    const existing = latest.get(key);
+    if (!existing || reaction.created_at > existing.created_at) {
+      latest.set(key, reaction);
+    }
+  }
+
+  const byKey = new Map<string, ReactionTally>();
+  for (const reaction of latest.values()) {
+    const key = reactionKey(reaction);
+    const url = reaction.tags.find(([n]) => n === "emoji")?.[2];
+    const tally = byKey.get(key) ?? { key, url, count: 0, pubkeys: [], mine: false };
+    tally.count += 1;
+    tally.pubkeys.push(reaction.pubkey);
+    if (url && !tally.url) tally.url = url;
+    if (userPubkey && reaction.pubkey === userPubkey) {
+      tally.mine = true;
+      tally.mineEvent = reaction;
+    }
+    byKey.set(key, tally);
+  }
+
+  return [...byKey.values()].sort((a, b) => b.count - a.count);
+}
+
+/** Shared empty tally array so a message with no reactions keeps a stable prop. */
+const EMPTY_TALLIES: ReactionTally[] = [];
+
+function reactionsKey(relayUrl: string | undefined, groupId: string | undefined) {
+  return ["nip29", "reactions", relayUrl, groupId] as const;
+}
+
 /**
- * Load and toggle NIP-25 reactions (kind 7) for a single message inside a
- * NIP-29 group. Reactions are queried from and published to the group's host
- * relay only, mirroring polls and chat messages.
+ * Load and toggle NIP-25 reactions (kind 7) for a whole NIP-29 group in ONE
+ * batched query, keyed by the ids of the messages currently in view.
+ *
+ * This replaces the previous per-message `useReactions` fan-out (one relay
+ * query + one live subscription PER rendered message — 50 messages meant 50
+ * queries). Mirroring Concord's `useConcordReactions`, we fetch every reaction
+ * referencing the loaded messages in a single `#e` query, tally them into a
+ * `Map<messageId, ReactionTally[]>`, and expose a `reactionsFor(id)` accessor
+ * that returns the shared {@link MessageReactions} shape per row.
+ *
+ * Local-first like {@link useGroupMessages}: the store (NostrBatcher mirrors
+ * every reaction the relay ever returned into IndexedDB) is read immediately so
+ * reactions paint with the timeline, then a background relay refresh + a single
+ * live subscription keep them current.
  */
-export function useReactions(target: NostrEvent, relayUrl: string, groupId: string) {
+export function useGroupReactions(
+  relayUrl: string | undefined,
+  groupId: string | undefined,
+  messageIds: string[],
+): { reactionsFor: (id: string) => MessageReactions } {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const eventStore = useEventStore();
   const { mutateAsync: createEvent } = useNostrPublish();
   const queryClient = useQueryClient();
-  const queryKey = ["reactions", relayUrl, target.id];
+  const queryKey = reactionsKey(relayUrl, groupId);
 
-  const reactionsQuery = useQuery({
+  // The set of message ids to resolve reactions for. Sorted + joined so the
+  // effect/query deps are a stable primitive (not a fresh array each render).
+  const idsSig = useMemo(() => [...messageIds].sort().join(","), [messageIds]);
+
+  // All reactions in this group, keyed by message id. A single query for the
+  // whole visible window instead of one per message.
+  const reactionsQuery = useQuery<Map<string, NostrEvent[]>>({
     queryKey,
     queryFn: async ({ signal }) => {
-      return await nostr.relay(relayUrl).query(
-        [{ kinds: [KIND_REACTION], "#e": [target.id], limit: 500 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-      );
+      const ids = idsSig ? idsSig.split(",") : [];
+      if (!relayUrl || !groupId || ids.length === 0) return new Map();
+      const store = await eventStore;
+
+      // A generous cap so each per-id index cursor stops early instead of being
+      // walked to exhaustion (NIndexedDB stops a cursor at `limit` matches), so
+      // the scan cost scales with the window, not the whole reaction history.
+      const limit = ids.length * 20;
+
+      // 1. LOCAL-FIRST: read mirrored reactions out of IndexedDB immediately.
+      const cached = await store.query([{ kinds: [KIND_REACTION], "#e": ids, limit }]);
+
+      // 2. BACKGROUND refresh from the relay (NOT awaited — never gates render).
+      void (async () => {
+        if (signal.aborted) return;
+        try {
+          const fresh = await nostr.relay(relayUrl).query(
+            [{ kinds: [KIND_REACTION], "#e": ids, limit }],
+            { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+          );
+          if (signal.aborted || fresh.length === 0) return;
+          queryClient.setQueryData<Map<string, NostrEvent[]>>(queryKey, (old) =>
+            mergeReactions(old, fresh),
+          );
+        } catch {
+          // Best-effort; the local-first result already rendered.
+        }
+      })();
+
+      return groupReactionsByTarget(cached);
     },
+    enabled: Boolean(relayUrl && groupId) && Boolean(idsSig),
     staleTime: 15_000,
   });
 
-  // Live subscription: stream new reactions into the cache instead of polling
-  // every 30s. Scoped to this one message's id with a short `since` so it only
-  // delivers reactions posted after the initial load.
+  // One live subscription for the whole group (replaces one-per-message).
   useEffect(() => {
+    if (!relayUrl || !groupId || !idsSig) return;
+    const ids = idsSig.split(",");
     const controller = new AbortController();
-    const targetId = target.id;
 
     (async () => {
       try {
         for await (const msg of nostr.relay(relayUrl).req(
-          [{ kinds: [KIND_REACTION], "#e": [targetId], since: Math.floor(Date.now() / 1000) - 5 }],
+          [{ kinds: [KIND_REACTION], "#e": ids, since: Math.floor(Date.now() / 1000) - 5 }],
           { signal: controller.signal },
         )) {
           if (msg[0] !== "EVENT") continue;
           const event = msg[2] as NostrEvent;
-          queryClient.setQueryData<NostrEvent[]>(["reactions", relayUrl, targetId], (old = []) =>
-            old.some((e) => e.id === event.id) ? old : [...old, event],
+          queryClient.setQueryData<Map<string, NostrEvent[]>>(queryKey, (old) =>
+            mergeReactions(old, [event]),
           );
         }
       } catch {
@@ -93,44 +180,17 @@ export function useReactions(target: NostrEvent, relayUrl: string, groupId: stri
     })();
 
     return () => controller.abort();
-  }, [nostr, relayUrl, target.id, queryClient]);
-
-  // One reaction per (pubkey, key); the latest event wins.
-  const tallies = useMemo<ReactionTally[]>(() => {
-    const latest = new Map<string, NostrEvent>();
-    for (const reaction of reactionsQuery.data ?? []) {
-      const key = `${reaction.pubkey}:${reactionKey(reaction)}`;
-      const existing = latest.get(key);
-      if (!existing || reaction.created_at > existing.created_at) {
-        latest.set(key, reaction);
-      }
-    }
-
-    const byKey = new Map<string, ReactionTally>();
-    for (const reaction of latest.values()) {
-      const key = reactionKey(reaction);
-      const url = reaction.tags.find(([n]) => n === "emoji")?.[2];
-      const tally = byKey.get(key) ?? { key, url, count: 0, pubkeys: [], mine: false };
-      tally.count += 1;
-      tally.pubkeys.push(reaction.pubkey);
-      if (url && !tally.url) tally.url = url;
-      if (user && reaction.pubkey === user.pubkey) {
-        tally.mine = true;
-        tally.mineEvent = reaction;
-      }
-      byKey.set(key, tally);
-    }
-
-    return [...byKey.values()].sort((a, b) => b.count - a.count);
-  }, [reactionsQuery.data, user]);
+    // queryKey is derived from relayUrl + groupId, both already deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nostr, relayUrl, groupId, idsSig, queryClient]);
 
   const react = useMutation({
-    mutationFn: async ({ content, emojiUrl }: ReactInput) => {
+    mutationFn: async ({ target, content, emojiUrl }: { target: NostrEvent } & ReactInput) => {
       const tags: string[][] = [
         ["e", target.id],
         ["p", target.pubkey],
         ["k", String(target.kind)],
-        ["h", groupId],
+        ["h", groupId!],
       ];
       // NIP-30 custom emoji: content is `:shortcode:`, emoji tag carries the url.
       if (emojiUrl && content.startsWith(":") && content.endsWith(":")) {
@@ -143,10 +203,82 @@ export function useReactions(target: NostrEvent, relayUrl: string, groupId: stri
     },
   });
 
-  return {
-    tallies,
-    isLoading: reactionsQuery.isLoading,
-    react: (input: ReactInput) => react.mutate(input),
-    isReacting: react.isPending,
-  };
+  // Per-message tallies, derived once from the batched reaction map.
+  const talliesById = useMemo(() => {
+    const out = new Map<string, ReactionTally[]>();
+    const map = reactionsQuery.data;
+    if (!map) return out;
+    for (const [targetId, reactions] of map) {
+      out.set(targetId, tallyReactions(reactions, user?.pubkey));
+    }
+    return out;
+  }, [reactionsQuery.data, user?.pubkey]);
+
+  // Stable `react` closures + `MessageReactions` objects per id, so a row whose
+  // tally didn't change keeps a stable `reactions` prop (preserving React.memo).
+  // The mutation's `mutate` identity churns each render, so we hold it in a ref
+  // and read it at click time rather than capturing it in the closure.
+  const reactRef = useRef(react.mutate);
+  reactRef.current = react.mutate;
+  const reactCache = useRef(new Map<string, (input: ReactInput) => void>());
+  const objCache = useRef(new Map<string, { tallies: ReactionTally[]; value: MessageReactions }>());
+
+  const reactionsFor = useCallback(
+    (id: string): MessageReactions => {
+      const tallies = talliesById.get(id) ?? EMPTY_TALLIES;
+      const hit = objCache.current.get(id);
+      if (hit && hit.tallies === tallies) return hit.value;
+      let fn = reactCache.current.get(id);
+      if (!fn) {
+        // Resolve the target event from the messages cache lazily at click time.
+        const reactFn = (input: ReactInput) => {
+          const messages =
+            queryClient.getQueryData<NostrEvent[]>(["nip29", "messages", relayUrl, groupId]) ?? [];
+          const target = messages.find((m) => m.id === id);
+          if (!target) return;
+          reactRef.current({ target, ...input });
+        };
+        reactCache.current.set(id, (fn = reactFn));
+      }
+      const value: MessageReactions = { tallies, react: fn };
+      objCache.current.set(id, { tallies, value });
+      return value;
+    },
+    [talliesById, queryClient, relayUrl, groupId],
+  );
+
+  return { reactionsFor };
+}
+
+/** Bucket a flat reaction list into `target id → reactions`. */
+function groupReactionsByTarget(reactions: NostrEvent[]): Map<string, NostrEvent[]> {
+  const out = new Map<string, NostrEvent[]>();
+  for (const r of reactions) {
+    const target = r.tags.find(([n]) => n === "e")?.[1];
+    if (!target) continue;
+    const list = out.get(target);
+    if (list) list.push(r);
+    else out.set(target, [r]);
+  }
+  return out;
+}
+
+/** Merge new reactions into an existing target→reactions map (de-duped by id). */
+function mergeReactions(
+  old: Map<string, NostrEvent[]> | undefined,
+  incoming: NostrEvent[],
+): Map<string, NostrEvent[]> {
+  const next = new Map<string, NostrEvent[]>();
+  if (old) for (const [k, v] of old) next.set(k, [...v]);
+  for (const r of incoming) {
+    const target = r.tags.find(([n]) => n === "e")?.[1];
+    if (!target) continue;
+    const list = next.get(target);
+    if (!list) {
+      next.set(target, [r]);
+    } else if (!list.some((e) => e.id === r.id)) {
+      list.push(r);
+    }
+  }
+  return next;
 }

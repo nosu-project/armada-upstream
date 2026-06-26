@@ -50,9 +50,21 @@ export function useConcordTransport(
   channel: Channel | undefined,
   canWrite: boolean,
   canModerate: boolean,
-): { transport: ChatTransport; reactionsFor: (id: string) => MessageReactions } {
+): {
+  transport: ChatTransport;
+  reactionsFor: (id: string) => MessageReactions;
+  /**
+   * The FULL decoded message list (not the render window). Used for things that
+   * must see all history — member enumeration, reply-target author resolution —
+   * so they stay correct regardless of how far the timeline has scrolled back.
+   */
+  allMessages: ChatMsg[];
+} {
   const { user } = useCurrentUser();
-  const { data: opened, isLoading } = useConcordChannelMessages(community, channel);
+  const { data: opened, isLoading, loadOlder, hasMore, isLoadingOlder } = useConcordChannelMessages(
+    community,
+    channel,
+  );
   const { data: rawReactions } = useConcordReactions(community, channel);
   const { mutateAsync: send } = useSendConcordMessage(community, channel);
   const { retry, discard, deleteMessage } = useRetryConcordMessage(community, channel);
@@ -151,13 +163,16 @@ export function useConcordTransport(
       isLoading,
       canWrite,
       canModerate,
+      loadOlder,
+      hasMore,
+      isLoadingOlder,
       sendStatusFor: (id: string) => sendStatus[id],
       retry: (event: ChatMsg) => retry(event.id),
       discard,
       deleteMessage: (event: NostrEvent) => deleteMessage(event.id),
     }),
-    [messages, isLoading, canWrite, canModerate, sendStatus, retry, discard, deleteMessage],
+    [messages, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage],
   );
 
-  return { transport, reactionsFor };
+  return { transport, reactionsFor, allMessages: messages };
 }

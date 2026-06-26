@@ -1,10 +1,10 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
 
 import { useConcordControlEvents, useConcordRoster } from "@/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDeferredFold } from "@/hooks/useDeferredFold";
 import { useRotatorSecretKey } from "@/hooks/useRotatorSecretKey";
 import { useUpdateConcordList } from "@/hooks/useConcordList";
 import { publishChannelRekey } from "@/hooks/useConcordRekey";
@@ -28,10 +28,16 @@ export function useConcordBanlist(community: Community | undefined) {
   const events = control.data;
   const folded = roster.data;
 
-  const data = useMemo(() => {
-    if (!community || !events || !folded) return undefined;
-    return foldBanlist(events, community.serverRootKey, community.id, folded.roster, folded.ownerHex);
-  }, [community, events, folded]);
+  // Deferred fold (after paint) + persisted snapshot, so the banlist's
+  // decrypt+verify pass doesn't block the channel's first frame.
+  const data = useDeferredFold(
+    community ? `banlist:${bytesToHex(community.id)}` : null,
+    () =>
+      community && events && folded
+        ? foldBanlist(events, community.serverRootKey, community.id, folded.roster, folded.ownerHex)
+        : undefined,
+    [community, events, folded],
+  );
 
   return { ...control, data } as typeof control & {
     data: { banned: Set<string>; head?: { version: bigint; hash: Uint8Array } } | undefined;

@@ -281,7 +281,7 @@ export function ConcordPage() {
   );
   const canWrite = Boolean(user && channel);
 
-  const { transport, reactionsFor } = useConcordTransport(community, channel, canWrite, iAmOwner);
+  const { transport, reactionsFor, allMessages } = useConcordTransport(community, channel, canWrite, iAmOwner);
   const { mutateAsync: send } = useSendConcordMessage(community, channel);
   const { createChannel, isAddingChannel } = useConcordActions();
   const { leave, isLeaving, dissolve } = useConcordCommunityActions(community);
@@ -338,19 +338,19 @@ export function ConcordPage() {
   const memberPubkeys = useMemo(() => {
     const set = new Set<string>();
     if (roster) for (const m of concordMembers(roster)) set.add(m.pubkey);
-    for (const m of transport.messages) set.add(m.pubkey);
+    for (const m of allMessages) set.add(m.pubkey);
     if (user) set.add(user.pubkey);
     return [...set];
-  }, [roster, transport.messages, user]);
+  }, [roster, allMessages, user]);
 
   // id → author pubkey, so resolving a reply's target author is O(1) per row
   // instead of an O(N) `.find()` scan inside the per-row render closure (which
   // made a reply-heavy room O(N²) to render).
   const pubkeyById = useMemo(() => {
     const map = new Map<string, string>();
-    for (const m of transport.messages) map.set(m.id, m.pubkey);
+    for (const m of allMessages) map.set(m.id, m.pubkey);
     return map;
-  }, [transport.messages]);
+  }, [allMessages]);
 
   // Stable reply callback so a per-message `ConcordChatMessage` doesn't re-render
   // just because the page did. `setReplyTo` is a stable state setter.

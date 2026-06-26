@@ -17,8 +17,8 @@ import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useGroupSearch } from "@/hooks/useGroupSearch";
 import { useDeleteOwnMessage, useEditMessage } from "@/hooks/useEditMessage";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
-import { useReactions } from "@/hooks/useReactions";
-import { useReplyCount } from "@/hooks/useThread";
+import { useGroupReactions } from "@/hooks/useReactions";
+import { useGroupReplyCounts } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
@@ -65,10 +65,10 @@ interface Nip29ChatMessageProps {
 }
 
 /**
- * NIP-29 binding for a single message: resolves this message's reactions and
- * threaded-reply count from the group's host relay, then renders the shared
- * presentational {@link ChatMessage}. This is the only place per-message NIP-29
- * relay hooks are called; everything below it is transport-agnostic.
+ * NIP-29 binding for a single message. Reactions and threaded-reply counts are
+ * resolved ONCE per room (batched) by {@link GroupChat} and read here from the
+ * transport via `reactionsFor`/`replyCountFor` — no per-message relay hooks —
+ * then rendered through the shared presentational {@link ChatMessage}.
  */
 function Nip29ChatMessage({
   event,
@@ -85,21 +85,18 @@ function Nip29ChatMessage({
   onEditSubmit,
   onEditCancel,
 }: Nip29ChatMessageProps) {
-  const { tallies, react } = useReactions(event, relayUrl, groupId);
-  const replyCount = useReplyCount(event.id, relayUrl, groupId);
-
   return (
     <ChatMessage
       event={event}
       canWrite={transport.canWrite}
       canModerate={transport.canModerate}
       pollContext={{ relayUrl, groupId }}
-      reactions={{ tallies, react }}
+      reactions={transport.reactionsFor?.(event.id)}
       sendStatus={transport.sendStatusFor?.(event.id)}
       highlight={highlight}
       isEditing={isEditing}
       isPinned={transport.isPinned?.(event.id)}
-      replyCount={replyCount}
+      replyCount={transport.replyCountFor?.(event.id) ?? 0}
       replyContext={<ReplyContext eventId={getReplyToId(event) ?? ""} relayUrl={relayUrl} />}
       onRetry={() => transport.retry?.(event)}
       onDiscard={() => transport.discard?.(event.id)}
@@ -192,8 +189,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     isLoadingOlder,
   } = useGroupMessages(relayUrl, groupId);
   const { deleteEvent, removeUser } = useGroupModeration(relayUrl, groupId);
-  const { isPinned, pin, unpin } = usePinnedMessages(relayUrl, groupId);
-  const { mutateAsync: republish } = useRepublish();
+  const { isPinned, pin, unpin } = usePinnedMessages(relayUrl, groupId);  const { mutateAsync: republish } = useRepublish();
   const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);
   const { mutate: deleteOwnMessage } = useDeleteOwnMessage(relayUrl, groupId);
   const { markRead } = useReadState();
@@ -202,6 +198,20 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     groupId,
     searchQuery,
   );
+
+  // Batched per-room reactions + reply counts: resolved ONCE for every message
+  // currently in view (timeline ∪ search results), instead of one relay query +
+  // live subscription per message. The rows read these back via the transport's
+  // `reactionsFor`/`replyCountFor`. Mirrors Concord's `useConcordReactions`.
+  const visibleIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of messages) set.add(m.id);
+    for (const m of searchResults) set.add(m.id);
+    return [...set];
+  }, [messages, searchResults]);
+  const { reactionsFor } = useGroupReactions(relayUrl, groupId, visibleIds);
+  const { replyCountFor } = useGroupReplyCounts(relayUrl, groupId, visibleIds);
+
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   // The single message whose tap-to-reveal toolbar is open (mobile only).
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
@@ -395,7 +405,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       editMessage: async (original, content) => handleEditSubmit(original, content),
       isPinned,
       togglePin: handleTogglePin,
-      replyCountFor: undefined, // resolved per-row by useReplyCount
+      replyCountFor,
+      reactionsFor,
       openThread,
     }),
     [
@@ -414,6 +425,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       handleEditSubmit,
       isPinned,
       handleTogglePin,
+      replyCountFor,
+      reactionsFor,
       openThread,
     ],
   );

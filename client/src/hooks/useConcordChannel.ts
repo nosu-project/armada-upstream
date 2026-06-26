@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useConcordBanlist } from "@/hooks/useConcordModeration";
 import { useConcordChannelEpochs } from "@/hooks/useConcordRekey";
@@ -8,8 +8,9 @@ import { useConcordRoster } from "@/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useRotatorSecretKey } from "@/hooks/useRotatorSecretKey";
-import { forgetSkips, openMemoized, openMemoizedBatch } from "@/lib/concord/decodeCache";
+import { forgetSkips, openMemoizedBatch } from "@/lib/concord/decodeCache";
 import { channelPseudonym } from "@/lib/concord/derive";
+import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
 import {
   buildInnerEvent,
   openedFromSealed,
@@ -160,28 +161,53 @@ async function openMessages(
  * source of truth — like Vector's SQLite. Reading + decoding from it (rather
  * than re-querying relays) is what makes a visited channel paint instantly and
  * survive offline; decode-once memoization makes repeat reads cheap.
+ *
+ * Bounded by `limit` (the newest N sealed blobs): a large channel must NOT
+ * decrypt + verify its entire history before the first paint — that's what made
+ * a big channel's loading skeleton hang. The `#z` tag index is walked
+ * newest-first and stops at `limit`, so the cost scales with the visible window,
+ * not the cache size. Scrolling up grows `limit` and re-reads. Returns whether
+ * the store likely holds older blobs past this window (`hasMore`).
  */
 async function readAndFold(
   store: { query: (filters: NostrFilter[]) => Promise<NostrEvent[]> },
   channel: Channel,
   epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
   zs: string[],
+  limit: number,
   moderation?: ModerationContext,
   signal?: AbortSignal,
-): Promise<{ messages: OpenedMessage[]; deletes: Map<string, Set<string>> }> {
-  // No limit: the local store is the source of truth and is append-only, so we
-  // want every sealed blob it holds, not a truncated window. Decode-once keeps
-  // this cheap on repeat reads.
+): Promise<{ messages: OpenedMessage[]; deletes: Map<string, Set<string>>; hasMore: boolean }> {
+  // Read the newest `limit` sealed blobs (messages + edits + deletes). The
+  // planner walks the `#z` tag index newest-first and stops at `limit`, so this
+  // is cheap regardless of how much history the append-only store holds. Edits /
+  // deletes for an in-window message are themselves recent (published after it),
+  // so they fall inside the same newest window.
   const sealed = await store.query([
-    { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs },
+    { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, limit },
   ]);
-  return openMessages(sealed, channel.id, epochKeys, moderation, signal);
+  const hasMore = sealed.length >= limit;
+  const folded = await openMessages(sealed, channel.id, epochKeys, moderation, signal);
+  return { ...folded, hasMore };
 }
 
 /** A page size for relay backfill; the local store is unbounded, this just bounds each REQ. */
-const BACKFILL_PAGE = 500;
-/** How many `until`-pages to walk per backfill pass, so one tick can't loop forever. */
-const BACKFILL_MAX_PAGES = 6;
+const BACKFILL_PAGE = 30;
+/**
+ * How many `until`-pages to walk per backfill pass, so one tick can't loop
+ * forever. With a 30-event page that's up to 240 blobs per pass; the per-channel
+ * cursor resumes paging older history on the next poll, so a large channel still
+ * fills in fully over time without fetching thousands of blobs at once.
+ */
+const BACKFILL_MAX_PAGES = 8;
+
+/**
+ * How many of the newest sealed blobs to read + decode for the initial paint,
+ * and how many more to reveal per scroll-up. Bounds the decrypt/verify cost to
+ * the visible window so a large channel paints fast instead of decoding its
+ * whole history up front. Mirrors NIP-29's PAGE_SIZE.
+ */
+const WINDOW_SIZE = 30;
 
 /**
  * Backfill the local store from the relays, walking older history with `until`
@@ -294,6 +320,23 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   // the newest window every time, so a channel with >500 events fills in fully.
   const backfillCursor = useRef<Map<string, number | undefined>>(new Map());
 
+  // Render/decode window: only the newest `windowLimit` sealed blobs are read +
+  // decrypted for the initial paint, so a large channel doesn't decode its whole
+  // history up front (the cause of the slow loading skeleton). Scrolling up grows
+  // the window and re-reads. `hasMore` is true while the store likely holds older
+  // blobs past the window. The window is held in a ref (read inside the queryFn)
+  // mirrored by state (to drive `hasMore`/re-render).
+  const windowLimitRef = useRef(WINDOW_SIZE);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+
+  // Reset the window to the newest page whenever the channel changes.
+  useEffect(() => {
+    windowLimitRef.current = WINDOW_SIZE;
+    setHasMore(true);
+    setIsLoadingOlder(false);
+  }, [channelIdHex]);
+
   // Re-read immediately when the held epoch set changes (a rekey was caught up),
   // rather than waiting for the next poll. Forget remembered decode FAILURES so
   // blobs previously skipped as `no-held-epoch` retry under the new keys.
@@ -378,7 +421,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, community, channelIdHex, epochSig, moderation, queryClient]);
 
-  return useQuery({
+  const query = useQuery({
     queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
@@ -402,14 +445,16 @@ export function useConcordChannelMessages(community: Community | undefined, chan
        * post-backfill refresh.
        */
       const composeFromStore = async (): Promise<OpenedMessage[]> => {
-        const { messages: opened, deletes } = await readAndFold(
+        const { messages: opened, deletes, hasMore: more } = await readAndFold(
           store,
           channel!,
           epochKeys,
           zs,
+          windowLimitRef.current,
           moderation,
           signal,
         );
+        setHasMore(more);
 
         // Union by message id with what's already shown; the store read wins on
         // conflict (it's verified), but a just-arrived live message / optimistic
@@ -492,6 +537,29 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       return local;
     },
   });
+
+  /**
+   * Reveal an older page of history: grow the decode window by {@link WINDOW_SIZE}
+   * and re-read the store, so the next-oldest sealed blobs are decrypted and
+   * folded in. Resolves to the number of messages prepended (0 when nothing
+   * older), so the timeline can hold the reading position. Like NIP-29's
+   * `loadOlder`, but the "fetch" is a local decode rather than a relay round-trip.
+   */
+  const loadOlder = useCallback(async (): Promise<number> => {
+    if (!hasMore || isLoadingOlder) return 0;
+    const before = query.data?.length ?? 0;
+    windowLimitRef.current += WINDOW_SIZE;
+    setIsLoadingOlder(true);
+    try {
+      const result = await query.refetch();
+      const after = result.data?.length ?? 0;
+      return Math.max(0, after - before);
+    } finally {
+      setIsLoadingOlder(false);
+    }
+  }, [hasMore, isLoadingOlder, query]);
+
+  return { ...query, loadOlder, hasMore, isLoadingOlder };
 }
 
 /**
@@ -797,57 +865,176 @@ export interface ConcordReactionTally {
   url?: string;
 }
 
+/** target message id → emoji → {reactors, url}. */
+type ReactionTallyMap = Map<string, Map<string, ConcordReactionTally>>;
+
+/** Fold a batch of ALREADY-OPENED reaction events into a (cloned) tally map. */
+function tallyReactions(base: ReactionTallyMap | undefined, opened: OpenedMessage[]): ReactionTallyMap {
+  // Clone so we never mutate the cached object in place (React identity).
+  const tally: ReactionTallyMap = new Map();
+  if (base) {
+    for (const [target, byEmoji] of base) {
+      const cloned = new Map<string, ConcordReactionTally>();
+      for (const [emoji, entry] of byEmoji) cloned.set(emoji, { reactors: new Set(entry.reactors), url: entry.url });
+      tally.set(target, cloned);
+    }
+  }
+  for (const om of opened) {
+    const target = om.tags.find((t) => t[0] === "e")?.[1];
+    if (!target || !om.content) continue;
+    // NIP-30 custom emoji: content is `:shortcode:`, the `emoji` tag holds its
+    // image URL (`["emoji", shortcode, url]`). Keep it so the pill renders the
+    // image instead of the literal shortcode text.
+    const url = om.tags.find((t) => t[0] === "emoji")?.[2];
+    let byEmoji = tally.get(target);
+    if (!byEmoji) tally.set(target, (byEmoji = new Map()));
+    let entry = byEmoji.get(om.content);
+    if (!entry) byEmoji.set(om.content, (entry = { reactors: new Set() }));
+    entry.reactors.add(om.author);
+    if (url && !entry.url) entry.url = url;
+  }
+  return tally;
+}
+
 /**
- * Fetch + decrypt reactions (kind 3301) for a channel and tally them per target
- * message. Each reaction's `content` is the emoji; its reply `e` tag names the
- * reacted-to message. A NIP-30 custom-emoji reaction additionally carries an
- * `emoji` tag (`["emoji", shortcode, url]`) so the pill renders the image rather
- * than the literal `:shortcode:`. Reuses the same per-epoch envelope read path.
+ * Load + tally reactions (kind 3301) for a channel, keyed per target message.
+ *
+ * Local-first + live, mirroring {@link useConcordChannelMessages} so reactions
+ * paint WITH the timeline instead of arriving seconds later: the sealed reaction
+ * blobs (mirrored into IndexedDB by the batcher) are read + decoded from the
+ * local store immediately, then a background relay query reconciles, and a live
+ * `req()` subscription upserts new reactions the instant they arrive. (The old
+ * version was network-only with a 30s poll, so reactions lagged the first paint
+ * by a relay round-trip and could take up to 30s to update.)
  */
 export function useConcordReactions(community: Community | undefined, channel: Channel | undefined) {
   const { nostr } = useNostr();
+  const eventStore = useEventStore();
+  const queryClient = useQueryClient();
 
-  return useQuery({
-    queryKey: ["concord", "reactions", channel ? bytesToHex(channel.id) : null],
+  const channelIdHex = channel ? bytesToHex(channel.id) : null;
+  const queryKey = ["concord", "reactions", channelIdHex];
+  const persistKey = channelIdHex ? `reactions:${channelIdHex}` : null;
+  // `zs` (epoch pseudonyms) signature, so the live effect re-subscribes when a
+  // rekey is caught up. Kept as a primitive dep.
+  const zsSig = channel ? channelPseudonyms(channel).join(",") : "";
+
+  // Restore the last persisted tally from IndexedDB on mount, so reactions paint
+  // INSTANTLY on a refresh of a visited channel instead of waiting for the
+  // (chunked) decode of up to 500 sealed reaction blobs. Seeds the query cache
+  // only when empty; the decode-from-store result then replaces it.
+  useEffect(() => {
+    if (!persistKey || !channelIdHex) return;
+    let cancelled = false;
+    void readFolded<ReactionTallyMap>(persistKey).then((restored) => {
+      if (cancelled || !restored) return;
+      queryClient.setQueryData<ReactionTallyMap>(queryKey, (old) =>
+        old && old.size > 0 ? old : restored,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistKey, channelIdHex, queryClient]);
+
+  // Live subscription: stream new reactions and fold them into the cached tally
+  // the instant the relay forwards them (replaces waiting on the 30s poll).
+  useEffect(() => {
+    if (!community || !channel || !channelIdHex) return;
+    const epochKeys = readEpochKeys(channel);
+    const zs = channelPseudonyms(channel);
+    const controller = new AbortController();
+    const since = Math.floor(Date.now() / 1000) - 5;
+
+    const apply = async (events: NostrEvent[]) => {
+      const opened = await openMemoizedBatch(events, channel.id, epochKeys, { signal: controller.signal });
+      if (opened.length === 0) return;
+      queryClient.setQueryData<ReactionTallyMap>(queryKey, (old) => tallyReactions(old, opened));
+    };
+
+    for (const url of community.relays) {
+      void (async () => {
+        try {
+          for await (const msg of nostr.relay(url).req(
+            [{ kinds: [KIND_COMMUNITY_REACTION], "#z": zs, since }],
+            { signal: controller.signal },
+          )) {
+            if (msg[0] === "EVENT") await apply([msg[2] as NostrEvent]);
+          }
+        } catch {
+          // Subscription ended (abort or relay closed) — the poll covers gaps.
+        }
+      })();
+    }
+
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nostr, community, channelIdHex, zsSig, queryClient]);
+
+  const query = useQuery<ReactionTallyMap>({
+    queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
-    // Reactions are less latency-critical than messages and re-tally the whole
-    // window per poll; keep the cadence modest to limit repeated decryption.
+    // Backstop poll; the live subscription delivers new reactions instantly.
     refetchInterval: 30_000,
     queryFn: async ({ signal }) => {
       const epochKeys = readEpochKeys(channel!);
       const zs = channelPseudonyms(channel!);
-      const results = await Promise.all(
-        community!.relays.map((url) =>
-          nostr
-            .relay(url)
-            .query([{ kinds: [3301], "#z": zs, limit: 500 }], {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-            })
-            .catch(() => [] as NostrEvent[]),
-        ),
-      );
-      // target id → emoji → { reactors, url }
-      const tally = new Map<string, Map<string, ConcordReactionTally>>();
-      for (const ev of results.flat()) {
-        // Memoized open: a re-tally each poll re-reads the same blobs, so
-        // decode-once keeps the repeated verify cost off the main thread.
-        const opened = openMemoized(ev, channel!.id, epochKeys);
-        if (!opened) continue; // not ours / invalid
-        const target = opened.tags.find((t) => t[0] === "e")?.[1];
-        if (!target || !opened.content) continue;
-        // NIP-30 custom emoji: content is `:shortcode:`, the `emoji` tag holds
-        // its image URL (`["emoji", shortcode, url]`). Keep it so the pill can
-        // render the image instead of the literal shortcode text.
-        const url = opened.tags.find((t) => t[0] === "emoji")?.[2];
-        let byEmoji = tally.get(target);
-        if (!byEmoji) tally.set(target, (byEmoji = new Map()));
-        let entry = byEmoji.get(opened.content);
-        if (!entry) byEmoji.set(opened.content, (entry = { reactors: new Set() }));
-        entry.reactors.add(opened.author);
-        if (url && !entry.url) entry.url = url;
-      }
-      return tally;
+      const store = await eventStore;
+
+      // 1. LOCAL-FIRST: read mirrored reaction blobs from IndexedDB and tally
+      //    them immediately, so reactions render with the timeline. Decode is
+      //    chunked/yielding (decode-once memoized), so a cold backlog never
+      //    blocks paint. (The persisted snapshot — seeded above — already paints
+      //    instantly on a revisit while this decode runs.)
+      const localSealed = await store.query([{ kinds: [KIND_COMMUNITY_REACTION], "#z": zs, limit: 500 }]);
+      const localOpened = await openMemoizedBatch(localSealed, channel!.id, epochKeys, { signal });
+      const local = tallyReactions(undefined, localOpened);
+
+      // 2. BACKGROUND refresh from the relays (NOT awaited — never gates render).
+      void (async () => {
+        if (signal.aborted) return;
+        try {
+          const results = await Promise.all(
+            community!.relays.map((url) =>
+              nostr
+                .relay(url)
+                .query([{ kinds: [KIND_COMMUNITY_REACTION], "#z": zs, limit: 500 }], {
+                  signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+                })
+                .catch(() => [] as NostrEvent[]),
+            ),
+          );
+          if (signal.aborted) return;
+          const opened = await openMemoizedBatch(results.flat(), channel!.id, epochKeys, { signal });
+          if (signal.aborted || opened.length === 0) return;
+          // Authoritative rebuild from the full network set (not a merge), so a
+          // reaction that was retracted upstream isn't retained. The live
+          // subscription handles incremental adds between refreshes.
+          queryClient.setQueryData<ReactionTallyMap>(queryKey, tallyReactions(undefined, opened));
+        } catch {
+          // Best-effort; the local-first tally already rendered.
+        }
+      })();
+
+      return local;
     },
   });
+
+  // Persist the tally so a future refresh paints reactions instantly from cache.
+  // Keyed on size+a cheap signature so an identical re-tally doesn't churn writes.
+  const lastWritten = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!persistKey || !query.data || query.data.size === 0) return;
+    let sig = "";
+    for (const [target, byEmoji] of query.data) {
+      for (const [emoji, entry] of byEmoji) sig += `${target}:${emoji}:${entry.reactors.size};`;
+    }
+    if (sig === lastWritten.current) return;
+    lastWritten.current = sig;
+    void writeFolded(persistKey, query.data);
+  }, [persistKey, query.data]);
+
+  return query;
 }

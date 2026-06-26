@@ -1,11 +1,11 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
-import { usePersistedFold } from "@/hooks/usePersistedFold";
+import { useDeferredFold } from "@/hooks/useDeferredFold";
 import {
   buildGrantEditionUnsigned,
   buildRoleEditionUnsigned,
@@ -112,15 +112,17 @@ export function useConcordRoster(community: Community | undefined) {
   const control = useConcordControlEvents(community);
   const events = control.data;
 
-  const live = useMemo<FoldedRoster | undefined>(() => {
-    if (!community || !events) return undefined;
-    return foldRoster(events, community.serverRootKey, community.id, community.ownerAttestation);
-  }, [community, events]);
-
-  // Paint the last-folded roster from IndexedDB on reload (admin badges, member
-  // list) until the freshly re-read control events re-fold; then persist the
-  // live result for next time.
-  const data = usePersistedFold(community ? `roster:${bytesToHex(community.id)}` : null, live);
+  // Fold OFF the render path (deferred to after paint) so a large control plane
+  // doesn't block the channel's first frame; the persisted snapshot paints
+  // admin badges / member list meanwhile.
+  const data = useDeferredFold<FoldedRoster>(
+    community ? `roster:${bytesToHex(community.id)}` : null,
+    () =>
+      community && events
+        ? foldRoster(events, community.serverRootKey, community.id, community.ownerAttestation)
+        : undefined,
+    [community, events],
+  );
 
   return { ...control, data } as typeof control & { data: FoldedRoster | undefined };
 }

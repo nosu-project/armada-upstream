@@ -18,7 +18,7 @@ const TIMELINE_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
 const LIVE_KINDS = [KIND_GROUP_CHAT, KIND_POLL, KIND_DELETE];
 
 /** How many messages to fetch per page (initial load and each backfill). */
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 30;
 
 /**
  * Largest gap (seconds) between the cursor message and the next-oldest before

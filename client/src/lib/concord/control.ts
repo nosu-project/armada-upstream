@@ -110,6 +110,38 @@ export function openControlEditionMemo(outer: NostrEvent, serverRoot: Uint8Array
   return inner;
 }
 
+/**
+ * Decode-once cache for the FULLY-PARSED (decrypted + Schnorr-verified) control
+ * edition, keyed by the outer event id. The roster, metadata, and banlist folds
+ * each opened+verified the same control editions independently on every mount
+ * and 30s poll — so a community with a large control history paid the
+ * `verifyEvent` cost ~3× per edition, synchronously, on every page load (the
+ * main-thread block that delayed the channel's first paint). An outer id is
+ * unique and its parsed edition is immutable, so memoizing the parse here makes
+ * verify run exactly once per edition per session. `null` remembers a parse
+ * FAILURE (bad-sig / malformed) so it isn't re-verified either. Session-scoped.
+ */
+const parsedEditionMemo = new Map<string, ParsedEdition | null>();
+
+/**
+ * Open + parse + verify a control outer, memoized by outer id (so the expensive
+ * decrypt + Schnorr verify happens once across all folds and polls in a
+ * session). Returns `undefined` for an outer that can't be opened/parsed under
+ * this server root (not ours / bad-sig / malformed), remembering the failure.
+ */
+function openAndParseEditionMemo(outer: NostrEvent, serverRoot: Uint8Array): ParsedEdition | undefined {
+  const cached = parsedEditionMemo.get(outer.id);
+  if (cached !== undefined) return cached ?? undefined;
+  let parsed: ParsedEdition | null;
+  try {
+    parsed = parseEditionInner(openControlEditionMemo(outer, serverRoot));
+  } catch {
+    parsed = null; // not ours / bad-sig / malformed — remember the skip
+  }
+  parsedEditionMemo.set(outer.id, parsed);
+  return parsed ?? undefined;
+}
+
 
 // ── Edition builders ──────────────────────────────────────────────────────────
 
@@ -268,18 +300,8 @@ function foldRosterUncached(
   const roleEntities = new Map<string, ParsedEdition[]>();
   const grantEntities = new Map<string, ParsedEdition[]>();
   for (const outer of outers) {
-    let inner: NostrEvent;
-    try {
-      inner = openControlEditionMemo(outer, serverRoot);
-    } catch {
-      continue;
-    }
-    let parsed: ParsedEdition;
-    try {
-      parsed = parseEditionInner(inner);
-    } catch {
-      continue;
-    }
+    const parsed = openAndParseEditionMemo(outer, serverRoot);
+    if (!parsed) continue;
     const key = bytesToHex(parsed.entityId);
     if (parsed.vsk === VSK_ROLE) push(roleEntities, key, parsed);
     else if (parsed.vsk === VSK_GRANT) push(grantEntities, key, parsed);
@@ -343,18 +365,8 @@ export function foldMetadata(
   const channelEntities = new Map<string, ParsedEdition[]>();
 
   for (const outer of outers) {
-    let inner: NostrEvent;
-    try {
-      inner = openControlEditionMemo(outer, serverRoot);
-    } catch {
-      continue;
-    }
-    let parsed: ParsedEdition;
-    try {
-      parsed = parseEditionInner(inner);
-    } catch {
-      continue;
-    }
+    const parsed = openAndParseEditionMemo(outer, serverRoot);
+    if (!parsed) continue;
     const key = bytesToHex(parsed.entityId);
     if (parsed.vsk === VSK_COMMUNITY_ROOT) push(rootEntities, key, parsed);
     else if (parsed.vsk === VSK_CHANNEL) push(channelEntities, key, parsed);
@@ -433,18 +445,8 @@ export function foldBanlist(
   const eid = bytesToHex(banlistLocator(communityId));
   const editions: ParsedEdition[] = [];
   for (const outer of outers) {
-    let inner: NostrEvent;
-    try {
-      inner = openControlEditionMemo(outer, serverRoot);
-    } catch {
-      continue;
-    }
-    let parsed: ParsedEdition;
-    try {
-      parsed = parseEditionInner(inner);
-    } catch {
-      continue;
-    }
+    const parsed = openAndParseEditionMemo(outer, serverRoot);
+    if (!parsed) continue;
     if (parsed.vsk === VSK_BANLIST && bytesToHex(parsed.entityId) === eid) editions.push(parsed);
   }
   if (editions.length === 0) return { banned: new Set() };

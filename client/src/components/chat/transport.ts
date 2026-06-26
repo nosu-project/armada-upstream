@@ -81,6 +81,8 @@ export interface ChatTransport {
 
   /** Threaded-reply count for a message id (drives the "N replies" badge). */
   replyCountFor?: (id: string) => number;
+  /** Resolved reaction tallies + toggle for a message id (batched per room). */
+  reactionsFor?: (id: string) => MessageReactions;
   /** Open the threaded-replies panel for a message. */
   openThread?: (event: ChatMsg, focusReply?: boolean) => void;
 }
