@@ -32,6 +32,7 @@ import { useConcordActions } from "@/hooks/useConcordActions";
 import { useConcordCommunity } from "@/hooks/useConcordList";
 import { useConcordCommunityActions } from "@/hooks/useConcordCommunityActions";
 import { useConcordMetadata } from "@/hooks/useConcordMetadata";
+import { useCommunityImageDescriptors } from "@/hooks/useCommunityImageDescriptors";
 import { useConcordModeration } from "@/hooks/useConcordModeration";
 import { useConcordTyping, useConcordTypingPublisher } from "@/hooks/useConcordTyping";
 import { useConcordRosterActions, concordMembers } from "@/hooks/useConcordRoster";
@@ -238,22 +239,30 @@ export function ConcordPage() {
   // and channel names reflect authoritative, owner-controlled edits — while keys
   // and relays stay sourced from the sealed bundle.
   const { data: folded } = useConcordMetadata(baseCommunity);
+  // Resolve icon/banner descriptors with a synchronous, disk-backed fallback so
+  // they paint on the first frame after reload instead of flickering through the
+  // initials/shield fallback while the (async) folded metadata lands.
+  const { icon: seededIcon, banner: seededBanner } = useCommunityImageDescriptors(baseCommunity, folded);
   const community = useMemo<Community | undefined>(() => {
     if (!baseCommunity) return undefined;
-    if (!folded) return baseCommunity;
+    if (!folded) {
+      // Even before the fold lands, carry the last-known-good icon/banner so the
+      // header/rail don't blank.
+      return { ...baseCommunity, icon: seededIcon, banner: seededBanner };
+    }
     const channelNames = folded.channelNames instanceof Map ? folded.channelNames : undefined;
     return {
       ...baseCommunity,
       name: folded.root?.name ?? baseCommunity.name,
       description: folded.root?.description ?? baseCommunity.description,
-      icon: folded.root?.icon ?? baseCommunity.icon,
-      banner: folded.root?.banner ?? baseCommunity.banner,
+      icon: folded.root?.icon ?? seededIcon,
+      banner: folded.root?.banner ?? seededBanner,
       channels: baseCommunity.channels.map((ch) => {
         const name = channelNames?.get(bytesToHex(ch.id));
         return name ? { ...ch, name } : ch;
       }),
     };
-  }, [baseCommunity, folded]);
+  }, [baseCommunity, folded, seededIcon, seededBanner]);
   const [channelIdHex, setChannelIdHex] = useState<string | null>(null);
 
   const channel = useMemo(() => {

@@ -12,6 +12,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useConcordList, useConcordCommunity } from "@/hooks/useConcordList";
 import { useConcordMetadata } from "@/hooks/useConcordMetadata";
+import { useCommunityImageDescriptors } from "@/hooks/useCommunityImageDescriptors";
 import { useDecryptedCommunityImage } from "@/hooks/useDecryptedCommunityImage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
@@ -269,7 +270,10 @@ function ConcordButton({
   // then decrypt the encrypted Blossom blob for display. Falls back to initials.
   const community = useConcordCommunity(communityId);
   const { data: folded } = useConcordMetadata(community);
-  const icon = folded?.root?.icon ?? community?.icon;
+  // Resolve the icon descriptor with a synchronous, disk-backed fallback so it's
+  // present on the first frame after reload (the folded metadata that normally
+  // carries it lands asynchronously, which is what made the avatar flicker).
+  const { icon } = useCommunityImageDescriptors(community, folded);
   const iconUrl = useDecryptedCommunityImage(icon);
   return (
     <Tooltip>
