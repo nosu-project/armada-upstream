@@ -33,6 +33,7 @@ import { useInsertText } from "@/hooks/useInsertText";
 import { useMentionInsertions } from "@/hooks/useMentionBus";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { useToast } from "@/hooks/useToast";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
@@ -465,7 +466,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     () =>
       Array.from(uploadedFileGroups.entries()).map(([url, tags]) => {
         const mime = tags.find((t) => t[0] === "m")?.[1] ?? "";
-        return { url, mime, isImage: mime.startsWith("image/") };
+        // Encrypted (Concord) attachments live on Blossom as ciphertext, so the
+        // preview must fetch + AES-GCM-decrypt them (same as the receive side)
+        // rather than point an <img> at the raw ciphertext URL.
+        const enc = attachmentEncryption.current.get(url);
+        const encryption = enc
+          ? { algorithm: enc.algorithm, key: enc.key, nonce: enc.nonce }
+          : undefined;
+        return { url, mime, isImage: mime.startsWith("image/"), encryption };
       }),
     [uploadedFileGroups],
   );
@@ -751,6 +759,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // signer crypto is serialized by the per-identity signer queue instead.
     if (!sendOverride && !onOptimisticInsert && isSending) return;
 
+    // Build the tags BEFORE resetting the composer. `resetComposeState` clears
+    // the per-upload encryption ref (`attachmentEncryption`), so building tags
+    // after the reset would drop every encrypted attachment's
+    // `decryption-key`/`decryption-nonce` from its imeta — publishing the
+    // ciphertext URL with no way to decrypt it (a broken image for everyone).
+    const tags = buildMessageTags(finalText);
+
     try {
       if (sendOverride) {
         // Delegated send (e.g. DMs): the caller owns publishing. Clear the
@@ -761,7 +776,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // result here.
         resetComposeState();
         onSent?.();
-        void Promise.resolve(sendOverride(finalText, buildMessageTags(finalText))).catch(() => {
+        void Promise.resolve(sendOverride(finalText, tags)).catch(() => {
           // Delivery/sign failures are surfaced inline by the override.
         });
       } else if (onOptimisticInsert) {
@@ -778,7 +793,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             await createEvent({
               kind: KIND_GROUP_CHAT,
               content: finalText,
-              tags: buildMessageTags(finalText),
+              tags,
               relay: relayUrl,
               onSigned: (event) => {
                 signedId = event.id;
@@ -805,7 +820,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         await createEvent({
           kind: KIND_GROUP_CHAT,
           content: finalText,
-          tags: buildMessageTags(finalText),
+          tags,
           relay: relayUrl,
         });
         resetComposeState();
@@ -1068,7 +1083,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               className="group relative size-20 rounded-lg overflow-hidden border border-border bg-secondary/40 shrink-0"
             >
               {att.isImage ? (
-                <img src={att.url} alt="attachment" className="size-full object-cover" />
+                <AttachmentPreviewImage url={att.url} mime={att.mime} encryption={att.encryption} />
               ) : (
                 <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
                   <Paperclip className="size-5" />
@@ -1548,4 +1563,34 @@ function ReplyBanner({ event, onCancel }: { event: NostrEvent; onCancel?: () => 
       </button>
     </div>
   );
+}
+
+/**
+ * Composer attachment-chip thumbnail. Plain uploads point an <img> at the URL;
+ * encrypted (Concord) uploads are ciphertext on Blossom, so this resolves them
+ * through {@link useResolvedMediaSrc} (fetch + AES-GCM decrypt to an object URL)
+ * exactly like the message render path, so the local preview isn't a broken img.
+ */
+function AttachmentPreviewImage({
+  url,
+  mime,
+  encryption,
+}: {
+  url: string;
+  mime: string;
+  encryption?: ImetaEncryption;
+}) {
+  const resolved = useResolvedMediaSrc(encryption ? { url, encryption, mime } : url);
+  if (resolved.status !== "ready") {
+    return (
+      <div className="size-full flex items-center justify-center bg-secondary/40">
+        {resolved.status === "loading" ? (
+          <Loader2 className="size-5 animate-spin text-muted-foreground" />
+        ) : (
+          <Paperclip className="size-5 text-muted-foreground" />
+        )}
+      </div>
+    );
+  }
+  return <img src={resolved.src} alt="attachment" className="size-full object-cover" />;
 }
