@@ -34,7 +34,7 @@ import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
 import { useCalendarEvents } from "@/hooks/useCalendarEvents";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
-import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
+import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
 import { toast } from "@/hooks/useToast";
 import { routeParamToRelay } from "@/lib/platform";
 import { relayRejectionMessage } from "@/lib/nip29";
@@ -108,6 +108,7 @@ export function GroupPage() {
   const leave = useLeaveGroup(relayUrl ?? "", groupId ?? "");
   const { removeUser, putUser, deleteGroup } = useGroupModeration(relayUrl ?? "", groupId ?? "");
   const { mutateAsync: updateList } = useUpdateUserGroupList();
+  const { data: userGroupList } = useUserGroupList();
   const { activeCall, joinCall } = useCall();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -162,11 +163,25 @@ export function GroupPage() {
   }
 
   const group = details?.group;
+  // The user's own kind 10009 list (NIP-51) is the locally-persisted,
+  // cross-device source of truth for "groups I joined". Unlike the relay's
+  // membership signals (kind 9000/9001, kind 39002 members), it's cached in the
+  // folded plaintext IndexedDB store and survives an app reopen, so it resolves
+  // instantly and offline. The relay queries, by contrast, run cold on reopen
+  // and can come back empty/slow/AUTH-gated — which previously flipped a real
+  // member back to the "Join channel" prompt. Treating presence in the user's
+  // own list as a membership signal fixes that.
+  const joinedLocally = Boolean(
+    userGroupList?.groups.some((g) => g.id === groupId && g.relay === relayUrl),
+  );
   // Admins may only appear in the kind 39001 admins list (e.g. the group
   // creator), not in 39002 members or via 9000 put-user events, so treat
   // admin status as membership too.
   const isMember =
-    isAdmin || Boolean(membership?.isMember) || Boolean(user && details?.members.includes(user.pubkey));
+    isAdmin ||
+    joinedLocally ||
+    Boolean(membership?.isMember) ||
+    Boolean(user && details?.members.includes(user.pubkey));
   // NIP-29 relays generally only accept writes from members (relay29 always
   // does), so gate the composer on membership.
   const canWrite = Boolean(user) && isMember;
