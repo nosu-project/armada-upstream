@@ -4,6 +4,34 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.9.1] - 2026-06-27
+
+Chat is faster and steadier, especially on Android. Opening a channel no longer
+stalls or flashes a half-empty timeline before history appears, new messages
+arrive promptly even after the app has been backgrounded, and tapping a message
+notification jumps you straight to that channel with the message already on
+screen. The Android back gesture now steps back through the app the way you'd
+expect.
+
+### Changed
+- Tapping a message notification now opens the exact channel it came from, with
+  the message already loaded, instead of dropping you on the community.
+- The Android back gesture and button now reveal the channel list from a
+  conversation and step back through the app, rather than navigating away
+  unexpectedly.
+
+### Fixed
+- Opening a channel is much faster and no longer stalls for several seconds or
+  flashes a single message followed by a blank gap before history loads.
+- New messages now keep arriving reliably after the app has been in the
+  background, catching up the moment you return or reconnect.
+- New messages in busy communities no longer stop appearing once a channel
+  accumulates lots of reactions.
+- Switching channels keeps the previous conversation on screen until the next
+  one loads instead of flashing a loading skeleton.
+- Connecting to sign-in-required relays with a remote signer is more reliable
+  and no longer gets stuck retrying, so those rooms receive messages.
+
 ## [0.9.0] - 2026-06-26
 
 Navigating channels on mobile now feels like Discord: swipe from the left edge
