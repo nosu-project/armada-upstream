@@ -39,6 +39,19 @@ export interface ReactInput {
   emojiUrl?: string;
 }
 
+/**
+ * NIP-30 custom-emoji tag for a reaction: when the content is a `:shortcode:`
+ * with an image URL, the pill renders the image via an `["emoji", code, url]`
+ * tag. Native/unicode reactions carry no extra tag. Shared by NIP-29 group
+ * reactions and Concord so both build the tag identically.
+ */
+export function customEmojiReactionTags(content: string, emojiUrl?: string): string[][] {
+  if (emojiUrl && content.startsWith(":") && content.endsWith(":")) {
+    return [["emoji", content.slice(1, -1), emojiUrl]];
+  }
+  return [];
+}
+
 /** Normalize a kind 7 reaction's content into a display key. */
 function reactionKey(event: NostrEvent): string {
   const content = event.content;
@@ -191,11 +204,8 @@ export function useGroupReactions(
         ["p", target.pubkey],
         ["k", String(target.kind)],
         ["h", groupId!],
+        ...customEmojiReactionTags(content, emojiUrl),
       ];
-      // NIP-30 custom emoji: content is `:shortcode:`, emoji tag carries the url.
-      if (emojiUrl && content.startsWith(":") && content.endsWith(":")) {
-        tags.push(["emoji", content.slice(1, -1), emojiUrl]);
-      }
       await createEvent({ kind: KIND_REACTION, content, tags, relay: relayUrl });
     },
     onSuccess: () => {

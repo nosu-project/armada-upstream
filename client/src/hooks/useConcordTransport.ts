@@ -8,6 +8,7 @@ import {
   useSendConcordMessage,
 } from "@/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { KIND_COMMUNITY_REACTION } from "@/lib/concord/kinds";
 
 import type { OpenedMessage } from "@/lib/concord/envelope";
@@ -124,18 +125,11 @@ export function useConcordTransport(
       let fn = reactCache.get(id);
       if (!fn) {
         fn = (input: ReactInput) => {
-          // NIP-30 custom emoji: content is `:shortcode:` and the image URL rides
-          // along on an `emoji` inner tag so the reaction pill renders the image
-          // (matching NIP-29). Native/unicode reactions carry no extra tag.
-          const extraTags =
-            input.emojiUrl && input.content.startsWith(":") && input.content.endsWith(":")
-              ? [["emoji", input.content.slice(1, -1), input.emojiUrl]]
-              : undefined;
           void send({
             content: input.content,
             kind: KIND_COMMUNITY_REACTION,
             reference: id,
-            extraTags,
+            extraTags: customEmojiReactionTags(input.content, input.emojiUrl),
           }).catch(() => {});
         };
         reactCache.set(id, fn);
