@@ -5,7 +5,7 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage } from "@/components/chat/ChatMessage";
+import { ChatMessage, getReplyToId } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline } from "@/components/chat/MessageTimeline";
@@ -89,11 +89,6 @@ function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
       <img src={url} alt="" className="size-full object-cover" />
     </div>
   );
-}
-
-/** The reply target id for a Concord message (NIP-10 marked reply e-tag). */
-function replyTargetId(event: ChatMsg): string | undefined {
-  return event.tags.find((t) => t[0] === "e" && t[3] === "reply")?.[1];
 }
 
 interface ConcordChatMessageProps {
@@ -716,7 +711,7 @@ export function ConcordPage() {
                 </p>
               }
               renderMessage={(msg, continuation) => {
-                const replyTo = replyTargetId(msg);
+                const replyTo = getReplyToId(msg);
                 const replyPk = replyTo ? pubkeyById.get(replyTo) : undefined;
                 return (
                   <ConcordChatMessage
