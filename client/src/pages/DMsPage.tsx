@@ -1,4 +1,4 @@
-import { AlertCircle, ChevronLeft, Headphones, Loader2, MessageSquare, PenSquare, Phone, Plus, RotateCw, Search, UserCheck, Users, X } from "lucide-react";
+import { AlertCircle, BellOff, ChevronLeft, Headphones, Loader2, MessageSquare, PenSquare, Phone, Plus, RotateCw, Search, UserCheck, Users, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -16,11 +16,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useFollowList } from "@/hooks/useFollowList";
+import { useMuteUser } from "@/hooks/useMuteList";
 import {
   useDMConversations,
   useDirectMessages,
@@ -239,6 +250,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { activeCall, joinDmCall } = useCall();
+  const muteUser = useMuteUser();
   const scrollRef = useRef<HTMLDivElement>(null);
   // The inner content wrapper, observed for size changes (images/embeds/lazy
   // decrypts) so we can keep the view pinned to the bottom as it grows.
@@ -246,6 +258,31 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   // Pre-prepend scroll metrics, used to hold the reading position when older
   // messages are backfilled above the viewport.
   const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
+
+  // Inline message search: toggled from the header, filters the loaded thread
+  // client-side (no extra relay queries). The mute confirm dialog is opened
+  // from the header's mute button.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [muteConfirmOpen, setMuteConfirmOpen] = useState(false);
+
+  // Reset the inline search whenever we switch conversations.
+  useEffect(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+  }, [peer]);
+
+  // Messages shown after applying the inline search filter (case-insensitive
+  // substring match on the decrypted text). Encrypted placeholders have no
+  // searchable text yet, so they're excluded while a query is active.
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
+  const visibleMessages = useMemo(
+    () =>
+      normalizedSearch
+        ? messages.filter((m) => m.content?.toLocaleLowerCase().includes(normalizedSearch))
+        : messages,
+    [messages, normalizedSearch],
+  );
 
   // Voice: derive the shared DM room id and find a LiveKit-capable relay to
   // host the call. DMs are stored on general app relays (which usually don't
@@ -451,6 +488,23 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
     [send, toast],
   );
 
+  const handleMute = useCallback(async () => {
+    setMuteConfirmOpen(false);
+    try {
+      await muteUser.mutateAsync(peer);
+      toast({ title: "Muted", description: `You won't see messages from ${name}.` });
+      // Leave the (now-hidden) thread — the conversation list filters out
+      // muted peers, so returning to it drops this conversation.
+      onBack();
+    } catch (e) {
+      toast({
+        title: "Couldn't mute",
+        description: e instanceof Error ? e.message : "Failed to update your mute list.",
+        variant: "destructive",
+      });
+    }
+  }, [muteUser, peer, name, toast, onBack]);
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <header className="h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
@@ -498,7 +552,69 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             </TooltipContent>
           </Tooltip>
         )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={searchOpen ? "Close search" : "Search messages"}
+              aria-pressed={searchOpen}
+              className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={() => setSearchOpen((open) => !open)}
+            >
+              {searchOpen ? <X className="size-4" /> : <Search className="size-4" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{searchOpen ? "Close search" : "Search messages"}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Mute ${name}`}
+              className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+              onClick={() => setMuteConfirmOpen(true)}
+            >
+              <BellOff className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Mute conversation</TooltipContent>
+        </Tooltip>
       </header>
+
+      {/* Inline message search — filters the loaded thread client-side. */}
+      {searchOpen && (
+        <div className="mx-2 mt-2 px-1 shrink-0">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setSearchOpen(false);
+                  setSearchQuery("");
+                }
+              }}
+              placeholder="Search messages…"
+              aria-label="Search messages"
+              className="pl-8 pr-8"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => setSearchQuery("")}
+              >
+                <X className="size-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Top-of-chat call stage portal target (active when this DM is in call). */}
       <CallStageSlot active={inThisCall} />
@@ -523,6 +639,14 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             <p className="text-sm text-muted-foreground">No messages yet</p>
             <p className="text-xs text-muted-foreground/60 mt-1">Say hello to {name}!</p>
           </div>
+        ) : normalizedSearch && visibleMessages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <Search className="size-10 text-muted-foreground/40 mb-3" />
+            <p className="text-sm text-muted-foreground">No matching messages</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">
+              Only loaded messages are searched — scroll up to load more.
+            </p>
+          </div>
         ) : (
           <>
             {isLoadingOlder && (
@@ -530,9 +654,10 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 <Loader2 className="size-4 animate-spin text-muted-foreground" />
               </div>
             )}
-            {messages.map((m, i) => {
-              const prev = messages[i - 1];
+            {visibleMessages.map((m, i) => {
+              const prev = visibleMessages[i - 1];
               const continuation =
+                !normalizedSearch &&
                 !!prev &&
                 prev.pubkey === m.pubkey &&
                 m.created_at - prev.created_at < DM_CONTINUATION_WINDOW_SECONDS;
@@ -558,6 +683,30 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         placeholder={`Message ${name}…`}
         sendOverride={handleSubmit}
       />
+
+      <AlertDialog open={muteConfirmOpen} onOpenChange={setMuteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Mute {name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This conversation will be hidden and you won't see new messages from {name}.
+              You can unmute them later from your mute list.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void handleMute();
+              }}
+              disabled={muteUser.isPending}
+            >
+              {muteUser.isPending ? "Muting…" : "Mute"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
