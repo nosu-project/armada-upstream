@@ -13,6 +13,7 @@ import { KIND_COMMUNITY_REACTION } from "@/lib/concord/kinds";
 
 import type { OpenedMessage } from "@/lib/concord/envelope";
 import type { Channel, Community } from "@/lib/concord/types";
+import { toChatMsg } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageReactions, ReactInput, ReactionTally } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -27,15 +28,14 @@ const EMPTY_TALLIES: ReactionTally[] = [];
  * (verified on open); the sig is omitted (rendering never re-verifies it).
  */
 export function openedToEvent(m: OpenedMessage): ChatMsg {
-  return {
+  return toChatMsg({
     id: m.messageId,
     pubkey: m.author,
     created_at: Math.floor(m.ms / 1000),
     kind: m.kind,
     tags: m.tags,
     content: m.content,
-    sig: "",
-  };
+  });
 }
 
 /**

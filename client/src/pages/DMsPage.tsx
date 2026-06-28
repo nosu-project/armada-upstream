@@ -7,6 +7,7 @@ import { CallStageSlot } from "@/components/chat/CallStage";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageRow } from "@/components/chat/MessageRow";
+import { toChatMsg } from "@/components/chat/transport";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
@@ -24,6 +25,7 @@ import {
   useDMConversations,
   useDirectMessages,
   useDMSupport,
+  KIND_DM,
   type DecryptedDM,
 } from "@/hooks/useDirectMessages";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
@@ -181,15 +183,14 @@ function DMMessage({
   }, [message.encrypted, message.id, observePlaceholder]);
 
   const event = useMemo<NostrEvent>(
-    () => ({
-      id: message.id,
-      pubkey: message.pubkey,
-      created_at: message.created_at,
-      kind: 4,
-      content: message.content,
-      tags: [],
-      sig: "",
-    }),
+    () =>
+      toChatMsg({
+        id: message.id,
+        pubkey: message.pubkey,
+        created_at: message.created_at,
+        kind: KIND_DM,
+        content: message.content,
+      }),
     [message],
   );
 

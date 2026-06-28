@@ -29,6 +29,32 @@ export type { ReactInput, ReactionTally, SendStatus };
 export type ChatMsg = NostrEvent;
 
 /**
+ * Adapt a non-`NostrEvent` message (a decrypted Concord `OpenedMessage`, a
+ * decrypted DM) into the shared `ChatMsg` shape so it renders through the same
+ * `MessageRow`/`ChatContent`/`ChatMessage` path. Rendering never re-verifies the
+ * signature, so a synthetic `sig: ""` is filled in when the source has none.
+ */
+export function toChatMsg(m: {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  kind: number;
+  content: string;
+  tags?: string[][];
+  sig?: string;
+}): ChatMsg {
+  return {
+    id: m.id,
+    pubkey: m.pubkey,
+    created_at: m.created_at,
+    kind: m.kind,
+    content: m.content,
+    tags: m.tags ?? [],
+    sig: m.sig ?? "",
+  };
+}
+
+/**
  * Per-message reaction state + toggle, resolved by the transport for one
  * message. Mirrors the return shape of {@link useReactions} so the shared
  * `ReactionBar`/`ReactionPicker` consume it unchanged.
