@@ -17,7 +17,7 @@ import { useLoggedInAccounts, type Account } from '@/hooks/useLoggedInAccounts';
 import { useServerScope } from '@/contexts/ServerScopeContext';
 import { ServerProfileDialog } from '@/components/dialogs/ServerProfileDialog';
 import { StatusDialog } from '@/components/dialogs/StatusDialog';
-import { clearPlaintextCache } from '@/lib/plaintextCache';
+import { clearRenderedPlaintext } from '@/hooks/dmRenderCache';
 import { purgeClientStorage } from '@/lib/purgeClientStorage';
 
 interface AccountSwitcherProps {
@@ -45,7 +45,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
     // Use setTimeout to ensure the dropdown closes before removing login
     setTimeout(() => {
       removeLogin(currentUser.id);
-      clearPlaintextCache();
+      clearRenderedPlaintext();
       if (isLastAccount) {
         void purgeClientStorage().finally(() => window.location.assign('/welcome'));
       }

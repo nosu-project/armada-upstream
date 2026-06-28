@@ -8,7 +8,7 @@ import {
 } from "@nostrify/react/login";
 
 import { useAppContext } from "@/hooks/useAppContext";
-import { clearPlaintextCache } from "@/lib/plaintextCache";
+import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { purgeClientStorage } from "@/lib/purgeClientStorage";
 
@@ -69,9 +69,10 @@ export function useLoginActions() {
       if (login) {
         removeLogin(login.id);
       }
-      // Drop any decrypted plaintext memoized this session so it can't be read
-      // after logout or by the next account.
-      clearPlaintextCache();
+      // Drop the in-memory DM render memo so it can't be read after logout or
+      // by the next account. (The persistent decrypt cache is per-pubkey and is
+      // wiped by purgeClientStorage on the final logout below.)
+      clearRenderedPlaintext();
 
       // If that was the last identity, wipe all client-side persistence (event
       // cache, drafts, read-state, relay-info, theme, added servers, decrypted

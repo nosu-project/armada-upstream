@@ -14,7 +14,7 @@ import {
   type DecryptedDM,
   type RelayCursors,
 } from "@/hooks/useDirectMessages";
-import { clearPlaintextCache, setCachedPlaintext } from "@/lib/plaintextCache";
+import { clearRenderedPlaintext, setRenderedPlaintext } from "@/hooks/dmRenderCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -26,7 +26,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 // mergeDmThread), mirroring the Concord pattern. buildThreadRows additionally
 // bounds eager decryption to the newest screenful (viewport-lazy decrypt).
 
-afterEach(() => clearPlaintextCache());
+afterEach(() => clearRenderedPlaintext());
 
 const SELF = "a".repeat(64);
 const PEER1 = "b".repeat(64);
@@ -213,7 +213,7 @@ describe("buildThreadRows (viewport-bounded eager decryption)", () => {
     const old = dmEvt("1", 100);
     const newer = dmEvt("2", 200);
     // Prime the memo as if "1" was decrypted earlier.
-    setCachedPlaintext(old.id, "remembered");
+    setRenderedPlaintext(old.id, "remembered");
 
     const decrypt = vi.fn(ok);
     const rows = await buildThreadRows([old, newer], SELF_PK, PEER_PK, decrypt, 1);
@@ -251,7 +251,7 @@ describe("buildThreadPlaceholders (instant first frame)", () => {
 
   it("fills in already-cached plaintext immediately (not a placeholder)", () => {
     const e = dmEvt("1", 100);
-    setCachedPlaintext(e.id, "already known");
+    setRenderedPlaintext(e.id, "already known");
     const [row] = buildThreadPlaceholders([e]);
     expect(row.encrypted).toBeUndefined();
     expect(row.content).toBe("already known");
@@ -297,7 +297,7 @@ describe("decryptThreadRows (progressive streaming, newest-first)", () => {
   it("skips messages already in the plaintext cache (no re-decrypt, no onRow)", async () => {
     const cached = dmEvt("1", 100);
     const fresh = dmEvt("2", 200);
-    setCachedPlaintext(cached.id, "known");
+    setRenderedPlaintext(cached.id, "known");
     const decrypt = vi.fn(ok);
     const got: number[] = [];
     await decryptThreadRows([cached, fresh], SELF_PK, PEER_PK, decrypt, 10, (row) => {

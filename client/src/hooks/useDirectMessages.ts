@@ -9,7 +9,7 @@ import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { decryptCached, getCachedPlaintext, hasCachedPlaintext, setCachedPlaintext, type DecryptFn } from "@/lib/plaintextCache";
+import { decryptCached, getRenderedPlaintext, hasRenderedPlaintext, setRenderedPlaintext, type DecryptFn } from "@/hooks/dmRenderCache";
 import { runExclusive } from "@/lib/signerQueue";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -168,7 +168,7 @@ export function mergeDmThread(prev: DecryptedDM[], incoming: DecryptedDM[]): Dec
 
 /**
  * Build placeholder rows for a conversation's events, synchronously and with no
- * decryption. Already-memoized plaintext (`getCachedPlaintext`) is filled in
+ * decryption. Already-memoized plaintext (`getRenderedPlaintext`) is filled in
  * immediately; everything else is an `encrypted: true` placeholder. This gives
  * the thread its full structure and correct scroll length on the very first
  * frame — the actual plaintext streams in afterwards (see `decryptThreadRows`).
@@ -179,7 +179,7 @@ export function buildThreadPlaceholders(events: NostrEvent[]): DecryptedDM[] {
   const rows: DecryptedDM[] = [];
   for (const event of events) {
     const base = { id: event.id, pubkey: event.pubkey, created_at: event.created_at };
-    const cached = getCachedPlaintext(event.id);
+    const cached = getRenderedPlaintext(event.id);
     rows.push(cached !== undefined ? { ...base, content: cached } : { ...base, content: "", encrypted: true });
   }
   return rows.sort((a, b) => a.created_at - b.created_at);
@@ -233,7 +233,7 @@ export async function decryptThreadRows(
 
   for (let i = 0; i < ordered.length && i < eager; i++) {
     const event = ordered[i];
-    if (getCachedPlaintext(event.id) !== undefined) continue; // already shown
+    if (getRenderedPlaintext(event.id) !== undefined) continue; // already shown
     const counterparty = event.pubkey === self ? peer : event.pubkey;
     try {
       const content = await decryptCached(self, counterparty, event, decrypt);
@@ -908,7 +908,7 @@ export function useDirectMessages(peer: string | undefined) {
         // event id, so when the relay echoes this message back through the live
         // subscription (or a refetch) it's a cache hit — we never re-decrypt our
         // own outgoing message.
-        setCachedPlaintext(event.id, trimmed);
+        setRenderedPlaintext(event.id, trimmed);
 
         // Publish in the background; don't make the caller await the relay.
         void publish(event).catch(() => {
@@ -966,15 +966,15 @@ export function useDirectMessages(peer: string | undefined) {
    * for each `encrypted: true` row. Reads the raw ciphertext from the event
    * store (where NostrBatcher mirrors it), decrypts through the memo, and
    * patches just that row. Idempotent: a no-op once the id is decrypted, and
-   * concurrent calls for the same id share one signer round-trip (plaintextCache
+   * concurrent calls for the same id share one signer round-trip (render-memo
    * in-flight dedup).
    */
   const decryptVisible = useCallback(
     (id: string) => {
       if (!self || !peer || !user?.signer.nip04) return;
-      if (hasCachedPlaintext(id)) {
+      if (hasRenderedPlaintext(id)) {
         // Already decrypted this session — just make sure the row reflects it.
-        const content = getCachedPlaintext(id)!;
+        const content = getRenderedPlaintext(id)!;
         queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
           old.map((m) => (m.id === id && m.encrypted ? { ...m, content, encrypted: false } : m)),
         );
