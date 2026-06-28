@@ -14,6 +14,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         // Register native plugins before super.onCreate.
         registerPlugin(ArmadaNotificationPlugin.class);
+        registerPlugin(BluetoothMeshPlugin.class);
 
         // Install the androidx splash screen. This dismisses the launch
         // (Theme.SplashScreen) window and hands off to postSplashScreenTheme

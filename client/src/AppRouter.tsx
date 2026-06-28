@@ -7,6 +7,7 @@ import { ConcordPage } from "@/pages/ConcordPage";
 import { DMsPage } from "@/pages/DMsPage";
 import { GroupPage } from "@/pages/GroupPage";
 import { InvitePage } from "@/pages/InvitePage";
+import { MeshPage } from "@/pages/MeshPage";
 import { NotFound } from "@/pages/NotFound";
 import { ServerPage } from "@/pages/ServerPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -70,6 +71,7 @@ export function AppRouter() {
           <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
           <Route path="/invite" element={<InvitePage />} />
           <Route path="/about" element={<AboutPage />} />
+          <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
           <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
           <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
           <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />

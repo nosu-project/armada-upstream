@@ -1,4 +1,4 @@
-import { Headphones, MessageSquare, Plus, Settings, ShieldCheck } from "lucide-react";
+import { Headphones, MessageSquare, Plus, Radio, Settings, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -553,6 +553,43 @@ export function ServerRail({
         className,
       )}
     >
+      {/* Nearby Bluetooth mesh chat — peer-to-peer, above DMs. Android-only at
+          runtime; the page shows an "unavailable here" state elsewhere, so the
+          entry is always present when signed in. */}
+      {user && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <NavLink
+              to="/mesh"
+              aria-label="Nearby mesh"
+              onClick={onNavigate}
+              className="group relative flex items-center justify-center shrink-0"
+            >
+              <span
+                className={cn(
+                  "relative block size-12 transition-all duration-150",
+                  "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                    "bg-muted text-primary opacity-50 saturate-50",
+                    "group-hover:opacity-100 group-hover:saturate-100",
+                    "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                  )}
+                >
+                  <Radio className="size-5" />
+                </span>
+              </span>
+            </NavLink>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="font-medium">
+            Nearby mesh
+          </TooltipContent>
+        </Tooltip>
+      )}
+
       {/* Direct messages — account-level, above the servers (Discord-style).
           Only shown when signed in (DMs require an account). */}
       {user && (
