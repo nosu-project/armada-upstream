@@ -11,6 +11,7 @@ import { DesktopBadge } from "@/components/DesktopBadge";
 import { NativeNotifications } from "@/components/NativeNotifications";
 import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
+import { PublishOutbox } from "@/components/PublishOutbox";
 import { ReadStateProvider } from "@/components/ReadStateProvider";
 import { ScreenSharePicker } from "@/components/ScreenSharePicker";
 import { SyncGate } from "@/components/SyncGate";
@@ -51,6 +52,7 @@ export function App() {
             <TooltipProvider>
               <ReadStateProvider>
                 <NostrSync />
+                <PublishOutbox />
                 <SyncGate />
                 <DesktopBadge />
                 <NativeNotifications />

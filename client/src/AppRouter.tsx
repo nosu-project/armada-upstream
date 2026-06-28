@@ -14,6 +14,7 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { WelcomePage } from "@/pages/WelcomePage";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 
 /**
@@ -32,14 +33,19 @@ import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 function HomeRedirect() {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
+  const online = useOnlineStatus();
 
   if (!user) {
     return <Navigate to="/welcome" replace />;
   }
 
+  if (!online) {
+    return <Navigate to="/mesh" replace />;
+  }
+
   const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0];
   if (!firstServer) {
-    return <Navigate to="/welcome" replace />;
+    return <Navigate to="/mesh" replace />;
   }
   return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
 }

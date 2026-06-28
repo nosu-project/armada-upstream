@@ -186,6 +186,18 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     if (ranForRef.current === pubkey) return;
     ranForRef.current = pubkey;
 
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setState({
+        phase: "done",
+        log: [
+          { id: "auth", text: `authenticated ${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`, status: "OK", tone: "ok" },
+          { id: "offline", text: "offline mode active", status: "MESH", tone: "info" },
+        ],
+        done: true,
+      });
+      return;
+    }
+
     let cancelled = false;
     const overall = AbortSignal.timeout(SYNC_TIMEOUT_MS);
     const log: SyncLogLine[] = [];

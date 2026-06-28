@@ -9,6 +9,7 @@ import { AddDialog } from "@/components/dialogs/AddDialog";
 import { Button } from "@/components/ui/button";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 
 /**
@@ -26,6 +27,7 @@ import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 export function WelcomePage() {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
+  const online = useOnlineStatus();
   const [joinOpen, setJoinOpen] = useState(false);
   const [signupOpen, setSignupOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -33,6 +35,9 @@ export function WelcomePage() {
   // Once signed in, leave the welcome screen for a real server: the pinned
   // platform relay on a hosted build, or the user's first added server.
   const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0];
+  if (user && !online) {
+    return <Navigate to="/mesh" replace />;
+  }
   if (user && firstServer) {
     return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
   }
