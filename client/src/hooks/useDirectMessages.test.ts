@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildDmFilters,
   buildThreadPlaceholders,
   buildThreadRows,
   decryptThreadRows,
+  DM_PAGE_SIZE,
   dmCounterparty,
+  hasMoreCursor,
   mergeDmEvents,
   mergeDmThread,
+  nextDirectionCursor,
   type DecryptedDM,
+  type RelayCursors,
 } from "@/hooks/useDirectMessages";
 import { clearPlaintextCache, setCachedPlaintext } from "@/lib/plaintextCache";
 
@@ -311,5 +316,90 @@ describe("decryptThreadRows (progressive streaming, newest-first)", () => {
       got.push(row.created_at);
     });
     expect(got).toEqual([]); // nothing streamed; placeholder remains
+  });
+});
+
+// Per-relay, per-direction pagination cursors. A single global `until` cursor
+// can skip ranges across heterogeneous relays (a sparse relay returning much
+// older events than a dense one); per-relay/per-direction cursors page each
+// independently. `null` = exhausted, `undefined` = unknown/retryable (a failed
+// relay is never marked exhausted).
+describe("nextDirectionCursor", () => {
+  function evts(count: number, oldest: number): NostrEvent[] {
+    return Array.from({ length: count }, (_, i) =>
+      dmEvent({ id: `e${i}`, from: PEER1, to: SELF, createdAt: oldest + i }),
+    );
+  }
+
+  it("a short page (< page size) is exhausted → null", () => {
+    expect(nextDirectionCursor(evts(3, 1000))).toBeNull();
+  });
+
+  it("an empty page is exhausted → null", () => {
+    expect(nextDirectionCursor([])).toBeNull();
+  });
+
+  it("a full page advances to the oldest timestamp minus one", () => {
+    const full = evts(DM_PAGE_SIZE, 5000); // timestamps 5000..5000+size-1
+    expect(nextDirectionCursor(full)).toBe(4999);
+  });
+});
+
+describe("hasMoreCursor", () => {
+  it("false when every relay/direction is exhausted (null)", () => {
+    const cursors: RelayCursors = {
+      "wss://a": { sent: null, received: null },
+      "wss://b": { sent: null, received: null },
+    };
+    expect(hasMoreCursor(cursors)).toBe(false);
+  });
+
+  it("true if any single direction still has pages (a number cursor)", () => {
+    const cursors: RelayCursors = {
+      "wss://a": { sent: null, received: null },
+      "wss://b": { sent: 1234, received: null },
+    };
+    expect(hasMoreCursor(cursors)).toBe(true);
+  });
+
+  it("true if a relay is unknown/retryable (undefined), not exhausted", () => {
+    // A relay that failed this pass is left undefined so the next pass retries
+    // it — it must NOT count as exhausted.
+    const cursors: RelayCursors = {
+      "wss://a": { sent: null, received: null },
+      "wss://b": { sent: undefined, received: undefined },
+    };
+    expect(hasMoreCursor(cursors)).toBe(true);
+  });
+
+  it("false for no relays", () => {
+    expect(hasMoreCursor({})).toBe(false);
+  });
+});
+
+describe("buildDmFilters", () => {
+  it("first page (undefined cursor) queries both directions with no until", () => {
+    const filters = buildDmFilters(SELF, undefined);
+    expect(filters).toHaveLength(2);
+    expect(filters[0]).toMatchObject({ kinds: [4], authors: [SELF], limit: DM_PAGE_SIZE });
+    expect(filters[1]).toMatchObject({ kinds: [4], "#p": [SELF], limit: DM_PAGE_SIZE });
+    expect(filters[0].until).toBeUndefined();
+    expect(filters[1].until).toBeUndefined();
+  });
+
+  it("a number cursor adds `until` for that direction", () => {
+    const filters = buildDmFilters(SELF, { sent: 1000, received: 2000 });
+    expect(filters[0].until).toBe(1000);
+    expect(filters[1].until).toBe(2000);
+  });
+
+  it("an exhausted direction (null) is omitted entirely", () => {
+    const filters = buildDmFilters(SELF, { sent: null, received: 2000 });
+    expect(filters).toHaveLength(1);
+    expect(filters[0]).toMatchObject({ "#p": [SELF], until: 2000 });
+  });
+
+  it("both directions exhausted → no filters", () => {
+    expect(buildDmFilters(SELF, { sent: null, received: null })).toHaveLength(0);
   });
 });
