@@ -10,7 +10,6 @@ import { useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { decryptCached, getRenderedPlaintext, hasRenderedPlaintext, setRenderedPlaintext, type DecryptFn } from "@/hooks/dmRenderCache";
-import { runExclusive } from "@/lib/signerQueue";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -227,21 +226,26 @@ export async function decryptThreadRows(
   eager: number,
   onRow: (row: DecryptedDM) => void,
 ): Promise<void> {
-  // Newest-first so the eager window is the newest messages (the visible bottom)
-  // and they reveal from the bottom up.
+  // Newest-first so the eager window is the newest messages (the visible
+  // bottom). Decrypts within the window are fired CONCURRENTLY — they are not
+  // serialized, so the thread fills in together rather than waterfalling one
+  // row at a time. Each row still streams into the UI the instant its own
+  // decrypt resolves (order of arrival is whatever the signer returns first).
   const ordered = [...events].sort((a, b) => b.created_at - a.created_at);
+  const window = ordered.slice(0, eager);
 
-  for (let i = 0; i < ordered.length && i < eager; i++) {
-    const event = ordered[i];
-    if (getRenderedPlaintext(event.id) !== undefined) continue; // already shown
-    const counterparty = event.pubkey === self ? peer : event.pubkey;
-    try {
-      const content = await decryptCached(self, counterparty, event, decrypt);
-      onRow({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
-    } catch {
-      // Keep as a placeholder; retried lazily when it scrolls into view.
-    }
-  }
+  await Promise.all(
+    window.map(async (event) => {
+      if (getRenderedPlaintext(event.id) !== undefined) return; // already shown
+      const counterparty = event.pubkey === self ? peer : event.pubkey;
+      try {
+        const content = await decryptCached(counterparty, event, decrypt);
+        onRow({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
+      } catch {
+        // Keep as a placeholder; retried lazily when it scrolls into view.
+      }
+    }),
+  );
 }
 
 /**
@@ -528,13 +532,17 @@ export function useDMConversations() {
     queryFn: async () => {
       const nip04 = user!.signer.nip04!;
       const out: Record<string, string> = {};
-      for (const { peer, latest } of conversations) {
-        try {
-          out[peer] = await decryptCached(self, peer, latest, (cp, ct) => nip04.decrypt(cp, ct));
-        } catch (err) {
-          console.warn("DM preview decrypt failed", { peer, id: latest.id, err });
-        }
-      }
+      // Decrypt every conversation's latest message concurrently — the previews
+      // don't depend on each other and the signer handles overlapping calls.
+      await Promise.all(
+        conversations.map(async ({ peer, latest }) => {
+          try {
+            out[peer] = await decryptCached(peer, latest, (cp, ct) => nip04.decrypt(cp, ct));
+          } catch (err) {
+            console.warn("DM preview decrypt failed", { peer, id: latest.id, err });
+          }
+        }),
+      );
       return out;
     },
   });
@@ -698,7 +706,7 @@ export function useDirectMessages(peer: string | undefined) {
           const counterparty = event.pubkey === self ? peer : event.pubkey;
           let content: string;
           try {
-            content = await decryptCached(self, counterparty, event, (cp, ct) => nip04.decrypt(cp, ct));
+            content = await decryptCached(counterparty, event, (cp, ct) => nip04.decrypt(cp, ct));
           } catch (err) {
             console.warn("DM live decrypt failed", { id: event.id, counterparty, err });
             continue;
@@ -875,24 +883,19 @@ export function useDirectMessages(peer: string | undefined) {
         ].sort((a, b) => a.created_at - b.created_at),
       );
       // NOTE: deliberately do NOT invalidate the conversation-list query here.
-      // Invalidating triggers a refetch + a re-decrypt of every conversation's
-      // preview (each a NIP-07 round-trip) that contends with our in-flight
-      // signing on the same extension — turning a burst of sends into a
-      // thrash. The optimistic thread render already shows the message; the
-      // conversation list re-orders on its next natural refetch / live event.
+      // The optimistic thread render already shows the message, and invalidating
+      // would trigger a refetch + re-decrypt of every conversation's preview for
+      // no visible benefit; the conversation list re-orders on its next natural
+      // refetch / live event.
 
-      // Encrypt + sign serialized against all other signer crypto for this
-      // identity (extension-safe), then render the real id and publish in the
-      // background.
+      // Encrypt + sign, then render the real id and publish in the background.
       try {
-        const event = await runExclusive(self, async () => {
-          const content = await signer.nip04!.encrypt(peer, trimmed);
-          return signer.signEvent({
-            kind: KIND_DM,
-            content,
-            tags: [["p", peer]],
-            created_at: createdAt,
-          });
+        const content = await signer.nip04!.encrypt(peer, trimmed);
+        const event = await signer.signEvent({
+          kind: KIND_DM,
+          content,
+          tags: [["p", peer]],
+          created_at: createdAt,
         });
 
         // Swap the placeholder for the real, signed event id (still "sending").
@@ -930,20 +933,17 @@ export function useDirectMessages(peer: string | undefined) {
       const failed = messages.find((m) => m.id === id && m.status === "failed");
       if (!failed || !user || !peer) return;
       const signer = user.signer;
-      const self = user.pubkey;
       setMessageStatus(id, "sending");
 
       void (async () => {
         try {
-          // Re-sign serialized against all other signer crypto, same as send.
-          const event = await runExclusive(self, async () => {
-            const content = await signer.nip04!.encrypt(peer, failed.content);
-            return signer.signEvent({
-              kind: KIND_DM,
-              content,
-              tags: [["p", peer]],
-              created_at: failed.created_at,
-            });
+          // Re-encrypt + re-sign, same as send.
+          const content = await signer.nip04!.encrypt(peer, failed.content);
+          const event = await signer.signEvent({
+            kind: KIND_DM,
+            content,
+            tags: [["p", peer]],
+            created_at: failed.created_at,
           });
           // The signed event id may differ from the placeholder id; reconcile.
           if (event.id !== id) {
@@ -987,7 +987,7 @@ export function useDirectMessages(peer: string | undefined) {
         if (!event) return;
         const counterparty = event.pubkey === self ? peer : event.pubkey;
         try {
-          const content = await decryptCached(self, counterparty, event, (cp, ct) => nip04.decrypt(cp, ct));
+          const content = await decryptCached(counterparty, event, (cp, ct) => nip04.decrypt(cp, ct));
           queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
             old.map((m) => (m.id === id ? { ...m, content, encrypted: false } : m)),
           );

@@ -258,7 +258,7 @@ describe("buildThreadPlaceholders (instant first frame)", () => {
   });
 });
 
-describe("decryptThreadRows (progressive streaming, newest-first)", () => {
+describe("decryptThreadRows (progressive streaming, concurrent)", () => {
   const SELF_PK = "a".repeat(64);
   const PEER_PK = "b".repeat(64);
 
@@ -275,14 +275,15 @@ describe("decryptThreadRows (progressive streaming, newest-first)", () => {
   }
   const ok = async (_cp: string, ct: string) => `plain-${ct}`;
 
-  it("streams each decrypted row via onRow, newest-first", async () => {
+  it("streams each decrypted row via onRow (whole eager window)", async () => {
     const events = [dmEvt("1", 100), dmEvt("2", 200), dmEvt("3", 300)];
-    const order: number[] = [];
+    const got: number[] = [];
     await decryptThreadRows(events, SELF_PK, PEER_PK, vi.fn(ok), 10, (row) => {
-      order.push(row.created_at);
+      got.push(row.created_at);
     });
-    // Reveal order is newest-first (the visible bottom fills first).
-    expect(order).toEqual([300, 200, 100]);
+    // Decrypts fire concurrently, so arrival order isn't guaranteed; assert the
+    // full set is revealed.
+    expect(got.sort()).toEqual([100, 200, 300]);
   });
 
   it("only streams the newest `eager` rows", async () => {

@@ -1,5 +1,3 @@
-import { runExclusive } from "@/lib/signerQueue";
-
 /**
  * Synchronous, in-memory render memo for decrypted DM plaintext, keyed by event
  * id (a hash of the immutable event, so a stable, never-stale key).
@@ -15,7 +13,7 @@ import { runExclusive } from "@/lib/signerQueue";
 const plaintextById = new Map<string, string>();
 
 /** In-flight decrypts, so two surfaces asking for the same event at once share
- *  one signer call instead of queueing two. Cleared when the decrypt settles. */
+ *  one decrypt instead of firing two. Cleared when the decrypt settles. */
 const inflightById = new Map<string, Promise<string>>();
 
 /** A signer's decrypt function: `(counterparty, ciphertext) => plaintext`. */
@@ -42,12 +40,12 @@ export function setRenderedPlaintext(id: string, plaintext: string): void {
  *  - **Hit:** returns immediately; neither the signer nor its persistent cache
  *    is touched.
  *  - **Miss:** decrypts via `decrypt` (which itself hits the persistent
- *    content-addressed cache, then the upstream signer) serialized through
- *    {@link runExclusive} for `signerKey`, memoizes, and returns. Concurrent
- *    misses for the same id share a single decrypt.
+ *    content-addressed cache, then the upstream signer), memoizes, and returns.
+ *    Decrypts run concurrently — they are not serialized through a signer queue
+ *    (modern NIP-07/NIP-46 signers batch overlapping calls). Concurrent misses
+ *    for the same id still share a single decrypt.
  */
 export async function decryptCached(
-  signerKey: string,
   counterparty: string,
   event: { id: string; content: string },
   decrypt: DecryptFn,
@@ -58,7 +56,7 @@ export async function decryptCached(
   const existing = inflightById.get(event.id);
   if (existing) return existing;
 
-  const pending = runExclusive(signerKey, () => decrypt(counterparty, event.content))
+  const pending = decrypt(counterparty, event.content)
     .then((plaintext) => {
       plaintextById.set(event.id, plaintext);
       return plaintext;

@@ -2,7 +2,6 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
 import { APP_NAME } from "@/lib/platform";
-import { runExclusive } from "@/lib/signerQueue";
 import { useCurrentUser } from "./useCurrentUser";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -65,17 +64,12 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         }
       }
 
-      // Serialize signing through the per-identity signer queue: NIP-07
-      // extensions reject overlapping signEvent calls, so rapid sends (e.g.
-      // firing several group messages in a row) must not race on the signer.
-      const event = await runExclusive(user.pubkey, () =>
-        user.signer.signEvent({
-          kind: template.kind,
-          content: template.content ?? "",
-          tags,
-          created_at,
-        }),
-      );
+      const event = await user.signer.signEvent({
+        kind: template.kind,
+        content: template.content ?? "",
+        tags,
+        created_at,
+      });
 
       if (event.pubkey !== user.pubkey) {
         throw new Error(
