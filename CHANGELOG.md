@@ -4,6 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.9.2] - 2026-06-28
+
+Replies are clearer everywhere: the "replying to" hint now shows who you're
+replying to and a preview of their message, and tapping it jumps straight to the
+original (with a gentle highlight) — in encrypted communities too. Direct
+messages also keep arriving reliably after the app has been backgrounded, the
+same way group and community chats already did.
+
+### Added
+- The reply hint above a message now previews the message being replied to, and
+  clicking it scrolls to and highlights the original — including in encrypted
+  communities.
+
+### Changed
+- Direct messages now render consistently with group and community chat.
+
+### Fixed
+- Direct messages keep arriving after the app has been in the background,
+  catching up the moment you return or reconnect, and a message that arrived via
+  notification just before opening the thread no longer goes missing.
+
 ## [0.9.1] - 2026-06-27
 
 Chat is faster and steadier, especially on Android. Opening a channel no longer
