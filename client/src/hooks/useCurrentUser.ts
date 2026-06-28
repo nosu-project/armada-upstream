@@ -4,7 +4,7 @@ import { type NLoginType, NUser, useNostrLogin } from "@nostrify/react/login";
 import { nip19 } from "nostr-tools";
 import { useCallback, useMemo } from "react";
 
-import { wrapSignerWithDecryptCache } from "@/lib/cachingSigner";
+import { AppSigner } from "@/lib/AppSigner";
 
 import { useAuthor } from "./useAuthor.ts";
 
@@ -12,13 +12,13 @@ export function useCurrentUser() {
   const { nostr } = useNostr();
   const { logins } = useNostrLogin();
 
-  // Decorate the user-facing signer so `nip04`/`nip44` `decrypt` is served from
-  // the persistent content-addressed cache (huge win for remote/extension
-  // signers). Wraps ONLY this signer — never the NIP-46 transport key below,
-  // nor the NIP-42 AUTH signer in NostrProvider.
+  // Wrap the user-facing signer in an AppSigner so `nip04`/`nip44` `decrypt` is
+  // served from the persistent content-addressed cache (huge win for
+  // remote/extension signers). Wraps ONLY this signer — never the NIP-46
+  // transport key below, nor the NIP-42 AUTH signer in NostrProvider.
   const cached = useCallback(
     (user: NUser): NUser =>
-      new NUser(user.method, user.pubkey, wrapSignerWithDecryptCache(user.signer, user.pubkey)),
+      new NUser(user.method, user.pubkey, new AppSigner(user.signer, user.pubkey)),
     [],
   );
 

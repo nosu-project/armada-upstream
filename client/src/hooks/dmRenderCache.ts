@@ -3,7 +3,7 @@
  * id (a hash of the immutable event, so a stable, never-stale key).
  *
  * This is a thin L1 in front of the signer's persistent decrypt cache
- * (`decryptCache.ts`). Its sole job is to answer "do we already have this
+ * (`AppSigner`). Its sole job is to answer "do we already have this
  * message's plaintext?" *synchronously*, so the DM thread can paint decrypted
  * rows on the very first frame (`buildThreadPlaceholders`) and `decryptVisible`
  * can short-circuit without an async hop. The durable, content-addressed

@@ -1,0 +1,201 @@
+import { type DBSchema, type IDBPDatabase, openDB } from "idb";
+
+import type { NostrSigner } from "@nostrify/nostrify";
+
+// ============================================================================
+// AppSigner — the app-facing Nostr signer.
+//
+// Wraps an upstream signer (nsec / NIP-07 extension / NIP-46 bunker) with the
+// behaviour every component-facing signer needs. Today that is a persistent,
+// content-addressed DECRYPT cache: each NIP-04/NIP-44 `decrypt` is, for an
+// extension or remote bunker, a slow round-trip — and the local event store is
+// append-only, so the same ciphertext would be re-decrypted on every load,
+// poll, and reconnect. AppSigner caches `decrypt(counterparty, ciphertext) ->
+// plaintext` keyed by a content hash of the inputs and serves the persisted
+// result instead of touching the signer.
+//
+// `getPublicKey`, `signEvent`, `getRelays`, and both `encrypt` methods pass
+// straight through — only `decrypt` is memoized. (Encrypting and signing must
+// always reach the real signer.)
+//
+// Use AppSigner ONLY for the user-facing signer (see `useCurrentUser`). Never
+// wrap the NIP-46 transport key or the NIP-42 AUTH signer.
+//
+// Trust note: this persists DECRYPTED plaintext at rest, in exchange for a
+// dramatically better remote-signer experience. That is a deliberate tradeoff
+// (and matches `armada-concord-cache`, which already persists decrypted
+// community data). Anyone with disk/profile access can read it; it is wiped on
+// final logout by `purgeClientStorage`.
+//
+// The IndexedDB connection lives on the instance (opened lazily, kept open for
+// the instance's lifetime). Degrades to a no-op when IndexedDB is unavailable
+// (private mode / SSR).
+// ============================================================================
+
+/** IndexedDB database holding the persistent decrypt cache. */
+export const DECRYPT_CACHE_DB_NAME = "armada-decrypt-cache";
+const DB_VERSION = 1;
+const STORE = "decrypts";
+
+interface DecryptCacheDB extends DBSchema {
+  [STORE]: {
+    /** sha256(method ∥ userPubkey ∥ counterparty ∥ ciphertext), hex. */
+    key: string;
+    value: { id: string; plaintext: string };
+  };
+}
+
+/** A signer's `nip04`/`nip44` crypto bundle. */
+type CryptoMethods = NonNullable<NostrSigner["nip04"]>;
+
+/** Which NIP scheme a cached entry was produced with. Folded into the cache id
+ *  so a nip44 entry can never be served for a nip04 call (different ciphers). */
+type DecryptMethod = "nip04" | "nip44";
+
+export class AppSigner implements NostrSigner {
+  readonly #upstream: NostrSigner;
+  readonly #pubkey: string;
+
+  /** Lazily-opened, instance-lived IndexedDB connection (or null when IDB is
+   *  unavailable). Undefined until first use. */
+  #db: Promise<IDBPDatabase<DecryptCacheDB> | null> | undefined;
+
+  /** In-flight decrypts, keyed by cache id, so concurrent callers asking for
+   *  the same ciphertext share one cache-read + upstream-decrypt. */
+  readonly #inflight = new Map<string, Promise<string>>();
+
+  constructor(upstream: NostrSigner, userPubkey: string) {
+    this.#upstream = upstream;
+    this.#pubkey = userPubkey;
+
+    // Mirror the upstream's optional crypto bundles: present iff upstream has
+    // them. `decrypt` is wrapped; `encrypt` is forwarded.
+    if (upstream.nip04) this.nip04 = this.#wrapCrypto("nip04", upstream.nip04);
+    if (upstream.nip44) this.nip44 = this.#wrapCrypto("nip44", upstream.nip44);
+  }
+
+  // --- pass-through signer surface -----------------------------------------
+
+  getPublicKey(): Promise<string> {
+    return this.#upstream.getPublicKey();
+  }
+
+  signEvent(event: Parameters<NostrSigner["signEvent"]>[0]): ReturnType<NostrSigner["signEvent"]> {
+    return this.#upstream.signEvent(event);
+  }
+
+  getRelays(): Promise<Record<string, { read: boolean; write: boolean }>> {
+    return this.#upstream.getRelays?.() ?? Promise.resolve({});
+  }
+
+  nip04?: CryptoMethods;
+  nip44?: CryptoMethods;
+
+  // --- decrypt cache --------------------------------------------------------
+
+  #wrapCrypto(method: DecryptMethod, crypto: CryptoMethods): CryptoMethods {
+    return {
+      encrypt: (pubkey, plaintext) => crypto.encrypt(pubkey, plaintext),
+      decrypt: (counterparty, ciphertext) => this.#cachedDecrypt(method, crypto, counterparty, ciphertext),
+    };
+  }
+
+  async #cachedDecrypt(
+    method: DecryptMethod,
+    crypto: CryptoMethods,
+    counterparty: string,
+    ciphertext: string,
+  ): Promise<string> {
+    const id = await this.#deriveId(method, counterparty, ciphertext);
+
+    // Share one resolution per id across concurrent callers. The shared promise
+    // covers BOTH the cache read and the upstream decrypt, so two simultaneous
+    // misses for the same ciphertext make a single signer call.
+    const existing = this.#inflight.get(id);
+    if (existing) return existing;
+
+    const pending = (async () => {
+      const cached = await this.#get(id);
+      if (cached !== undefined) return cached;
+      const plaintext = await crypto.decrypt(counterparty, ciphertext);
+      void this.#put(id, plaintext);
+      return plaintext;
+    })().finally(() => {
+      this.#inflight.delete(id);
+    });
+
+    this.#inflight.set(id, pending);
+    return pending;
+  }
+
+  /**
+   * Deterministic, collision-free cache id for a decrypt's inputs:
+   * sha256(`${method}\0${pubkey}\0${counterparty}\0${ciphertext}`).
+   *
+   *  - `method` distinguishes nip04 vs nip44 (different ciphers).
+   *  - the user pubkey namespaces per account (entries survive an account
+   *    switch yet never cross identities).
+   *  - `counterparty` + `ciphertext` are the decrypt arguments; the ciphertext
+   *    is immutable so the cached plaintext never goes stale.
+   *
+   * The NUL separators are unambiguous: method/pubkey are hex and the
+   * ciphertext is base64/bech-ish — none contain NUL.
+   */
+  async #deriveId(method: DecryptMethod, counterparty: string, ciphertext: string): Promise<string> {
+    const data = new TextEncoder().encode(
+      `${method}\u0000${this.#pubkey}\u0000${counterparty}\u0000${ciphertext}`,
+    );
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    let hex = "";
+    for (const b of new Uint8Array(digest)) hex += b.toString(16).padStart(2, "0");
+    return hex;
+  }
+
+  #getDB(): Promise<IDBPDatabase<DecryptCacheDB> | null> {
+    if (this.#db) return this.#db;
+    if (typeof indexedDB === "undefined") {
+      this.#db = Promise.resolve(null);
+      return this.#db;
+    }
+    this.#db = openDB<DecryptCacheDB>(DECRYPT_CACHE_DB_NAME, DB_VERSION, {
+      upgrade(db) {
+        db.createObjectStore(STORE, { keyPath: "id" });
+      },
+    }).catch(() => null);
+    return this.#db;
+  }
+
+  /** The cached plaintext for a derived id, or `undefined` on a miss / no IDB. */
+  async #get(id: string): Promise<string | undefined> {
+    const db = await this.#getDB();
+    if (!db) return undefined;
+    try {
+      return (await db.get(STORE, id))?.plaintext;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Persist a decrypt result. Best-effort: failures are swallowed since the
+   *  cache is never on the critical path. */
+  async #put(id: string, plaintext: string): Promise<void> {
+    const db = await this.#getDB();
+    if (!db) return;
+    try {
+      await db.put(STORE, { id, plaintext });
+    } catch {
+      // best-effort
+    }
+  }
+
+  /** Test seam: close the cached connection so the next use reopens it. */
+  async __closeForTests(): Promise<void> {
+    const prev = this.#db;
+    this.#db = undefined;
+    try {
+      (await prev)?.close();
+    } catch {
+      // ignore
+    }
+  }
+}
