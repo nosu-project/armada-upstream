@@ -162,15 +162,17 @@ export function MessageTimeline({
     }
   }, [paused, loadOlder, hasMore, isLoadingOlder]);
 
-  // Scroll a (pinned) message into view and flash it. No-op if it's not in the
-  // currently-loaded timeline.
+  // Scroll a (pinned) message into view and briefly highlight it with a subtle
+  // background tint that fades out. No-op if it's not in the currently-loaded
+  // timeline.
   const scrollToMessage = useCallback((id: string) => {
     const el = scrollRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
     if (!el) return;
     isAutoScrollRef.current = false;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
-    el.classList.add("ring-2", "ring-amber-400", "ring-inset");
-    setTimeout(() => el.classList.remove("ring-2", "ring-amber-400", "ring-inset"), 1600);
+    el.classList.add("bg-primary/10", "transition-colors", "duration-1000", "rounded-md");
+    setTimeout(() => el.classList.remove("bg-primary/10"), 1200);
+    setTimeout(() => el.classList.remove("transition-colors", "duration-1000", "rounded-md"), 2200);
   }, []);
 
   useImperativeHandle(
