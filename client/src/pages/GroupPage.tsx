@@ -37,7 +37,7 @@ import { useCalendarEvents } from "@/hooks/useCalendarEvents";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
 import { toast } from "@/hooks/useToast";
-import { routeParamToRelay } from "@/lib/platform";
+import { PLATFORM_RELAYS, routeParamToRelay } from "@/lib/platform";
 import { relayRejectionMessage } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
 
@@ -181,6 +181,33 @@ export function GroupPage() {
           },
     );
   }, [relayUrl, groupId, updateConfig]);
+
+  // Visiting a server/invite link (e.g. /s/chat.soapbox.pub/<group>) should add
+  // the server to the user's rail so they can navigate back to it after going
+  // to DMs or another server. Platform relays are always present in the rail, so
+  // only non-platform servers need adding. Mirrors AddDialog: write the local
+  // cache immediately (works logged-out, instant rail visibility) and, when
+  // signed in, sync to the kind 10009 list for cross-device persistence.
+  const addedServerRef = useRef<string | null>(null);
+  const syncedServerRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!relayUrl || PLATFORM_RELAYS.includes(relayUrl)) return;
+    if (addedServerRef.current !== relayUrl) {
+      addedServerRef.current = relayUrl;
+      updateConfig((c) =>
+        c.addedRelays.includes(relayUrl)
+          ? c
+          : { ...c, addedRelays: [...c.addedRelays, relayUrl] },
+      );
+    }
+    // Cross-device sync needs a signed-in user; `user` may resolve after the
+    // first render, so this re-runs (and fires once) when it does.
+    if (user && syncedServerRef.current !== relayUrl) {
+      syncedServerRef.current = relayUrl;
+      updateList({ type: "add-server", url: relayUrl }).catch((err) =>
+        console.warn("Failed to sync server to group list:", err));
+    }
+  }, [relayUrl, user, updateConfig, updateList]);
 
   if (!relayUrl || !groupId) {
     return <Navigate to="/" replace />;
