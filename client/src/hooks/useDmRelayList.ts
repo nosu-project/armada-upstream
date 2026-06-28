@@ -1,6 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { normalizeRelayUrl } from "@/lib/platform";
 
@@ -87,4 +88,37 @@ export function useDmRelayList() {
     /** Publish a new kind-10050 DM relay list. */
     publish: publish.mutateAsync,
   };
+}
+
+/**
+ * Read another user's published kind-10050 DM relay list (NIP-17), so we can
+ * deliver DMs to the relays where they actually read. Queried from the app
+ * relays (where 10050 lists live), cached for an hour. Returns `[]` when the
+ * peer has published no list — callers fall back to their own DM relays.
+ *
+ * This closes the cross-relay delivery gap: writing only to the *sender's*
+ * relays silently fails when the peer doesn't read them. By unioning the peer's
+ * published inbox relays into the write set, a message lands somewhere the
+ * recipient is actually listening.
+ */
+export function useDmRelaysFor(peer: string | undefined): string[] {
+  const { nostr } = useNostr();
+  const { config } = useAppContext();
+  const relayKey = config.appRelays.join(",");
+
+  const query = useQuery<string[]>({
+    queryKey: ["dm-relay-list", "peer", peer, relayKey],
+    enabled: !!peer,
+    staleTime: 60 * 60 * 1000,
+    queryFn: async ({ signal }) => {
+      const events = await nostr.group(config.appRelays).query(
+        [{ kinds: [KIND_DM_RELAYS], authors: [peer!], limit: 1 }],
+        { signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) },
+      );
+      const event = events.sort((a, b) => b.created_at - a.created_at)[0];
+      return parseDmRelays(event);
+    },
+  });
+
+  return query.data ?? [];
 }

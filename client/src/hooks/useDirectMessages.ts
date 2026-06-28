@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
+import { useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { decryptCached, getCachedPlaintext, hasCachedPlaintext, setCachedPlaintext, type DecryptFn } from "@/lib/plaintextCache";
@@ -15,11 +17,74 @@ import type { NostrEvent } from "@nostrify/nostrify";
 /** NIP-04 encrypted direct message kind. */
 export const KIND_DM = 4;
 
+/** How many kind-4 events to request per direction, per relay, per page. */
+export const DM_PAGE_SIZE = 500;
+
 /** The other participant of a DM event, from the viewer's perspective. */
 export function dmCounterparty(event: NostrEvent, self: string): string | undefined {
   if (event.pubkey !== self) return event.pubkey; // received: peer is the sender
   // sent: peer is the first `p` tag
   return event.tags.find(([name]) => name === "p")?.[1];
+}
+
+/**
+ * A pagination cursor for one direction of one relay's DM stream. `undefined`
+ * means "start from the top (no `until`)"; a number is the `until` for the next
+ * page; `null` means EXHAUSTED — that relay returned a short page, so there is
+ * nothing older. The undefined-vs-null distinction matters: a relay that fails
+ * or times out is left `undefined` (retryable next pass), never marked `null`,
+ * so a flaky relay doesn't permanently hide older history.
+ */
+export type DirectionCursor = number | null | undefined;
+
+/** Per-relay sent/received cursors. */
+export interface RelayCursor {
+  sent: DirectionCursor;
+  received: DirectionCursor;
+}
+
+/** All relays' cursors, keyed by relay URL. */
+export type RelayCursors = Record<string, RelayCursor>;
+
+/**
+ * Compute the next `until` for a direction from the events a relay returned.
+ * A short page (`< DM_PAGE_SIZE`) means we've reached the bottom → `null`
+ * (exhausted). A full page means there may be more → the oldest event's
+ * timestamp minus one second. An empty result is also exhausted.
+ *
+ * Per-relay, per-direction cursors (rather than a single global `until`) are
+ * what keep pagination correct across heterogeneous relays: a single global
+ * timestamp can skip ranges on a dense relay when a sparse relay returns much
+ * older events. Each relay advances independently.
+ */
+export function nextDirectionCursor(events: NostrEvent[]): DirectionCursor {
+  if (events.length < DM_PAGE_SIZE) return null;
+  const oldest = Math.min(...events.map((e) => e.created_at));
+  return Number.isFinite(oldest) ? oldest - 1 : null;
+}
+
+/** True if any relay/direction still has older pages to fetch. */
+export function hasMoreCursor(cursors: RelayCursors): boolean {
+  return Object.values(cursors).some((c) => c.sent !== null || c.received !== null);
+}
+
+/**
+ * Build the self-scoped kind-4 filters for one relay given its cursor.
+ * Relays only serve the viewer's own DMs, so we query `authors:[self]` (sent)
+ * and `#p:[self]` (received). A direction whose cursor is `null` (exhausted) is
+ * omitted. `undefined` means no `until` (first page).
+ */
+export function buildDmFilters(self: string, cursor: RelayCursor | undefined) {
+  const filters: { kinds: number[]; authors?: string[]; "#p"?: string[]; limit: number; until?: number }[] = [];
+  const sent = cursor?.sent;
+  const received = cursor?.received;
+  if (sent !== null) {
+    filters.push({ kinds: [KIND_DM], authors: [self], limit: DM_PAGE_SIZE, ...(typeof sent === "number" ? { until: sent } : {}) });
+  }
+  if (received !== null) {
+    filters.push({ kinds: [KIND_DM], "#p": [self], limit: DM_PAGE_SIZE, ...(typeof received === "number" ? { until: received } : {}) });
+  }
+  return filters;
 }
 
 /** A decrypted DM ready for rendering. */
@@ -199,6 +264,80 @@ export async function buildThreadRows(
   return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
 }
 
+/** The pool object from `useNostr` (relay/group accessors). */
+type NostrPool = ReturnType<typeof useNostr>["nostr"];
+
+/**
+ * Query ONE relay for the viewer's DMs given its cursor, returning the events
+ * and the relay's advanced cursor (per direction). A relay that errors/times
+ * out throws, so the caller can leave its cursor `undefined` (retryable) rather
+ * than marking it exhausted.
+ */
+async function queryRelayDmPage(
+  nostr: NostrPool,
+  url: string,
+  self: string,
+  cursor: RelayCursor | undefined,
+  signal: AbortSignal,
+): Promise<{ url: string; events: NostrEvent[]; cursor: RelayCursor }> {
+  const filters = buildDmFilters(self, cursor);
+  if (filters.length === 0) {
+    return { url, events: [], cursor: { sent: null, received: null } };
+  }
+  const events = await nostr.relay(url).query(filters, { signal });
+  const sentEvents = events.filter((e) => e.pubkey === self);
+  const receivedEvents = events.filter((e) => e.pubkey !== self);
+  return {
+    url,
+    events,
+    cursor: {
+      // A direction that was already exhausted (null) or had no filter stays put.
+      sent: cursor?.sent === null ? null : nextDirectionCursor(sentEvents),
+      received: cursor?.received === null ? null : nextDirectionCursor(receivedEvents),
+    },
+  };
+}
+
+/**
+ * Query every relay individually (not as a pooled `group`), in parallel, and
+ * merge all events by id. Returns the union plus each relay's advanced cursor.
+ *
+ * Per-relay querying (vs `nostr.group(relays).query`) is what lets the cursor
+ * model work: a pooled query collapses all relays into one EOSE and one result,
+ * so we can't tell which relay still has older pages. Querying each relay
+ * separately lets a dense relay keep paging while a sparse one is already
+ * exhausted. A failed relay is left with its previous cursor (retryable).
+ */
+async function queryRelaysDmPage(
+  nostr: NostrPool,
+  relays: string[],
+  self: string,
+  cursors: RelayCursors,
+  signal: AbortSignal,
+): Promise<{ events: NostrEvent[]; cursors: RelayCursors }> {
+  const byId = new Map<string, NostrEvent>();
+  const nextCursors: RelayCursors = {};
+
+  const results = await Promise.allSettled(
+    relays.map((url) => queryRelayDmPage(nostr, url, self, cursors[url], signal)),
+  );
+
+  results.forEach((result, i) => {
+    const url = relays[i];
+    if (!url) return;
+    if (result.status === "fulfilled") {
+      for (const e of result.value.events) byId.set(e.id, e);
+      nextCursors[url] = result.value.cursor;
+    } else {
+      // Failed/timed-out: keep the prior cursor (or undefined) so the next pass
+      // retries from where it was, never marking the relay exhausted.
+      nextCursors[url] = cursors[url] ?? { sent: undefined, received: undefined };
+    }
+  });
+
+  return { events: [...byId.values()], cursors: nextCursors };
+}
+
 /**
  * The list of DM conversations for the current user: every distinct
  * counterparty with the latest message and its timestamp. Built client-side
@@ -210,10 +349,24 @@ export function useDMConversations() {
   const { config } = useAppContext();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
+  const { mutedPubkeys, ready: muteReady } = useMutedPubkeys();
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
 
   const queryKey = ["dm", "conversations", user?.pubkey, relayKey];
+
+  // Per-relay, per-direction pagination cursors for the "load older
+  // conversations" backfill. Kept in a ref (not state) so advancing them
+  // doesn't re-render; `loadMore` reads/writes them. Reset when the
+  // user/relays change.
+  const cursorsRef = useRef<RelayCursors>({});
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+  useEffect(() => {
+    cursorsRef.current = {};
+    setHasMore(true);
+  }, [user?.pubkey, relayKey]);
 
   const query = useQuery<NostrEvent[]>({
     queryKey,
@@ -226,26 +379,32 @@ export function useDMConversations() {
       //    NostrBatcher, so the conversation list paints instantly from cache on
       //    reload instead of behind a relay round-trip.
       const cachedEvents = await store.query([
-        { kinds: [KIND_DM], authors: [pubkey], limit: 500 },
-        { kinds: [KIND_DM], "#p": [pubkey], limit: 500 },
+        { kinds: [KIND_DM], authors: [pubkey], limit: DM_PAGE_SIZE },
+        { kinds: [KIND_DM], "#p": [pubkey], limit: DM_PAGE_SIZE },
       ]);
       const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
       const local = mergeDmEvents(prev, cachedEvents);
 
-      // 2. BACKGROUND refresh from the DM relays, merged in. NOT awaited — the
-      //    network never gates the visible conversation list. Merge floor: a
-      //    sparse/empty relay read can never SHRINK the list.
+      // 2. BACKGROUND refresh: query EACH relay individually (not a pooled
+      //    group) for its newest page, merge all in, and seed the per-relay
+      //    cursors so "load older" can page each relay independently. NOT
+      //    awaited — the network never gates the visible list. Merge floor: a
+      //    sparse/empty relay read can never SHRINK the list, and a conversation
+      //    that only exists on one slow relay still gets filled in.
       void (async () => {
-        if (signal.aborted) return;
+        if (signal.aborted || relays.length === 0) return;
         try {
-          const events = await nostr.group(relays).query(
-            [
-              { kinds: [KIND_DM], authors: [pubkey], limit: 500 },
-              { kinds: [KIND_DM], "#p": [pubkey], limit: 500 },
-            ],
-            { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+          const { events, cursors } = await queryRelaysDmPage(
+            nostr,
+            relays,
+            pubkey,
+            {}, // first page per relay (no `until`)
+            AbortSignal.any([signal, AbortSignal.timeout(8000)]),
           );
-          if (signal.aborted || events.length === 0) return;
+          if (signal.aborted) return;
+          cursorsRef.current = cursors;
+          setHasMore(hasMoreCursor(cursors));
+          if (events.length === 0) return;
           queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) => mergeDmEvents(old, events));
         } catch {
           // Best-effort; the local-first list already rendered.
@@ -256,6 +415,46 @@ export function useDMConversations() {
     },
     staleTime: 15_000,
   });
+
+  // Load an older page of conversations: advance each non-exhausted relay's
+  // cursor one page and merge. Because each relay pages independently, a dense
+  // relay keeps yielding history after a sparse one is exhausted — no global
+  // cursor can skip its range.
+  const loadMore = useCallback(async (): Promise<number> => {
+    if (!user?.pubkey || loadingMoreRef.current || !hasMore || relays.length === 0) return 0;
+    if (!hasMoreCursor(cursorsRef.current)) {
+      setHasMore(false);
+      return 0;
+    }
+    loadingMoreRef.current = true;
+    setIsLoadingMore(true);
+    try {
+      const { events, cursors } = await queryRelaysDmPage(
+        nostr,
+        relays,
+        user.pubkey,
+        cursorsRef.current,
+        AbortSignal.timeout(8000),
+      );
+      cursorsRef.current = cursors;
+      const more = hasMoreCursor(cursors);
+      setHasMore(more);
+      if (events.length === 0) return 0;
+      let added = 0;
+      queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) => {
+        const merged = mergeDmEvents(old, events);
+        added = merged.length - old.length;
+        return merged;
+      });
+      return added;
+    } catch {
+      return 0;
+    } finally {
+      loadingMoreRef.current = false;
+      setIsLoadingMore(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nostr, user?.pubkey, relayKey, hasMore, queryClient]);
 
   // The live subscription below (since=now-5s) surfaces new conversations; the
   // local-first queryFn handles cold-load rendering, so no separate seed effect.
@@ -294,19 +493,27 @@ export function useDMConversations() {
 
   const self = user?.pubkey ?? "";
 
-  // Reduce raw events to one entry per counterparty (latest wins).
+  // Reduce raw events to one entry per counterparty (latest wins), dropping
+  // conversations with anyone on the user's mute list (NIP-51 kind 10000) so
+  // blocked people never show up in the DM list.
+  //
+  // Until the mute set is `ready` we return NOTHING (and report loading), so the
+  // list never paints muted conversations and then yanks them out from under
+  // the user. `ready` resolves instantly from the local cache for a returning
+  // user; only a true cold start (no cache + network in flight) actually waits.
   const conversations = useMemo(() => {
+    if (!muteReady) return [];
     const byPeer = new Map<string, { peer: string; latest: NostrEvent }>();
     for (const event of query.data ?? []) {
       const peer = dmCounterparty(event, self);
-      if (!peer) continue;
+      if (!peer || mutedPubkeys.has(peer)) continue;
       const existing = byPeer.get(peer);
       if (!existing || event.created_at > existing.latest.created_at) {
         byPeer.set(peer, { peer, latest: event });
       }
     }
     return [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
-  }, [query.data, self]);
+  }, [query.data, self, mutedPubkeys, muteReady]);
 
   // Decrypt just the latest message of each conversation for the list preview.
   // Sequential decrypt (see thread loop) to avoid NIP-07 concurrency rejections.
@@ -335,8 +542,15 @@ export function useDMConversations() {
   return {
     conversations,
     previews: previews.data ?? {},
-    isLoading: query.isLoading,
+    // Loading until the events query AND the mute set are both settled, so the
+    // list shows a spinner rather than an unfiltered flash on cold start.
+    isLoading: query.isLoading || !muteReady,
     error: query.error,
+    /** Fetch an older page of conversations (per-relay cursor pagination). */
+    loadMore,
+    /** Whether any relay still has older conversation history to page. */
+    hasMore,
+    isLoadingMore,
   };
 }
 
@@ -373,6 +587,19 @@ export function useDirectMessages(peer: string | undefined) {
   const eventStore = useEventStore();
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
+
+  // The peer's published NIP-17 DM inbox relays (kind 10050), if any. We READ
+  // from our own relays (a relay only serves the viewer's own kind-4 events,
+  // so the peer's relays wouldn't return our copies), but we WRITE to the union
+  // of our relays and the peer's inbox — otherwise a message to someone who
+  // doesn't read our relays silently never reaches them. Falls back to our own
+  // relays when the peer has published no list.
+  const peerDmRelays = useDmRelaysFor(peer);
+  const writeRelays = useMemo(() => {
+    const merged = [...relays, ...peerDmRelays];
+    return [...new Set(merged)];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relayKey, peerDmRelays.join(",")]);
 
   const self = user?.pubkey;
   const queryKey = useMemo(
@@ -592,7 +819,10 @@ export function useDirectMessages(peer: string | undefined) {
   const publish = useCallback(
     async (event: NostrEvent) => {
       try {
-        await nostr.group(relays).event(event, { signal: AbortSignal.timeout(8000) });
+        // Write to the union of our DM relays and the peer's published inbox
+        // relays (kind 10050), so the message reaches the recipient even when
+        // they don't read our relays.
+        await nostr.group(writeRelays).event(event, { signal: AbortSignal.timeout(8000) });
         // Confirmed: drop the "sending" badge. The live subscription may also
         // echo this event back; dedup by id keeps it from duplicating.
         setMessageStatus(event.id, undefined);
@@ -602,7 +832,7 @@ export function useDirectMessages(peer: string | undefined) {
         throw err;
       }
     },
-    [nostr, relays, setMessageStatus, queryClient, user?.pubkey],
+    [nostr, writeRelays, setMessageStatus, queryClient, user?.pubkey],
   );
 
   const send = useMutation({
