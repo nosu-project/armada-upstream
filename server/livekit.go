@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
@@ -151,51 +149,15 @@ func isWeakLivekitSecret(secret string) bool {
 // verifyNip98 validates the `Authorization: Nostr <base64-event>` header for
 // the given URL and returns the authenticated pubkey.
 func verifyNip98(r *http.Request, expectedURL string) (string, bool) {
-	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, "Nostr ") {
-		return "", false
-	}
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "Nostr "))
-	if err != nil {
-		return "", false
-	}
-	var event nostr.Event
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return "", false
-	}
-	if event.Kind != kindHTTPAuth {
-		return "", false
-	}
-	if ok, err := event.CheckSignature(); !ok || err != nil {
-		return "", false
-	}
-	now := nostr.Now()
-	if event.CreatedAt < now-60 || event.CreatedAt > now+60 {
-		return "", false
-	}
-	uTag := event.Tags.GetFirst([]string{"u", ""})
-	if uTag == nil || (*uTag)[1] != expectedURL {
-		return "", false
-	}
-	methodTag := event.Tags.GetFirst([]string{"method", ""})
-	if methodTag != nil && !strings.EqualFold((*methodTag)[1], r.Method) {
-		return "", false
-	}
-	// Single-use: reject a grant whose id we've already honored within its
-	// freshness window (anti-replay). Use the computed id (not the wire `id`
-	// field, which the client controls and could omit/forge) so a replay can't
-	// dodge the cache by mutating only the id. Checked last so we only consume
-	// the id for an otherwise-valid grant.
-	if rememberGrant(event.GetID()) {
+	event, ok := parseAuthGrant(r, "Nostr", expectedURL, nil)
+	if !ok {
 		return "", false
 	}
 	return event.PubKey, true
 }
 
 func handleLivekitToken(w http.ResponseWriter, r *http.Request) {
-	corsHeaders(w, r)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
+	if preflight(w, r) {
 		return
 	}
 
@@ -235,18 +197,7 @@ func handleLivekitToken(w http.ResponseWriter, r *http.Request) {
 	}
 	identity := pubkey + "-" + hex.EncodeToString(suffix)
 
-	jwt, err := mintLivekitToken(identity, groupId)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to mint livekit token")
-		http.Error(w, "failed to mint token", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"token": jwt,
-		"url":   s.LivekitURL,
-	})
+	writeTokenResponse(w, identity, groupId, "livekit token")
 }
 
 // mintLivekitToken issues a 6h LiveKit JWT granting join access to `room` for
@@ -278,7 +229,7 @@ func parseDMRoomID(roomId string) (a, b string, ok bool) {
 		return "", "", false
 	}
 	a, b = parts[0], parts[1]
-	if !isHex64(a) || !isHex64(b) {
+	if !nostr.IsValid32ByteHex(a) || !nostr.IsValid32ByteHex(b) {
 		return "", "", false
 	}
 	// Must be canonical: distinct and sorted ascending.
@@ -294,23 +245,10 @@ func parseDMRoomID(roomId string) (a, b string, ok bool) {
 // 64-hex segment only when it is a valid pubkey, otherwise the identity
 // unchanged — participantsEvent must not assume the result is a valid pubkey.
 func pubkeyFromIdentity(identity string) string {
-	if i := strings.IndexByte(identity, '-'); i == 64 && isHex64(identity[:64]) {
+	if i := strings.IndexByte(identity, '-'); i == 64 && nostr.IsValid32ByteHex(identity[:64]) {
 		return identity[:64]
 	}
 	return identity
-}
-
-func isHex64(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			return false
-		}
-	}
-	return true
 }
 
 // handleLivekitDMToken mints a LiveKit token for a 1:1 DM voice room. Unlike
@@ -319,9 +257,7 @@ func isHex64(s string) bool {
 // id". Presence (kind 39004) reuses the same webhook-driven `rooms` registry,
 // keyed by the DM room id.
 func handleLivekitDMToken(w http.ResponseWriter, r *http.Request) {
-	corsHeaders(w, r)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
+	if preflight(w, r) {
 		return
 	}
 
@@ -352,18 +288,7 @@ func handleLivekitDMToken(w http.ResponseWriter, r *http.Request) {
 	}
 	identity := pubkey + "-" + hex.EncodeToString(suffix)
 
-	jwt, err := mintLivekitToken(identity, roomId)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to mint dm livekit token")
-		http.Error(w, "failed to mint token", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"token": jwt,
-		"url":   s.LivekitURL,
-	})
+	writeTokenResponse(w, identity, roomId, "dm livekit token")
 }
 
 func handleLivekitWebhook(w http.ResponseWriter, r *http.Request) {
@@ -428,7 +353,7 @@ func participantsEvent(groupId string) *nostr.Event {
 		// Skip identities whose leading segment isn't a valid pubkey (e.g.
 		// fully-random Concord identities). The relay signs this event, so it
 		// must not vouch for a malformed "pubkey".
-		if !isHex64(pubkey) {
+		if !nostr.IsValid32ByteHex(pubkey) {
 			continue
 		}
 		tags = append(tags, nostr.Tag{"participant", pubkey})

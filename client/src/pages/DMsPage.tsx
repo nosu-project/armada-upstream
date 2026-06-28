@@ -629,7 +629,7 @@ function ConversationList({
   openPeer,
   className,
 }: {
-  rows: { peer: string; latest: NostrEvent }[];
+  rows: { peer: string; latest: NostrEvent | undefined }[];
   previews: Record<string, string>;
   activePeer: string | undefined;
   dmSupported: boolean;
@@ -733,7 +733,7 @@ function ConversationList({
               previewText={previews[c.peer]}
               query={search}
               unread={
-                Boolean(c.latest) &&
+                !!c.latest &&
                 c.latest.pubkey !== user?.pubkey &&
                 c.latest.created_at > getLastRead(dmReadKey(c.peer)) &&
                 c.peer !== activePeer
@@ -795,9 +795,11 @@ export function DMsPage() {
 
   // Conversations plus the active peer if it's a brand-new thread.
   const rows = useMemo(() => {
-    const list = conversations.map((c) => ({ peer: c.peer, latest: c.latest }));
+    const list: { peer: string; latest: NostrEvent | undefined }[] = conversations.map(
+      (c) => ({ peer: c.peer, latest: c.latest }),
+    );
     if (activePeer && !list.some((c) => c.peer === activePeer)) {
-      list.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent });
+      list.unshift({ peer: activePeer, latest: undefined });
     }
     return list;
   }, [conversations, activePeer]);

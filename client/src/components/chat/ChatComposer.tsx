@@ -32,6 +32,7 @@ import { useGroup } from "@/hooks/useGroup";
 import { useInsertText } from "@/hooks/useInsertText";
 import { useMentionInsertions } from "@/hooks/useMentionBus";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useMountedTransition } from "@/hooks/useMountedTransition";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { useToast } from "@/hooks/useToast";
@@ -260,10 +261,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const [content, setContent] = useState(() => readDraft(draftKey).content);
   const [pickerOpen, setPickerOpen] = useState(false);
-  // Keeps the picker mounted through its slide-down exit animation.
-  const [pickerMounted, setPickerMounted] = useState(false);
-  // Animation target for the slide-up/down (toggled a frame after mount).
-  const [pickerVisible, setPickerVisible] = useState(false);
+  // Keeps the picker mounted through its slide animation (mount + visible flags).
+  const { mounted: pickerMounted, visible: pickerVisible } = useMountedTransition(pickerOpen);
   const [pickerTab, setPickerTab] = useState<"emoji" | "gif" | "stickers">("emoji");
   const [plusOpen, setPlusOpen] = useState(false);
   const [removedEmbeds, setRemovedEmbeds] = useState<Set<string>>(new Set());
@@ -283,8 +282,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // Poll mode state
   const [mode, setMode] = useState<"post" | "poll">("post");
   // Mount + animation-target flags so the poll panel slides up/down like the picker.
-  const [pollMounted, setPollMounted] = useState(false);
-  const [pollVisible, setPollVisible] = useState(false);
+  const pollMode = mode === "poll";
+  const { mounted: pollMounted, visible: pollVisible } = useMountedTransition(pollMode);
   const [pollOptions, setPollOptions] = useState([
     { id: pollOptionId(), label: "" },
     { id: pollOptionId(), label: "" },
@@ -350,56 +349,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [pickerOpen]);
 
   // Mount the picker on open; keep it in the DOM briefly on close so the
-  // slide-down exit transition can play before unmounting.
-  useEffect(() => {
-    if (pickerOpen) {
-      setPickerMounted(true);
-      return;
-    }
-    setPickerVisible(false);
-    if (!pickerMounted) return;
-    const t = setTimeout(() => setPickerMounted(false), 200);
-    return () => clearTimeout(t);
-  }, [pickerOpen, pickerMounted]);
-
-  // Once mounted (and still open), flip the animation target on the next paint
-  // so the enter transition runs from the collapsed (0fr) state to open (1fr).
-  useEffect(() => {
-    if (!pickerMounted || !pickerOpen) return;
-    let raf2 = 0;
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setPickerVisible(true));
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-    };
-  }, [pickerMounted, pickerOpen]);
-
-  // Same mount/slide lifecycle as the picker, for the inline poll options panel.
-  const pollMode = mode === "poll";
-  useEffect(() => {
-    if (pollMode) {
-      setPollMounted(true);
-      return;
-    }
-    setPollVisible(false);
-    if (!pollMounted) return;
-    const t = setTimeout(() => setPollMounted(false), 200);
-    return () => clearTimeout(t);
-  }, [pollMode, pollMounted]);
-
-  useEffect(() => {
-    if (!pollMounted || !pollMode) return;
-    let raf2 = 0;
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setPollVisible(true));
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-    };
-  }, [pollMounted, pollMode]);
+  // slide-down exit transition can play before unmounting. The mount/slide
+  // lifecycle (picker + poll panel) lives in useMountedTransition, above.
 
   // Auto-save draft (debounced): persists the text and any uploaded attachments
   // (already-uploaded Blossom URLs, so safe to serialize) per channel.

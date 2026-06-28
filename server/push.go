@@ -565,7 +565,7 @@ func tagValue(event *nostr.Event, name string) string {
 func pSet(event *nostr.Event) map[string]bool {
 	out := map[string]bool{}
 	for _, t := range event.Tags {
-		if len(t) >= 2 && t[0] == "p" && isHex64(t[1]) {
+		if len(t) >= 2 && t[0] == "p" && nostr.IsValid32ByteHex(t[1]) {
 			out[t[1]] = true
 		}
 	}
@@ -614,8 +614,8 @@ func publicRelayWSURL() string {
 // urlPathEscape percent-encodes a value for use as a single path segment,
 // matching the client's encodeURIComponent (which the router decodes).
 func urlPathEscape(v string) string {
-	// url.QueryEscape encodes spaces as '+', which is wrong for a path; use
-	// PathEscape and additionally encode the few chars PathEscape leaves.
+	// url.QueryEscape encodes spaces as '+', which is wrong for a path segment;
+	// url.PathEscape encodes them as %20, matching the client's encodeURIComponent.
 	return url.PathEscape(v)
 }
 

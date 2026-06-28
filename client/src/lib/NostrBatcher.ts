@@ -31,17 +31,84 @@ interface PendingRequest<V> {
   signal?: AbortSignal;
 }
 
+/** Anything that can be rejected and may carry an abort signal. */
+interface AbortableRequest {
+  reject: (error: unknown) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * Drop the requests whose signal has already aborted (rejecting them with their
+ * reason) and return only the still-live requests. Shared by every collector's
+ * `flush` prelude.
+ */
+function partitionLive<R extends AbortableRequest>(batch: R[]): R[] {
+  const live: R[] = [];
+  for (const req of batch) {
+    if (req.signal?.aborted) req.reject(req.signal.reason);
+    else live.push(req);
+  }
+  return live;
+}
+
+/**
+ * Build the combined AbortController for a batch: it aborts only when EVERY
+ * live caller has aborted (a single caller cancelling must not kill the shared
+ * query the others are still waiting on). When not every caller supplies a
+ * signal, the batch is never collectively aborted.
+ */
+function combinedAbortController<R extends AbortableRequest>(live: R[]): AbortController {
+  const controller = new AbortController();
+  const signals = live.map((r) => r.signal).filter(Boolean) as AbortSignal[];
+  if (signals.length > 0 && signals.length === live.length) {
+    const checkAllAborted = () => {
+      if (signals.every((s) => s.aborted)) controller.abort(signals[0].reason);
+    };
+    for (const sig of signals) sig.addEventListener('abort', checkAllAborted, { once: true });
+  }
+  return controller;
+}
+
+/**
+ * Accumulates requests during the current microtask and fires a single combined
+ * query once it drains. Subclasses implement `flush()` (the query + fan-out);
+ * this base owns the pending queue and microtask scheduling shared by every
+ * collector.
+ */
+abstract class MicrotaskBatcher<R extends AbortableRequest> {
+  protected pending: R[] = [];
+  private scheduled = false;
+
+  /** Enqueue a request and schedule a flush for the end of this microtask. */
+  protected enqueue(req: R): void {
+    this.pending.push(req);
+    if (!this.scheduled) {
+      this.scheduled = true;
+      queueMicrotask(() => this.flush());
+    }
+  }
+
+  /** Drain the pending queue into `batch` and reset for the next tick. */
+  protected drain(): R[] {
+    const batch = this.pending;
+    this.pending = [];
+    this.scheduled = false;
+    return batch;
+  }
+
+  protected abstract flush(): Promise<void>;
+}
+
 /**
  * A batch collector that accumulates requests during the current microtask
  * and then fires a single combined query.
  */
-class BatchCollector<V> {
-  private pending: PendingRequest<V>[] = [];
-  private scheduled = false;
-
+class BatchCollector<V> extends MicrotaskBatcher<PendingRequest<V>> {
   constructor(
     private executeBatch: (keys: string[], signal: AbortSignal) => Promise<Map<string, V>>,
-  ) {}
+  ) {
+    super();
+  }
 
   /** Enqueue a request. Returns a promise that resolves when the batch completes. */
   request(key: string, signal?: AbortSignal): Promise<V> {
@@ -50,31 +117,13 @@ class BatchCollector<V> {
         reject(signal.reason);
         return;
       }
-
-      this.pending.push({ key, resolve, reject, signal });
-
-      if (!this.scheduled) {
-        this.scheduled = true;
-        queueMicrotask(() => this.flush());
-      }
+      this.enqueue({ key, resolve, reject, signal });
     });
   }
 
   /** Drain the pending queue and execute the batch. */
-  private async flush(): Promise<void> {
-    const batch = this.pending;
-    this.pending = [];
-    this.scheduled = false;
-
-    if (batch.length === 0) return;
-
-    const live = batch.filter((req) => !req.signal?.aborted);
-    const aborted = batch.filter((req) => req.signal?.aborted);
-
-    for (const req of aborted) {
-      req.reject(req.signal!.reason);
-    }
-
+  protected async flush(): Promise<void> {
+    const live = partitionLive(this.drain());
     if (live.length === 0) return;
 
     // Deduplicate keys.
@@ -87,19 +136,7 @@ class BatchCollector<V> {
       }
     }
 
-    // Combined abort: only abort when ALL callers have aborted.
-    const controller = new AbortController();
-    const liveSignals = live.map((r) => r.signal).filter(Boolean) as AbortSignal[];
-    if (liveSignals.length > 0 && liveSignals.length === live.length) {
-      const checkAllAborted = () => {
-        if (liveSignals.every((s) => s.aborted)) {
-          controller.abort(liveSignals[0].reason);
-        }
-      };
-      for (const sig of liveSignals) {
-        sig.addEventListener('abort', checkAllAborted, { once: true });
-      }
-    }
+    const controller = combinedAbortController(live);
 
     try {
       // Chunk to respect relay limits.
@@ -173,20 +210,18 @@ function isReplaceableFilter(filter: NostrFilter): boolean {
  *
  * Each caller still gets back only its own event (or undefined).
  */
-class ReplaceableCollector {
-  /** Pending requests keyed by `${pubkey}:${kind}`. */
-  private pending: Array<{
-    pubkey: string;
-    kind: number;
-    resolve: (event: NostrEvent | undefined) => void;
-    reject: (error: unknown) => void;
-    signal?: AbortSignal;
-  }> = [];
-  private scheduled = false;
-
+class ReplaceableCollector extends MicrotaskBatcher<{
+  pubkey: string;
+  kind: number;
+  resolve: (event: NostrEvent | undefined) => void;
+  reject: (error: unknown) => void;
+  signal?: AbortSignal;
+}> {
   constructor(
     private pool: NPool,
-  ) {}
+  ) {
+    super();
+  }
 
   /**
    * Collect events for a replaceable-event filter, waiting longer than the
@@ -216,25 +251,12 @@ class ReplaceableCollector {
         reject(signal.reason);
         return;
       }
-      this.pending.push({ pubkey, kind, resolve, reject, signal });
-      if (!this.scheduled) {
-        this.scheduled = true;
-        queueMicrotask(() => this.flush());
-      }
+      this.enqueue({ pubkey, kind, resolve, reject, signal });
     });
   }
 
-  private async flush(): Promise<void> {
-    const batch = this.pending;
-    this.pending = [];
-    this.scheduled = false;
-
-    if (batch.length === 0) return;
-
-    const live = batch.filter((r) => !r.signal?.aborted);
-    for (const r of batch.filter((r) => r.signal?.aborted)) {
-      r.reject(r.signal!.reason);
-    }
+  protected async flush(): Promise<void> {
+    const live = partitionLive(this.drain());
     if (live.length === 0) return;
 
     // Collect unique kinds per pubkey.
@@ -253,15 +275,7 @@ class ReplaceableCollector {
       byKindSet.get(key)!.pubkeys.push(pubkey);
     }
 
-    // Combined abort: only abort when ALL callers have aborted.
-    const controller = new AbortController();
-    const liveSignals = live.map((r) => r.signal).filter(Boolean) as AbortSignal[];
-    if (liveSignals.length > 0 && liveSignals.length === live.length) {
-      const checkAllAborted = () => {
-        if (liveSignals.every((s) => s.aborted)) controller.abort(liveSignals[0].reason);
-      };
-      for (const sig of liveSignals) sig.addEventListener('abort', checkAllAborted, { once: true });
-    }
+    const controller = combinedAbortController(live);
 
     // results[pubkey][kind] = event | undefined
     const results = new Map<string, Map<number, NostrEvent | undefined>>();
@@ -354,20 +368,19 @@ class ReplaceableCollector {
  * which batch many `d` tags for ONE author. Here the kind and `d` are fixed
  * and the authors vary.
  */
-class FixedDTagAuthorCollector {
-  private pending: Array<{
-    author: string;
-    resolve: (event: NostrEvent | undefined) => void;
-    reject: (error: unknown) => void;
-    signal?: AbortSignal;
-  }> = [];
-  private scheduled = false;
-
+class FixedDTagAuthorCollector extends MicrotaskBatcher<{
+  author: string;
+  resolve: (event: NostrEvent | undefined) => void;
+  reject: (error: unknown) => void;
+  signal?: AbortSignal;
+}> {
   constructor(
     private pool: NPool,
     private kind: number,
     private dTag: string,
-  ) {}
+  ) {
+    super();
+  }
 
   request(author: string, signal?: AbortSignal): Promise<NostrEvent | undefined> {
     return new Promise((resolve, reject) => {
@@ -375,25 +388,12 @@ class FixedDTagAuthorCollector {
         reject(signal.reason);
         return;
       }
-      this.pending.push({ author, resolve, reject, signal });
-      if (!this.scheduled) {
-        this.scheduled = true;
-        queueMicrotask(() => this.flush());
-      }
+      this.enqueue({ author, resolve, reject, signal });
     });
   }
 
-  private async flush(): Promise<void> {
-    const batch = this.pending;
-    this.pending = [];
-    this.scheduled = false;
-
-    if (batch.length === 0) return;
-
-    const live = batch.filter((r) => !r.signal?.aborted);
-    for (const r of batch.filter((r) => r.signal?.aborted)) {
-      r.reject(r.signal!.reason);
-    }
+  protected async flush(): Promise<void> {
+    const live = partitionLive(this.drain());
     if (live.length === 0) return;
 
     // Unique authors, preserving order.
@@ -406,15 +406,7 @@ class FixedDTagAuthorCollector {
       }
     }
 
-    // Combined abort: only abort when ALL callers have aborted.
-    const controller = new AbortController();
-    const liveSignals = live.map((r) => r.signal).filter(Boolean) as AbortSignal[];
-    if (liveSignals.length > 0 && liveSignals.length === live.length) {
-      const checkAllAborted = () => {
-        if (liveSignals.every((s) => s.aborted)) controller.abort(liveSignals[0].reason);
-      };
-      for (const sig of liveSignals) sig.addEventListener('abort', checkAllAborted, { once: true });
-    }
+    const controller = combinedAbortController(live);
 
     const byAuthor = new Map<string, NostrEvent>();
     try {

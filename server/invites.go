@@ -110,7 +110,7 @@ func setupInvites() {
 			return false, ""
 		}
 		// only members holding a privileged role may mint invites
-		roles, _ := group.Members[event.PubKey]
+		roles := group.Members[event.PubKey]
 		for _, role := range roles {
 			if role == adminRole || role == moderatorRole {
 				return false, ""
@@ -146,14 +146,11 @@ func setupInvites() {
 	})
 
 	// Replace relay29's join-request reaction with one that honors invite
-	// codes for closed groups. NOTE: this rebuild mirrors the OnEventSaved
+	// codes for closed groups. NOTE: this index mirrors the OnEventSaved
 	// order established by khatru29.Init (pinned at relay29 v0.5.1):
 	// [ApplyModerationAction, ReactToJoinRequest, ReactToLeaveRequest, AddToPreviousChecking].
-	for i, handler := range relay.OnEventSaved {
-		if i == 1 {
-			_ = handler // replaced: state.ReactToJoinRequest
-			relay.OnEventSaved[i] = reactToJoinRequest
-		}
+	if len(relay.OnEventSaved) > 1 {
+		relay.OnEventSaved[1] = reactToJoinRequest // was state.ReactToJoinRequest
 	}
 
 	// Load previously minted invite codes.

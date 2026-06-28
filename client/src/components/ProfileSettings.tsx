@@ -3,7 +3,7 @@ import {
   Loader2, Plus, Trash2, ChevronDown, ChevronUp,
   Wallet, Upload, Music, ImageIcon, Film, Mail, Link2, Pencil, AlertTriangle, Save,
 } from 'lucide-react';
-import { useForm, useFieldArray } from 'react-hook-form';
+import { useForm, useFieldArray, type Control } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { NSchema as n } from '@nostrify/nostrify';
@@ -239,11 +239,12 @@ const formSchema = n.metadata().extend({
     accept: z.string().optional(),
     /** Client-side only — placeholder text for the value input (not persisted). */
     placeholder: z.string().optional(),
-  })).optional(),
+  })),
   shape: z.string().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
+type FieldEntry = NonNullable<FormValues['fields']>[number];
 
 type CropState = {
   imageSrc: string;
@@ -260,8 +261,7 @@ interface FieldRowProps {
   accept?: string;
   valuePlaceholder?: string;
   isUploading?: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  control: any;
+  control: Control<FormValues>;
   canMoveUp: boolean;
   canMoveDown: boolean;
   onRemove: () => void;
@@ -481,8 +481,12 @@ export function ProfileSettings() {
     },
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { fields, append, remove, move } = useFieldArray({ control: form.control as any, name: 'fields' });
+  // `n.metadata()` contributes an index signature to FormValues, which defeats
+  // react-hook-form's FieldArrayPath inference for `fields` (it resolves to
+  // `never`). Cast the control to a form shape with just the array field so the
+  // field-array stays typed without an `any`.
+  const fieldArrayControl = form.control as unknown as Control<{ fields: FieldEntry[] }>;
+  const { fields, append, remove, move } = useFieldArray({ control: fieldArrayControl, name: 'fields' });
 
   // Media field upload — dynamic accept attribute per field
   const mediaInputRef = useRef<HTMLInputElement>(null);

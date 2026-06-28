@@ -68,9 +68,6 @@ export const shapedAvatarBorderStyle: React.CSSProperties = {
     ' drop-shadow(0 -3px 0 hsl(var(--background)))',
 };
 
-/** @deprecated Use shapedAvatarBorderStyle instead */
-export const emojiAvatarBorderStyle = shapedAvatarBorderStyle;
-
 /**
  * CSS filter that draws a crisp, solid green "speaking" outline that tightly
  * hugs the silhouette of a shaped avatar (emoji). Like
