@@ -5,10 +5,10 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, getReplyToId, ReplyContextLine } from "@/components/chat/ChatMessage";
+import { ChatMessage, getReplyToId, ReplyContextLine, replyPreviewText } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { MemberList } from "@/components/chat/MemberList";
-import { MessageTimeline } from "@/components/chat/MessageTimeline";
+import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { VoicePresence } from "@/components/VoicePresence";
 import { InviteConcordDialog } from "@/components/dialogs/InviteConcordDialog";
 import { ConcordSettingsDialog } from "@/components/dialogs/ConcordSettingsDialog";
@@ -53,13 +53,21 @@ import { cn, pickDefaultChannel } from "@/lib/utils";
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
 
 /** Concord reply context: the relay can't be asked for the sealed target, so
- *  the page resolves the author from already-decoded history and we render the
- *  shared chrome with the name only (no content preview). */
-function ConcordReplyContext({ pubkey }: { pubkey: string | undefined }) {
+ *  the page resolves the author + a content preview from already-decoded
+ *  history and we render the shared chrome. Clicking jumps to the original. */
+function ConcordReplyContext({
+  pubkey,
+  preview,
+  onClick,
+}: {
+  pubkey: string | undefined;
+  preview: string | undefined;
+  onClick: (() => void) | undefined;
+}) {
   const author = useAuthor(pubkey);
   const displayName = useScopedDisplayName(pubkey, author.data?.metadata);
   if (!pubkey) return null;
-  return <ReplyContextLine name={displayName} />;
+  return <ReplyContextLine name={displayName} preview={preview} onClick={onClick} />;
 }
 
 /** The community's decrypted GroupRoot logo for the channel-list title, with a
@@ -92,6 +100,10 @@ interface ConcordChatMessageProps {
   event: ChatMsg;
   reactions: MessageReactions;
   replyPubkey: string | undefined;
+  /** A short preview of the replied-to message (from decoded history). */
+  replyPreview: string | undefined;
+  /** Id of the replied-to message, for jump-to-original on click. */
+  replyId: string | undefined;
   continuation: boolean;
   canWrite: boolean;
   canModerate: boolean;
@@ -104,6 +116,7 @@ interface ConcordChatMessageProps {
   onDelete: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
+  onJumpToReply: (id: string) => void;
 }
 
 /**
@@ -120,6 +133,8 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   event,
   reactions,
   replyPubkey,
+  replyPreview,
+  replyId,
   continuation,
   canWrite,
   canModerate,
@@ -130,6 +145,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   onDelete,
   onRetry,
   onDiscard,
+  onJumpToReply,
 }: ConcordChatMessageProps) {
   return (
     <ChatMessage
@@ -141,7 +157,13 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       continuation={continuation}
       active={active}
       onToggleActive={onToggleActive}
-      replyContext={<ConcordReplyContext pubkey={replyPubkey} />}
+      replyContext={
+        <ConcordReplyContext
+          pubkey={replyPubkey}
+          preview={replyPreview}
+          onClick={replyId ? () => onJumpToReply(replyId) : undefined}
+        />
+      }
       onReply={onReply}
       onDelete={onDelete}
       onRetry={onRetry ? () => onRetry(event) : undefined}
@@ -390,9 +412,24 @@ export function ConcordPage() {
     return map;
   }, [allMessages]);
 
+  // Body previews for the reply-context line, resolved from already-decoded
+  // history (the relay can't serve the sealed target). Same one-pass + O(1)
+  // lookup as pubkeyById, so a reply-heavy room doesn't go O(N²) per render.
+  const previewById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of allMessages) map.set(m.id, replyPreviewText(m.content));
+    return map;
+  }, [allMessages]);
+
   // Stable reply callback so a per-message `ConcordChatMessage` doesn't re-render
   // just because the page did. `setReplyTo` is a stable state setter.
   const onReplyCb = useMemo(() => (canWrite ? setReplyTo : undefined), [canWrite]);
+
+  // Stable: clicking a reply-context line jumps the timeline to the original.
+  const timelineRef = useRef<MessageTimelineHandle | null>(null);
+  const jumpToReply = useCallback((id: string) => {
+    timelineRef.current?.scrollToMessage(id);
+  }, []);
 
   // Moderation: ban (read-cut), kick (cooperative), unban. The recipient set for
   // a ban's read-cut is everyone we know about minus the banned member.
@@ -701,6 +738,7 @@ export function ConcordPage() {
             <MessageTimeline
               key={channel ? bytesToHex(channel.id) : "none"}
               transport={transport}
+              handleRef={timelineRef}
               className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
               emptyState={
                 <p className="px-2 py-8 text-center text-sm text-muted-foreground">
@@ -710,12 +748,15 @@ export function ConcordPage() {
               renderMessage={(msg, continuation) => {
                 const replyTo = getReplyToId(msg);
                 const replyPk = replyTo ? pubkeyById.get(replyTo) : undefined;
+                const replyPreview = replyTo ? previewById.get(replyTo) : undefined;
                 return (
                   <ConcordChatMessage
                     key={msg.id}
                     event={msg}
                     reactions={reactionsFor(msg.id)}
                     replyPubkey={replyPk}
+                    replyPreview={replyPreview}
+                    replyId={replyTo}
                     continuation={continuation}
                     canWrite={transport.canWrite}
                     canModerate={transport.canModerate}
@@ -726,6 +767,7 @@ export function ConcordPage() {
                     onDelete={transport.deleteMessage}
                     onRetry={transport.retry}
                     onDiscard={transport.discard}
+                    onJumpToReply={jumpToReply}
                   />
                 );
               }}

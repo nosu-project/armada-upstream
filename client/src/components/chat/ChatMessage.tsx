@@ -30,21 +30,53 @@ export function getReplyToId(event: ChatMsg): string | undefined {
 }
 
 /**
+ * A one-line preview of a message's body for the reply-context line: URLs are
+ * collapsed to 📎 (they'd blow out the line), and an all-URL/empty body falls
+ * back to 📎. Shared so NIP-29 and Concord previews read identically.
+ */
+export function replyPreviewText(content: string): string {
+  return content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
+}
+
+/**
  * The compact "replying to …" context line shown above a reply message. Purely
  * presentational: the transport resolves WHO is replied to (and optionally a
  * content preview) — relay-fetched for NIP-29, the in-memory sealed author for
- * Concord — and hands the resolved `name`/`preview` here so the chrome (the
- * reply icon + bold name + truncated preview) is defined once. Renders nothing
- * until a name is resolved (avoids a flash of an empty line).
+ * Concord — and hands the resolved `name`/`preview` here so the chrome (a
+ * Discord-style quoted bar with the bold name + truncated preview) is defined
+ * once. Renders nothing until a name is resolved (avoids a flash of an empty
+ * line). When `onClick` is supplied the line jumps the timeline to the
+ * replied-to message.
  */
-export function ReplyContextLine({ name, preview }: { name: string | undefined; preview?: string }) {
+export function ReplyContextLine({
+  name,
+  preview,
+  onClick,
+}: {
+  name: string | undefined;
+  preview?: string;
+  onClick?: () => void;
+}) {
   if (!name) return null;
-  return (
-    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80 mb-0.5 min-w-0">
-      <Reply className="size-3 shrink-0" />
+  const content = (
+    <>
       <span className="font-semibold shrink-0">{name}</span>
       {preview && <span className="truncate">{preview}</span>}
-    </div>
+    </>
+  );
+  const className =
+    "flex items-center gap-1.5 text-[11px] text-muted-foreground/80 mb-0.5 min-w-0 border-l-2 border-muted-foreground/30 pl-2";
+  if (!onClick) {
+    return <div className={className}>{content}</div>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(className, "text-left hover:text-foreground hover:border-muted-foreground/60 transition-colors cursor-pointer")}
+    >
+      {content}
+    </button>
   );
 }
 

@@ -2,7 +2,7 @@ import { Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, getReplyToId, ReplyContextLine } from "@/components/chat/ChatMessage";
+import { ChatMessage, getReplyToId, ReplyContextLine, replyPreviewText } from "@/components/chat/ChatMessage";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import LoginDialog from "@/components/auth/LoginDialog";
@@ -30,17 +30,22 @@ import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /** NIP-29 reply context: fetch the replied-to event from the relay, then render
- *  the shared chrome with the author name + a content preview. */
-function ReplyContext({ eventId, relayUrl }: { eventId: string; relayUrl: string }) {
+ *  the shared chrome with the author name + a content preview. Clicking jumps
+ *  the timeline to the replied-to message. */
+function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl: string; onJump: (id: string) => void }) {
   const { data: event } = useEvent(eventId, [relayUrl]);
   const author = useAuthor(event?.pubkey);
   const displayName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
 
   if (!event) return null;
 
-  const preview = event.content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
-
-  return <ReplyContextLine name={displayName} preview={preview} />;
+  return (
+    <ReplyContextLine
+      name={displayName}
+      preview={replyPreviewText(event.content)}
+      onClick={() => onJump(eventId)}
+    />
+  );
 }
 
 interface Nip29ChatMessageProps {
@@ -57,6 +62,7 @@ interface Nip29ChatMessageProps {
   onEdit: (event: ChatMsg) => void;
   onEditSubmit: (event: ChatMsg, content: string) => void;
   onEditCancel: () => void;
+  onJumpToReply: (id: string) => void;
 }
 
 /**
@@ -79,6 +85,7 @@ function Nip29ChatMessage({
   onEdit,
   onEditSubmit,
   onEditCancel,
+  onJumpToReply,
 }: Nip29ChatMessageProps) {
   return (
     <ChatMessage
@@ -92,7 +99,7 @@ function Nip29ChatMessage({
       isEditing={isEditing}
       isPinned={transport.isPinned?.(event.id)}
       replyCount={transport.replyCountFor?.(event.id) ?? 0}
-      replyContext={<ReplyContext eventId={getReplyToId(event) ?? ""} relayUrl={relayUrl} />}
+      replyContext={<ReplyContext eventId={getReplyToId(event) ?? ""} relayUrl={relayUrl} onJump={onJumpToReply} />}
       onRetry={() => transport.retry?.(event)}
       onDiscard={() => transport.discard?.(event.id)}
       onTogglePin={transport.togglePin}
@@ -221,6 +228,11 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
+
+  // Stable: clicking a reply-context line jumps the timeline to the original.
+  const jumpToReply = useCallback((id: string) => {
+    timelineRef.current?.scrollToMessage(id);
+  }, []);
 
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {
@@ -462,6 +474,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                       onEdit={(e) => setEditingId(e.id)}
                       onEditSubmit={handleEditSubmit}
                       onEditCancel={() => setEditingId(undefined)}
+                      onJumpToReply={jumpToReply}
                     />
                   ))}
               </>
@@ -494,6 +507,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                 onEdit={(e) => setEditingId(e.id)}
                 onEditSubmit={handleEditSubmit}
                 onEditCancel={() => setEditingId(undefined)}
+                onJumpToReply={jumpToReply}
               />
             )}
           />
