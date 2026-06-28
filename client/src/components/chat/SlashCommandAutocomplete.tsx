@@ -8,6 +8,12 @@ interface SlashCommandAutocompleteProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   content: string;
   canModerate: boolean;
+  /**
+   * Optional extra filter on which commands the menu offers (on top of the
+   * built-in moderation gate). Used by surfaces that support only a subset —
+   * e.g. the Bluetooth mesh, which has no polls/threads/moderation.
+   */
+  commandFilter?: (command: SlashCommand) => boolean;
   /** Replace the command word `/query` with `/<name> ` (keeps the menu intent). */
   onInsertCommand: (params: { start: number; end: number; replacement: string }) => void;
   /** Run a command immediately (for argument-less commands picked from the menu). */
@@ -24,6 +30,7 @@ export function SlashCommandAutocomplete({
   textareaRef,
   content,
   canModerate,
+  commandFilter,
   onInsertCommand,
   onRunCommand,
 }: SlashCommandAutocompleteProps) {
@@ -44,8 +51,12 @@ export function SlashCommandAutocomplete({
   });
 
   const matches = useMemo(
-    () => (isOpen ? matchSlashCommands(query, canModerate) : []),
-    [isOpen, query, canModerate],
+    () => {
+      if (!isOpen) return [];
+      const base = matchSlashCommands(query, canModerate);
+      return commandFilter ? base.filter(commandFilter) : base;
+    },
+    [isOpen, query, canModerate, commandFilter],
   );
 
   const detect = useCallback(() => {

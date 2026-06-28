@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import {
   Bluetooth,
@@ -13,21 +13,27 @@ import {
   VenetianMask,
 } from "lucide-react";
 
-import { ChatMessage } from "@/components/chat/ChatMessage";
+import { MeshMessage } from "@/components/chat/MeshMessage";
+import { MeshMentionAutocomplete } from "@/components/chat/MeshMentionAutocomplete";
 import { MessageTimeline } from "@/components/chat/MessageTimeline";
+import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useInsertText } from "@/hooks/useInsertText";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
+import { toast } from "@/hooks/useToast";
 import { meshIdentity, type MeshIdentity } from "@/lib/meshIdentity";
+import { runMeshSlashCommand, isMeshSlashCommand } from "@/lib/meshSlashCommands";
 import { cn } from "@/lib/utils";
 
 import type { ChatTransport } from "@/components/chat/transport";
 import type { MeshPeer } from "@/lib/bluetoothMesh";
+import type { SlashCommand } from "@/lib/slashCommands";
 
 /**
  * What the chat pane is currently showing. `null` is the "nothing selected"
@@ -49,6 +55,8 @@ export function MeshPage() {
   const { transport, mesh, send, sendPrivate } = useMeshTransport();
   const [view, setView] = useState<MeshView>(null);
   const [draft, setDraft] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { insertAtCursor } = useInsertText(textareaRef, draft, setDraft);
 
   // A peer that drops off the roster (left Bluetooth range) shouldn't leave the
   // DM pane pointing at a dead peer — fall back to the landing state.
@@ -97,17 +105,69 @@ export function MeshPage() {
 
   const activeTransport = view?.type === "dm" ? directTransport : transport;
 
+  // Send already-resolved text over the active channel (broadcast or this DM).
+  const sendText = async (content: string) => {
+    if (!content || !mesh.started || !view) return;
+    if (view.type === "dm") {
+      if (!selectedPeer) throw new Error("Peer unavailable");
+      await sendPrivate(selectedPeer, content);
+    } else {
+      await send(content);
+    }
+  };
+
+  const focusComposer = () => {
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  // Open the `@` picker, optionally seeding the draft (e.g. "/slap @").
+  const openMentionPicker = (prefix?: string) => {
+    setDraft(`${prefix ?? ""}@`);
+    focusComposer();
+  };
+
+  // Run a slash command picked from the menu (argument-less ones run on select).
+  const runCommandFromMenu = (command: SlashCommand) => {
+    const result = runMeshSlashCommand(`/${command.name}`);
+    if (result.type === "openMention") {
+      openMentionPicker(result.prefix);
+    } else if (result.type === "error") {
+      toast({ title: "Command unavailable", description: result.message, variant: "destructive" });
+    }
+    // "send" never happens for argument-less commands picked from the menu.
+  };
+
   const onSend = async () => {
     const content = draft.trim();
     if (!content || !mesh.started || !view) return;
+
+    // Slash commands: rewrite/redirect before sending. A bare command word is
+    // also handled here (e.g. "/me" with no text → error, not a literal send).
+    if (content.startsWith("/")) {
+      const result = runMeshSlashCommand(content);
+      if (result.type === "error") {
+        toast({ title: "Command unavailable", description: result.message, variant: "destructive" });
+        return;
+      }
+      if (result.type === "openMention") {
+        openMentionPicker(result.prefix);
+        return;
+      }
+      if (result.type === "send") {
+        setDraft("");
+        try {
+          await sendText(result.text);
+        } catch {
+          setDraft(content);
+        }
+        return;
+      }
+      // passthrough → send literally below.
+    }
+
     setDraft("");
     try {
-      if (view.type === "dm") {
-        if (!selectedPeer) throw new Error("Peer unavailable");
-        await sendPrivate(selectedPeer, content);
-      } else {
-        await send(content);
-      }
+      await sendText(content);
     } catch {
       // Surface failures by restoring the draft so the user can retry.
       setDraft(content);
@@ -157,20 +217,38 @@ export function MeshPage() {
               transport={activeTransport}
               className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
               emptyState={view.type === "dm" ? <EmptyDM peer={selectedPeer} /> : <EmptyBroadcast />}
-              renderMessage={(msg) => (
-                <ChatMessage
+              renderMessage={(msg, continuation) => (
+                <MeshMessage
                   key={msg.id}
                   event={msg}
-                  identityOverride={resolveIdentity(msg.pubkey)}
-                  canWrite={activeTransport.canWrite}
-                  canModerate={false}
+                  identity={resolveIdentity(msg.pubkey)}
+                  peers={mesh.peers}
+                  myPeerID={mesh.myPeerID}
+                  continuation={continuation}
                 />
               )}
             />
 
-            <div className="px-3 pb-3 pt-1 shrink-0">
+            <div className="relative px-3 pb-3 pt-1 shrink-0">
+              {/* Autocompletes anchor to the composer textarea. Mentions suggest
+                  nearby peers; slash commands offer the mesh-appropriate set. */}
+              <MeshMentionAutocomplete
+                textareaRef={textareaRef}
+                content={draft}
+                peers={mesh.peers}
+                onInsertMention={insertAtCursor}
+              />
+              <SlashCommandAutocomplete
+                textareaRef={textareaRef}
+                content={draft}
+                canModerate={false}
+                commandFilter={isMeshSlashCommand}
+                onInsertCommand={insertAtCursor}
+                onRunCommand={runCommandFromMenu}
+              />
               <div className="flex items-end gap-2 rounded-2xl bg-secondary/40 px-3 py-1.5">
                 <textarea
+                  ref={textareaRef}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
