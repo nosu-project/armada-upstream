@@ -5,7 +5,7 @@
 End-to-end encrypted, server-less group chat ("Communities") over Nostr.
 
 This document is the concrete wire specification for the Concord protocol as implemented in
-the Vector client. Where [`README.md`](./README.md) explains the *philosophy*, this document
+the Vector client. Where [`README.md`](https://github.com/VectorPrivacy/Vector/blob/master/docs/concord/README.md) explains the *philosophy*, this document
 gives the exact event kinds, key derivations, encryption envelopes, tag layouts, and
 publish/query procedures needed to implement an interoperable client from scratch.
 
