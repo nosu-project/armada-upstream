@@ -113,3 +113,38 @@ export function meshIdentity(
     suffix: meshSuffix(peerID),
   };
 }
+
+/**
+ * The `@`-mention token for a peer: `@<name>#<suffix>` (e.g. `@anon3f9a#6f70`).
+ * Matches bitchat's `nick#abcd` disambiguation convention and is plain text, so
+ * it survives the BLE wire and reads sensibly on bitchat clients too. The
+ * suffix pins the mention to a specific device even when two peers share a name.
+ */
+export function meshMentionToken(identity: MeshIdentity): string {
+  return `@${identity.name}#${identity.suffix}`;
+}
+
+/**
+ * Matches a mesh mention token in message text: `@name#abcd`. The name allows
+ * letters, digits, underscore, hyphen and dot (covers `anon3f9a`, `armada-…`,
+ * and NIP-05-ish names); the suffix is exactly 4 hex chars. Global + unicode so
+ * the renderer can walk every mention. `g` state is reset by the caller.
+ */
+export const MESH_MENTION_REGEX = /@([\p{L}\p{N}_.-]+)#([0-9a-f]{4})/giu;
+
+/**
+ * Whether a message body mentions the local user, by matching any
+ * `@name#suffix` token against our own suffix (the peer-id tail is unique per
+ * device, so the suffix alone is a reliable self-check). Returns false when we
+ * don't yet know our own peer id.
+ */
+export function meshMentionsMe(content: string, myPeerID: string | null): boolean {
+  if (!myPeerID) return false;
+  const mySuffix = meshSuffix(myPeerID);
+  const re = new RegExp(MESH_MENTION_REGEX.source, "giu");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    if (m[2].toLowerCase() === mySuffix) return true;
+  }
+  return false;
+}

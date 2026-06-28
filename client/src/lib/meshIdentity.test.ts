@@ -5,6 +5,8 @@ import {
   meshAnonName,
   meshColor,
   meshIdentity,
+  meshMentionToken,
+  meshMentionsMe,
   meshSuffix,
 } from "@/lib/meshIdentity";
 
@@ -57,5 +59,33 @@ describe("meshIdentity", () => {
 
   it("uses the reserved self color for the local user", () => {
     expect(meshIdentity(PEER, "Me", true).color).toBe(MESH_SELF_COLOR);
+  });
+});
+
+describe("meshMentionToken", () => {
+  it("formats as @name#suffix", () => {
+    expect(meshMentionToken(meshIdentity(PEER, "Alice"))).toBe("@Alice#6f70");
+    expect(meshMentionToken(meshIdentity(PEER, undefined))).toBe("@anon3f9a#6f70");
+  });
+});
+
+describe("meshMentionsMe", () => {
+  const me = "aaaa1111bbbb2222"; // suffix 2222
+
+  it("matches a mention whose suffix is our peer-id tail", () => {
+    expect(meshMentionsMe("hey @anon3f9a#2222 look", me)).toBe(true);
+    expect(meshMentionsMe("hey @Someone#2222!", me)).toBe(true);
+  });
+
+  it("ignores mentions of other peers", () => {
+    expect(meshMentionsMe("hey @anon3f9a#6f70", me)).toBe(false);
+  });
+
+  it("is case-insensitive on the suffix", () => {
+    expect(meshMentionsMe("@x#AAAA done", "0000000000000000".slice(0, 12) + "aaaa")).toBe(true);
+  });
+
+  it("returns false when our peer id is unknown", () => {
+    expect(meshMentionsMe("@x#2222", null)).toBe(false);
   });
 });
