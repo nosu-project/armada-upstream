@@ -1,13 +1,13 @@
-import { AlertCircle, ChevronLeft, Headphones, Loader2, MessageSquare, Phone, Plus, RotateCw, Search, X } from "lucide-react";
+import { ChevronLeft, Headphones, Loader2, MessageSquare, Phone, Plus, Search, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatContent } from "@/components/chat/ChatContent";
+import { ChatMessage } from "@/components/chat/ChatMessage";
 import { MessageRow } from "@/components/chat/MessageRow";
-import { toChatMsg } from "@/components/chat/transport";
+import { MessageTimeline } from "@/components/chat/MessageTimeline";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
@@ -23,11 +23,9 @@ import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   useDMConversations,
-  useDirectMessages,
   useDMSupport,
-  KIND_DM,
-  type DecryptedDM,
 } from "@/hooks/useDirectMessages";
+import { useDmTransport } from "@/hooks/useDmTransport";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
@@ -147,104 +145,50 @@ function ConversationRow({
 }
 
 /**
- * Max gap between two same-author DMs for the later one to render as a compact
- * continuation (no repeated avatar/name/timestamp). 5 minutes.
+ * A not-yet-decrypted DM placeholder. It reserves the row (so scroll
+ * length/position stay correct in the timeline) and shows a muted shimmer until
+ * it scrolls into view, at which point `observePlaceholder` triggers its
+ * decrypt. Decrypted messages render through the shared `ChatMessage` instead.
  */
-const DM_CONTINUATION_WINDOW_SECONDS = 5 * 60;
-
-/**
- * A single direct message, rendered with the same flat row layout as group
- * chat messages (shared `MessageRow` + rich `ChatContent` body). DMs carry no
- * tags, so we adapt the decrypted message into a minimal event for rendering.
- */
-function DMMessage({
-  message,
+function DmPlaceholderRow({
+  id,
+  pubkey,
+  createdAt,
   continuation,
-  onRetry,
   observePlaceholder,
 }: {
-  message: DecryptedDM;
+  id: string;
+  pubkey: string;
+  createdAt: number;
   continuation?: boolean;
-  onRetry?: (id: string) => void;
-  /**
-   * For an `encrypted` placeholder row, register its element with the thread's
-   * IntersectionObserver so it's decrypted when it scrolls into view. Returns a
-   * cleanup that unobserves. No-op for already-decrypted rows.
-   */
-  observePlaceholder?: (el: HTMLElement, id: string) => () => void;
+  observePlaceholder: (el: HTMLElement, id: string) => () => void;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
-    if (!message.encrypted || !observePlaceholder) return;
     const el = rowRef.current;
     if (!el) return;
-    return observePlaceholder(el, message.id);
-  }, [message.encrypted, message.id, observePlaceholder]);
-
-  const event = useMemo<NostrEvent>(
-    () =>
-      toChatMsg({
-        id: message.id,
-        pubkey: message.pubkey,
-        created_at: message.created_at,
-        kind: KIND_DM,
-        content: message.content,
-      }),
-    [message],
-  );
-
-  // A not-yet-decrypted placeholder: reserve the row (so scroll length/position
-  // stay correct) and show a muted shimmer until it scrolls into view.
-  if (message.encrypted) {
-    return (
-      <div ref={rowRef} data-message-id={message.id}>
-        <MessageRow pubkey={message.pubkey} createdAt={message.created_at} continuation={continuation}>
-          <Skeleton className="h-3 w-40 max-w-full" />
-        </MessageRow>
-      </div>
-    );
-  }
+    return observePlaceholder(el, id);
+  }, [id, observePlaceholder]);
 
   return (
-    <MessageRow pubkey={message.pubkey} createdAt={message.created_at} continuation={continuation}>
-      <div className={cn(message.status === "failed" && "opacity-80")}>
-        <ChatContent
-          event={event}
-          className={cn("text-[15px]", message.status === "sending" && "opacity-60")}
-        />
-        {message.status === "failed" && (
-          <button
-            type="button"
-            onClick={() => onRetry?.(message.id)}
-            className="mt-0.5 inline-flex items-center gap-1 text-xs text-destructive hover:underline"
-          >
-            <AlertCircle className="size-3" />
-            Not delivered — tap to retry
-            <RotateCw className="size-3" />
-          </button>
-        )}
-      </div>
-    </MessageRow>
+    <div ref={rowRef} data-event-id={id}>
+      <MessageRow pubkey={pubkey} createdAt={createdAt} continuation={continuation}>
+        <Skeleton className="h-3 w-40 max-w-full" />
+      </MessageRow>
+    </div>
   );
 }
 
 function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
-  const { messages, isLoading, send, retry, loadOlder, hasMore, isLoadingOlder, decryptVisible } = useDirectMessages(peer);
+  const { transport, encryptedIds, decryptVisible, send } = useDmTransport(peer);
+  const { messages } = transport;
   const { markRead } = useReadState();
   const { toast } = useToast();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { activeCall, joinDmCall } = useCall();
-  const scrollRef = useRef<HTMLDivElement>(null);
-  // The inner content wrapper, observed for size changes (images/embeds/lazy
-  // decrypts) so we can keep the view pinned to the bottom as it grows.
-  const contentRef = useRef<HTMLDivElement>(null);
-  // Pre-prepend scroll metrics, used to hold the reading position when older
-  // messages are backfilled above the viewport.
-  const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
 
   // Voice: derive the shared DM room id and find a LiveKit-capable relay to
   // host the call. DMs are stored on general app relays (which usually don't
@@ -279,72 +223,12 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
     [participants, user?.pubkey],
   );
 
-  // Stick-to-bottom behavior. A chat should stay pinned to the newest message
-  // until the USER scrolls up — and crucially it must STAY pinned as async
-  // content (images, link previews, lazily-decrypted messages) loads and grows
-  // the thread, which doesn't trigger a `messages` change. We track whether the
-  // view is currently at the bottom (`pinnedRef`) and a ResizeObserver re-pins
-  // on any content growth while pinned.
-  const pinnedRef = useRef(true);
-  // Set right before we programmatically change scrollTop, so the resulting
-  // `scroll` event isn't mistaken for the user scrolling away (which would
-  // unpin us a beat before the ResizeObserver re-pins — the cause of drift when
-  // reactions/embeds/decrypts grow a row).
-  const programmaticScrollRef = useRef(false);
-  // Distance from the bottom (px) under which we consider the view "pinned".
-  const PIN_THRESHOLD = 80;
-
-  const scrollToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    programmaticScrollRef.current = true;
-    el.scrollTop = el.scrollHeight;
-    // Clear the guard next frame in case the assignment fired no scroll event
-    // (e.g. already at bottom), so a later genuine user scroll isn't swallowed.
-    requestAnimationFrame(() => {
-      programmaticScrollRef.current = false;
-    });
-  }, []);
-
-  const restoreAfterPrepend = useCallback(() => {
-    const el = scrollRef.current;
-    const restore = restoreScrollRef.current;
-    if (!el || !restore) return false;
-    restoreScrollRef.current = null;
-    programmaticScrollRef.current = true;
-    el.scrollTop = restore.top + (el.scrollHeight - restore.height);
-    requestAnimationFrame(() => {
-      programmaticScrollRef.current = false;
-    });
-    return true;
-  }, []);
-
-  // Re-pin to bottom whenever the content grows (images/embeds/lazy decrypts/
-  // reactions) — but only while the user hasn't scrolled away. Also handles the
-  // backfill scroll-position restore when older history is prepended.
-  useEffect(() => {
-    const el = scrollRef.current;
-    const content = contentRef.current;
-    if (!el || !content) return;
-    const ro = new ResizeObserver(() => {
-      if (restoreAfterPrepend()) return;
-      if (pinnedRef.current) scrollToBottom();
-    });
-    ro.observe(content);
-    return () => ro.disconnect();
-  }, [peer, restoreAfterPrepend, scrollToBottom]);
-
-  // On a new message (and on first load) pin to bottom if the user is pinned.
-  useEffect(() => {
-    if (restoreAfterPrepend()) return;
-    if (pinnedRef.current) scrollToBottom();
-  }, [messages, restoreAfterPrepend, scrollToBottom]);
-
-  // Lazy decryption: a single IntersectionObserver (rooted on the scroll
-  // container) decrypts placeholder rows as they scroll into view, so opening a
-  // long thread only pays for the visible screenful up front. The element→id
-  // map lets the observer callback look up which message a row belongs to;
-  // `observePlaceholder` (passed to each placeholder DMMessage) registers it.
+  // Lazy decryption: a single IntersectionObserver decrypts placeholder rows as
+  // they scroll into view, so opening a long thread only pays for the visible
+  // screenful up front. The element→id map lets the observer callback look up
+  // which message a row belongs to; `observePlaceholder` (passed to each
+  // DmPlaceholderRow) registers it. The observer keys off element visibility,
+  // independent of the MessageTimeline's scroll container.
   const elementIds = useRef(new WeakMap<Element, string>());
   // Always call the latest decryptVisible without re-creating the observer.
   const decryptVisibleRef = useRef(decryptVisible);
@@ -384,36 +268,6 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       elementIds.current.delete(el);
     };
   }, []);
-
-  // Track whether the user is at the bottom (so async growth keeps it pinned),
-  // and backfill older history when the user scrolls near the top.
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-
-    // Ignore the scroll event our own pin/restore caused — only a genuine user
-    // scroll should change whether we're pinned. (The flag self-clears next
-    // frame.)
-    if (programmaticScrollRef.current) return;
-
-    // Pinned = within PIN_THRESHOLD px of the bottom. Scrolling up unpins;
-    // scrolling back down re-pins. While unpinned, content growth won't yank.
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    pinnedRef.current = distanceFromBottom <= PIN_THRESHOLD;
-
-    if (hasMore && !isLoadingOlder && el.scrollTop < 200) {
-      restoreScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
-      void loadOlder().then((added) => {
-        if (added === 0) restoreScrollRef.current = null;
-      });
-    }
-  }, [hasMore, isLoadingOlder, loadOlder]);
-
-  // Reset to pinned (and jump to bottom) whenever we switch conversations.
-  useEffect(() => {
-    pinnedRef.current = true;
-    restoreScrollRef.current = null;
-  }, [peer]);
 
   // Mark the thread read up to the newest message while it's visible.
   useEffect(() => {
@@ -502,53 +356,39 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       {/* Top-of-chat call stage portal target (active when this DM is in call). */}
       <CallStageSlot active={inThisCall} />
 
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4">
-        <div ref={contentRef}>
-        {isLoading ? (
-          <div className="space-y-3 p-2">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <Skeleton className="size-10 rounded-full shrink-0" />
-                <div className="space-y-1 flex-1">
-                  <Skeleton className="h-3 w-24" />
-                  <Skeleton className="h-3 w-2/3" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : messages.length === 0 ? (
+      <MessageTimeline
+        transport={transport}
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
+        emptyState={
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <MessageSquare className="size-10 text-muted-foreground/40 mb-3" />
             <p className="text-sm text-muted-foreground">No messages yet</p>
             <p className="text-xs text-muted-foreground/60 mt-1">Say hello to {name}!</p>
           </div>
-        ) : (
-          <>
-            {isLoadingOlder && (
-              <div className="flex justify-center py-3">
-                <Loader2 className="size-4 animate-spin text-muted-foreground" />
-              </div>
-            )}
-            {messages.map((m, i) => {
-              const prev = messages[i - 1];
-              const continuation =
-                !!prev &&
-                prev.pubkey === m.pubkey &&
-                m.created_at - prev.created_at < DM_CONTINUATION_WINDOW_SECONDS;
-              return (
-                <DMMessage
-                  key={m.id}
-                  message={m}
-                  continuation={continuation}
-                  onRetry={retry}
-                  observePlaceholder={observePlaceholder}
-                />
-              );
-            })}
-          </>
-        )}
-        </div>
-      </div>
+        }
+        renderMessage={(msg, continuation) =>
+          encryptedIds.has(msg.id) ? (
+            <DmPlaceholderRow
+              key={msg.id}
+              id={msg.id}
+              pubkey={msg.pubkey}
+              createdAt={msg.created_at}
+              continuation={continuation}
+              observePlaceholder={observePlaceholder}
+            />
+          ) : (
+            <ChatMessage
+              key={msg.id}
+              event={msg}
+              canWrite={transport.canWrite}
+              canModerate={transport.canModerate}
+              sendStatus={transport.sendStatusFor?.(msg.id)}
+              onRetry={transport.retry ? () => transport.retry!(msg) : undefined}
+              continuation={continuation}
+            />
+          )
+        }
+      />
 
       <ChatComposer
         relayUrl="dm"
