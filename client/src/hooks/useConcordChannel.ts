@@ -20,7 +20,6 @@ import {
 } from "@/lib/concord/envelope";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_REACTION } from "@/lib/concord/kinds";
 import { canActOnMember, Permissions } from "@/lib/concord/roles";
-import { runExclusive } from "@/lib/signerQueue";
 import type { Channel, Community } from "@/lib/concord/types";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
@@ -762,7 +761,6 @@ export function useSendConcordMessage(community: Community | undefined, channel:
       if (!user) throw new Error("Sign in to send a message.");
       if (!community || !channel) throw new Error("No channel selected.");
 
-      const self = user.pubkey;
       const signer = user.signer;
       const isChatMessage = kind === KIND_COMMUNITY_MESSAGE || kind === 3302;
 
@@ -780,14 +778,14 @@ export function useSendConcordMessage(community: Community | undefined, channel:
         extraTags,
       });
 
-      // Sign + seal serialized per-identity (extension-safe). If this throws
-      // (signer rejected / sealing failed) it propagates to the caller before
-      // anything is rendered; the composer shows a toast and keeps the draft.
-      const signed = await runExclusive(self, async () => {
-        const signedInner = await signer.signEvent(innerTemplate);
-        const sealed = sealWithSignedInner(signedInner, channel.key, channel.id, channel.epoch);
-        return { signedInner, sealed };
-      });
+      // Sign + seal. If this throws (signer rejected / sealing failed) it
+      // propagates to the caller before anything is rendered; the composer
+      // shows a toast and keeps the draft.
+      const signedInner = await signer.signEvent(innerTemplate);
+      const signed = {
+        signedInner,
+        sealed: sealWithSignedInner(signedInner, channel.key, channel.id, channel.epoch),
+      };
       const outer = signed.sealed;
       const innerId = signed.signedInner.id;
 
@@ -840,28 +838,25 @@ export function useRetryConcordMessage(community: Community | undefined, channel
       const messages = queryClient.getQueryData<OpenedMessage[]>(channelKey(channelIdHex)) ?? [];
       const msg = messages.find((m) => m.messageId === id);
       if (!msg) return;
-      const self = user.pubkey;
       const signer = user.signer;
       setStatus(id, "pending");
 
       void (async () => {
         try {
-          const outer = await runExclusive(self, async () => {
-            // Rebuild the inner from the original content/tags. `buildInnerEvent`
-            // re-derives the binding tags; the reply reference (if any) is in the
-            // original inner's `e` tag.
-            const reference = msg.tags.find((t) => t[0] === "e")?.[1];
-            const innerTemplate = buildInnerEvent({
-              channelId: channel.id,
-              epoch: channel.epoch,
-              content: msg.content,
-              ms: msg.ms,
-              kind: msg.kind,
-              reference,
-            });
-            const signedInner = await signer.signEvent(innerTemplate);
-            return sealWithSignedInner(signedInner, channel.key, channel.id, channel.epoch);
+          // Rebuild the inner from the original content/tags. `buildInnerEvent`
+          // re-derives the binding tags; the reply reference (if any) is in the
+          // original inner's `e` tag.
+          const reference = msg.tags.find((t) => t[0] === "e")?.[1];
+          const innerTemplate = buildInnerEvent({
+            channelId: channel.id,
+            epoch: channel.epoch,
+            content: msg.content,
+            ms: msg.ms,
+            kind: msg.kind,
+            reference,
           });
+          const signedInner = await signer.signEvent(innerTemplate);
+          const outer = sealWithSignedInner(signedInner, channel.key, channel.id, channel.epoch);
           const results = await Promise.allSettled(
             community.relays.map((url) =>
               nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }),
@@ -900,7 +895,6 @@ export function useRetryConcordMessage(community: Community | undefined, channel
   const deleteMessage = useCallback(
     (id: string) => {
       if (!user || !community || !channel) return;
-      const self = user.pubkey;
       const signer = user.signer;
 
       const messages = queryClient.getQueryData<OpenedMessage[]>(channelKey(channelIdHex)) ?? [];
@@ -930,18 +924,16 @@ export function useRetryConcordMessage(community: Community | undefined, channel
 
       void (async () => {
         try {
-          const outer = await runExclusive(self, async () => {
-            const innerTemplate = buildInnerEvent({
-              channelId: channel.id,
-              epoch: channel.epoch,
-              content: "",
-              ms: Date.now(),
-              kind: KIND_COMMUNITY_DELETE,
-              reference: id,
-            });
-            const signedInner = await signer.signEvent(innerTemplate);
-            return sealWithSignedInner(signedInner, channel.key, channel.id, channel.epoch);
+          const innerTemplate = buildInnerEvent({
+            channelId: channel.id,
+            epoch: channel.epoch,
+            content: "",
+            ms: Date.now(),
+            kind: KIND_COMMUNITY_DELETE,
+            reference: id,
           });
+          const signedInner = await signer.signEvent(innerTemplate);
+          const outer = sealWithSignedInner(signedInner, channel.key, channel.id, channel.epoch);
           const results = await Promise.allSettled(
             community.relays.map((url) =>
               nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }),

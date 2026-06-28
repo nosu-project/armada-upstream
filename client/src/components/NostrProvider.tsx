@@ -10,7 +10,6 @@ import { EventStoreContext } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
-import { runExclusive } from "@/lib/signerQueue";
 
 interface NostrProviderProps {
   children: React.ReactNode;
@@ -107,11 +106,6 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // callback reads from this ref when a relay sends an AUTH challenge, so it
   // always uses the latest signer without recreating the pool.
   const signerRef = useRef<NostrSigner | undefined>(undefined);
-  // The user's pubkey, used to key the signer-serialization queue so concurrent
-  // AUTH challenges from many relays don't fan out into parallel calls against a
-  // (slow, remote) NIP-46 bunker.
-  const pubkeyRef = useRef<string | undefined>(undefined);
-  pubkeyRef.current = logins[0]?.pubkey;
   // Per-relay cache of the most recent signed AUTH event, so a REQ retry that
   // re-triggers the same challenge — or a burst of fresh challenges from a
   // relay that keeps closing our subs — reuses the signature instead of queuing
@@ -178,18 +172,15 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             if (Date.now() < cooldownUntil) {
               throw new Error(`AUTH throttled for ${url}`);
             }
-            const key = pubkeyRef.current ?? "anon";
-            const signing = runExclusive(`auth:${key}`, () =>
-              signer.signEvent({
-                kind: 22242,
-                content: "",
-                tags: [
-                  ["relay", url],
-                  ["challenge", challenge],
-                ],
-                created_at: Math.floor(Date.now() / 1000),
-              }),
-            ).then((ev) => {
+            const signing = signer.signEvent({
+              kind: 22242,
+              content: "",
+              tags: [
+                ["relay", url],
+                ["challenge", challenge],
+              ],
+              created_at: Math.floor(Date.now() / 1000),
+            }).then((ev) => {
               authCacheRef.current.set(url, { challenge, event: ev, signedAt: Date.now() });
               authCooldownRef.current.set(url, Date.now() + AUTH_MIN_INTERVAL_MS);
               return ev;

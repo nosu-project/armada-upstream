@@ -1,4 +1,5 @@
-import { clearPlaintextCache } from "@/lib/plaintextCache";
+import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
+import { DECRYPT_CACHE_DB_NAME } from "@/lib/AppSigner";
 
 /**
  * localStorage keys that must survive a purge. `armada:login` is the nostrify
@@ -14,7 +15,7 @@ async function purgeIndexedDB(): Promise<void> {
   try {
     // `indexedDB.databases()` is unsupported on Firefox; fall back to the
     // known Armada database names so we still wipe the bulk of the data.
-    const known = ["armada-events", "armada-concord-cache", "armada-relay-provenance"];
+    const known = ["armada-events", "armada-concord-cache", "armada-relay-provenance", DECRYPT_CACHE_DB_NAME];
     const dbs =
       typeof indexedDB.databases === "function"
         ? (await indexedDB.databases()).map((d) => d.name).filter((n): n is string => Boolean(n))
@@ -61,16 +62,17 @@ function purgeLocalStorage(): void {
 
 /**
  * Purge all client-side persistence so a fresh logout leaves nothing behind:
- * the event cache, Concord caches, decrypted image bytes, per-user read-state
- * and drafts, relay-info, voice/notification prefs, theme, and the added-server
- * list. Decrypted in-memory plaintext is dropped too.
+ * the event cache, Concord caches, the persistent decrypt cache, decrypted
+ * image bytes, per-user read-state and drafts, relay-info, voice/notification
+ * prefs, theme, and the added-server list. The in-memory DM render memo is
+ * dropped too.
  *
  * `armada:login` is intentionally left for the caller's `removeLogin` to manage
  * in the same tick; everything else (including `armada:app-config`) is wiped so
  * the next session starts truly clean.
  */
 export async function purgeClientStorage(): Promise<void> {
-  clearPlaintextCache();
+  clearRenderedPlaintext();
   purgeLocalStorage();
   await Promise.all([purgeIndexedDB(), purgeCacheStorage()]);
 }
