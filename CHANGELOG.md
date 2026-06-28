@@ -6,18 +6,25 @@ All notable changes to Armada are documented here. The format follows
 
 ## [0.9.2] - 2026-06-28
 
-Replies are clearer everywhere: the "replying to" hint now shows who you're
-replying to and a preview of their message, and tapping it jumps straight to the
-original (with a gentle highlight) — in encrypted communities too. Direct
-messages also keep arriving reliably after the app has been backgrounded, the
-same way group and community chats already did.
+Direct messages get a real workout: search within a conversation, mute someone,
+and a smoother way to start a new chat — plus steadier delivery after the app
+has been backgrounded. Replies are also clearer everywhere: the "replying to"
+hint shows who you're replying to and a preview of their message, and tapping it
+jumps straight to the original (with a gentle highlight), in encrypted
+communities too.
 
 ### Added
+- Search within a direct-message conversation from the thread header.
+- Mute a person from a direct-message conversation to hide it and stop seeing
+  their messages.
 - The reply hint above a message now previews the message being replied to, and
   clicking it scrolls to and highlights the original — including in encrypted
   communities.
+- Visiting an invite link now adds that server to your rail.
 
 ### Changed
+- Starting a new direct message and the conversation list are reworked for a
+  smoother, clearer flow.
 - Direct messages now render consistently with group and community chat.
 
 ### Fixed
