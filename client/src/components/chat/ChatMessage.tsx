@@ -29,6 +29,25 @@ export function getReplyToId(event: ChatMsg): string | undefined {
   return rootTag?.[1];
 }
 
+/**
+ * The compact "replying to …" context line shown above a reply message. Purely
+ * presentational: the transport resolves WHO is replied to (and optionally a
+ * content preview) — relay-fetched for NIP-29, the in-memory sealed author for
+ * Concord — and hands the resolved `name`/`preview` here so the chrome (the
+ * reply icon + bold name + truncated preview) is defined once. Renders nothing
+ * until a name is resolved (avoids a flash of an empty line).
+ */
+export function ReplyContextLine({ name, preview }: { name: string | undefined; preview?: string }) {
+  if (!name) return null;
+  return (
+    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80 mb-0.5 min-w-0">
+      <Reply className="size-3 shrink-0" />
+      <span className="font-semibold shrink-0">{name}</span>
+      {preview && <span className="truncate">{preview}</span>}
+    </div>
+  );
+}
+
 export interface ChatMessageProps {
   event: ChatMsg;
   canWrite: boolean;

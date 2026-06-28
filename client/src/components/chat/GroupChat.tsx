@@ -1,8 +1,8 @@
-import { Hash, Loader2, Reply, Search } from "lucide-react";
+import { Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, getReplyToId } from "@/components/chat/ChatMessage";
+import { ChatMessage, getReplyToId, ReplyContextLine } from "@/components/chat/ChatMessage";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import LoginDialog from "@/components/auth/LoginDialog";
@@ -29,7 +29,8 @@ import { cn } from "@/lib/utils";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** Compact "replying to" context line shown above a NIP-29 reply message. */
+/** NIP-29 reply context: fetch the replied-to event from the relay, then render
+ *  the shared chrome with the author name + a content preview. */
 function ReplyContext({ eventId, relayUrl }: { eventId: string; relayUrl: string }) {
   const { data: event } = useEvent(eventId, [relayUrl]);
   const author = useAuthor(event?.pubkey);
@@ -39,13 +40,7 @@ function ReplyContext({ eventId, relayUrl }: { eventId: string; relayUrl: string
 
   const preview = event.content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
 
-  return (
-    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80 mb-0.5 min-w-0">
-      <Reply className="size-3 shrink-0" />
-      <span className="font-semibold shrink-0">{displayName}</span>
-      <span className="truncate">{preview}</span>
-    </div>
-  );
+  return <ReplyContextLine name={displayName} preview={preview} />;
 }
 
 interface Nip29ChatMessageProps {

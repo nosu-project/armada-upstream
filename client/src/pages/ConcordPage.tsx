@@ -1,11 +1,11 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { ChevronLeft, Hash, Headphones, Loader2, LogOut, MoreVertical, Phone, Plus, Reply, Settings, Shield, ShieldCheck, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { ChevronLeft, Hash, Headphones, Loader2, LogOut, MoreVertical, Phone, Plus, Settings, Shield, ShieldCheck, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, getReplyToId } from "@/components/chat/ChatMessage";
+import { ChatMessage, getReplyToId, ReplyContextLine } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline } from "@/components/chat/MessageTimeline";
@@ -52,17 +52,14 @@ import { cn, pickDefaultChannel } from "@/lib/utils";
 
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
 
-/** Compact "replying to" context line shown above a Concord reply message. */
+/** Concord reply context: the relay can't be asked for the sealed target, so
+ *  the page resolves the author from already-decoded history and we render the
+ *  shared chrome with the name only (no content preview). */
 function ConcordReplyContext({ pubkey }: { pubkey: string | undefined }) {
   const author = useAuthor(pubkey);
   const displayName = useScopedDisplayName(pubkey, author.data?.metadata);
   if (!pubkey) return null;
-  return (
-    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80 mb-0.5 min-w-0">
-      <Reply className="size-3 shrink-0" />
-      <span className="font-semibold shrink-0">{displayName}</span>
-    </div>
-  );
+  return <ReplyContextLine name={displayName} />;
 }
 
 /** The community's decrypted GroupRoot logo for the channel-list title, with a
