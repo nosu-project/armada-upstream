@@ -1,6 +1,6 @@
-import { AlertCircle, ChevronLeft, Headphones, Loader2, MessageSquare, Phone, Plus, RotateCw, Search, X } from "lucide-react";
+import { AlertCircle, ChevronLeft, Headphones, Loader2, MessageSquare, PenSquare, Phone, Plus, RotateCw, Search, UserCheck, Users, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
@@ -20,6 +20,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useFollowList } from "@/hooks/useFollowList";
 import {
   useDMConversations,
   useDirectMessages,
@@ -27,7 +28,7 @@ import {
   type DecryptedDM,
 } from "@/hooks/useDirectMessages";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
-import { useSearchProfiles } from "@/hooks/useSearchProfiles";
+import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
@@ -35,6 +36,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { DM_VOICE_RELAYS, PLATFORM_RELAYS } from "@/lib/platform";
+import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -560,57 +562,221 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   );
 }
 
-function NewDMDialog({ onPick, onClose }: { onPick: (pubkey: string) => void; onClose: () => void }) {
-  const [query, setQuery] = useState("");
-  const { data: profiles } = useSearchProfiles(query);
-  const direct = resolvePubkey(query);
-
-  return (
-    <div className="absolute inset-0 z-20 flex flex-col bg-background">
-      <div className="flex items-center gap-2 p-3 border-b">
-        <Input
-          autoFocus
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search name or paste npub…"
-          className="h-9"
-        />
-        <Button variant="ghost" size="icon" aria-label="Close" onClick={onClose}>
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        {direct && (
-          <ProfilePick pubkey={direct} onPick={onPick} />
-        )}
-        {(profiles ?? [])
-          .filter((p) => p.pubkey !== direct)
-          .map((p) => (
-            <ProfilePick key={p.pubkey} pubkey={p.pubkey} onPick={onPick} />
-          ))}
-      </div>
-    </div>
-  );
-}
-
-function ProfilePick({ pubkey, onPick }: { pubkey: string; onPick: (pubkey: string) => void }) {
-  const author = useAuthor(pubkey);
-  const metadata = author.data?.metadata;
+/** A single recipient suggestion row inside the new-DM pane. */
+function RecipientSuggestion({
+  pubkey,
+  metadata,
+  active,
+  followed,
+  onSelect,
+}: {
+  pubkey: string;
+  metadata: SearchProfile["metadata"] | undefined;
+  active: boolean;
+  followed: boolean;
+  onSelect: () => void;
+}) {
   const name = getDisplayName(metadata, pubkey);
+  const picture = sanitizeUrl(metadata?.picture);
+  // Prefer a human-readable NIP-05 handle; fall back to the (truncated) npub.
+  const npub = nip19.npubEncode(pubkey);
+  const handle = metadata?.nip05 ?? `${npub.slice(0, 12)}…${npub.slice(-6)}`;
+
   return (
     <button
       type="button"
-      onClick={() => onPick(pubkey)}
-      className="flex items-center gap-2.5 w-full px-2 py-2 rounded-lg text-left hover:bg-secondary/60 transition-colors"
+      onClick={onSelect}
+      data-active={active}
+      className={cn(
+        "flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition-colors",
+        active ? "bg-secondary" : "hover:bg-secondary/60",
+      )}
     >
-      <Avatar shape={getAvatarShape(metadata)} className="size-8 shrink-0">
-        <AvatarImage src={metadata?.picture} alt={name} />
+      <Avatar shape={getAvatarShape(metadata)} className="size-9 shrink-0">
+        <AvatarImage src={picture} alt={name} />
         <AvatarFallback className="bg-primary/20 text-primary text-xs">
           {name[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>
-      <span className="text-sm font-medium truncate">{name}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{name}</span>
+          {followed && (
+            <UserCheck className="size-3.5 shrink-0 text-primary" aria-label="You follow this person" />
+          )}
+        </div>
+        <span className="block truncate text-xs text-muted-foreground">{handle}</span>
+      </div>
     </button>
+  );
+}
+
+/**
+ * A recipient row whose metadata isn't in the search results yet — e.g. a
+ * pasted npub/nprofile that resolved to a raw pubkey. Resolves the author
+ * profile on its own so it shows an avatar/name instead of a bare key.
+ */
+function ResolvedRecipientSuggestion({
+  pubkey,
+  active,
+  followed,
+  onSelect,
+}: {
+  pubkey: string;
+  active: boolean;
+  followed: boolean;
+  onSelect: () => void;
+}) {
+  const author = useAuthor(pubkey);
+  return (
+    <RecipientSuggestion
+      pubkey={pubkey}
+      metadata={author.data?.metadata}
+      active={active}
+      followed={followed}
+      onSelect={onSelect}
+    />
+  );
+}
+
+/**
+ * The "start a new chat" pane. Renders in the thread column in place of the
+ * empty-state prompt (no modal). A "To:" field drives debounced profile
+ * autocomplete — followed contacts first, then NIP-50 relay hits, plus a pasted
+ * npub/nprofile/hex as a direct match — and the suggestions render inline below
+ * the field with full keyboard nav (↑/↓ to move, Enter to open, Esc to cancel).
+ */
+function NewDMPane({
+  onSelectRecipient,
+  onCancel,
+}: {
+  onSelectRecipient: (pubkey: string) => void;
+  onCancel: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const { data: profiles, isFetching, followedPubkeys } = useSearchProfiles(query);
+  const trimmed = query.trim();
+
+  // A pasted npub/nprofile/hex resolves to a pubkey we can DM directly, even if
+  // it isn't in the search results. Surface it first, de-duped against results.
+  const direct = resolvePubkey(query);
+  const recipients = useMemo(() => {
+    const fromSearch = (profiles ?? []).filter((p) => p.pubkey !== direct);
+    const list: { pubkey: string; metadata?: SearchProfile["metadata"]; resolved?: boolean }[] = [];
+    if (direct) list.push({ pubkey: direct, resolved: true });
+    for (const p of fromSearch) list.push({ pubkey: p.pubkey, metadata: p.metadata });
+    return list;
+  }, [profiles, direct]);
+
+  // Reset the highlighted row whenever the candidate set changes.
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [recipients.length]);
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+      return;
+    }
+    if (recipients.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => (i + 1) % recipients.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => (i - 1 + recipients.length) % recipients.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const chosen = recipients[activeIndex];
+      if (chosen) onSelectRecipient(chosen.pubkey);
+    }
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col safe-area-top">
+      <header className="h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Back to conversations"
+          className="size-9 shrink-0 sidebar:hidden"
+          onClick={onCancel}
+        >
+          <ChevronLeft className="size-5" />
+        </Button>
+        <PenSquare className="size-4 text-muted-foreground shrink-0" />
+        <h1 className="font-semibold truncate flex-1 min-w-0">New message</h1>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Cancel"
+          className="size-8 shrink-0 text-muted-foreground hidden sidebar:inline-flex"
+          onClick={onCancel}
+        >
+          <X className="size-4" />
+        </Button>
+      </header>
+
+      <div className="px-3 pt-3 pb-2 shrink-0">
+        <label htmlFor="dm-recipient" className="mb-1.5 block text-xs font-medium text-muted-foreground">
+          To:
+        </label>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            id="dm-recipient"
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Search a name or paste an npub…"
+            autoComplete="off"
+            className="h-10 pl-8 pr-8 text-sm"
+          />
+          {isFetching && (
+            <Loader2 className="absolute right-2.5 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-3 space-y-0.5">
+        {recipients.length > 0 ? (
+          recipients.map((r, index) =>
+            r.resolved ? (
+              <ResolvedRecipientSuggestion
+                key={r.pubkey}
+                pubkey={r.pubkey}
+                active={index === activeIndex}
+                followed={followedPubkeys.has(r.pubkey)}
+                onSelect={() => onSelectRecipient(r.pubkey)}
+              />
+            ) : (
+              <RecipientSuggestion
+                key={r.pubkey}
+                pubkey={r.pubkey}
+                metadata={r.metadata}
+                active={index === activeIndex}
+                followed={followedPubkeys.has(r.pubkey)}
+                onSelect={() => onSelectRecipient(r.pubkey)}
+              />
+            ),
+          )
+        ) : (
+          <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+            <PenSquare className="size-8 text-primary/70" />
+            <p className="mx-auto max-w-xs text-sm text-muted-foreground">
+              {trimmed
+                ? isFetching
+                  ? "Searching…"
+                  : "No one found. Try a different name, or paste an npub."
+                : "Search for someone by name, or paste their npub to start a conversation."}
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -624,9 +790,13 @@ function ConversationList({
   activePeer,
   dmSupported,
   isLoading,
-  composing,
-  setComposing,
+  onCompose,
+  friendsOnly,
+  setFriendsOnly,
   openPeer,
+  loadMore,
+  hasMore,
+  isLoadingMore,
   className,
 }: {
   rows: { peer: string; latest: NostrEvent }[];
@@ -634,9 +804,13 @@ function ConversationList({
   activePeer: string | undefined;
   dmSupported: boolean;
   isLoading: boolean;
-  composing: boolean;
-  setComposing: (value: boolean) => void;
+  onCompose: () => void;
+  friendsOnly: boolean;
+  setFriendsOnly: (updater: (v: boolean) => boolean) => void;
   openPeer: (pubkey: string) => void;
+  loadMore: () => Promise<number>;
+  hasMore: boolean;
+  isLoadingMore: boolean;
   className?: string;
 }) {
   const { user } = useCurrentUser();
@@ -672,6 +846,20 @@ function ConversationList({
     return registerCallBarSlot(el);
   }, [registerCallBarSlot]);
 
+  // Page in older conversations when the list is scrolled near the bottom.
+  // Mirrors the per-relay cursor backfill in useDMConversations: each scroll to
+  // the end advances every non-exhausted relay one page.
+  const handleListScroll = useCallback(
+    (e: UIEvent<HTMLDivElement>) => {
+      if (!hasMore || isLoadingMore) return;
+      const el = e.currentTarget;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) {
+        void loadMore();
+      }
+    },
+    [hasMore, isLoadingMore, loadMore],
+  );
+
   return (
     <aside
       className={cn(
@@ -684,15 +872,34 @@ function ConversationList({
         <span className="text-[11px] text-muted-foreground truncate leading-tight">
           Message your friends.
         </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="New message"
-          className="absolute right-3 bottom-3 size-8"
-          onClick={() => setComposing(true)}
-        >
-          <Plus className="size-5" />
-        </Button>
+        <div className="absolute right-3 bottom-3 flex items-center gap-0.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={friendsOnly ? "Showing people you follow" : "Show only people you follow"}
+                aria-pressed={friendsOnly}
+                className={cn("size-8 text-muted-foreground", friendsOnly && "text-primary")}
+                onClick={() => setFriendsOnly((v) => !v)}
+              >
+                <Users className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {friendsOnly ? "Showing friends only" : "Friends only"}
+            </TooltipContent>
+          </Tooltip>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="New message"
+            className="size-8"
+            onClick={onCompose}
+          >
+            <Plus className="size-5" />
+          </Button>
+        </div>
       </header>
 
       {/* Search conversations by contact name or last message. */}
@@ -711,7 +918,7 @@ function ConversationList({
       {/* Divider between the header and the conversation list. */}
       <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+      <div className="flex-1 overflow-y-auto p-2 space-y-0.5" onScroll={handleListScroll}>
         {!dmSupported ? (
           <p className="text-sm text-muted-foreground p-3">
             Your signer doesn't support encryption, so direct messages are unavailable.
@@ -722,35 +929,40 @@ function ConversationList({
           </div>
         ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground p-3">
-            No conversations yet. Start one with the + button.
+            {friendsOnly
+              ? "No conversations with people you follow. Turn off the friends filter to see everyone."
+              : "No conversations yet. Start one with the + button."}
           </p>
         ) : (
-          rows.map((c) => (
-            <ConversationRow
-              key={c.peer}
-              peer={c.peer}
-              preview={c.latest}
-              previewText={previews[c.peer]}
-              query={search}
-              unread={
-                Boolean(c.latest) &&
-                c.latest.pubkey !== user?.pubkey &&
-                c.latest.created_at > getLastRead(dmReadKey(c.peer)) &&
-                c.peer !== activePeer
-              }
-              active={c.peer === activePeer}
-              inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.peer}
-              selfPubkey={user?.pubkey}
-              voiceRelay={voiceRelay ?? undefined}
-              onClick={() => openPeer(c.peer)}
-            />
-          ))
+          <>
+            {rows.map((c) => (
+              <ConversationRow
+                key={c.peer}
+                peer={c.peer}
+                preview={c.latest}
+                previewText={previews[c.peer]}
+                query={search}
+                unread={
+                  Boolean(c.latest) &&
+                  c.latest.pubkey !== user?.pubkey &&
+                  c.latest.created_at > getLastRead(dmReadKey(c.peer)) &&
+                  c.peer !== activePeer
+                }
+                active={c.peer === activePeer}
+                inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.peer}
+                selfPubkey={user?.pubkey}
+                voiceRelay={voiceRelay ?? undefined}
+                onClick={() => openPeer(c.peer)}
+              />
+            ))}
+            {isLoadingMore && (
+              <div className="flex justify-center py-3">
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              </div>
+            )}
+          </>
         )}
       </div>
-
-      {composing && (
-        <NewDMDialog onPick={openPeer} onClose={() => setComposing(false)} />
-      )}
 
       {/* Voice call bar slot — the persistent call UI portals here on desktop. */}
       <div ref={callBarRef} className="empty:hidden shrink-0" />
@@ -774,8 +986,17 @@ export function DMsPage() {
   const { peer: rawPeer } = useParams<{ peer: string }>();
   const { user } = useCurrentUser();
   const dmSupported = useDMSupport();
-  const { conversations, previews, isLoading } = useDMConversations();
+  const { conversations, previews, isLoading, loadMore, hasMore, isLoadingMore } = useDMConversations();
+  const { data: followData } = useFollowList();
   const [composing, setComposing] = useState(false);
+  // "Friends only" toggle: when on, the conversation list is narrowed to people
+  // the user follows (kind 3). Muted people are already excluded upstream in
+  // useDMConversations regardless of this toggle.
+  const [friendsOnly, setFriendsOnly] = useState(false);
+  const followedPubkeys = useMemo(
+    () => new Set(followData?.pubkeys ?? []),
+    [followData?.pubkeys],
+  );
 
   const activePeer = rawPeer ? resolvePubkey(rawPeer) : undefined;
 
@@ -793,18 +1014,35 @@ export function DMsPage() {
     return () => clearTimeout(timer);
   }, [activePeer]);
 
-  // Conversations plus the active peer if it's a brand-new thread.
+  // Composing takes over the thread column immediately — drop any lingering
+  // slide-out thread so the recipient picker shows without a thread flashing.
+  useEffect(() => {
+    if (composing) setRenderedPeer(undefined);
+  }, [composing]);
+
+  // Conversations plus the active peer if it's a brand-new thread. When the
+  // friends filter is on, narrow to followed peers — but always keep the peer
+  // whose thread is currently open so the row you're reading never vanishes.
   const rows = useMemo(() => {
-    const list = conversations.map((c) => ({ peer: c.peer, latest: c.latest }));
+    let list = conversations.map((c) => ({ peer: c.peer, latest: c.latest }));
+    if (friendsOnly) {
+      list = list.filter((c) => followedPubkeys.has(c.peer) || c.peer === activePeer);
+    }
     if (activePeer && !list.some((c) => c.peer === activePeer)) {
       list.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent });
     }
     return list;
-  }, [conversations, activePeer]);
+  }, [conversations, activePeer, friendsOnly, followedPubkeys]);
 
   const openPeer = useCallback(
     (pubkey: string) => {
       setComposing(false);
+      // Mount the thread synchronously in the same render that closes the
+      // compose pane, so we never fall through to the empty state for a frame
+      // between `composing` going false and the route-driven effect setting
+      // `renderedPeer`. (Without this the "Select a conversation" screen flashes
+      // when switching from a new-message draft to an existing conversation.)
+      setRenderedPeer(pubkey);
       navigate(`/dms/${nip19.npubEncode(pubkey)}`);
     },
     [navigate],
@@ -814,16 +1052,29 @@ export function DMsPage() {
     return <Navigate to="/" replace />;
   }
 
-  // Reveal the conversation list (slide the thread fully away) by clearing the
-  // active peer; return to the still-mounted thread by re-selecting it.
-  const revealList = () => navigate("/dms");
+  // Reveal the conversation list (slide the thread/compose pane away) by
+  // clearing the active peer and cancelling compose; return to the still-mounted
+  // thread by re-selecting it.
+  const revealList = () => {
+    setComposing(false);
+    navigate("/dms");
+  };
   const returnToThread = () => {
     if (renderedPeer) navigate(`/dms/${nip19.npubEncode(renderedPeer)}`);
   };
+  const startComposing = () => {
+    navigate("/dms");
+    setComposing(true);
+  };
+
+  // On mobile the list is revealed when there's no thread AND we're not
+  // composing — starting a new message slides the compose pane over the list,
+  // exactly like opening a conversation does.
+  const listRevealed = !activePeer && !composing;
 
   return (
     <SwipeReveal
-      open={!activePeer}
+      open={listRevealed}
       onReveal={revealList}
       onClose={returnToThread}
       underlay={
@@ -837,16 +1088,21 @@ export function DMsPage() {
             activePeer={activePeer}
             dmSupported={dmSupported}
             isLoading={isLoading}
-            composing={composing}
-            setComposing={setComposing}
+            onCompose={startComposing}
+            friendsOnly={friendsOnly}
+            setFriendsOnly={setFriendsOnly}
             openPeer={openPeer}
+            loadMore={loadMore}
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
             className="flex-1 sidebar:flex-none sidebar:w-60"
           />
         </>
       }
     >
-      {/* Thread pane. On mobile it's the swipeable overlay; on desktop a static
-          side-by-side pane (SwipeReveal renders it inline). */}
+      {/* Thread / compose pane. On mobile it's the swipeable overlay; on desktop
+          a static side-by-side pane (SwipeReveal renders it inline). A new-DM
+          recipient picker takes this column in place of the empty state. */}
       <main className="flex flex-col flex-1 min-w-0 safe-area-top bg-background h-full">
         {renderedPeer ? (
           <Conversation
@@ -854,11 +1110,17 @@ export function DMsPage() {
             peer={renderedPeer}
             onBack={revealList}
           />
+        ) : composing ? (
+          <NewDMPane onSelectRecipient={openPeer} onCancel={revealList} />
         ) : (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <div className="flex flex-col items-center gap-3">
+          <div className="flex flex-1 items-center justify-center text-muted-foreground p-8 text-center">
+            <div className="flex flex-col items-center gap-3 max-w-sm">
               <MessageSquare className="size-12 opacity-30" />
               <p className="text-sm">Select a conversation</p>
+              <Button variant="outline" className="mt-1" onClick={startComposing}>
+                <PenSquare className="size-4" />
+                New message
+              </Button>
             </div>
           </div>
         )}
