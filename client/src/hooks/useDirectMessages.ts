@@ -15,6 +15,15 @@ import type { NostrEvent } from "@nostrify/nostrify";
 /** NIP-04 encrypted direct message kind. */
 export const KIND_DM = 4;
 
+/**
+ * How far back the live subscription looks. A push notification can deliver a
+ * DM (and the user open the thread) before the live `req` is established; a
+ * wider lookback replays it. Matches the NIP-29/Concord rationale; the merge
+ * floor / dedupe removes overlap with the initial page. (Was 5s, which dropped
+ * push-delivered messages that arrived just before the socket opened.)
+ */
+const LIVE_SINCE_LOOKBACK_SECONDS = 5 * 60;
+
 /** The other participant of a DM event, from the viewer's perspective. */
 export function dmCounterparty(event: NostrEvent, self: string): string | undefined {
   if (event.pubkey !== self) return event.pubkey; // received: peer is the sender
@@ -255,9 +264,17 @@ export function useDMConversations() {
       return local;
     },
     staleTime: 15_000,
+    // Backstop the live socket: a backgrounded mobile WebSocket can wedge with
+    // no error and no event, silently stalling delivery. A periodic local-first
+    // re-read heals the gap (matches the NIP-29/Concord hooks, which DMs had
+    // been missing). Focus/reconnect catch up immediately rather than waiting
+    // out the interval.
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
-  // The live subscription below (since=now-5s) surfaces new conversations; the
+  // The live subscription below surfaces new conversations; the
   // local-first queryFn handles cold-load rendering, so no separate seed effect.
 
   // Live subscription so new conversations/messages surface without a refetch.
@@ -265,7 +282,7 @@ export function useDMConversations() {
     if (!user?.pubkey) return;
     const pubkey = user.pubkey;
     const controller = new AbortController();
-    const since = Math.floor(Date.now() / 1000) - 5;
+    const since = Math.floor(Date.now() / 1000) - LIVE_SINCE_LOOKBACK_SECONDS;
 
     (async () => {
       try {
@@ -446,6 +463,12 @@ export function useDirectMessages(peer: string | undefined) {
       return localPlaceholders;
     },
     staleTime: 10_000,
+    // Backstop the live socket (see the conversations query above): heal a
+    // wedged mobile WebSocket with a periodic local-first re-read, and catch up
+    // on focus/reconnect.
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
   // Live subscription for new messages in this thread.
@@ -453,7 +476,7 @@ export function useDirectMessages(peer: string | undefined) {
     if (!self || !peer || !user?.signer.nip04) return;
     const nip04 = user.signer.nip04;
     const controller = new AbortController();
-    const since = Math.floor(Date.now() / 1000) - 5;
+    const since = Math.floor(Date.now() / 1000) - LIVE_SINCE_LOOKBACK_SECONDS;
 
     (async () => {
       try {
