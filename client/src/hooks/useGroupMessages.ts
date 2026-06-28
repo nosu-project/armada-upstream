@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useEventStore } from "@/hooks/useEventStore";
+import { useSendStatusMap } from "@/hooks/useSendStatusMap";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -37,11 +38,9 @@ const LIVE_SINCE_LOOKBACK_SECONDS = 5 * 60;
  */
 const MAX_GAP_SECONDS = 6 * 60 * 60;
 
-/** Delivery status of an optimistically-inserted (locally-published) message. */
-export type SendStatus = "pending" | "failed";
-
-/** Map of event id → send status, for optimistic/unconfirmed messages. */
-export type SendStatusMap = Record<string, SendStatus>;
+// Optimistic send-status types/storage are shared with Concord; re-exported
+// here so existing importers (transport.ts) keep their path.
+export type { SendStatus, SendStatusMap } from "@/hooks/useSendStatusMap";
 
 function messagesKey(relayUrl: string | undefined, groupId: string | undefined) {
   return ["nip29", "messages", relayUrl, groupId] as const;
@@ -186,14 +185,9 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     placeholderData: (prev) => prev,
   });
 
-  // Send-status for optimistic messages (kept in its own cache entry).
-  const { data: status = {} } = useQuery<SendStatusMap>({
-    queryKey: statusKey(relayUrl, groupId),
-    queryFn: () => ({}),
-    enabled: Boolean(relayUrl && groupId),
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
+  // Send-status for optimistic messages (kept in its own cache entry, shared
+  // with Concord via useSendStatusMap).
+  const { status, setStatus } = useSendStatusMap(statusKey(relayUrl, groupId));
 
   const upsertMessage = useCallback(
     (event: NostrEvent) => {
@@ -247,22 +241,6 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       setIsLoadingOlder(false);
     }
   }, [nostr, relayUrl, groupId, hasMore, queryClient]);
-
-  const setStatus = useCallback(
-    (id: string, value: SendStatus | undefined) => {
-      queryClient.setQueryData<SendStatusMap>(statusKey(relayUrl, groupId), (old = {}) => {
-        if (value === undefined) {
-          if (!(id in old)) return old;
-          const next = { ...old };
-          delete next[id];
-          return next;
-        }
-        if (old[id] === value) return old;
-        return { ...old, [id]: value };
-      });
-    },
-    [queryClient, relayUrl, groupId],
-  );
 
   /** Insert a locally-signed message immediately with `pending` status. */
   const insertOptimistic = useCallback(

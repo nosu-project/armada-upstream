@@ -8,6 +8,7 @@ import { useConcordRoster } from "@/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useRotatorSecretKey } from "@/hooks/useRotatorSecretKey";
+import { useSendStatusMap, useSendStatusMapValue, type SendStatus, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import { forgetSkips, openMemoizedBatch } from "@/lib/concord/decodeCache";
 import { channelPseudonym } from "@/lib/concord/derive";
 import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
@@ -26,8 +27,8 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /** Optimistic delivery status for a Concord message we sent, keyed by message id. */
-export type ConcordSendStatus = "pending" | "failed";
-export type ConcordSendStatusMap = Record<string, ConcordSendStatus>;
+export type ConcordSendStatus = SendStatus;
+export type ConcordSendStatusMap = SendStatusMap;
 
 /** Query key for a channel's decoded message list. */
 function channelKey(channelIdHex: string | null) {
@@ -726,20 +727,7 @@ export function useSendConcordMessage(community: Community | undefined, channel:
 
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
 
-  const setStatus = useCallback(
-    (id: string, status: ConcordSendStatus | undefined) => {
-      queryClient.setQueryData<ConcordSendStatusMap>(statusKey(channelIdHex), (old = {}) => {
-        if (status === undefined) {
-          if (!(id in old)) return old;
-          const next = { ...old };
-          delete next[id];
-          return next;
-        }
-        return { ...old, [id]: status };
-      });
-    },
-    [queryClient, channelIdHex],
-  );
+  const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
 
   /** Broadcast a sealed outer to the community's relays. Throws if none accept. */
   const broadcast = useCallback(
@@ -844,19 +832,7 @@ export function useRetryConcordMessage(community: Community | undefined, channel
   const queryClient = useQueryClient();
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
 
-  const setStatus = useCallback(
-    (id: string, status: ConcordSendStatus | undefined) => {
-      queryClient.setQueryData<ConcordSendStatusMap>(statusKey(channelIdHex), (old = {}) => {
-        if (status === undefined) {
-          const next = { ...old };
-          delete next[id];
-          return next;
-        }
-        return { ...old, [id]: status };
-      });
-    },
-    [queryClient, channelIdHex],
-  );
+  const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
 
   const retry = useCallback(
     (id: string) => {
@@ -991,14 +967,7 @@ export function useRetryConcordMessage(community: Community | undefined, channel
 /** Read a channel's optimistic send-status map (pending/failed by message id). */
 export function useConcordSendStatus(channel: Channel | undefined): ConcordSendStatusMap {
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
-  const { data } = useQuery<ConcordSendStatusMap>({
-    queryKey: statusKey(channelIdHex),
-    queryFn: () => ({}),
-    enabled: Boolean(channelIdHex),
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
-  return data ?? {};
+  return useSendStatusMapValue(statusKey(channelIdHex));
 }
 
 /** A tallied reaction key: reactors plus the NIP-30 custom-emoji image URL (if any). */
