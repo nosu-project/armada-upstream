@@ -34,6 +34,11 @@ export interface MeshMessage {
 export interface MeshPeer {
   peerID: string;
   nickname: string;
+  isConnected?: boolean;
+  isDirectConnection?: boolean;
+  isVerified?: boolean;
+  lastSeen?: number;
+  noisePublicKey?: string;
 }
 
 export interface BluetoothMeshPlugin {
@@ -53,6 +58,13 @@ export interface BluetoothMeshPlugin {
   stop(): Promise<void>;
   /** Send a public (broadcast) mesh message, flooded over BLE with TTL. */
   sendMessage(options: { content: string }): Promise<void>;
+  /** Send an encrypted 1:1 mesh direct message using bitchat Noise sessions. */
+  sendPrivateMessage(options: {
+    content: string;
+    peerID: string;
+    nickname?: string;
+    messageID?: string;
+  }): Promise<void>;
   /** Current peer roster (peerID → nickname). */
   getPeers(): Promise<{ peers: MeshPeer[] }>;
 

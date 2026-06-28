@@ -11,6 +11,7 @@ import androidx.annotation.Nullable;
 
 import com.bitchat.android.mesh.BluetoothMeshDelegate;
 import com.bitchat.android.mesh.BluetoothMeshService;
+import com.bitchat.android.mesh.PeerInfo;
 import com.bitchat.android.model.BitchatMessage;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -171,6 +172,35 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
     }
 
     @PluginMethod
+    public void sendPrivateMessage(PluginCall call) {
+        String content = call.getString("content");
+        String peerID = call.getString("peerID");
+        String nickname = call.getString("nickname");
+        String messageID = call.getString("messageID");
+        if (content == null || content.isEmpty()) {
+            call.reject("content required");
+            return;
+        }
+        if (peerID == null || peerID.isEmpty()) {
+            call.reject("peerID required");
+            return;
+        }
+        if (meshService == null || !started) {
+            call.reject("mesh not started");
+            return;
+        }
+        String resolvedNickname = nickname;
+        if (resolvedNickname == null || resolvedNickname.isEmpty()) {
+            resolvedNickname = meshService.getPeerNicknames().get(peerID);
+        }
+        if (resolvedNickname == null || resolvedNickname.isEmpty()) {
+            resolvedNickname = peerID;
+        }
+        meshService.sendPrivateMessage(content, peerID, resolvedNickname, messageID);
+        call.resolve();
+    }
+
+    @PluginMethod
     public void getPeers(PluginCall call) {
         JSObject ret = new JSObject();
         ret.put("peers", peersArray());
@@ -264,10 +294,29 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
                 JSObject p = new JSObject();
                 p.put("peerID", e.getKey());
                 p.put("nickname", e.getValue());
+                PeerInfo info = meshService.getPeerInfo(e.getKey());
+                if (info != null) {
+                    p.put("isConnected", info.isConnected());
+                    p.put("isDirectConnection", info.isDirectConnection());
+                    p.put("isVerified", info.isVerifiedNickname());
+                    p.put("lastSeen", info.getLastSeen());
+                    byte[] noisePublicKey = info.getNoisePublicKey();
+                    if (noisePublicKey != null) {
+                        p.put("noisePublicKey", bytesToHex(noisePublicKey));
+                    }
+                }
                 arr.put(p);
             }
         }
         return arr;
+    }
+
+    private String bytesToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b & 0xff));
+        }
+        return sb.toString();
     }
 
     private String[] requiredBlePermissions() {

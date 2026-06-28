@@ -36,6 +36,8 @@ export interface MeshState {
   myPeerID: string | null;
   /** Current peer roster. */
   peers: MeshPeer[];
+  /** Direct-message histories keyed by mesh peer id. */
+  directMessages: Record<string, ChatMsg[]>;
   /** A startup/permission error, if any. */
   error: string | null;
   /** Manually (re)start the mesh (e.g. after granting permission). */
@@ -57,9 +59,11 @@ export function useMeshTransport(): {
   transport: ChatTransport;
   mesh: MeshState;
   send: (content: string) => Promise<void>;
+  sendPrivate: (peer: MeshPeer, content: string) => Promise<void>;
 } {
   const { user, metadata } = useCurrentUser();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [directMessages, setDirectMessages] = useState<Record<string, ChatMsg[]>>({});
   const [peers, setPeers] = useState<MeshPeer[]>([]);
   const [available, setAvailable] = useState(false);
   const [started, setStarted] = useState(false);
@@ -79,7 +83,19 @@ export function useMeshTransport(): {
   // De-dupe incoming messages by id (the mesh floods, so the same packet can
   // surface more than once) and keep ascending (oldest-first) order.
   const seenIds = useRef<Set<string>>(new Set());
+  const seenPrivateIds = useRef<Set<string>>(new Set());
   const appendMessage = useCallback((m: MeshMessage) => {
+    if (m.isPrivate) {
+      const peerID = m.senderPeerID;
+      if (!peerID || seenPrivateIds.current.has(m.id)) return;
+      seenPrivateIds.current.add(m.id);
+      setDirectMessages((prev) => {
+        const nextMessages = [...(prev[peerID] ?? []), meshToEvent(m)];
+        nextMessages.sort((a, b) => a.created_at - b.created_at);
+        return { ...prev, [peerID]: nextMessages };
+      });
+      return;
+    }
     if (seenIds.current.has(m.id)) return;
     seenIds.current.add(m.id);
     setMessages((prev) => {
@@ -172,6 +188,36 @@ export function useMeshTransport(): {
     [appendMessage, nickname, myPeerID],
   );
 
+  const sendPrivate = useCallback(
+    async (peer: MeshPeer, content: string) => {
+      const trimmed = content.trim();
+      if (!trimmed) return;
+      const messageID = crypto.randomUUID().toUpperCase();
+      const now = Date.now();
+      const localMessage = meshToEvent({
+        id: messageID,
+        sender: nickname || "me",
+        content: trimmed,
+        timestamp: now,
+        senderPeerID: myPeerID,
+        channel: null,
+        isPrivate: true,
+      });
+      setDirectMessages((prev) => {
+        const nextMessages = [...(prev[peer.peerID] ?? []), localMessage];
+        nextMessages.sort((a, b) => a.created_at - b.created_at);
+        return { ...prev, [peer.peerID]: nextMessages };
+      });
+      await BluetoothMesh.sendPrivateMessage({
+        content: trimmed,
+        peerID: peer.peerID,
+        nickname: peer.nickname,
+        messageID,
+      });
+    },
+    [myPeerID, nickname],
+  );
+
   const transport = useMemo<ChatTransport>(
     () => ({
       messages,
@@ -183,9 +229,9 @@ export function useMeshTransport(): {
   );
 
   const mesh = useMemo<MeshState>(
-    () => ({ available, started, myPeerID, peers, error, start, stop }),
-    [available, started, myPeerID, peers, error, start, stop],
+    () => ({ available, started, myPeerID, peers, directMessages, error, start, stop }),
+    [available, started, myPeerID, peers, directMessages, error, start, stop],
   );
 
-  return { transport, mesh, send };
+  return { transport, mesh, send, sendPrivate };
 }
