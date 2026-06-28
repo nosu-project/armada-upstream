@@ -12,9 +12,31 @@ import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
 
+/**
+ * An explicit display identity for a message author, used by surfaces whose
+ * authors are NOT Nostr identities (the Bluetooth mesh). When supplied,
+ * MessageRow renders this directly and skips the kind-0 author lookup and
+ * server-scoped profile resolution entirely (no wasted relay queries, no
+ * "Anonymous" fallback for a non-pubkey author key).
+ */
+export interface MessageIdentity {
+  /** Name to display. */
+  name: string;
+  /** Username color (CSS color), or undefined for the default. */
+  color?: string;
+  /** A muted suffix shown after the name (e.g. a mesh `#abcd` disambiguator). */
+  suffix?: string;
+}
+
 interface MessageRowProps {
   /** Author of the message; drives the avatar, display name and profile card. */
   pubkey: string;
+  /**
+   * Explicit author identity (mesh peers). When set, the avatar/name come from
+   * this instead of a Nostr profile lookup, and the profile-preview card is
+   * suppressed (there's no Nostr profile behind a mesh peer).
+   */
+  identityOverride?: MessageIdentity;
   /** Unix-seconds creation time, rendered as a short relative timestamp. */
   createdAt: number;
   /** The message body (rich content, poll, /me action, edit field, …). */
@@ -48,6 +70,7 @@ interface MessageRowProps {
  */
 export const MessageRow = memo(function MessageRow({
   pubkey,
+  identityOverride,
   createdAt,
   children,
   pending,
@@ -59,9 +82,29 @@ export const MessageRow = memo(function MessageRow({
   className,
   containerProps,
 }: MessageRowProps) {
-  const author = useAuthor(pubkey);
+  // Mesh authors carry an explicit identity; skip the Nostr author/profile
+  // lookups entirely for them (the pubkey is a mesh peer id, not a real key).
+  const author = useAuthor(identityOverride ? undefined : pubkey);
   const metadata = author.data?.metadata;
-  const { displayName, color, label } = useScopedIdentity(pubkey, metadata);
+  const scoped = useScopedIdentity(identityOverride ? undefined : pubkey, metadata);
+  const displayName = identityOverride?.name ?? scoped.displayName;
+  const color = identityOverride?.color ?? scoped.color;
+  const label = identityOverride ? undefined : scoped.label;
+  const suffix = identityOverride?.suffix;
+
+  // For mesh authors there's no Nostr profile to preview — render the avatar/
+  // name as plain (non-interactive) elements rather than profile-card triggers.
+  const avatar = (
+    <Avatar shape={getAvatarShape(metadata)} className="size-10">
+      <AvatarImage src={metadata?.picture} alt={displayName} />
+      <AvatarFallback
+        className="text-sm"
+        style={color ? { backgroundColor: `${color}33`, color } : undefined}
+      >
+        {displayName[0]?.toUpperCase()}
+      </AvatarFallback>
+    </Avatar>
+  );
 
   return (
     <div
@@ -77,6 +120,8 @@ export const MessageRow = memo(function MessageRow({
         <span className="shrink-0 w-10 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity tabular-nums select-none">
           {shortClockTime(createdAt)}
         </span>
+      ) : identityOverride ? (
+        <span className="shrink-0 mt-0.5">{avatar}</span>
       ) : (
         <ProfilePreviewCard pubkey={pubkey}>
           <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -92,15 +137,29 @@ export const MessageRow = memo(function MessageRow({
       <div className="flex-1 min-w-0">
         {!continuation && (
           <div className="flex items-baseline gap-2">
-            <ProfilePreviewCard pubkey={pubkey}>
-              <button
-                type="button"
-                className="text-[15px] font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none"
+            {identityOverride ? (
+              <span
+                className="text-[15px] font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1"
                 style={color ? { color } : undefined}
               >
-                {displayName}
-              </button>
-            </ProfilePreviewCard>
+                <span className="truncate">{displayName}</span>
+                {suffix && (
+                  <span className="text-[11px] font-normal text-muted-foreground/70 shrink-0">
+                    #{suffix}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <ProfilePreviewCard pubkey={pubkey}>
+                <button
+                  type="button"
+                  className="text-[15px] font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none"
+                  style={color ? { color } : undefined}
+                >
+                  {displayName}
+                </button>
+              </ProfilePreviewCard>
+            )}
             {label && (
               <Badge variant="secondary" className="text-[10px] font-medium shrink min-w-0 max-w-[35%]">
                 <span className="truncate">{label}</span>

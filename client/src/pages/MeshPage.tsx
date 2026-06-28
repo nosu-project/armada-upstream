@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import {
   Bluetooth,
@@ -10,6 +10,7 @@ import {
   Radio,
   Send,
   Users,
+  VenetianMask,
 } from "lucide-react";
 
 import { ChatMessage } from "@/components/chat/ChatMessage";
@@ -19,8 +20,10 @@ import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
+import { meshIdentity, type MeshIdentity } from "@/lib/meshIdentity";
 import { cn } from "@/lib/utils";
 
 import type { ChatTransport } from "@/components/chat/transport";
@@ -67,6 +70,25 @@ export function MeshPage() {
       canModerate: false,
     }),
     [mesh.directMessages, mesh.started, selectedPeer, transport.isLoading],
+  );
+
+  // Resolve a mesh message author (its `pubkey` is the sender's peer id) to a
+  // display identity: our own messages get the reserved self color; known peers
+  // use their announced nickname; everyone gets a deterministic color + a
+  // `#abcd` suffix from the peer id so same-named/anon peers stay distinct.
+  const nicknameByPeer = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of mesh.peers) map.set(p.peerID, p.nickname);
+    return map;
+  }, [mesh.peers]);
+
+  const resolveIdentity = useCallback(
+    (peerID: string): MeshIdentity => {
+      const isSelf = !!mesh.myPeerID && peerID === mesh.myPeerID;
+      const nickname = isSelf ? mesh.myNickname : nicknameByPeer.get(peerID);
+      return meshIdentity(peerID, nickname, isSelf);
+    },
+    [mesh.myPeerID, mesh.myNickname, nicknameByPeer],
   );
 
   if (!user) {
@@ -126,6 +148,8 @@ export function MeshPage() {
               view={view}
               peer={selectedPeer}
               started={mesh.started}
+              incognito={mesh.incognito}
+              onToggleIncognito={() => mesh.setIncognito(!mesh.incognito)}
               onBack={() => setView(null)}
             />
 
@@ -137,6 +161,7 @@ export function MeshPage() {
                 <ChatMessage
                   key={msg.id}
                   event={msg}
+                  identityOverride={resolveIdentity(msg.pubkey)}
                   canWrite={activeTransport.canWrite}
                   canModerate={false}
                 />
@@ -314,6 +339,7 @@ function MemberRow({
   active?: boolean;
   onClick: () => void;
 }) {
+  const identity = meshIdentity(peer.peerID, peer.nickname);
   return (
     <button
       type="button"
@@ -324,10 +350,14 @@ function MemberRow({
         active && "is-active text-foreground font-medium",
       )}
     >
-      <span className="size-6 shrink-0 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[11px] font-semibold">
-        {peer.nickname.slice(0, 1).toUpperCase() || "?"}
+      <span
+        className="size-6 shrink-0 rounded-full flex items-center justify-center text-[11px] font-semibold"
+        style={{ backgroundColor: `${identity.color}33`, color: identity.color }}
+      >
+        {identity.name.slice(0, 1).toUpperCase() || "?"}
       </span>
-      <span className="truncate flex-1">{peer.nickname}</span>
+      <span className="truncate flex-1" style={{ color: identity.color }}>{identity.name}</span>
+      <span className="shrink-0 text-[10px] text-muted-foreground/60">#{identity.suffix}</span>
     </button>
   );
 }
@@ -337,15 +367,20 @@ function ChatHeader({
   view,
   peer,
   started,
+  incognito,
+  onToggleIncognito,
   onBack,
 }: {
   view: NonNullable<MeshView>;
   peer: MeshPeer | null;
   started: boolean;
+  incognito: boolean;
+  onToggleIncognito: () => void;
   onBack: () => void;
 }) {
   const isDm = view.type === "dm";
-  const title = isDm ? peer?.nickname ?? "Mesh DM" : "nearby mesh";
+  const dmIdentity = isDm && peer ? meshIdentity(peer.peerID, peer.nickname) : null;
+  const title = isDm ? dmIdentity?.name ?? "Mesh DM" : "nearby mesh";
 
   return (
     <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
@@ -360,13 +395,42 @@ function ChatHeader({
         <ChevronLeft className="size-5" />
       </Button>
       {isDm ? (
-        <span className="size-7 shrink-0 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold">
-          {peer?.nickname.slice(0, 1).toUpperCase() || <MessageCircle className="size-4" />}
+        <span
+          className="size-7 shrink-0 rounded-full flex items-center justify-center text-xs font-semibold"
+          style={dmIdentity ? { backgroundColor: `${dmIdentity.color}33`, color: dmIdentity.color } : undefined}
+        >
+          {dmIdentity?.name.slice(0, 1).toUpperCase() || <MessageCircle className="size-4" />}
         </span>
       ) : (
         <Hash className="size-5 text-muted-foreground shrink-0" />
       )}
-      <h1 className="font-semibold truncate flex-1 min-w-0">{title}</h1>
+      <h1 className="font-semibold truncate min-w-0" style={dmIdentity ? { color: dmIdentity.color } : undefined}>{title}</h1>
+      {dmIdentity && (
+        <span className="text-[11px] text-muted-foreground/60 shrink-0">#{dmIdentity.suffix}</span>
+      )}
+      <span className="flex-1" />
+      {/* Incognito toggle: ON (default) announces an anon name; OFF reveals the
+          Armada display name to nearby devices. */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={incognito ? "Incognito on — showing an anonymous name" : "Incognito off — showing your name"}
+            aria-pressed={incognito}
+            className={cn(
+              "size-8 shrink-0",
+              incognito ? "text-primary" : "text-muted-foreground hover:text-foreground",
+            )}
+            onClick={onToggleIncognito}
+          >
+            <VenetianMask className="size-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {incognito ? "Incognito on · tap to show your name" : "Incognito off · tap to go anonymous"}
+        </TooltipContent>
+      </Tooltip>
       {started ? (
         <Bluetooth className="size-4 text-success shrink-0" />
       ) : (

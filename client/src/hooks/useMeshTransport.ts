@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { BluetoothMesh, type MeshMessage, type MeshPeer } from "@/lib/bluetoothMesh";
+import { meshAnonName } from "@/lib/meshIdentity";
 
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 
@@ -40,10 +42,19 @@ export interface MeshState {
   directMessages: Record<string, ChatMsg[]>;
   /** A startup/permission error, if any. */
   error: string | null;
+  /**
+   * Whether incognito mode is on. When on, this device announces a derived
+   * `anon<peerid>` nickname; when off, the user's Armada display name.
+   */
+  incognito: boolean;
+  /** The nickname this device is currently announcing on the mesh. */
+  myNickname: string;
   /** Manually (re)start the mesh (e.g. after granting permission). */
   start: () => Promise<void>;
   /** Stop the mesh. */
   stop: () => Promise<void>;
+  /** Toggle incognito mode (persisted) and re-announce under the new name. */
+  setIncognito: (incognito: boolean) => void;
 }
 
 /**
@@ -62,6 +73,8 @@ export function useMeshTransport(): {
   sendPrivate: (peer: MeshPeer, content: string) => Promise<void>;
 } {
   const { user, metadata } = useCurrentUser();
+  const { config, updateConfig } = useAppContext();
+  const incognito = config.meshIncognito;
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [directMessages, setDirectMessages] = useState<Record<string, ChatMsg[]>>({});
   const [peers, setPeers] = useState<MeshPeer[]>([]);
@@ -71,14 +84,29 @@ export function useMeshTransport(): {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Preferred announce nickname: profile display name → name → npub-ish fallback.
-  const nickname = useMemo(() => {
+  // The user's real (non-incognito) name: profile display name → name → an
+  // npub-ish fallback so a profileless account still has a stable handle.
+  const realName = useMemo(() => {
     return (
       metadata?.display_name?.trim() ||
       metadata?.name?.trim() ||
       (user ? `armada-${user.pubkey.slice(0, 8)}` : "")
     );
   }, [metadata?.display_name, metadata?.name, user]);
+
+  // The nickname actually announced on the mesh. Incognito → a stable
+  // `anon<peerid>` derived from our peer id (only known once started, so blank
+  // until then and the native side keeps its own anon default in the meantime).
+  // Non-incognito → the real name.
+  const myNickname = useMemo(() => {
+    if (incognito) return myPeerID ? meshAnonName(myPeerID) : "";
+    return realName;
+  }, [incognito, myPeerID, realName]);
+
+  const setIncognito = useCallback(
+    (next: boolean) => updateConfig((c) => ({ ...c, meshIncognito: next })),
+    [updateConfig],
+  );
 
   // De-dupe incoming messages by id (the mesh floods, so the same packet can
   // surface more than once) and keep ascending (oldest-first) order.
@@ -108,7 +136,11 @@ export function useMeshTransport(): {
   const start = useCallback(async () => {
     setError(null);
     try {
-      if (nickname) await BluetoothMesh.setNickname({ nickname });
+      // Announce a name up front when we already have one. Incognito's anon
+      // name needs the peer id (only known after start), so it's announced by
+      // the sync effect below once `myNickname` resolves; until then the native
+      // side keeps its own anon default, so we still read as anonymous.
+      if (myNickname) await BluetoothMesh.setNickname({ nickname: myNickname });
       const { peerID } = await BluetoothMesh.start();
       setMyPeerID(peerID);
       setStarted(true);
@@ -120,7 +152,7 @@ export function useMeshTransport(): {
       setError(e instanceof Error ? e.message : String(e));
       setStarted(false);
     }
-  }, [nickname]);
+  }, [myNickname]);
 
   const stop = useCallback(async () => {
     try {
@@ -157,17 +189,20 @@ export function useMeshTransport(): {
     };
   }, [appendMessage]);
 
-  // Auto-start once available and we have a nickname to announce.
+  // Auto-start once available. Incognito doesn't need a nickname up front (the
+  // native anon default covers the gap until our peer id resolves); otherwise
+  // wait for the real name so we never announce a blank.
   useEffect(() => {
-    if (available && !started && nickname) void start();
-    // Only react to availability/nickname becoming ready; `start` is stable enough.
+    if (available && !started && (incognito || realName)) void start();
+    // Only react to availability/name readiness; `start` is stable enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [available, nickname]);
+  }, [available, incognito, realName]);
 
-  // Keep the announced nickname in sync if the profile name changes mid-session.
+  // Keep the announced nickname in sync when it changes mid-session (profile
+  // edit, incognito toggle, or the anon name resolving once we learn our peer id).
   useEffect(() => {
-    if (started && nickname) void BluetoothMesh.setNickname({ nickname }).catch(() => {});
-  }, [started, nickname]);
+    if (started && myNickname) void BluetoothMesh.setNickname({ nickname: myNickname }).catch(() => {});
+  }, [started, myNickname]);
 
   const send = useCallback(
     async (content: string) => {
@@ -176,7 +211,7 @@ export function useMeshTransport(): {
       // Optimistic local echo (the mesh does not loop our own messages back).
       appendMessage({
         id: `local-${crypto.randomUUID()}`.toUpperCase(),
-        sender: nickname || "me",
+        sender: myNickname || "me",
         content: trimmed,
         timestamp: Date.now(),
         senderPeerID: myPeerID,
@@ -185,7 +220,7 @@ export function useMeshTransport(): {
       });
       await BluetoothMesh.sendMessage({ content: trimmed });
     },
-    [appendMessage, nickname, myPeerID],
+    [appendMessage, myNickname, myPeerID],
   );
 
   const sendPrivate = useCallback(
@@ -196,7 +231,7 @@ export function useMeshTransport(): {
       const now = Date.now();
       const localMessage = meshToEvent({
         id: messageID,
-        sender: nickname || "me",
+        sender: myNickname || "me",
         content: trimmed,
         timestamp: now,
         senderPeerID: myPeerID,
@@ -215,7 +250,7 @@ export function useMeshTransport(): {
         messageID,
       });
     },
-    [myPeerID, nickname],
+    [myPeerID, myNickname],
   );
 
   const transport = useMemo<ChatTransport>(
@@ -229,8 +264,11 @@ export function useMeshTransport(): {
   );
 
   const mesh = useMemo<MeshState>(
-    () => ({ available, started, myPeerID, peers, directMessages, error, start, stop }),
-    [available, started, myPeerID, peers, directMessages, error, start, stop],
+    () => ({
+      available, started, myPeerID, peers, directMessages, error,
+      incognito, myNickname, start, stop, setIncognito,
+    }),
+    [available, started, myPeerID, peers, directMessages, error, incognito, myNickname, start, stop, setIncognito],
   );
 
   return { transport, mesh, send, sendPrivate };

@@ -2,7 +2,7 @@ import { AlertCircle, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2 } from 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
-import { MessageRow } from "@/components/chat/MessageRow";
+import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
 import { PollCard } from "@/components/chat/PollCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import { Button } from "@/components/ui/button";
@@ -85,6 +85,12 @@ export interface ChatMessageProps {
   canWrite: boolean;
   canModerate: boolean;
   /**
+   * Explicit author identity for non-Nostr authors (Bluetooth mesh peers). When
+   * set, the message header renders this name/color/suffix instead of resolving
+   * a Nostr profile from `event.pubkey` (which is a mesh peer id, not a key).
+   */
+  identityOverride?: MessageIdentity;
+  /**
    * Context for rendering/voting on NIP-88 polls in this message. Only NIP-29
    * group chat carries polls (kind 1068); transports without polls omit this
    * and a poll kind would never appear in their timeline.
@@ -158,6 +164,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   event,
   canWrite,
   canModerate,
+  identityOverride,
   pollContext,
   reactions,
   sendStatus,
@@ -181,8 +188,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
 }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
-  const author = useAuthor(event.pubkey);
-  const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
+  const author = useAuthor(identityOverride ? undefined : event.pubkey);
+  const scopedName = useScopedDisplayName(identityOverride ? undefined : event.pubkey, author.data?.metadata);
+  const displayName = identityOverride?.name ?? scopedName;
   const replyToId = getReplyToId(event);
   const isPending = sendStatus === "pending";
   const isFailed = sendStatus === "failed";
@@ -442,6 +450,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   return (
     <MessageRow
       pubkey={event.pubkey}
+      identityOverride={identityOverride}
       createdAt={event.created_at}
       pending={isPending}
       edited={wasEdited && !isEditing}

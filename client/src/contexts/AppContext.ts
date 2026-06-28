@@ -75,6 +75,13 @@ export interface AppConfig {
    * channel or the first channel when there's no record.
    */
   lastChannelByServer: Record<string, string>;
+  /**
+   * Bluetooth-mesh incognito mode. When on (the default), this device announces
+   * a derived `anon<peerid>` nickname over the mesh rather than the user's
+   * Armada display name — matching bitchat's anonymous-by-default behavior.
+   * Toggling it off announces the real display name. Persisted per-device.
+   */
+  meshIncognito: boolean;
 }
 
 export interface AppContextType {
@@ -92,6 +99,7 @@ export const defaultConfig: AppConfig = {
   useOwnDmRelays: false,
   dmRelays: [...APP_RELAYS],
   lastChannelByServer: {},
+  meshIncognito: true,
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
