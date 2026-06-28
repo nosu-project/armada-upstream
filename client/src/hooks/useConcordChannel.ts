@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useConcordBanlist } from "@/hooks/useConcordModeration";
@@ -183,6 +183,11 @@ async function readAndFold(
   // is cheap regardless of how much history the append-only store holds. Edits /
   // deletes for an in-window message are themselves recent (published after it),
   // so they fall inside the same newest window.
+  //
+  // The `kinds` constraint is REQUIRED: a channel's `#z` also carries reactions
+  // (3301), typing, presence, and control events, which are far more frequent
+  // than messages. Without `kinds`, the newest-`limit` `#z` window fills with
+  // reactions and pushes actual messages out, so new messages stop appearing.
   const sealed = await store.query([
     { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, limit },
   ]);
@@ -193,6 +198,13 @@ async function readAndFold(
 
 /** A page size for relay backfill; the local store is unbounded, this just bounds each REQ. */
 const BACKFILL_PAGE = 30;
+/**
+ * Grace (ms) after the FIRST relay returns a backfill page before the remaining
+ * relays for that page are abandoned. NRelay1.query has no eoseTimeout, so this
+ * is our per-page EOSE race (mirrors NPool's eoseTimeout): a fast relay caps the
+ * wait on slow/aggregator relays instead of every page paying the 8s timeout.
+ */
+const BACKFILL_EOSE_GRACE_MS = 500;
 /**
  * How many `until`-pages to walk per backfill pass, so one tick can't loop
  * forever. With a 30-event page that's up to 240 blobs per pass; the per-channel
@@ -210,6 +222,15 @@ const BACKFILL_MAX_PAGES = 8;
 const WINDOW_SIZE = 30;
 
 /**
+ * How many reaction blobs to read from the local store on channel open. Reactions
+ * share a channel's `#z` with messages and outnumber them, so a large limit walks
+ * deep into the tag index; 150 comfortably covers the ~30-message render window
+ * while keeping the cold read fast (the network refresh rebuilds authoritatively).
+ */
+const LOCAL_REACTION_READ = 150;
+
+
+/**
  * Backfill the local store from the relays, walking older history with `until`
  * pagination so a channel with more than {@link BACKFILL_PAGE} events isn't
  * permanently truncated to its newest page (the old single `limit: 500` query
@@ -219,8 +240,20 @@ const WINDOW_SIZE = 30;
  *
  * Returns the OLDEST `created_at` seen across the pass, so a caller tracking a
  * per-channel backfill cursor can resume from there next time instead of
- * re-walking the same window. Stops early when a page comes back short (the
- * relays have no older events) or the page budget is exhausted.
+ * re-walking the same window.
+ *
+ * Progress is tracked PER-RELAY: a relay is dropped from later pages once it
+ * stops returning events strictly older than the cursor we asked for. This is
+ * essential because some relays in a community's relay list are general
+ * aggregators that ignore the `until` cursor (or the `#z` filter) and return
+ * their newest 30 events on every page — without per-relay culling, one such
+ * relay forces the loop to burn its entire page budget (8 pages × N relays,
+ * ~5–11s) on every single backfill, which is exactly what made opening a
+ * channel and every 60s poll stall before new messages appeared.
+ *
+ * When `maxPages` is 1 (the default for the foreground "newest window" pass)
+ * this is just a single cheap page per relay; deep history is walked only on
+ * scroll-up via {@link loadOlder}.
  */
 async function backfillStore(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -228,38 +261,75 @@ async function backfillStore(
   zs: string[],
   signal: AbortSignal,
   until?: number,
+  maxPages: number = BACKFILL_MAX_PAGES,
 ): Promise<number | undefined> {
-  let cursor = until;
   let oldest: number | undefined;
-  for (let page = 0; page < BACKFILL_MAX_PAGES; page++) {
+  // Each relay walks its own cursor; a relay drops out once it stops yielding
+  // strictly-older events (no progress) or returns a short page.
+  let active = relays.map((url) => ({ url, cursor: until }));
+
+  for (let page = 0; page < maxPages && active.length > 0; page++) {
     if (signal.aborted) break;
-    const filter: NostrFilter = {
-      kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT],
-      "#z": zs,
-      limit: BACKFILL_PAGE,
+
+    // EOSE-race cap: NRelay1.query (per-relay) has no eoseTimeout, so a slow
+    // relay would otherwise hold the whole page up to the 8s hard timeout. Once
+    // the FASTEST relay returns this page, give the rest a short grace window,
+    // then abandon them — their cursor just isn't advanced this pass and they're
+    // retried next backfill. Mirrors the pool's eoseTimeout race.
+    const pageController = new AbortController();
+    const pageSignal = AbortSignal.any([signal, pageController.signal]);
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const armGrace = () => {
+      if (graceTimer === undefined) {
+        graceTimer = setTimeout(() => pageController.abort(), BACKFILL_EOSE_GRACE_MS);
+      }
     };
-    if (cursor !== undefined) filter.until = cursor;
+
     const results = await Promise.all(
-      relays.map((url) =>
-        nostr
-          .relay(url)
-          .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) })
-          .catch(() => [] as NostrEvent[]),
-      ),
+      active.map(async (relay) => {
+        const filter: NostrFilter = {
+          kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT],
+          "#z": zs,
+          limit: BACKFILL_PAGE,
+        };
+        if (relay.cursor !== undefined) filter.until = relay.cursor;
+        try {
+          const r = await nostr
+            .relay(relay.url)
+            .query([filter], { signal: AbortSignal.any([pageSignal, AbortSignal.timeout(8000)]) });
+          // First relay home starts the grace clock for the stragglers.
+          armGrace();
+          return { relay, events: r };
+        } catch {
+          return { relay, events: [] as NostrEvent[] };
+        }
+      }),
     );
-    const flat = results.flat();
-    if (flat.length === 0) break;
-    let pageOldest = Infinity;
-    for (const ev of flat) if (ev.created_at < pageOldest) pageOldest = ev.created_at;
-    if (Number.isFinite(pageOldest)) oldest = pageOldest;
-    // A page shorter than a full window means the relays have no older events
-    // past this point — stop walking.
-    if (flat.length < BACKFILL_PAGE) break;
-    // Step the cursor strictly older than the oldest event we just saw.
-    if (!Number.isFinite(pageOldest) || pageOldest <= 0) break;
-    const next = pageOldest - 1;
-    if (cursor !== undefined && next >= cursor) break; // no forward progress
-    cursor = next;
+    if (graceTimer !== undefined) clearTimeout(graceTimer);
+
+    const next: typeof active = [];
+    for (const { relay, events } of results) {
+      // Oldest event this relay returned that is strictly older than what we
+      // asked for (defends against a relay that ignores `until`).
+      let relayOldest = Infinity;
+      let progressed = 0;
+      for (const ev of events) {
+        if (relay.cursor === undefined || ev.created_at < relay.cursor) {
+          progressed += 1;
+          if (ev.created_at < relayOldest) relayOldest = ev.created_at;
+        }
+      }
+      if (Number.isFinite(relayOldest)) {
+        if (oldest === undefined || relayOldest < oldest) oldest = relayOldest;
+      }
+      // Keep walking this relay only if it made real progress AND returned a
+      // full page (more likely older history). A short page or a page with no
+      // strictly-older events means this relay is done (or misbehaving).
+      if (progressed > 0 && events.length >= BACKFILL_PAGE && relayOldest > 0) {
+        next.push({ url: relay.url, cursor: relayOldest - 1 });
+      }
+    }
+    active = next;
   }
   return oldest;
 }
@@ -330,11 +400,21 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
 
+  // The channel id whose initial store decode has completed. Until the cold read
+  // resolves, the live subscription must NOT paint into an empty cache (that's
+  // the "1 lonely message, then a blank second, then history snaps in" glitch on
+  // a fresh open): a relay-forwarded message would replace the skeleton with a
+  // single row while the (slower) IndexedDB read + decrypt is still in flight.
+  // Live messages received during that window are persisted to the store by the
+  // batcher anyway, so the resolving `composeFromStore` includes them.
+  const initialLoadedRef = useRef<string | null>(null);
+
   // Reset the window to the newest page whenever the channel changes.
   useEffect(() => {
     windowLimitRef.current = WINDOW_SIZE;
     setHasMore(true);
     setIsLoadingOlder(false);
+    initialLoadedRef.current = null;
   }, [channelIdHex]);
 
   // Re-read immediately when the held epoch set changes (a rekey was caught up),
@@ -360,8 +440,8 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     const controller = new AbortController();
     const since = Math.floor(Date.now() / 1000) - 5;
 
-    /** Open one batch of sealed outers and fold them into the cached timeline. */
-    const apply = async (events: NostrEvent[]) => {
+    /** Fold a batch of sealed outers into the cached timeline (assumes ready). */
+    const fold = async (events: NostrEvent[]) => {
       if (events.length === 0) return;
       const { messages: opened, deletes } = await openMessages(events, channel.id, allEpochKeys, moderation);
       if (opened.length === 0 && deletes.size === 0) return;
@@ -402,6 +482,40 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       });
     };
 
+    // Live events that arrive before the initial store decode resolves are
+    // buffered, not dropped, then flushed the instant the timeline is ready — so
+    // a message posted while a fresh channel is still loading appears right after
+    // the history paints, not 1–2s later when the backfill happens to re-read it.
+    const pending: NostrEvent[] = [];
+    let readyTimer: ReturnType<typeof setInterval> | undefined;
+    const isReady = () =>
+      initialLoadedRef.current === channelIdHex ||
+      (queryClient.getQueryData<OpenedMessage[]>(queryKey)?.length ?? 0) > 0;
+
+    const apply = async (events: NostrEvent[]) => {
+      if (events.length === 0) return;
+      if (!isReady()) {
+        pending.push(...events);
+        if (readyTimer === undefined) {
+          readyTimer = setInterval(() => {
+            if (controller.signal.aborted) {
+              clearInterval(readyTimer);
+              readyTimer = undefined;
+              return;
+            }
+            if (isReady()) {
+              clearInterval(readyTimer);
+              readyTimer = undefined;
+              const flush = pending.splice(0, pending.length);
+              void fold(flush);
+            }
+          }, 100);
+        }
+        return;
+      }
+      await fold(events);
+    };
+
     for (const url of relays) {
       void (async () => {
         try {
@@ -417,7 +531,10 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       })();
     }
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (readyTimer !== undefined) clearInterval(readyTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, community, channelIdHex, epochSig, moderation, queryClient]);
 
@@ -425,6 +542,9 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
+    // Keep the previous channel's messages on screen while the next channel's
+    // first read resolves, so switching never flashes a skeleton.
+    placeholderData: keepPreviousData,
     // Backstop + backfill. The live subscription delivers NEW messages
     // instantly; this poll heals gaps (dropped subscription / missed event) and
     // walks OLDER history into the append-only local store via `until`
@@ -509,31 +629,54 @@ export function useConcordChannelMessages(community: Community | undefined, chan
         return [...byId.values()].sort((a, b) => a.ms - b.ms);
       };
 
-      // 1. LOCAL-FIRST: resolve the query from the local store immediately, so
-      //    `isLoading` reflects only the (fast) IndexedDB read + decode — never
-      //    the multi-relay network walk. A refresh / offline launch paints the
-      //    full local history at once instead of behind the skeleton.
-      const local = await composeFromStore();
+      // 1. INSTANT PAINT: if React Query already holds this channel's timeline
+      //    in memory (a return visit this session, or kept via placeholderData),
+      //    render it immediately and refresh from the durable store + relays in
+      //    the background. The local IndexedDB read can be slow on a cold WebView
+      //    (seconds), and it must never gate the paint when we already have
+      //    something good to show — the store/live results merge in on top.
+      const existing = queryClient.getQueryData<OpenedMessage[]>(queryKey);
 
-      // 2. BACKGROUND BACKFILL: walk the relays (newest window + older-history
-      //    continuation) into the append-only store, then re-read and update the
-      //    cache. NOT awaited — the network never gates the visible timeline.
-      void (async () => {
+      const cursorKey = channelIdHex ?? "";
+
+      /**
+       * Walk the relays into the durable store and refresh the cache. Phase (a)
+       * is one cheap EOSE-raced page per relay (surfaces NEW messages fast);
+       * phase (b) is the bounded, resumable older-history walk. Each phase
+       * re-reads the store and merges into the cache; never gates the paint.
+       */
+      const backfillAndRefresh = async () => {
         if (signal.aborted) return;
-        const cursorKey = channelIdHex ?? "";
-        await backfillStore(nostr, relays, zs, signal); // newest window
+        // Re-reading the store is the slow part (seconds on a cold WebView), so
+        // walk BOTH backfill phases first, then recompose ONCE — not after each.
+        await backfillStore(nostr, relays, zs, signal, undefined, 1); // newest page
+        if (signal.aborted) return;
         const resumeFrom = backfillCursor.current.get(cursorKey);
         const oldest = await backfillStore(nostr, relays, zs, signal, resumeFrom);
         if (oldest !== undefined && (resumeFrom === undefined || oldest < resumeFrom)) {
           backfillCursor.current.set(cursorKey, oldest);
         }
         if (signal.aborted) return;
-        const refreshed = await composeFromStore();
-        queryClient.setQueryData<OpenedMessage[]>(queryKey, refreshed);
-      })().catch(() => {
-        // Best-effort background heal; the local-first result already rendered.
-      });
+        queryClient.setQueryData<OpenedMessage[]>(queryKey, await composeFromStore());
+      };
 
+      if (existing && existing.length > 0) {
+        // Warm: paint what we have NOW; heal from the store + relays in the
+        // background (the durable read can't gate the paint).
+        initialLoadedRef.current = channelIdHex;
+        void (async () => {
+          if (signal.aborted) return;
+          queryClient.setQueryData<OpenedMessage[]>(queryKey, await composeFromStore());
+          await backfillAndRefresh();
+        })().catch(() => undefined);
+        return existing;
+      }
+
+      // Cold: nothing in memory yet. The durable store read IS the first paint;
+      // then continue the relay backfill in the background.
+      const local = await composeFromStore();
+      initialLoadedRef.current = channelIdHex;
+      void backfillAndRefresh().catch(() => undefined);
       return local;
     },
   });
@@ -988,7 +1131,15 @@ export function useConcordReactions(community: Community | undefined, channel: C
       //    chunked/yielding (decode-once memoized), so a cold backlog never
       //    blocks paint. (The persisted snapshot — seeded above — already paints
       //    instantly on a revisit while this decode runs.)
-      const localSealed = await store.query([{ kinds: [KIND_COMMUNITY_REACTION], "#z": zs, limit: 500 }]);
+      //
+      //    Limit 150, not 500: reactions and messages share one `#z`, and a busy
+      //    channel has several reactions per message, so collecting N reactions
+      //    walks several×N tag-index rows newest-first. The cost grows with the
+      //    limit (measured ~70× slower at 500 than 60 on a reaction-heavy
+      //    channel), and the only-render window is ~30 messages anyway. The
+      //    authoritative network refresh below (and the persisted snapshot) cover
+      //    anything older than this local top-up.
+      const localSealed = await store.query([{ kinds: [KIND_COMMUNITY_REACTION], "#z": zs, limit: LOCAL_REACTION_READ }]);
       const localOpened = await openMemoizedBatch(localSealed, channel!.id, epochKeys, { signal });
       const local = tallyReactions(undefined, localOpened);
 

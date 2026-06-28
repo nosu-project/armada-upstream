@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-/** How close to the left edge (px) an OPEN drag must start. */
-const EDGE_ZONE = 28;
+/**
+ * How far from the left edge (px) an OPEN drag may start. This is wide on
+ * purpose: on Android the OS reserves the very edge for its own gesture nav, so
+ * a swipe that starts a little *inside* the chat (past the OS strip) still needs
+ * to reveal the list. A clearly-horizontal rightward move is required to claim
+ * it (see {@link CLAIM_THRESHOLD} / the dx-vs-dy test), so the wide zone doesn't
+ * fight vertical scrolling.
+ */
+const EDGE_ZONE = 64;
 /** Min horizontal travel (px) before we claim the gesture from the scroller. */
 const CLAIM_THRESHOLD = 10;
 /** Fraction of the pane width past which a release commits. */

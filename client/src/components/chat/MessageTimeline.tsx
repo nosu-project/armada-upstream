@@ -65,6 +65,18 @@ export function MessageTimeline({
 }: MessageTimelineProps) {
   const { messages, isLoading, loadOlder, hasMore, isLoadingOlder } = transport;
 
+  // Remember that we've shown a populated timeline. If `messages` then briefly
+  // empties (a transient between a cache refresh and the merged result landing),
+  // we render the skeleton rather than flashing the empty state / a blank gap —
+  // the timeline never truly "loses" its history, so a momentary empty array is
+  // a render artifact, not an empty channel. Reset while a fresh load is in
+  // flight (channel switch) so a genuinely-empty channel still shows its empty
+  // state instead of a stale skeleton.
+  const hadMessagesRef = useRef(false);
+  if (isLoading) hadMessagesRef.current = false;
+  if (messages.length > 0) hadMessagesRef.current = true;
+  const transientEmpty = messages.length === 0 && hadMessagesRef.current;
+
   const scrollRef = useRef<HTMLDivElement>(null);
   // Inner content wrapper, observed for size changes (images, link previews,
   // lazily-loaded embeds, reactions, reply-count rows) so the view stays pinned
@@ -180,7 +192,7 @@ export function MessageTimeline({
   return (
     <div ref={scrollRef} onScroll={handleScroll} className={className}>
       <div ref={contentRef}>
-      {isLoading ? (
+      {isLoading || transientEmpty ? (
         <div className="space-y-3 p-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="flex items-start gap-3">

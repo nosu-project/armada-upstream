@@ -169,6 +169,18 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     },
     enabled: Boolean(relayUrl && groupId),
     staleTime: 10_000,
+    // Backstop poll. The live `req` delivers new messages instantly on a healthy
+    // socket, but a half-dead socket (one the OS silently severed while the app
+    // was backgrounded on Android) leaves the streaming `for await` blocked with
+    // no error and no event, so live delivery quietly stops and the room falls
+    // behind. A periodic re-read from the relay (local-first, never gates the
+    // paint) heals that gap — every other group/Concord hook already polls.
+    refetchInterval: 60_000,
+    // Catch up the moment the app returns to the foreground / regains network,
+    // rather than waiting up to a full poll interval — the mobile-critical case
+    // where the live socket died in the background.
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
     // Keep showing the previous channel's messages while the next loads, so
     // switching channels never flashes the skeleton (cache-first feel).
     placeholderData: (prev) => prev,
@@ -280,6 +292,14 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
 
   // Live subscription for new messages. A relay echo of our own optimistic
   // event arrives here and clears its pending status (same id).
+  //
+  // NRelay1 owns reconnection: its WebSocket auto-reconnects with backoff and
+  // re-sends every active subscription on reopen, and this `req` iterator stays
+  // alive across that (it only ends on an explicit relay `CLOSED` or our abort).
+  // So we do NOT resubscribe ourselves — doing that on a `CLOSED` from an
+  // AUTH-gated relay (e.g. chat.soapbox.pub) just spins a fresh REQ→AUTH→CLOSED
+  // handshake against the signer. A genuinely dropped/half-dead socket is healed
+  // by the query's 60s poll + refetch-on-resume/reconnect instead.
   useEffect(() => {
     if (!relayUrl || !groupId) return;
     const controller = new AbortController();

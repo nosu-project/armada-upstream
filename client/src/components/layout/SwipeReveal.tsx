@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { cn } from "@/lib/utils";
@@ -54,6 +55,21 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   }, []);
 
   const swipeEnabled = isTouch && narrow;
+
+  // Android system back gesture / button. On the mobile drill-down, when the
+  // chat is showing (list hidden), "back" reveals the channel list — one level
+  // up, the Discord behavior. This is also the only reliable left-edge gesture
+  // on Android, where the OS reserves the screen edges for its own gesture nav
+  // and eats an in-WebView edge swipe before our pointer handlers see it. When
+  // the list is already revealed, we defer (return false) so back leaves the
+  // server/community via normal history navigation.
+  useAndroidBack(() => {
+    if (!open) {
+      onReveal();
+      return true;
+    }
+    return false;
+  }, swipeEnabled);
 
   // Slide the chat in from the right on first mount (e.g. tapping a channel on
   // ServerPage navigates here as a *fresh* component, so without this the chat

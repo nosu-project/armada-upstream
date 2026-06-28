@@ -123,7 +123,9 @@ public class NotificationRelayService extends Service {
     private JSONObject prefs = new JSONObject();
     // Concord (E2E) channel subscriptions, keyed for fast lookup:
     //   zToName: #z pseudonym (hex) → "Community / #channel" display name
-    //   zToUrl:  #z pseudonym (hex) → in-app deep-link (/c/<communityId>)
+    //   zToUrl:  #z pseudonym (hex) → in-app deep-link base (/c/<communityId>);
+    //            the channel id is appended per-event at notify time
+    //            (/c/<communityId>/<channelId>) so a tap opens the right channel
     //   zToKey:  #z pseudonym (hex) → decrypt material (raw key + channel/epoch
     //            binding) so the service can open the sealed message
     //   relayToZs: relay url → the #z values that live on that relay
@@ -149,6 +151,10 @@ public class NotificationRelayService extends Service {
     // pubkey → waiters for an in-flight kind-0 fetch, so concurrent events for
     // the same author share a single REQ.
     private final Map<String, List<ProfileCallback>> pendingProfiles = new HashMap<>();
+    // pubkey → best (newest) kind-0 seen so far for an in-flight fetch, across
+    // all relays it was broadcast to. A profile from one relay can be staler
+    // than another's, so we keep the highest created_at rather than first-wins.
+    private final Map<String, Profile> bestProfile = new HashMap<>();
     // avatar URL → circle-cropped bitmap, decoded once and reused.
     private final Map<String, Bitmap> avatarCache = new HashMap<>();
     // groupId → resolved group name (kind 39000). Cached for the service lifetime
@@ -161,13 +167,18 @@ public class NotificationRelayService extends Service {
     // How long to wait for a kind-0 profile before firing a name-less fallback.
     private static final long PROFILE_TIMEOUT_MS = 4_000;
 
-    /** Minimal author profile: display name + avatar URL (either may be null). */
+    /** Minimal author profile: display name + avatar URL + nip05 (any may be null). */
     private static final class Profile {
         final String name;
         final String picture;
-        Profile(String name, String picture) {
+        final String nip05;
+        /** kind-0 created_at, so a newer event from another relay wins. */
+        final long ts;
+        Profile(String name, String picture, String nip05, long ts) {
             this.name = name;
             this.picture = picture;
+            this.nip05 = nip05;
+            this.ts = ts;
         }
     }
 
@@ -654,11 +665,17 @@ public class NotificationRelayService extends Service {
             String sub = msg.optString(1);
             JSONObject event = msg.optJSONObject(2);
             if (event == null) return;
-            // A kind-0 from a profile lookup: cache it and resolve waiters.
+            // A kind-0 from a profile lookup: keep the newest across relays and
+            // resolve waiters with the best we have.
             String pk = profilePubkeyForSub(sub);
             if (pk != null) {
                 closeProfileSub(relayUrl, sub);
-                resolveProfile(pk, parseProfile(event));
+                Profile parsed = parseProfile(event);
+                Profile prev = bestProfile.get(pk);
+                if (prev == null || parsed.ts >= prev.ts) {
+                    bestProfile.put(pk, parsed);
+                }
+                resolveProfile(pk, bestProfile.get(pk));
                 return;
             }
             // A kind-39000 from a group-name lookup: cache the name + resolve.
@@ -703,7 +720,11 @@ public class NotificationRelayService extends Service {
     /**
      * Resolve {@code pubkey} to a profile, then invoke {@code cb} (always on the
      * main handler). Serves from cache when present, otherwise issues a kind-0
-     * REQ on {@code relayUrl} and waits up to {@link #PROFILE_TIMEOUT_MS}.
+     * REQ on EVERY open relay (a user's kind-0 usually lives on their general /
+     * outbox relays, not the NIP-29 group relay the message came from, so a
+     * single-relay lookup misses it — that was why many senders showed no name
+     * or avatar). Waits up to {@link #PROFILE_TIMEOUT_MS}, keeping the newest
+     * kind-0 seen across relays.
      */
     private void resolveAuthor(String pubkey, String relayUrl, ProfileCallback cb) {
         Profile cached = profileCache.get(pubkey);
@@ -720,16 +741,24 @@ public class NotificationRelayService extends Service {
         waiters.add(cb);
         pendingProfiles.put(pubkey, waiters);
 
-        RelayConnection rc = connectionFor(relayUrl);
-        if (rc == null) {
+        // Broadcast to every connected relay (originating relay first), not just
+        // the one the message arrived on.
+        boolean sentAny = false;
+        for (RelayConnection rc : connections) {
+            if (rc.ws != null && !rc.closed) {
+                rc.fetchProfile(pubkey);
+                sentAny = true;
+            }
+        }
+        if (!sentAny) {
             resolveProfile(pubkey, null);
             return;
         }
-        rc.fetchProfile(pubkey);
-        // Fallback if the relay never answers (no kind-0 / slow).
+        // Fallback if no relay answers in time (no kind-0 / slow): resolve with
+        // the best profile gathered so far (possibly null).
         handler.postDelayed(() -> {
             if (pendingProfiles.containsKey(pubkey)) {
-                resolveProfile(pubkey, null);
+                resolveProfile(pubkey, bestProfile.get(pubkey));
             }
         }, PROFILE_TIMEOUT_MS);
     }
@@ -738,6 +767,12 @@ public class NotificationRelayService extends Service {
     private void resolveProfile(String pubkey, Profile profile) {
         if (profile != null) {
             profileCache.put(pubkey, profile);
+        }
+        bestProfile.remove(pubkey);
+        // Close any profile subs still open for this pubkey on the other relays
+        // we broadcast to, so they don't linger.
+        for (RelayConnection rc : connections) {
+            rc.closeSub(rc.profilePrefix + pubkey);
         }
         List<ProfileCallback> waiters = pendingProfiles.remove(pubkey);
         if (waiters == null) return;
@@ -753,20 +788,23 @@ public class NotificationRelayService extends Service {
         return null;
     }
 
-    /** Parse a kind-0 event's content into a {@link Profile} (name + picture). */
+    /** Parse a kind-0 event's content into a {@link Profile}. */
     private static Profile parseProfile(JSONObject event) {
+        long ts = event.optLong("created_at", 0);
         try {
             JSONObject meta = new JSONObject(event.optString("content", "{}"));
-            String name = meta.optString("name", null);
+            String name = meta.optString("display_name", null);
             if (name == null || name.isEmpty()) {
-                name = meta.optString("display_name", null);
+                name = meta.optString("name", null);
             }
             if (name != null && name.isEmpty()) name = null;
             String picture = meta.optString("picture", null);
             if (picture != null && picture.isEmpty()) picture = null;
-            return new Profile(name, picture);
+            String nip05 = meta.optString("nip05", null);
+            if (nip05 != null && nip05.isEmpty()) nip05 = null;
+            return new Profile(name, picture, nip05, ts);
         } catch (JSONException e) {
-            return new Profile(null, null);
+            return new Profile(null, null, null, ts);
         }
     }
 
@@ -875,6 +913,21 @@ public class NotificationRelayService extends Service {
 
         int kind = event.optInt("kind");
 
+        // Feed the raw outer event to the WebView (live if it's up, buffered
+        // otherwise) so a message the service already received is in the app's
+        // store the instant it opens — no relay round-trip, no "wait for the
+        // chat to catch up". Covers the timeline kinds the WebView renders:
+        // NIP-29 chat/polls/reactions/replies/deletes and Concord sealed outers
+        // (kind 3300, decrypted in the WebView). DMs (kind 4) are NIP-04 and
+        // handled by their own flow, so we skip them here.
+        switch (kind) {
+            case 9: case 1068: case 7: case 1111: case 5: case 3300:
+                ArmadaNotificationPlugin.feedRelayEvent(event.toString());
+                break;
+            default:
+                break;
+        }
+
         // Concord (E2E): the outer event is signed by an ephemeral key with
         // NIP-44-encrypted content. Open it with the channel key we were handed
         // (derived in the WebView, where membership lives) to recover the inner
@@ -892,6 +945,13 @@ public class NotificationRelayService extends Service {
             notifiedIds.add(id);
 
             ConcordKey ck = zToKey.get(z);
+            // Deep-link to the SPECIFIC channel (not just the community), so a
+            // tap opens the room the notification is about instead of falling
+            // back to the last-opened channel. The community-only url is the
+            // base; append the channel id when the key carries one.
+            if (ck != null && url != null && !url.equals("/") && !ck.channelId.isEmpty()) {
+                url = url + "/" + uriEncode(ck.channelId);
+            }
             JSONObject inner = ck != null ? openConcord(event, ck) : null;
             if (inner == null) {
                 // Couldn't decrypt — still tell the user something arrived, and
@@ -1030,6 +1090,20 @@ public class NotificationRelayService extends Service {
     private static String displayName(Profile profile, String pubkey) {
         if (profile != null && profile.name != null && !profile.name.isEmpty()) {
             return profile.name;
+        }
+        // Fall back to the NIP-05 identifier (its local-part, dropping a leading
+        // "_@" which conventionally means "the domain itself") before the raw
+        // pubkey stub, so a user with only a nip05 still gets a readable name.
+        if (profile != null && profile.nip05 != null && !profile.nip05.isEmpty()) {
+            String n = profile.nip05;
+            int at = n.indexOf('@');
+            if (at == 0) {
+                n = n.substring(1);
+            } else if (at > 0) {
+                String local = n.substring(0, at);
+                n = local.equals("_") ? n.substring(at + 1) : local;
+            }
+            if (!n.isEmpty()) return n;
         }
         if (pubkey != null && pubkey.length() >= 8) {
             return "User " + pubkey.substring(0, 8);

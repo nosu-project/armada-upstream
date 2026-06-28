@@ -1,8 +1,10 @@
 // NOTE: This file should normally not be modified unless you are adding a new provider.
 // To add new routes, edit the AppRouter.tsx file.
 
+import { App as CapacitorApp } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
 import { NostrLoginProvider } from "@nostrify/react/login";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AppProvider } from "@/components/AppProvider";
 import { DesktopBadge } from "@/components/DesktopBadge";
@@ -26,6 +28,19 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// On Android the WebView's `visibilitychange`/`focus` events (which React
+// Query's focusManager watches by default) don't fire reliably when the app is
+// brought back from the background — so a query that should refetch on focus
+// (the live group timeline, which can fall behind while the socket was dead in
+// the background) misses its catch-up. Drive focusManager from Capacitor's
+// authoritative `appStateChange` instead, so resuming the app marks the app
+// focused and any `refetchOnWindowFocus` query catches up immediately.
+if (Capacitor.isNativePlatform()) {
+  void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+    focusManager.setFocused(isActive);
+  });
+}
 
 export function App() {
   return (

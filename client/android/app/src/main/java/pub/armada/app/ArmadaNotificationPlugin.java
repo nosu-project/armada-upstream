@@ -10,6 +10,7 @@ import android.util.Log;
 
 import androidx.core.app.NotificationManagerCompat;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -77,6 +78,53 @@ public class ArmadaNotificationPlugin extends Plugin {
         data.put("challenge", challenge);
         p.notifyListeners("authChallenge", data);
         return true;
+    }
+
+    /**
+     * Raw outer events the background service received but the WebView may not
+     * have yet (it was backgrounded / its socket was down). Buffered while the
+     * bridge is dead so a freshly-opened app can drain them straight into its
+     * event store — no relay round-trip, so a tapped notification's message is
+     * already on screen. Capped to avoid unbounded growth.
+     */
+    private static final java.util.ArrayDeque<String> eventBuffer = new java.util.ArrayDeque<>();
+    private static final int EVENT_BUFFER_MAX = 200;
+
+    /**
+     * Hand a raw outer event (the wire JSON the service received) to the WebView.
+     * Emits live if the bridge is up; otherwise buffers for the next drain.
+     * Same event for NIP-29 (kind 9/1068/…) and Concord (sealed kind 3300) — the
+     * WebView writes it into its IndexedDB store and its read path decodes it.
+     */
+    static void feedRelayEvent(String eventJson) {
+        if (eventJson == null) return;
+        ArmadaNotificationPlugin p = instance;
+        if (p != null) {
+            JSObject data = new JSObject();
+            data.put("event", eventJson);
+            p.notifyListeners("relayEvent", data);
+            return;
+        }
+        synchronized (eventBuffer) {
+            if (eventBuffer.size() >= EVENT_BUFFER_MAX) eventBuffer.pollFirst();
+            eventBuffer.addLast(eventJson);
+        }
+    }
+
+    /**
+     * Drain buffered raw events (those received while the WebView was down).
+     * Returns { events: [json, …] }; the JS layer writes them to its store.
+     */
+    @PluginMethod
+    public void drainEvents(PluginCall call) {
+        JSArray arr = new JSArray();
+        synchronized (eventBuffer) {
+            String e;
+            while ((e = eventBuffer.pollFirst()) != null) arr.put(e);
+        }
+        JSObject ret = new JSObject();
+        ret.put("events", arr);
+        call.resolve(ret);
     }
 
     /**

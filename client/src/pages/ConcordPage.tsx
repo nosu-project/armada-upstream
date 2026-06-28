@@ -232,7 +232,7 @@ function ConcordChannelRow({
  * the channel/community chrome differ.
  */
 export function ConcordPage() {
-  const { communityId } = useParams<{ communityId: string }>();
+  const { communityId, channelId: routeChannelId } = useParams<{ communityId: string; channelId: string }>();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   // Storage key for this community's last-opened channel (local preference).
@@ -267,7 +267,16 @@ export function ConcordPage() {
       }),
     };
   }, [baseCommunity, folded, seededIcon, seededBanner]);
-  const [channelIdHex, setChannelIdHex] = useState<string | null>(null);
+  const [channelIdHex, setChannelIdHex] = useState<string | null>(routeChannelId ?? null);
+
+  // A deep-link to a specific channel (e.g. tapping a notification, which routes
+  // to /c/<community>/<channel>) must open THAT channel, overriding the
+  // last-opened-channel memory below — even if the page is already mounted on a
+  // different channel of the same community. In-page channel clicks use local
+  // state and don't touch the URL, so this only fires on a genuine route change.
+  useEffect(() => {
+    if (routeChannelId) setChannelIdHex(routeChannelId);
+  }, [routeChannelId]);
 
   const channel = useMemo(() => {
     if (!community) return undefined;
@@ -698,6 +707,7 @@ export function ConcordPage() {
         <div className="relative flex flex-1 min-h-0">
           <div className="flex-1 min-w-0 flex flex-col">
             <MessageTimeline
+              key={channel ? bytesToHex(channel.id) : "none"}
               transport={transport}
               className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
               emptyState={

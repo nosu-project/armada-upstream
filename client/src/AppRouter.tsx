@@ -67,6 +67,7 @@ export function AppRouter() {
           <Route path="/s/:server" element={<ServerPage />} />
           <Route path="/s/:server/:groupId" element={<GroupPage />} />
           <Route path="/c/:communityId" element={<ConcordPage />} />
+          <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
           <Route path="/invite" element={<InvitePage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />

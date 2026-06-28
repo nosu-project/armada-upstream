@@ -10,10 +10,20 @@ import { EventStoreContext } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
+import { runExclusive } from "@/lib/signerQueue";
 
 interface NostrProviderProps {
   children: React.ReactNode;
 }
+
+/**
+ * Per-relay cooldown between signing NEW NIP-42 challenges. A burst of retried
+ * REQs (each re-challenged) arrives within milliseconds, so a short window
+ * collapses the flood onto one bunker sign while still letting a genuine
+ * reconnect re-authenticate quickly. (Challenges are nonces, so we never reuse a
+ * signature across challenges — we just refuse the extra ones during the window.)
+ */
+const AUTH_MIN_INTERVAL_MS = 5_000;
 
 /**
  * Provides the relay pool for the whole app.
@@ -45,7 +55,15 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // installs schema version 1, and pointing it at the old v2 database would make
   // IndexedDB reject the open as a downgrade (→ silent no-op cache).
   const eventStore = useRef<Promise<NIndexedDB> | undefined>(undefined);
-  eventStore.current ??= Promise.resolve(new NIndexedDB("armada-events"));
+  if (eventStore.current === undefined) {
+    const db = new NIndexedDB("armada-events");
+    // Warm up the IndexedDB connection immediately. The FIRST query after launch
+    // pays a one-time cold-connection penalty (~2.5s on Android WebView) before
+    // the LevelDB backing is hot; doing a throwaway query now means the first
+    // channel open reads a warm store (<100ms) instead of eating that stall.
+    void db.query([{ kinds: [0], limit: 1 }]).catch(() => undefined);
+    eventStore.current = Promise.resolve(db);
+  }
 
   // Pool routes: app relays (non-NIP-29 traffic) + all servers
   // (platform-pinned + user-added). The internal servers stay in the set so
@@ -89,49 +107,97 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // callback reads from this ref when a relay sends an AUTH challenge, so it
   // always uses the latest signer without recreating the pool.
   const signerRef = useRef<NostrSigner | undefined>(undefined);
+  // The user's pubkey, used to key the signer-serialization queue so concurrent
+  // AUTH challenges from many relays don't fan out into parallel calls against a
+  // (slow, remote) NIP-46 bunker.
+  const pubkeyRef = useRef<string | undefined>(undefined);
+  pubkeyRef.current = logins[0]?.pubkey;
+  // Per-relay cache of the most recent signed AUTH event, so a REQ retry that
+  // re-triggers the same challenge — or a burst of fresh challenges from a
+  // relay that keeps closing our subs — reuses the signature instead of queuing
+  // another bunker round-trip.
+  const authCacheRef = useRef<Map<string, { challenge: string; event: NostrEvent; signedAt: number }>>(new Map());
+  // Per-relay in-flight AUTH sign, so a burst of concurrent challenges for the
+  // same relay collapses onto one bunker round-trip instead of N (the cache
+  // timestamp is only set AFTER signing, so without this the whole burst slips
+  // past the rate-limit check before any of them completes).
+  const authInFlightRef = useRef<Map<string, Promise<NostrEvent>>>(new Map());
+  // Per-relay cooldown: timestamp until which we refuse to sign a NEW challenge
+  // for this relay, so a relay that re-challenges on every retried REQ can't
+  // flood the bunker. Set after each successful sign.
+  const authCooldownRef = useRef<Map<string, number>>(new Map());
 
-  const currentLogin = logins[0];
-  const currentSigner = useMemo(() => {
-    if (!currentLogin) return undefined;
-    try {
-      switch (currentLogin.type) {
-        case "nsec":
-          return NUser.fromNsecLogin(currentLogin).signer;
-        case "bunker":
-          // pool.current is created synchronously during first render below.
-          return NUser.fromBunkerLogin(currentLogin, pool.current!).signer;
-        case "extension":
-          return NUser.fromExtensionLogin(currentLogin).signer;
-        default:
-          return undefined;
-      }
-    } catch {
-      return undefined;
-    }
-  }, [currentLogin]);
-
-  signerRef.current = currentSigner;
-
+  // The pool MUST be constructed before the signer memo: a bunker (NIP-46)
+  // signer is built with `NUser.fromBunkerLogin(login, pool)`, so the pool has
+  // to exist first. The `open()` callback only reads the refs lazily (when a
+  // relay sends an AUTH challenge), so building it here — before relays/signer
+  // are finalized — is safe. (Previously the pool was created AFTER this memo,
+  // so a bunker login computed its signer with an `undefined` pool, the memo
+  // never recomputed [dep: currentLogin only], and `signerRef` stayed undefined
+  // forever — every NIP-42 AUTH then failed with "no signer", which locked an
+  // auth-required relay like chat.soapbox.pub into an endless REQ→CLOSED retry
+  // and the room received nothing.)
   if (!pool.current) {
     pool.current = new NPool({
       open(url: string) {
         return new NRelay1(url, {
           // NIP-42: respond to relay AUTH challenges by signing a kind 22242
           // ephemeral event with the current user's signer.
+          //
+          // Two safeguards against a slow/remote NIP-46 bunker: (1) reuse a
+          // cached signature when the same relay re-issues the same challenge (a
+          // REQ retry shouldn't re-sign); (2) serialize all signing through the
+          // per-identity signer queue, so concurrent AUTH challenges from many
+          // relays don't fan out into parallel bunker round-trips (which the
+          // bunker can't service — they all time out, leaving every
+          // auth-required relay stuck on CLOSED and the room empty).
           auth: async (challenge: string) => {
             const signer = signerRef.current;
             if (!signer) {
               throw new Error("AUTH failed: no signer available (user not logged in)");
             }
-            return signer.signEvent({
-              kind: 22242,
-              content: "",
-              tags: [
-                ["relay", url],
-                ["challenge", challenge],
-              ],
-              created_at: Math.floor(Date.now() / 1000),
+            // NIP-42 challenges are single-use nonces: a signature is only valid
+            // for the exact challenge it was made for. So we may ONLY reuse a
+            // cached signature when the relay re-issues the IDENTICAL challenge
+            // (a plain REQ retry) — never across a fresh challenge, or the relay
+            // rejects the stale nonce and re-challenges forever (the room never
+            // authenticates).
+            const cached = authCacheRef.current.get(url);
+            if (cached && cached.challenge === challenge) {
+              return cached.event;
+            }
+            // A fresh challenge must be signed. Two guards keep a relay that
+            // re-challenges on every retried REQ from flooding the (slow, remote)
+            // bunker: (a) collapse a concurrent burst onto one in-flight sign;
+            // (b) rate-limit per relay — within the window, REFUSE the extra
+            // challenge (let nostrify retry later) rather than signing it or, worse,
+            // returning a stale signature.
+            const inFlight = authInFlightRef.current.get(url);
+            if (inFlight) return inFlight;
+            const cooldownUntil = authCooldownRef.current.get(url) ?? 0;
+            if (Date.now() < cooldownUntil) {
+              throw new Error(`AUTH throttled for ${url}`);
+            }
+            const key = pubkeyRef.current ?? "anon";
+            const signing = runExclusive(`auth:${key}`, () =>
+              signer.signEvent({
+                kind: 22242,
+                content: "",
+                tags: [
+                  ["relay", url],
+                  ["challenge", challenge],
+                ],
+                created_at: Math.floor(Date.now() / 1000),
+              }),
+            ).then((ev) => {
+              authCacheRef.current.set(url, { challenge, event: ev, signedAt: Date.now() });
+              authCooldownRef.current.set(url, Date.now() + AUTH_MIN_INTERVAL_MS);
+              return ev;
+            }).finally(() => {
+              authInFlightRef.current.delete(url);
             });
+            authInFlightRef.current.set(url, signing);
+            return signing;
           },
         });
       },
@@ -153,6 +219,29 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       eoseTimeout: 300,
     });
   }
+
+  // Now that the pool exists, derive the signer (a bunker signer needs it).
+  const currentLogin = logins[0];
+  const currentSigner = useMemo(() => {
+    if (!currentLogin) return undefined;
+    try {
+      switch (currentLogin.type) {
+        case "nsec":
+          return NUser.fromNsecLogin(currentLogin).signer;
+        case "bunker":
+          return NUser.fromBunkerLogin(currentLogin, pool.current!).signer;
+        case "extension":
+          return NUser.fromExtensionLogin(currentLogin).signer;
+        default:
+          return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+    // pool.current is a stable ref (created once above), so it isn't a dep.
+  }, [currentLogin]);
+
+  signerRef.current = currentSigner;
 
   // Wrap the pool in the batching proxy (combines profile/id lookups into single REQs).
   const batcher = useRef<NostrBatcher | undefined>(undefined);

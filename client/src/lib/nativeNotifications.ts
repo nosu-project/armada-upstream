@@ -17,6 +17,13 @@ export interface ArmadaNotificationPlugin {
   /** Hand a signed NIP-42 kind-22242 event back to the service for a relay. */
   submitAuth(options: { relayUrl: string; event: NostrEvent }): Promise<void>;
   /**
+   * Drain raw outer events the background service received while the WebView was
+   * down (it buffers them). The JS layer writes each into its event store so a
+   * freshly-opened app already holds the messages the notifications were about —
+   * no relay round-trip. Returns the events as wire JSON strings.
+   */
+  drainEvents(): Promise<{ events: string[] }>;
+  /**
    * Fired when a relay issues a NIP-42 AUTH challenge. The JS layer signs a
    * kind-22242 with the user's signer and calls submitAuth — so no private key
    * ever enters native code, and bunker/extension signers work too.
@@ -24,6 +31,16 @@ export interface ArmadaNotificationPlugin {
   addListener(
     eventName: "authChallenge",
     listener: (data: { relayUrl: string; challenge: string }) => void,
+  ): Promise<PluginListenerHandle>;
+  /**
+   * Fired when the background service receives a raw outer event (NIP-29 kind
+   * 9/1068/7/1111/5 or a Concord sealed kind 3300) while the WebView is up. The
+   * JS layer writes it straight into its event store, so the live timeline shows
+   * it with zero relay latency — the same message the notification was about.
+   */
+  addListener(
+    eventName: "relayEvent",
+    listener: (data: { event: string }) => void,
   ): Promise<PluginListenerHandle>;
   /**
    * Configure (and start/stop) the background service. Passing `enabled: false`
