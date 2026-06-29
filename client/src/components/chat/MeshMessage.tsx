@@ -17,6 +17,13 @@ interface MeshMessageProps {
   myPeerID: string | null;
   /** Render compactly as a continuation of the previous same-author message. */
   continuation?: boolean;
+  /**
+   * Open the Noise XX DM with this message's author. Omitted when the author is
+   * us or when we're already viewing that DM, which hides the "Message" action.
+   */
+  onMessage?: (peerID: string) => void;
+  /** Insert an @-mention of this message's author into the composer. */
+  onMention?: (peerID: string) => void;
 }
 
 /**
@@ -24,10 +31,12 @@ interface MeshMessageProps {
  * polls/edits/moderation, so this is a thin shell over the shared `MessageRow`
  * (rather than the full Nostr `ChatMessage`): it renders the colored author via
  * `identityOverride`, the plain-text body with `@name#suffix` mention chips, the
- * `/me` action form, and emphasizes a message that mentions us.
+ * `/me` action form, and emphasizes a message that mentions us. The author
+ * avatar/name open a mesh profile popover (Message / Mention) via `meshActions`.
  */
-export function MeshMessage({ event, identity, peers, myPeerID, continuation }: MeshMessageProps) {
+export function MeshMessage({ event, identity, peers, myPeerID, continuation, onMessage, onMention }: MeshMessageProps) {
   const mentionsMe = meshMentionsMe(event.content, myPeerID);
+  const isSelf = !!myPeerID && event.pubkey === myPeerID;
 
   const body = isMeAction(event) ? (
     <div className="text-[15px] italic text-muted-foreground">
@@ -49,6 +58,7 @@ export function MeshMessage({ event, identity, peers, myPeerID, continuation }: 
     <MessageRow
       pubkey={event.pubkey}
       identityOverride={identity}
+      meshActions={{ peerID: event.pubkey, isSelf, onMessage, onMention }}
       createdAt={event.created_at}
       // A mention needs the full header (avatar + name), not a collapsed
       // continuation, so it reads as directed at someone.

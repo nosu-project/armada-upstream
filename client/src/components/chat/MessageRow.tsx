@@ -1,6 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { memo } from "react";
 
+import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +38,19 @@ interface MessageRowProps {
    * suppressed (there's no Nostr profile behind a mesh peer).
    */
   identityOverride?: MessageIdentity;
+  /**
+   * Mesh-only: makes the avatar/name a click-triggered `MeshProfilePreviewCard`
+   * (with Message/Mention actions) instead of plain text. Requires
+   * `identityOverride` to be set. `peerID` is the author's mesh peer id (the
+   * row's `pubkey`); `onMessage`/`onMention` wire the popover's actions and
+   * `isSelf` hides them for our own messages.
+   */
+  meshActions?: {
+    peerID: string;
+    isSelf?: boolean;
+    onMessage?: (peerID: string) => void;
+    onMention?: (peerID: string) => void;
+  };
   /** Unix-seconds creation time, rendered as a short relative timestamp. */
   createdAt: number;
   /** The message body (rich content, poll, /me action, edit field, …). */
@@ -71,6 +85,7 @@ interface MessageRowProps {
 export const MessageRow = memo(function MessageRow({
   pubkey,
   identityOverride,
+  meshActions,
   createdAt,
   children,
   pending,
@@ -121,7 +136,21 @@ export const MessageRow = memo(function MessageRow({
           {shortClockTime(createdAt)}
         </span>
       ) : identityOverride ? (
-        <span className="shrink-0 mt-0.5">{avatar}</span>
+        meshActions ? (
+          <MeshProfilePreviewCard
+            peerID={meshActions.peerID}
+            identity={identityOverride}
+            isSelf={meshActions.isSelf}
+            onMessage={meshActions.onMessage}
+            onMention={meshActions.onMention}
+          >
+            <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer transition-opacity hover:opacity-90">
+              {avatar}
+            </button>
+          </MeshProfilePreviewCard>
+        ) : (
+          <span className="shrink-0 mt-0.5">{avatar}</span>
+        )
       ) : (
         <ProfilePreviewCard pubkey={pubkey}>
           <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -138,17 +167,40 @@ export const MessageRow = memo(function MessageRow({
         {!continuation && (
           <div className="flex items-baseline gap-2">
             {identityOverride ? (
-              <span
-                className="text-[15px] font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1"
-                style={color ? { color } : undefined}
-              >
-                <span className="truncate">{displayName}</span>
-                {suffix && (
-                  <span className="text-[11px] font-normal text-muted-foreground/70 shrink-0">
-                    #{suffix}
-                  </span>
-                )}
-              </span>
+              meshActions ? (
+                <MeshProfilePreviewCard
+                  peerID={meshActions.peerID}
+                  identity={identityOverride}
+                  isSelf={meshActions.isSelf}
+                  onMessage={meshActions.onMessage}
+                  onMention={meshActions.onMention}
+                >
+                  <button
+                    type="button"
+                    className="text-[15px] font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1 hover:underline focus:outline-none"
+                    style={color ? { color } : undefined}
+                  >
+                    <span className="truncate">{displayName}</span>
+                    {suffix && (
+                      <span className="text-[11px] font-normal text-muted-foreground/70 shrink-0 no-underline">
+                        #{suffix}
+                      </span>
+                    )}
+                  </button>
+                </MeshProfilePreviewCard>
+              ) : (
+                <span
+                  className="text-[15px] font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1"
+                  style={color ? { color } : undefined}
+                >
+                  <span className="truncate">{displayName}</span>
+                  {suffix && (
+                    <span className="text-[11px] font-normal text-muted-foreground/70 shrink-0">
+                      #{suffix}
+                    </span>
+                  )}
+                </span>
+              )
             ) : (
               <ProfilePreviewCard pubkey={pubkey}>
                 <button

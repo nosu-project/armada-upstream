@@ -27,7 +27,7 @@ import { useInsertText } from "@/hooks/useInsertText";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { toast } from "@/hooks/useToast";
-import { meshIdentity, type MeshIdentity } from "@/lib/meshIdentity";
+import { meshIdentity, meshMentionToken, type MeshIdentity } from "@/lib/meshIdentity";
 import { runMeshSlashCommand, isMeshSlashCommand } from "@/lib/meshSlashCommands";
 import { cn } from "@/lib/utils";
 
@@ -98,6 +98,24 @@ export function MeshPage() {
     },
     [mesh.myPeerID, mesh.myNickname, nicknameByPeer],
   );
+
+  // Insert an @-mention of a peer (by id) at the composer cursor — the same
+  // `@name#suffix` token the mention autocomplete inserts, so it chips and
+  // routes identically. Used by the message author popover's "Mention" action.
+  const mentionPeer = useCallback(
+    (peerID: string) => {
+      const token = `${meshMentionToken(resolveIdentity(peerID))} `;
+      const textarea = textareaRef.current;
+      const start = textarea?.selectionStart ?? draft.length;
+      const end = textarea?.selectionEnd ?? draft.length;
+      insertAtCursor({ start, end, replacement: token });
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    },
+    [resolveIdentity, insertAtCursor, draft],
+  );
+
+  // Open the Noise XX DM with a peer — the author popover's "Message" action.
+  const openDM = useCallback((peerID: string) => setView({ type: "dm", peerID }), []);
 
   if (!user) {
     return <Navigate to="/" replace />;
@@ -214,6 +232,10 @@ export function MeshPage() {
             />
 
             <MessageTimeline
+              // Remount per conversation so the timeline's "had messages"
+              // skeleton guard resets on switch — otherwise leaving the
+              // populated broadcast for an empty DM looks perpetually loading.
+              key={view.type === "dm" ? `dm:${view.peerID}` : "broadcast"}
               transport={activeTransport}
               className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
               emptyState={view.type === "dm" ? <EmptyDM peer={selectedPeer} /> : <EmptyBroadcast />}
@@ -225,6 +247,11 @@ export function MeshPage() {
                   peers={mesh.peers}
                   myPeerID={mesh.myPeerID}
                   continuation={continuation}
+                  // Don't offer "Message" for a peer whose DM is already open.
+                  onMessage={
+                    view.type === "dm" && view.peerID === msg.pubkey ? undefined : openDM
+                  }
+                  onMention={mentionPeer}
                 />
               )}
             />
