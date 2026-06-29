@@ -29,12 +29,17 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { toast } from "@/hooks/useToast";
 import { meshIdentity, meshMentionToken, type MeshIdentity } from "@/lib/meshIdentity";
-import { runMeshSlashCommand, isMeshSlashCommand } from "@/lib/meshSlashCommands";
+import { isMeshSlashCommand } from "@/lib/meshSlashCommands";
+import {
+  executeSlashCommand,
+  parseSlashCommand,
+  type SlashCommand,
+  type SlashCommandHandlers,
+} from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 import type { ChatTransport } from "@/components/chat/transport";
 import type { MeshPeer } from "@/lib/bluetoothMesh";
-import type { SlashCommand } from "@/lib/slashCommands";
 
 /**
  * What the chat pane is currently showing. `null` is the "nothing selected"
@@ -149,15 +154,34 @@ export function MeshPage() {
     focusComposer();
   };
 
-  // Run a slash command picked from the menu (argument-less ones run on select).
+  // How the mesh dispatches a slash command's result. The mesh supports only
+  // text rewrites + `/mention` (gated by `isMeshSlashCommand`), so it provides
+  // no `onAction`; the shared runner reports any other action as unavailable.
+  const slashHandlers: SlashCommandHandlers = {
+    send: async (text) => {
+      setDraft("");
+      try {
+        await sendText(text);
+      } catch {
+        // Surface failures by restoring the draft so the user can retry.
+        setDraft(text);
+      }
+    },
+    openMention: openMentionPicker,
+    clearDraft: () => setDraft(""),
+    onError: (message) =>
+      toast({ title: "Command unavailable", description: message, variant: "destructive" }),
+    isAllowed: isMeshSlashCommand,
+  };
+
+  const runSlash = (command: SlashCommand, arg: string) =>
+    executeSlashCommand(command, arg, { canModerate: false, resolvePubkey: () => undefined }, slashHandlers);
+
+  // Run a slash command picked from the menu (Tab/Enter/tap). Argument-less
+  // ones run on select; the typed command word is the only arg context.
   const runCommandFromMenu = (command: SlashCommand) => {
-    const result = runMeshSlashCommand(`/${command.name}`);
-    if (result.type === "openMention") {
-      openMentionPicker(result.prefix);
-    } else if (result.type === "error") {
-      toast({ title: "Command unavailable", description: result.message, variant: "destructive" });
-    }
-    // "send" never happens for argument-less commands picked from the menu.
+    const parsed = parseSlashCommand(draft);
+    void runSlash(command, parsed?.command === command ? parsed.arg : "");
   };
 
   const onSend = async () => {
@@ -167,25 +191,12 @@ export function MeshPage() {
     // Slash commands: rewrite/redirect before sending. A bare command word is
     // also handled here (e.g. "/me" with no text → error, not a literal send).
     if (content.startsWith("/")) {
-      const result = runMeshSlashCommand(content);
-      if (result.type === "error") {
-        toast({ title: "Command unavailable", description: result.message, variant: "destructive" });
+      const parsed = parseSlashCommand(content);
+      if (parsed) {
+        await runSlash(parsed.command, parsed.arg);
         return;
       }
-      if (result.type === "openMention") {
-        openMentionPicker(result.prefix);
-        return;
-      }
-      if (result.type === "send") {
-        setDraft("");
-        try {
-          await sendText(result.text);
-        } catch {
-          setDraft(content);
-        }
-        return;
-      }
-      // passthrough → send literally below.
+      // Unknown /command: fall through and send it literally.
     }
 
     setDraft("");

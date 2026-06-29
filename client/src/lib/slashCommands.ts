@@ -188,6 +188,87 @@ export function parseSlashCommand(content: string): { command: SlashCommand; arg
   return { command, arg: match[2] ?? "" };
 }
 
+/**
+ * Host callbacks for {@link executeSlashCommand}. A chat surface (the Nostr
+ * group composer, the Bluetooth mesh, …) supplies whichever of these it
+ * supports; the shared runner maps a command's {@link SlashRunResult} onto
+ * them. This is the single place command results are dispatched — surfaces
+ * differ only in *how* they send/act, never in the result-handling logic.
+ */
+export interface SlashCommandHandlers {
+  /** Send the (rewritten) message text. */
+  send: (text: string) => void | Promise<void>;
+  /**
+   * Open the `@` mention picker, optionally seeding the draft with `prefix`
+   * (e.g. "/slap ") so the resolved mention re-runs that command on send.
+   */
+  openMention: (prefix?: string) => void;
+  /** Clear the composer/draft (a `noop`/`clearDraft` outcome). */
+  clearDraft?: () => void;
+  /** Surface a recoverable error to the user (e.g. a toast). */
+  onError: (message: string) => void;
+  /**
+   * Handle a non-mention {@link SlashAction} (open poll/thread, moderation, …).
+   * Surfaces that don't support a given action should reject (or simply not
+   * provide this), and the runner reports it as unavailable.
+   */
+  onAction?: (action: SlashAction) => void | Promise<void>;
+  /**
+   * Optional gate: return false for commands this surface doesn't support, to
+   * produce a friendly "isn't available here" error instead of running them.
+   * Should match the menu's `commandFilter` so typed and picked commands agree.
+   */
+  isAllowed?: (command: SlashCommand) => boolean;
+}
+
+/**
+ * Run a slash command and dispatch its result onto the host's handlers. Used by
+ * every chat composer (group, mesh, …) so the run → result → side-effect logic
+ * lives in exactly one place. Mention actions go to `openMention`; `openPoll`/
+ * `openThread`/moderation go to `onAction`; text rewrites and `/me`-style sends
+ * go to `send`.
+ */
+export async function executeSlashCommand(
+  command: SlashCommand,
+  arg: string,
+  ctx: SlashCommandContext,
+  handlers: SlashCommandHandlers,
+): Promise<void> {
+  if (handlers.isAllowed && !handlers.isAllowed(command)) {
+    handlers.onError(`/${command.name} isn't available here.`);
+    return;
+  }
+
+  const result = command.run(arg, ctx);
+  switch (result.type) {
+    case "error":
+      handlers.onError(result.message);
+      return;
+    case "noop":
+      handlers.clearDraft?.();
+      return;
+    case "send":
+      await handlers.send(result.text);
+      return;
+    case "action":
+      if (result.action.kind === "openMention") {
+        handlers.openMention(result.action.prefix);
+        return;
+      }
+      if (result.action.kind === "clearDraft") {
+        handlers.clearDraft?.();
+        return;
+      }
+      // openPoll / openThread / moderation — delegated to the surface.
+      if (!handlers.onAction) {
+        handlers.onError(`/${command.name} isn't available here.`);
+        return;
+      }
+      await handlers.onAction(result.action);
+      return;
+  }
+}
+
 /** Commands whose name/alias starts with `query` (no leading slash), for the menu. */
 export function matchSlashCommands(query: string, canModerate: boolean): SlashCommand[] {
   const q = query.toLowerCase();
