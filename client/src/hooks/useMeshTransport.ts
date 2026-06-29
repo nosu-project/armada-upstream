@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
+import { MeshContext, type MeshContextType, type MeshState } from "@/contexts/MeshContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { BluetoothMesh, type MeshMessage, type MeshPeer } from "@/lib/bluetoothMesh";
 import { meshAnonName } from "@/lib/meshIdentity";
 
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
+
+export type { MeshState } from "@/contexts/MeshContext";
 
 /** Synthetic Nostr kind for adapted mesh messages (mirrors NIP-29 chat kind 9). */
 const MESH_KIND = 9;
@@ -29,34 +32,6 @@ function meshToEvent(m: MeshMessage): ChatMsg {
   };
 }
 
-export interface MeshState {
-  /** Whether the platform can run the BLE mesh (Android only). */
-  available: boolean;
-  /** Whether the mesh is currently running. */
-  started: boolean;
-  /** This device's mesh peer id, once started. */
-  myPeerID: string | null;
-  /** Current peer roster. */
-  peers: MeshPeer[];
-  /** Direct-message histories keyed by mesh peer id. */
-  directMessages: Record<string, ChatMsg[]>;
-  /** A startup/permission error, if any. */
-  error: string | null;
-  /**
-   * Whether incognito mode is on. When on, this device announces a derived
-   * `anon<peerid>` nickname; when off, the user's Armada display name.
-   */
-  incognito: boolean;
-  /** The nickname this device is currently announcing on the mesh. */
-  myNickname: string;
-  /** Manually (re)start the mesh (e.g. after granting permission). */
-  start: () => Promise<void>;
-  /** Stop the mesh. */
-  stop: () => Promise<void>;
-  /** Toggle incognito mode (persisted) and re-announce under the new name. */
-  setIncognito: (incognito: boolean) => void;
-}
-
 /**
  * Drives the Android Bluetooth mesh and exposes it as a {@link ChatTransport}
  * for the shared chat UI. Public (broadcast) mesh chat only in this first cut —
@@ -65,13 +40,13 @@ export interface MeshState {
  *
  * Identity: the mesh keeps its native crypto identity; we only push the
  * logged-in Nostr profile name down as the announced nickname.
+ *
+ * This is the implementation hosted by {@link MeshProvider}. It is mounted ONCE
+ * above the router so the conversation history survives navigating away from
+ * the Mesh page (the native side has no history replay — see {@link MeshContext}).
+ * UI code should call {@link useMeshTransport}, which reads the provider value.
  */
-export function useMeshTransport(): {
-  transport: ChatTransport;
-  mesh: MeshState;
-  send: (content: string) => Promise<void>;
-  sendPrivate: (peer: MeshPeer, content: string) => Promise<void>;
-} {
+export function useMeshTransportState(): MeshContextType {
   const { user, metadata } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   const incognito = config.meshIncognito;
@@ -271,5 +246,21 @@ export function useMeshTransport(): {
     [available, started, myPeerID, peers, directMessages, error, incognito, myNickname, start, stop, setIncognito],
   );
 
-  return { transport, mesh, send, sendPrivate };
+  return useMemo(
+    () => ({ transport, mesh, send, sendPrivate }),
+    [transport, mesh, send, sendPrivate],
+  );
+}
+
+/**
+ * Read the app-wide Bluetooth-mesh transport (provided by {@link MeshProvider}).
+ * Throws if used outside the provider — every consumer is under it via
+ * `App.tsx`.
+ */
+export function useMeshTransport(): MeshContextType {
+  const ctx = useContext(MeshContext);
+  if (!ctx) {
+    throw new Error("useMeshTransport must be used within a MeshProvider");
+  }
+  return ctx;
 }

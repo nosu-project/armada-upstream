@@ -8,6 +8,7 @@ import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-
 
 import { AppProvider } from "@/components/AppProvider";
 import { DesktopBadge } from "@/components/DesktopBadge";
+import { MeshProvider } from "@/components/MeshProvider";
 import { NativeNotifications } from "@/components/NativeNotifications";
 import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
@@ -58,7 +59,9 @@ export function App() {
                 <NativeNotifications />
                 <ScreenSharePicker />
                 <Toaster />
-                <AppRouter />
+                <MeshProvider>
+                  <AppRouter />
+                </MeshProvider>
               </ReadStateProvider>
             </TooltipProvider>
           </NostrProvider>
