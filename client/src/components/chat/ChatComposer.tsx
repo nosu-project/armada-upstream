@@ -4,6 +4,7 @@ import {
   BarChart3,
   Loader2,
   Mic,
+  MonitorPlay,
   Paperclip,
   Plus,
   Reply,
@@ -25,6 +26,8 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useApps } from "@/hooks/useApps";
+import { useChatScope } from "@/hooks/useChatScope";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
@@ -241,6 +244,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const { emojis: customEmojis } = useCustomEmojis();
   const { toast } = useToast();
   const isMobile = useIsMobile();
+  // The chat scope (NIP-29 group / Concord channel), provided by the page. Used
+  // to launch in-chat apps from the "+" menu. Undefined in DMs (no scope).
+  const appScope = useChatScope();
+  const { launchApp } = useApps();
 
   // Scope @-mentions to people in the room: admins, members, and anyone who
   // has spoken in this view. DMs (relayUrl === "dm") have no room, so mentions
@@ -1163,6 +1170,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       <Paperclip className="size-4" />
                       <span className="font-medium">Attach file</span>
                     </button>
+                    {appScope && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          launchApp(appScope, { type: "youtube" });
+                          setPlusOpen(false);
+                        }}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+                      >
+                        <MonitorPlay className="size-4" />
+                        <span className="font-medium">Watch together</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {

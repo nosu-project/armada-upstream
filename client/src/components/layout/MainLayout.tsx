@@ -1,5 +1,6 @@
 import { Outlet } from "react-router-dom";
 
+import { AppsProvider } from "@/components/AppsProvider";
 import { CallProvider } from "@/components/CallProvider";
 import { ConcordInvitesPrompt } from "@/components/ConcordInvitesPrompt";
 
@@ -10,15 +11,17 @@ import { ConcordInvitesPrompt } from "@/components/ConcordInvitesPrompt";
  * shared frame here is intentionally thin — the panes manage their own
  * responsive visibility.
  *
- * The CallProvider lives here (the layout never unmounts on navigation) so a
- * voice call persists across channel/server changes; it wraps the routed
- * content and docks the call bar below it.
+ * The CallProvider and AppsProvider live here (the layout never unmounts on
+ * navigation) so a voice call and an in-chat app persist across channel/server
+ * changes; they wrap the routed content and dock their UI below it.
  */
 export function MainLayout() {
   return (
     <CallProvider>
-      <Outlet />
-      <ConcordInvitesPrompt />
+      <AppsProvider>
+        <Outlet />
+        <ConcordInvitesPrompt />
+      </AppsProvider>
     </CallProvider>
   );
 }

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
+import { AppStageSlot } from "@/components/chat/AppStage";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { GroupChat } from "@/components/chat/GroupChat";
 import { MemberList } from "@/components/chat/MemberList";
@@ -26,6 +27,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
+import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
@@ -560,6 +562,10 @@ export function GroupPage() {
             when this channel is the one in call. */}
         <CallStageSlot active={inThisCall} />
 
+        {/* Top-of-chat app stage: a running in-chat app (YouTube watchalong,
+            webxdc) portals in here when this channel is the one it's open in. */}
+        <AppStageSlot scope={{ kind: "nip29", relayUrl, groupId }} />
+
         {/* Join banner */}
         {user && !isMember && !isLoading && (
           <JoinBanner relayUrl={relayUrl} groupId={groupId} isClosed={Boolean(group?.isClosed)} />
@@ -571,6 +577,7 @@ export function GroupPage() {
         {/* Chat + members. The member panel mirrors the thread panel: in-flow
             animated-width on desktop, full-screen floating card overlay on
             mobile (no drawer/backdrop). */}
+        <ChatScopeContext.Provider value={{ kind: "nip29", relayUrl, groupId }}>
         <div className="relative flex flex-1 min-h-0">
           <GroupChat
             relayUrl={relayUrl}
@@ -619,6 +626,7 @@ export function GroupPage() {
             </div>
           </div>
         </div>
+        </ChatScopeContext.Provider>
         </main>
       </SwipeReveal>
 

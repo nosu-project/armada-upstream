@@ -4,6 +4,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
+import { AppStageSlot } from "@/components/chat/AppStage";
+import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage, getReplyToId, ReplyContextLine, replyPreviewText } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
@@ -732,7 +734,15 @@ export function ConcordPage() {
             the one in encrypted voice). */}
         <CallStageSlot active={inThisVoice} />
 
+        {/* Top-of-chat app stage (YouTube watchalong, webxdc) for this channel. */}
+        {community && channel && (
+          <AppStageSlot scope={{ kind: "concord", community, channel }} />
+        )}
+
         {/* Chat + members. Member panel mirrors the NIP-29 GroupPage. */}
+        <ChatScopeContext.Provider
+          value={community && channel ? { kind: "concord", community, channel } : undefined}
+        >
         <div className="relative flex flex-1 min-h-0">
           <div className="flex-1 min-w-0 flex flex-col">
             <MessageTimeline
@@ -835,6 +845,7 @@ export function ConcordPage() {
             </div>
           </div>
         </div>
+        </ChatScopeContext.Provider>
       </main>
       </SwipeReveal>
 

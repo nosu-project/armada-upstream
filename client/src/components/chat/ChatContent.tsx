@@ -8,6 +8,7 @@ import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
+import { XdcAttachment } from "@/components/chat/XdcAttachment";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -584,6 +585,11 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
           case "media-embed": {
             const imeta = imetaMap.get(token.url);
             const mime = imeta?.mime ?? "";
+            const isXdc = mime === "application/x-webxdc"
+              || /\.xdc(\?[^\s]*)?$/i.test(token.url);
+            if (isXdc) {
+              return <XdcAttachment key={i} url={token.url} imeta={imeta} />;
+            }
             const isAudio = mime.startsWith("audio/")
               || /\.(mp3|wav|ogg|flac|m4a|aac|opus)(\?[^\s]*)?$/i.test(token.url);
             if (isAudio) {

@@ -79,6 +79,23 @@ export const KIND_CALENDAR_TIME = 31923;
  */
 export const KIND_CALENDAR_RSVP = 31925;
 
+/**
+ * In-chat app (webxdc) state update — Armada's NIP-29 mapping of the
+ * webxdc `sendUpdate()` API (see NIP-DC / ditto's NOSTR_WEBXDC.md). A regular
+ * event scoped to the group by an `h` tag, carrying a `i` tag = the app
+ * session UUID, and a JSON-serialised payload in `content`. Updates are ordered
+ * by `created_at` and assigned serial numbers by the client.
+ */
+export const KIND_GROUP_WEBXDC_UPDATE = 9450;
+/**
+ * In-chat app (webxdc) realtime data — Armada's NIP-29 mapping of the webxdc
+ * `joinRealtimeChannel()` API. An ephemeral, group-scoped (`h` tag) event with
+ * an `i` tag = the app session UUID and a base64-encoded `Uint8Array` payload
+ * in `content`. The relay forwards these to active subscribers but never stores
+ * them.
+ */
+export const KIND_GROUP_WEBXDC_REALTIME = 24450;
+
 /** User: request to join a group. */
 export const KIND_JOIN_REQUEST = 9021;
 /** User: request to leave a group. */

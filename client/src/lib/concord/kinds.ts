@@ -25,7 +25,13 @@ export const KIND_COMMUNITY_PRESENCE = 3306;
 export const KIND_COMMUNITY_CONTROL = 3308;
 /** Cooperative kick (soft removal). */
 export const KIND_COMMUNITY_KICK = 3309;
-/** WebXDC realtime peer signal. */
+/**
+ * In-chat app (webxdc) sync: both `sendUpdate()` state events and
+ * `joinRealtimeChannel()` realtime data, sealed under the channel key. The two
+ * are distinguished by an inner `["rt", "1"]` tag (present only on realtime
+ * data); realtime events are still persisted by the relay (Concord has no
+ * ephemeral plane), but consumers treat them as transient.
+ */
 export const KIND_COMMUNITY_WEBXDC = 3310;
 /** Typing indicator (ephemeral, never persisted). */
 export const KIND_COMMUNITY_TYPING = 3311;
