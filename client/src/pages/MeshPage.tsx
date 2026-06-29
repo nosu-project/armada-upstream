@@ -229,7 +229,7 @@ export function MeshPage() {
               )}
             />
 
-            <div className="relative px-3 pb-3 pt-1 shrink-0">
+            <div className="relative px-3 pb-safe pt-1 shrink-0">
               {/* Autocompletes anchor to the composer textarea. Mentions suggest
                   nearby peers; slash commands offer the mesh-appropriate set. */}
               <MeshMentionAutocomplete
