@@ -101,7 +101,7 @@ A Community runs on a small set of keys.
 Identifiers:
 
 - **`CommunityId`** — a **self-certifying commitment to the owner's identity key** (NOT random,
-  NOT a timestamp snowflake): `community_id = SHA-256("vector-community/v1/community-id" ||
+  NOT a timestamp snowflake): `community_id = SHA-256("concord/v1/community-id" ||
   owner_xonly[32] || owner_salt[32])` (§3.5). Lowercase hex on the wire. Because the id commits
   to `owner_xonly`, anyone holding `(owner_xonly, owner_salt)` can recompute and **verify which
   key minted the community**; forging ownership of an *existing* id is second-preimage resistance
@@ -147,24 +147,26 @@ HMAC-SHA256). `L = 32` (the expand never fails at this length).
 
 | Label string | id32 | epoch | Output |
 |---|---|---|---|
-| `vector-community/v1/channel-pseudonym` | channel id | yes | channel **group signing key** seed (§3.4) |
-| `vector-community/v1/recipient-pseudonym` | scope id | yes | rekey blob locator |
-| `vector-community/v1/rekey-pseudonym` | channel id | yes | channel-rekey **group signing key** seed |
-| `vector-community/v1/base-rekey-pseudonym` | community id | yes (new epoch) | server-root-rekey **group signing key** seed |
-| `vector-community/v1/public-invite-key` | all-zero | no | public invite NIP-44 decrypt key |
-| `vector-community/v1/public-invite-locator` | all-zero | no | public invite `d`-tag locator |
-| `vector-community/v1/public-invite-signer` | all-zero | no | public invite signing key (→ secp256k1 scalar) |
-| `vector-community/v1/banlist-locator` | community id | no | banlist entity id |
-| `vector-community/v1/grant-locator` | community id (IKM) + member-xonly (in info) | no | per-member grant entity id |
-| `vector-community/v1/invite-links-locator` | community id (IKM) + creator-xonly (in info) | no | per-creator invite-links entity id |
-| `vector-community/v1/dissolved-locator` | community id | no | dissolution tombstone entity id |
-| `vector-community/v1/dissolved-pseudonym` | community id | no | dissolution **group signing key** seed (rotation-stable) |
+| `concord/v1/channel-pseudonym` | channel id | yes | channel **group signing key** seed (§3.4) |
+| `concord/v1/recipient-pseudonym` | scope id | yes | rekey blob locator |
+| `concord/v1/rekey-pseudonym` | channel id | yes | channel-rekey **group signing key** seed |
+| `concord/v1/base-rekey-pseudonym` | community id | yes (new epoch) | server-root-rekey **group signing key** seed |
+| `concord/v1/public-invite-key` | all-zero | no | public invite NIP-44 decrypt key |
+| `concord/v1/public-invite-locator` | all-zero | no | public invite `d`-tag locator |
+| `concord/v1/public-invite-signer` | all-zero | no | public invite signing key (→ secp256k1 scalar) |
+| `concord/v1/banlist-locator` | community id | no | banlist entity id |
+| `concord/v1/grant-locator` | community id (IKM) + member-xonly (in info) | no | per-member grant entity id |
+| `concord/v1/invite-links-locator` | community id (IKM) + creator-xonly (in info) | no | per-creator invite-links entity id |
+| `concord/v1/dissolved-locator` | community id | no | dissolution tombstone entity id |
+| `concord/v1/dissolved-pseudonym` | community id | no | dissolution **group signing key** seed (rotation-stable) |
 
-> **Label names retained for continuity.** The `*-pseudonym` labels keep their v1 strings (the
-> bytes are frozen) but now seed a **group signing key** (§3.4) rather than a 32-byte `z` value.
-> The HKDF *output* is identical to v1; only its *use* changed (it is fed through the
-> scalar-normalization of §3.4 to become a keypair, whose pubkey is the wire address). This
-> keeps the golden HKDF vectors stable while moving the addressing from `#z` to `authors`.
+> **`concord/v1` label prefix.** Every label uses the `concord/v1/…` prefix (the `v1` here is the
+> *derivation* version, independent of the `v2` wire/protocol version — the HKDF construction is
+> unchanged, only the prefix string differs from earlier drafts). The `*-pseudonym` labels seed a
+> **group signing key** (§3.4) rather than a 32-byte `z` value: the seed is fed through the
+> scalar-normalization of §3.4 to become a keypair, whose pubkey is the wire address. The labels
+> are **frozen** — changing any byte orphans every derived coordinate; the golden vectors in
+> Appendix A pin these exact strings.
 
 Notes:
 
@@ -229,7 +231,7 @@ control-plane reuse (§6.5) all feed §3.4 to produce their respective group key
 The `CommunityId` is a SHA-256 commitment binding the community to its owner's identity key:
 
 ```
-COMMUNITY_ID_LABEL = "vector-community/v1/community-id"
+COMMUNITY_ID_LABEL = "concord/v1/community-id"
 community_id = SHA-256( utf8(COMMUNITY_ID_LABEL) || owner_xonly[32] || owner_salt[32] )
 ```
 
@@ -461,7 +463,7 @@ larger array after decrypting (so a hostile array is also size-bounded).
 ### 5.4 Epoch-key commitment
 
 ```
-prev_key_commitment = SHA-256( "vector-community/v1/epoch-key-commitment" || prev_epoch_be[8] || prev_key[32] )
+prev_key_commitment = SHA-256( "concord/v1/epoch-key-commitment" || prev_epoch_be[8] || prev_key[32] )
 ```
 
 Two managers who both rotate epoch N→N+1 produce a *detectable* fork (resolved by
@@ -671,7 +673,7 @@ Each entity is a chain of editions. The **edition hash** is a domain-separated,
 length-prefixed SHA-256:
 
 ```
-EDITION_LABEL = "vector-community/v1/edition"
+EDITION_LABEL = "concord/v1/edition"
 signing_bytes = u64_be(len(EDITION_LABEL)) || EDITION_LABEL
              || entity_id[32]
              || u64_be(version)
@@ -1068,49 +1070,49 @@ nothing.
 These exact outputs anchor the wire format (independent RFC-5869 HKDF / SHA-256
 implementations). A drift means the format changed.
 
-The `*_pseudonym` values below are the **HKDF seeds** (§3.1) — unchanged from v1. In v2 each
-seed is fed through the scalar-normalization of §3.4 (reject-and-retry to a valid secp256k1
-secret key) to produce the **group signing key**; the keypair's x-only public key is the
-on-wire `authors` address. Implementations MUST additionally pin, for each derivation, the
+The `*_pseudonym` values below are the **HKDF seeds** (§3.1) under the `concord/v1` label prefix.
+In v2 each seed is fed through the scalar-normalization of §3.4 (reject-and-retry to a valid
+secp256k1 secret key) to produce the **group signing key**; the keypair's x-only public key is
+the on-wire `authors` address. Implementations MUST additionally pin, for each derivation, the
 resulting `group_sk` (after normalization) and the x-only `group_pk`; those pins are generated
 from the seeds below and committed alongside the golden HKDF vectors in the source.
 
 ```
-# HKDF seeds (frozen, identical to v1; now seed the group signing key per §3.4)
+# HKDF seeds (concord/v1 label prefix; seed the group signing key per §3.4)
 channel_pseudonym(key=0x00..1f, id=0xff,0xfe,.., epoch 0)
-  = d55b9f5fad668887d41d46b7c08ba63725a39d7c86b602c7c36e2f2e0eff8c40
+  = 23b4e1059184c52788da6876823ada480ce4442e56adbb0a347b3444bc24c500
 channel_pseudonym(.., epoch 1)
-  = 050079d9899c85bebf5c73fd777cdd812132d262e3ceec83c847a056dea41293
+  = d5e38a2134141fe45423b8f35c635e45c1d0b31fc60398ed398db0f1c766c9e3
 channel_pseudonym(.., epoch 0x0102030405060708)   // proves u64 big-endian
-  = cec398094d17688cd127bc609d34fa067331427400b023d0c70ff77fafe17e0b
+  = 794674e1e215064cb21e4ab9587e8428d1ba7552ea96bd508e570af229372be8
 
 grant_locator(community=0x11*32, member=0x22*32)
-  = c18d4d5955ecdd258f44240019a493a01fc01d51b5f0b8f7679ae424f8d5bfcc
+  = 9ffe7fc6960270ea06a3dc0d0b01fb646edeb35c28003c19f281f62b7aa0fffd
 invite_links_locator(community=0x11*32, creator=0x22*32)
-  = cf42937a815ec561da6b4ca5ddd0c361634b0d9744693b744d4f5b34ec209ec2
+  = beb6cccf3efd06af4c858970e0f5e3185f1d2e1af807a3ea3248c1b8f2db6f4b
 
 rekey_pseudonym(server_root=0x07*32, channel=0xff,0xfe,.., epoch 1)
-  = 3a848655f79a586510e1113131f078aa1ce0ff8dcb74374507e6af07ff49fd24
+  = bcef42f7a54681bd85136aa6efbd681b571bdb2e80c88e6d0da47cf6cb875ba5
 base_rekey_pseudonym(prior_root=0x07*32, community=0x09*32, epoch 1)
-  = 23ced8fd6cad30a21ded43c96bd040311cf20bcfff935453dc0985b41ff660be
+  = bc3053d885290b94aaef04ade6e2423a115e10f45139863a459653abb3fd4a65
 recipient_pseudonym(secret=0x07*32, Channel(0xff,0xfe,..), epoch 3)
-  = 971f69d6a948c79704f8077188cded86bd35c82960e88043ebb2c2c3d60a3b71
+  = ace6b8b85a1057cdb0a5f0c9d45727df389ac36cffe71a43d3f43d535001ff63
 recipient_pseudonym(secret=0x07*32, ServerRoot, epoch 3)
-  = e50e5d803fd2edc310be8cd7354586d12fcb8e3f30162553be53da1a34a17c46
+  = 47de47fc4222d6cf72e291b993f89f46997a659fe2eb09561ad91bba998e2017
 
 public_invite_key(token=0x05*32)
-  = 7f02a8a832a1744adf286676038446dc94762c2c8332650c9ad62a0c870e0751
+  = aec07ed9655ef10fbae5287a36fd452ed310c6b75f8ed1f7b528b9aaeb75617d
 public_invite_locator(token=0x05*32)
-  = 33c098d6e4cddc2b8ee98ab6b5182186794c35f5b71391130a49ae3d88588c2c
+  = a1ba7ccab72e7f529391b761991db98a5042822da1bd7039d7e33321a1d679c7
 public_invite_signer(token=0x05*32)
-  = 9154a3a7e4a03e94eaad2f76efeebd43e25ee9df4fbca12454edcee0ef666e8d
+  = a223f898821a0a979ef1b01e4b082de88e3bed0800871acbe8066fa906af29c5
 
 edition_hash(entity=0x11*32, version=1, prev=None, content="hello")
-  = 2daf42e65a6bc259a4c99fac6df754a5d3d92310607cf13e2a1e8c94d42f6303
+  = 27ee643a84e2dc23d0bfcb471106e71dd0b7328646090afb41c54c4ad09a53f1
 
 # Self-certifying community id (§3.5): SHA-256(label || owner_xonly[32] || owner_salt[32])
 community_id(owner=0x22*32, salt=0x33*32)
-  = 18417770a083dbf39099d677de2f8308e877da1c2391cba30a0a9ba272968871
+  = a294f4c7bbb864e7e19f5530b864b9b5c2847100505858b3f22e058b12470dea
 
 # v2 group-key normalization (§3.4) — pins generated from the seeds above:
 #   group_sk = scalar_normalize(seed, info);  group_pk = secp256k1_xonly_pubkey(group_sk)
