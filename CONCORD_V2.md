@@ -58,17 +58,29 @@ a small block in the regular (`3000–9999`) range for actions that have no stan
 The block **3300, 3301, 3304, 3305** is **retired** — those v1 sub-kinds are now served by the
 reused standard kinds (9, 7, NIP-17 DM, 5). **Never reuse** a retired number.
 
+Two **Concord-specific addressable** kinds (NIP-01 parameterized-replaceable range
+`30000–39999`) replace the v1 NIP-78 (`kind 30078`) carriers; Concord defines **no** NIP-78
+events:
+
+| Kind | Name | Plane | Notes |
+|---|---|---|---|
+| **33301** | `COMMUNITY_PUBLIC_INVITE` | invite | addressable; public-invite bundle + revocation tombstone, token-signed (§7.2) |
+| **33302** | `COMMUNITY_USER_LIST` | sync | addressable; per-user self-encrypted Community List / Invite List (§8) |
+
+Kinds 33301–33302 are frozen; **never reuse** a number.
+
 Other standard kinds in play:
 
 - **Kind 1059** (NIP-59 gift wrap) — every outer wire event. **Kind 13** (NIP-59 seal) — every
   inner authorship envelope.
 - **Kind 14** (NIP-17 private DM) gift-wrapped per NIP-17 carries the **targeted invite bundle**
   (§7.1).
-- **Kind 30078** (NIP-78 application-specific, addressable) carries the **public-invite bundle**
-  (§7.2), the per-user **Community List** and **Invite List** cross-device sync (§8), and the
-  **owner attestation** (§6.4, embedded form).
 - **Kind 5** (NIP-09 deletion) is also the relay-honored deletion an author publishes to remove
   their own append-plane events (§4.5): a kind-5 rumor wrapped in a fresh gift wrap.
+
+The **owner attestation** is no longer a standalone event of any kind: ownership is proven
+*cryptographically* by the **self-certifying `community_id`** (§2, §6.4), with an owner-signed
+genesis edition proving secret-key possession. No NIP-78 (kind 30078) event is used anywhere.
 
 The seal's kind is always 13; the rumor's kind names the action. Inner control/edition rumors
 are always kind 3308 regardless of sub-kind (§6).
@@ -88,15 +100,25 @@ A Community runs on a small set of keys.
 
 Identifiers:
 
-- **`CommunityId`** — random 32 bytes (NOT a timestamp snowflake). Lowercase hex on the wire.
+- **`CommunityId`** — a **self-certifying commitment to the owner's identity key** (NOT random,
+  NOT a timestamp snowflake): `community_id = SHA-256("vector-community/v1/community-id" ||
+  owner_xonly[32] || owner_salt[32])` (§3.5). Lowercase hex on the wire. Because the id commits
+  to `owner_xonly`, anyone holding `(owner_xonly, owner_salt)` can recompute and **verify which
+  key minted the community**; forging ownership of an *existing* id is second-preimage resistance
+  (infeasible). See §6.4.
+- **`OwnerSalt`** — random 32 bytes mixed into `CommunityId` so two communities owned by the same
+  npub get distinct ids (and so the id is not a bare hash of a public key). Shipped in metadata
+  and invites (§6.4); lowercase hex.
 - **`ChannelId`** — random 32 bytes. Lowercase hex.
 - **`Epoch`** — `u64`, the read-access clock. Bumps only on a rekey. Serialized **big-endian**
   in HKDF info, decimal string in tags.
 - **`GroupAddress`** — the x-only public key of the per-epoch `GroupSigningKey`; the value
   clients place in an `authors` filter. (Replaces v1's `Pseudonym`/`z` tag.)
 
-`CommunityId` and `ChannelId` are random-32 and so can never collide with the all-zero
-**server-root scope sentinel** (`0x00…00`, 64 hex zeros) used by rekey scoping (§5).
+`CommunityId` is a SHA-256 output and `ChannelId` is random-32, so neither can collide (other
+than negligibly) with the all-zero **server-root scope sentinel** (`0x00…00`, 64 hex zeros) used
+by rekey scoping (§5); a `CommunityId` that hashes to all-zero is rejected at mint (re-roll the
+salt).
 
 There is no longer any single-use ephemeral wire key: the outer signer is the shared, member-
 derivable `GroupSigningKey`. (Pairwise NIP-17 invites in §7.1 still use NIP-59's own pairwise
@@ -201,6 +223,28 @@ conv_key     = NIP-44 v2 ConversationKey::derive(group_sk, group_pk)  // self-EC
 
 The four `*-pseudonym` derivations (`channel`, `rekey`, `base-rekey`, `dissolved`) and the
 control-plane reuse (§6.5) all feed §3.4 to produce their respective group keypairs.
+
+### 3.5 Community-id commitment (frozen)
+
+The `CommunityId` is a SHA-256 commitment binding the community to its owner's identity key:
+
+```
+COMMUNITY_ID_LABEL = "vector-community/v1/community-id"
+community_id = SHA-256( utf8(COMMUNITY_ID_LABEL) || owner_xonly[32] || owner_salt[32] )
+```
+
+- `owner_xonly` — the owner's 32-byte x-only identity pubkey.
+- `owner_salt` — fresh random 32 bytes minted with the community (§2), so the same owner can run
+  many communities and the id is never a bare hash of a public key.
+- The label is concatenated **raw** (`utf8`, no separator byte) ahead of the two 32-byte fields;
+  the total preimage is `len(label) + 64` bytes.
+- Reject an all-zero output at mint (re-roll `owner_salt`) so `community_id` can never equal the
+  server-root scope sentinel (§2, §5.1).
+
+This is a plain SHA-256 commitment, **not** an HKDF derivation — it does not use the §3 HKDF
+construction. Verification (§6.4) recomputes `community_id` from a presented `(owner_xonly,
+owner_salt)` and checks equality; a second-preimage to claim a *different* owner for an existing
+id is infeasible.
 
 ---
 
@@ -454,13 +498,14 @@ A control edition's **rumor** (kind 3308) carries `["vsk", <n>]`:
 | 3 | Grant (per member) | `grant_locator(community_id, member_xonly)` | `MemberGrant` JSON (§6.2) |
 | 4 | Banlist | `banlist_locator(community_id)` | JSON array of banned pubkeys (hex) |
 | 5 | RoleOrder | *(reserved, unbuilt)* | — |
-| 6 | *(public-invite bundle — token-signed, not a 3308 edition; §7.2)* | — | — |
-| 7 | *(owner attestation — embedded as event JSON, §6.4)* | — | — |
+| 6 | *(public-invite bundle — token-signed kind 33301, not a 3308 edition; §7.2)* | — | — |
+| 7 | *retired (was owner attestation; ownership is now the self-certifying `community_id`, §6.4)* | — | **never reuse** |
 | 8 | InviteLinks (per creator) | `invite_links_locator(community_id, creator_xonly)` | JSON array of active link locators (hex) |
-| 9 | *(public-invite revocation tombstone — token-signed, §7.2)* | — | — |
+| 9 | *(public-invite revocation tombstone — token-signed kind 33301, §7.2)* | — | — |
 | 10 | GroupDissolved tombstone | `dissolved_locator(community_id)` | `{}` (chain-free, §9.3) |
 
-Sub-kinds 0–10 are all spoken for; **never reuse** a number.
+Sub-kinds 0–10 are all spoken for; **never reuse** a number. (`vsk` 6/9 are carried on the
+addressable public-invite kind 33301, not on a 3308 control edition.)
 
 ### 6.2 Roles and grants
 
@@ -531,22 +576,36 @@ by the actor's real identity key (so the rumor `pubkey` = the seal signer = the 
 All of `vsk`/`eid`/`ev`/`ep`/`vac` must appear **at most once**; a duplicate is rejected (it
 would make the edition's canonical bytes ambiguous and diverge the chain).
 
-### 6.4 Owner attestation (vsk=7 / embedded)
+### 6.4 Owner proof (self-certifying community id)
 
-At creation the owner signs, with their **identity key**, an attestation binding the community
-id. It is a normal Nostr event:
+Ownership is proven **cryptographically by the `community_id` itself** (§3.5), not by trusting a
+transported claim. Two facts establish the owner:
+
+1. **The id commits to the owner's key.** Given `(owner_xonly, owner_salt)`, a verifier recomputes
+   `community_id = SHA-256(COMMUNITY_ID_LABEL || owner_xonly || owner_salt)` and accepts
+   `owner_xonly` as the **claimed** owner **iff** it reproduces the `community_id` in hand. An
+   attacker cannot point an existing community at a different owner (that is a second-preimage on
+   SHA-256), and cannot frame an innocent npub (recomputing for someone else's key yields a
+   different, unrelated id).
+2. **The owner holds the secret key.** The genesis GroupRoot edition (vsk=0, version 1) MUST be
+   **sealed-signed by `owner_xonly`** (the seal in §6.5 is signed by the real identity key). This
+   proves possession of the owner secret key — not merely knowledge of the public key — and binds
+   the proof to a real, version-1 control edition rather than a free-floating event.
+
+So the proven owner = the `owner_xonly` that (a) reproduces `community_id` via §3.5 **and** (b)
+signed the genesis vsk=0 edition. No standalone attestation event (and **no kind 30078**) is
+needed: the `owner_salt` travels in metadata/invites (§6.6, §7) so any party can run check (1),
+and the owner-signed genesis edition (which every member syncs) provides check (2).
+
+`OwnerProof` (the transported material; embedded, never its own event):
 
 ```jsonc
-// kind 30078, content "", exactly one tag:
-{ "kind": 30078, "content": "", "tags": [["vco", "<community_id hex>"]], ... }   // signed by the owner
+{ "owner": "<owner_xonly hex>", "salt": "<owner_salt hex>" }
 ```
 
-Verification returns the proven owner = `event.pubkey` **iff** the Schnorr signature is valid
-**and** the bound `vco` value equals the community id in hand. The proven owner is always
-*derived* this way, never asserted as a bare field. An attestation for community X cannot be
-replayed as Y (the unique id is inside the signed payload), and a forger can only ever attest
-*themselves* (so they cannot frame an innocent npub). The attestation JSON travels in the
-GroupRoot (vsk=0) content and in the invite bundle (§7).
+A consumer keeps an `OwnerProof` **only if** it reproduces the `community_id` it is paired with
+(§7 invite acceptance refuses a mismatching proof). The bootstrapping-joiner path (§6.7) then
+additionally requires the genesis vsk=0 edition to be owner-signed before trusting authority.
 
 ### 6.5 Sealing and addressing a control edition
 
@@ -584,12 +643,17 @@ chain's refuse-downgrade is the defense.
   "description": "..." | absent,
   "icon":   {CommunityImage} | absent,     // encrypted blob ref, §6.6.1
   "banner": {CommunityImage} | absent,
-  "owner_attestation": "<event json>" | absent
+  "owner": "<owner_xonly hex>",            // the committed owner key (§6.4)
+  "owner_salt": "<owner_salt hex>"         // so any reader can recompute & verify community_id
 }
 
 // ChannelMetadata (vsk=2)
 { "name": "..." }
 ```
+
+The genesis (version 1) GroupRoot edition MUST be sealed-signed by `owner` (§6.4 check 2); the
+`owner`/`owner_salt` fields let any reader recompute `community_id` (§6.4 check 1). A verifier
+rejects metadata whose `(owner, owner_salt)` does not reproduce the `community_id`.
 
 #### 6.6.1 CommunityImage (encrypted logo/banner)
 
@@ -633,7 +697,8 @@ floor `(version, hash)`:
   floor edition), set `gap = true`. A **tracking** client (holds a floor) MUST then fail closed
   (suspend the entity, refetch from the relay union). A **bootstrapping** joiner (`floor == 0`,
   whose genesis was re-anchored away) may accept the highest signed head **only after** verifying
-  the author's current authority against the roster + owner attestation.
+  the author's current authority against the roster rooted at the proven owner (§6.4: the owner
+  is the `owner_xonly` that reproduces `community_id` and signed the genesis vsk=0 edition).
 
 The fold is a pure function of the *set* (order-independent), so two clients that have seen the
 same editions compute the identical head. Aggregating across relays heals single-relay gaps
@@ -660,7 +725,7 @@ force).
 ## 7. Invites
 
 Accepting an invite hands the recipient the actual **keys** (the server root, the granted
-channels' keys, the relay set, the owner attestation), so the key *is* the membership. A received
+channels' keys, the relay set, the owner proof), so the key *is* the membership. A received
 invite is **parked** (nothing connects/joins) until the user accepts.
 
 ### 7.1 Targeted invite (NIP-17 private message)
@@ -678,7 +743,8 @@ The bundle is the join material:
   "channels": [
     { "id": "<hex>", "key": "<hex>", "epoch": <u64 (omit if 0)>, "name": "..." }, ...
   ],
-  "owner_attestation": "<event json>" | absent,
+  "owner": "<owner_xonly hex>",      // self-certifying owner proof (§6.4)
+  "owner_salt": "<owner_salt hex>",  //   — together these must reproduce community_id
   "icon": {CommunityImage} | absent  // so a parked invite can show the logo
 }
 ```
@@ -689,14 +755,16 @@ build a NIP-17 private-message **rumor (kind 14)** whose `content` is the bundle
 (kind 13, signed by the sender's identity), and gift-wrap it (kind 1059) to the invitee per
 NIP-17 — using NIP-17's own pairwise gift-wrap signing key (the only place Concord uses the
 NIP-59 PR's pairwise-derived wrap key, since here the recipient is a single npub, not a group).
-The sender's identity is irrelevant to trust — the owner attestation inside anchors authority.
+The sender's identity is irrelevant to trust — the self-certifying `community_id` anchors
+ownership (§6.4).
 
 On receipt, `parse_invite_dm` returns the bundle only if the rumor is kind 14, carries the
 `concord-invite` marker, and the JSON parses. `accept_invite` reconstructs a member-view
-Community: it keeps the `owner_attestation` **only if** it verifies against this community id
+Community: it keeps `(owner, owner_salt)` **only if** they reproduce `community_id` via §3.5
 (an impostor cannot smuggle a bogus owner claim or hand a fake key for a real community — a
-mismatching bundle is refused). Caps: ≤ **256** channels (reject), relays truncated to ≤ 5 (not
-rejected).
+mismatching bundle is refused), and the bootstrapping path (§6.7) then requires the genesis
+vsk=0 edition to be owner-signed. Caps: ≤ **256** channels (reject), relays truncated to ≤ 5
+(not rejected).
 
 ### 7.2 Public invite (link)
 
@@ -710,7 +778,7 @@ A shareable URL `https://vectorapp.io/invite#<fragment>` whose `#fragment` carri
 **Bundle event** (posted on the community's relays):
 
 ```jsonc
-// kind 30078, signed by Keys(public_invite_signer(token))
+// kind 33301 (COMMUNITY_PUBLIC_INVITE, addressable), signed by Keys(public_invite_signer(token))
 content = NIP-44 seal(public_invite_key(token), PublicInviteBundle JSON)
 tags = [
   ["d", "<public_invite_locator(token) hex>"],
@@ -736,15 +804,15 @@ signer_pubkey(token)` (rejects an impostor squatting the locator) → Schnorr si
 (a preview can still render an expired link); joins gate on `is_expired(now)`.
 
 The public-invite bundle is **not** gift-wrapped: it must be directly fetchable by a non-member
-following a link (the token-derived signer + locator is the addressing), so it keeps its
-addressable kind-30078 form. This is the one read path open to outsiders, gated by the secret
-token in the URL fragment.
+following a link (the token-derived signer + locator is the addressing), so it is a
+Concord-specific **addressable kind 33301** (NOT NIP-78 / kind 30078). This is the one read path
+open to outsiders, gated by the secret token in the URL fragment.
 
 **Rotate** = re-post the bundle under the same coordinate. **Revoke** = publish a token-signed
-**tombstone** (an empty-content replaceable event, same `(kind, pubkey, d)`, `vsk == "9"`); a
-fetcher reading it returns an explicit "revoked" verdict. Relays honor replaceable-event
-replacement more reliably than NIP-09 `a`-tag deletion, so the tombstone guarantees the browser
-preview dies.
+**tombstone** (an empty-content replaceable kind-33301 event, same `(kind, pubkey, d)`,
+`vsk == "9"`); a fetcher reading it returns an explicit "revoked" verdict. Relays honor
+replaceable-event replacement more reliably than NIP-09 `a`-tag deletion, so the tombstone
+guarantees the browser preview dies.
 
 **Public vs. Private** mode is derived from the **InviteLinks** control entity (vsk=8): the
 aggregate (union across creators who hold `CREATE_INVITE`) of active link locators. Non-empty =
@@ -761,15 +829,17 @@ nor the relays (they hold only the locked bundle).
 
 ---
 
-## 8. Cross-device sync (kind 30078)
+## 8. Cross-device sync (kind 33302)
 
 Joins leave no reconstructible network trace (a DM bundle reaching device B doesn't mean device A
 accepted; a URL join is invisible), so memberships sync explicitly through self-encrypted,
-replaceable per-user lists.
+replaceable per-user lists on the Concord-specific **addressable kind 33302**
+(`COMMUNITY_USER_LIST`); Concord uses **no** NIP-78 (kind 30078) event. The two lists are
+distinguished by their `d`-tag.
 
 ### 8.1 Community List
 
-- **kind 30078**, addressed to yourself, `["d", "vector/communities"]`.
+- **kind 33302**, addressed to yourself, `["d", "vector/communities"]`.
 - content = **NIP-44 self-encrypted** JSON of `CommunityList`:
 
 ```jsonc
@@ -794,8 +864,9 @@ tiebreak on an epoch tie. Icons are stripped from list blobs (re-folded from met
 
 ### 8.2 Invite List
 
-The same kind-30078 self-sync pattern syncs a creator's active public-invite tokens across their
-own devices (so rotate/revoke is consistent everywhere).
+The same kind-33302 self-sync pattern (a distinct `d`-tag, e.g. `["d", "vector/invite-links"]`)
+syncs a creator's active public-invite tokens across their own devices (so rotate/revoke is
+consistent everywhere).
 
 ---
 
@@ -820,9 +891,9 @@ The Community-transport twin of the NIP-17 peer-advertisement DM, for Mini Apps 
 { "op": "left", "topic": "<hex>" }                                // stopped playing
 ```
 
-Persisted on receipt (a 30078 row keyed by topic) so a member who reopens mid-session
-rediscovers active players. Own-device echoes are dropped. Author-controlled timestamps are
-clamped.
+Persisted on receipt in a **local store** keyed by topic (IndexedDB, not a Nostr event) so a
+member who reopens mid-session rediscovers active players. Own-device echoes are dropped.
+Author-controlled timestamps are clamped.
 
 ### 9.3 Cooperative delete / moderation-hide (kind 5)
 
@@ -977,6 +1048,19 @@ volume/timing, and your IP to the relays you use (absent Tor/VPN).
 > filtering. Concord accepts it because (a) the epoch rotation bounds linkability to one epoch,
 > and (b) cooperative deletion (§4.5, §9.3) is already the app-level model.
 
+**Ownership is self-certifying, not asserted.** The `community_id` is a SHA-256 commitment to the
+owner's identity key plus a random salt (§3.5), so the proven owner is *recomputed* from
+`(owner, owner_salt)` rather than trusted from a transported claim, and the genesis vsk=0 edition
+must be sealed-signed by that key to prove possession (§6.4). An attacker cannot reassign an
+existing community to a different owner (second-preimage resistance) nor frame an innocent npub
+(a forged community for someone else's key is simply a different, unrelated id). Concord uses
+**no NIP-78 (kind 30078) events**: the public-invite bundle/tombstone live on the addressable
+kind 33301 and the per-user sync lists on kind 33302, both Concord-specific. One privacy note:
+because `community_id = H(owner_xonly || salt)` and `owner`/`owner_salt` travel in metadata and
+invites, **a party who holds an invite learns the owner's npub** — this is intentional (it is the
+proof) but means the owner is not pseudonymous to members; the id alone (without the salt) reveals
+nothing.
+
 ---
 
 ## Appendix A — frozen golden vectors (regression pins)
@@ -1023,6 +1107,10 @@ public_invite_signer(token=0x05*32)
 
 edition_hash(entity=0x11*32, version=1, prev=None, content="hello")
   = 2daf42e65a6bc259a4c99fac6df754a5d3d92310607cf13e2a1e8c94d42f6303
+
+# Self-certifying community id (§3.5): SHA-256(label || owner_xonly[32] || owner_salt[32])
+community_id(owner=0x22*32, salt=0x33*32)
+  = 18417770a083dbf39099d677de2f8308e877da1c2391cba30a0a9ba272968871
 
 # v2 group-key normalization (§3.4) — pins generated from the seeds above:
 #   group_sk = scalar_normalize(seed, info);  group_pk = secp256k1_xonly_pubkey(group_sk)
