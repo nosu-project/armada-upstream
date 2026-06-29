@@ -157,8 +157,14 @@ export function SlashCommandAutocomplete({
               "w-full flex items-baseline gap-2 px-3 py-2 text-left transition-colors cursor-pointer",
               index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
             )}
-            onClick={() => selectCommand(command)}
-            onMouseDown={(e) => e.preventDefault()}
+            // Select on pointer-down (not click): preventDefault keeps the
+            // composer focused, and acting on pointer-down fires reliably on
+            // touch, where a mousedown-preventDefault can swallow the synthetic
+            // click (the menu would just close and nothing would prefill).
+            onPointerDown={(e) => {
+              e.preventDefault();
+              selectCommand(command);
+            }}
           >
             <span className="font-mono text-sm font-semibold shrink-0">
               {command.usage ?? `/${command.name}`}

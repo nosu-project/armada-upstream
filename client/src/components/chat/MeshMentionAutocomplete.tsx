@@ -200,8 +200,13 @@ export function MeshMentionAutocomplete({
               "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
               index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
             )}
-            onClick={() => selectCandidate(candidate)}
-            onMouseDown={(e) => e.preventDefault()}
+            // Select on pointer-down so it fires reliably on touch (a
+            // mousedown-preventDefault can swallow the synthetic click);
+            // preventDefault keeps the composer focused.
+            onPointerDown={(e) => {
+              e.preventDefault();
+              selectCandidate(candidate);
+            }}
           >
             <span
               className="size-8 shrink-0 rounded-full flex items-center justify-center text-xs font-semibold"
