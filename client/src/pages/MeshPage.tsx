@@ -11,6 +11,7 @@ import {
   Send,
   Users,
   VenetianMask,
+  X,
 } from "lucide-react";
 
 import { MeshMessage } from "@/components/chat/MeshMessage";
@@ -55,6 +56,10 @@ export function MeshPage() {
   const { transport, mesh, send, sendPrivate } = useMeshTransport();
   const [view, setView] = useState<MeshView>(null);
   const [draft, setDraft] = useState("");
+  // Nearby-members panel beside the broadcast room (mirrors Concord's member
+  // pane): desktop shows/hides it inline; mobile slides it over.
+  const [membersVisible, setMembersVisible] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { insertAtCursor } = useInsertText(textareaRef, draft, setDraft);
 
@@ -229,76 +234,108 @@ export function MeshPage() {
               incognito={mesh.incognito}
               onToggleIncognito={() => mesh.setIncognito(!mesh.incognito)}
               onBack={() => setView(null)}
+              peerCount={mesh.peers.length}
+              membersVisible={membersVisible}
+              membersOpen={membersOpen}
+              onToggleMembers={() => {
+                setMembersVisible((v) => !v);
+                setMembersOpen((v) => !v);
+              }}
             />
 
-            <MessageTimeline
-              // Remount per conversation so the timeline's "had messages"
-              // skeleton guard resets on switch — otherwise leaving the
-              // populated broadcast for an empty DM looks perpetually loading.
-              key={view.type === "dm" ? `dm:${view.peerID}` : "broadcast"}
-              transport={activeTransport}
-              className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
-              emptyState={view.type === "dm" ? <EmptyDM peer={selectedPeer} /> : <EmptyBroadcast />}
-              renderMessage={(msg, continuation) => (
-                <MeshMessage
-                  key={msg.id}
-                  event={msg}
-                  identity={resolveIdentity(msg.pubkey)}
+            <div className="relative flex flex-1 min-h-0">
+              <div className="flex-1 min-w-0 flex flex-col">
+                <MessageTimeline
+                  // Remount per conversation so the timeline's "had messages"
+                  // skeleton guard resets on switch — otherwise leaving the
+                  // populated broadcast for an empty DM looks perpetually loading.
+                  key={view.type === "dm" ? `dm:${view.peerID}` : "broadcast"}
+                  transport={activeTransport}
+                  className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
+                  emptyState={view.type === "dm" ? <EmptyDM peer={selectedPeer} /> : <EmptyBroadcast />}
+                  renderMessage={(msg, continuation) => (
+                    <MeshMessage
+                      key={msg.id}
+                      event={msg}
+                      identity={resolveIdentity(msg.pubkey)}
+                      peers={mesh.peers}
+                      myPeerID={mesh.myPeerID}
+                      continuation={continuation}
+                      // Don't offer "Message" for a peer whose DM is already open.
+                      onMessage={
+                        view.type === "dm" && view.peerID === msg.pubkey ? undefined : openDM
+                      }
+                      onMention={mentionPeer}
+                    />
+                  )}
+                />
+
+                <div className="relative px-3 pb-safe pt-1 shrink-0">
+                  {/* Autocompletes anchor to the composer textarea. Mentions suggest
+                      nearby peers; slash commands offer the mesh-appropriate set. */}
+                  <MeshMentionAutocomplete
+                    textareaRef={textareaRef}
+                    content={draft}
+                    peers={mesh.peers}
+                    onInsertMention={insertAtCursor}
+                  />
+                  <SlashCommandAutocomplete
+                    textareaRef={textareaRef}
+                    content={draft}
+                    canModerate={false}
+                    commandFilter={isMeshSlashCommand}
+                    onInsertCommand={insertAtCursor}
+                    onRunCommand={runCommandFromMenu}
+                  />
+                  <div className="flex items-end gap-2 rounded-2xl bg-secondary/40 px-3 py-1.5">
+                    <textarea
+                      ref={textareaRef}
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          void onSend();
+                        }
+                      }}
+                      rows={1}
+                      placeholder={composerPlaceholder(view, mesh.started, selectedPeer)}
+                      disabled={!mesh.started || (view.type === "dm" && !selectedPeer)}
+                      className="block w-full resize-none bg-transparent border-0 outline-none px-1 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto"
+                    />
+                    <Button
+                      size="icon"
+                      aria-label="Send"
+                      disabled={!mesh.started || !draft.trim() || (view.type === "dm" && !selectedPeer)}
+                      onClick={() => void onSend()}
+                      className="size-9 shrink-0"
+                    >
+                      <Send className="size-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Nearby-members panel (broadcast room only). Width-animated on
+                  desktop, slide overlay on mobile — mirrors Concord. */}
+              {view.type === "broadcast" && (
+                <MeshMemberPanel
                   peers={mesh.peers}
-                  myPeerID={mesh.myPeerID}
-                  continuation={continuation}
-                  // Don't offer "Message" for a peer whose DM is already open.
-                  onMessage={
-                    view.type === "dm" && view.peerID === msg.pubkey ? undefined : openDM
-                  }
-                  onMention={mentionPeer}
+                  activePeerID={null}
+                  visible={membersVisible}
+                  open={membersOpen}
+                  available={mesh.available}
+                  started={mesh.started}
+                  onOpenDM={(peerID) => {
+                    setMembersOpen(false);
+                    openDM(peerID);
+                  }}
+                  onClose={() => {
+                    setMembersOpen(false);
+                    setMembersVisible(false);
+                  }}
                 />
               )}
-            />
-
-            <div className="relative px-3 pb-safe pt-1 shrink-0">
-              {/* Autocompletes anchor to the composer textarea. Mentions suggest
-                  nearby peers; slash commands offer the mesh-appropriate set. */}
-              <MeshMentionAutocomplete
-                textareaRef={textareaRef}
-                content={draft}
-                peers={mesh.peers}
-                onInsertMention={insertAtCursor}
-              />
-              <SlashCommandAutocomplete
-                textareaRef={textareaRef}
-                content={draft}
-                canModerate={false}
-                commandFilter={isMeshSlashCommand}
-                onInsertCommand={insertAtCursor}
-                onRunCommand={runCommandFromMenu}
-              />
-              <div className="flex items-end gap-2 rounded-2xl bg-secondary/40 px-3 py-1.5">
-                <textarea
-                  ref={textareaRef}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void onSend();
-                    }
-                  }}
-                  rows={1}
-                  placeholder={composerPlaceholder(view, mesh.started, selectedPeer)}
-                  disabled={!mesh.started || (view.type === "dm" && !selectedPeer)}
-                  className="block w-full resize-none bg-transparent border-0 outline-none px-1 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto"
-                />
-                <Button
-                  size="icon"
-                  aria-label="Send"
-                  disabled={!mesh.started || !draft.trim() || (view.type === "dm" && !selectedPeer)}
-                  onClick={() => void onSend()}
-                  className="size-9 shrink-0"
-                >
-                  <Send className="size-4" />
-                </Button>
-              </div>
             </div>
           </>
         )}
@@ -379,7 +416,7 @@ function MeshSidebar({
 
       {/* Members: nearby peers. Tapping one opens a native Noise XX DM. */}
       <h3 className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Members{peers.length > 0 ? ` · ${peers.length}` : ""}
+        Nearby{peers.length > 0 ? ` · ${peers.length}` : ""}
       </h3>
       {peers.length === 0 ? (
         <p className="px-4 py-1 text-xs text-muted-foreground/70">
@@ -475,6 +512,10 @@ function ChatHeader({
   incognito,
   onToggleIncognito,
   onBack,
+  peerCount,
+  membersVisible,
+  membersOpen,
+  onToggleMembers,
 }: {
   view: NonNullable<MeshView>;
   peer: MeshPeer | null;
@@ -482,10 +523,15 @@ function ChatHeader({
   incognito: boolean;
   onToggleIncognito: () => void;
   onBack: () => void;
+  peerCount: number;
+  membersVisible: boolean;
+  membersOpen: boolean;
+  onToggleMembers: () => void;
 }) {
   const isDm = view.type === "dm";
   const dmIdentity = isDm && peer ? meshIdentity(peer.peerID, peer.nickname) : null;
   const title = isDm ? dmIdentity?.name ?? "Mesh DM" : "nearby mesh";
+  const membersShown = membersVisible || membersOpen;
 
   return (
     <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
@@ -514,6 +560,28 @@ function ChatHeader({
         <span className="text-[11px] text-muted-foreground/60 shrink-0">#{dmIdentity.suffix}</span>
       )}
       <span className="flex-1" />
+      {/* Nearby-members toggle (broadcast room only) — shows/hides the peer
+          roster panel, mirroring Concord's members button. */}
+      {!isDm && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={membersShown ? "Hide nearby" : "Show nearby"}
+              aria-pressed={membersShown}
+              className={cn(
+                "size-8 shrink-0",
+                membersShown ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={onToggleMembers}
+            >
+              <Users className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{membersShown ? "Hide nearby" : `Nearby · ${peerCount}`}</TooltipContent>
+        </Tooltip>
+      )}
       {/* Incognito toggle: ON (default) announces an anon name; OFF reveals the
           Armada display name to nearby devices. */}
       <Tooltip>
@@ -542,6 +610,91 @@ function ChatHeader({
         <BluetoothOff className="size-4 text-muted-foreground shrink-0" />
       )}
     </header>
+  );
+}
+
+/**
+ * The nearby-peers roster shown beside the broadcast room. Mirrors Concord's
+ * member panel: a width-animated in-flow pane on desktop and a slide-over
+ * overlay on mobile. Rows open a Noise XX DM with the peer.
+ */
+function MeshMemberPanel({
+  peers,
+  activePeerID,
+  visible,
+  open,
+  available,
+  started,
+  onOpenDM,
+  onClose,
+}: {
+  peers: MeshPeer[];
+  activePeerID: string | null;
+  visible: boolean;
+  open: boolean;
+  available: boolean;
+  started: boolean;
+  onOpenDM: (peerID: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "overflow-hidden",
+        "absolute inset-0 z-20 sidebar:static sidebar:z-auto",
+        "sidebar:shrink-0 sidebar:w-0 sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
+        open ? "" : "pointer-events-none sidebar:pointer-events-auto",
+        visible && "sidebar:w-[16.5rem]",
+      )}
+    >
+      {/* Mobile backdrop: fades in/out in sync with the panel slide. */}
+      <div
+        className={cn(
+          "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
+          open ? "opacity-100" : "opacity-0",
+        )}
+      />
+      <div
+        className={cn(
+          "relative h-full flex w-full sidebar:w-[16.5rem] transition-transform duration-200 ease-out",
+          open ? "translate-x-0" : "translate-x-full",
+          visible ? "sidebar:translate-x-0" : "sidebar:translate-x-full",
+        )}
+      >
+        <aside className="flex flex-col h-full w-full sidebar:w-[16.5rem] mx-2 mt-3 mb-2 clip-corner-lg bg-chrome overflow-hidden">
+          {/* Mobile-only header with a close button. */}
+          <div className="flex items-center justify-between px-4 h-12 shrink-0 sidebar:hidden">
+            <span className="text-sm font-semibold">Nearby</span>
+            <Button variant="ghost" size="icon" aria-label="Close nearby" className="size-8" onClick={onClose}>
+              <X className="size-4" />
+            </Button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable pb-safe">
+            <h3 className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Nearby{peers.length > 0 ? ` · ${peers.length}` : ""}
+            </h3>
+            {peers.length === 0 ? (
+              <p className="px-4 py-1 text-xs text-muted-foreground/70">
+                {available
+                  ? started
+                    ? "No nearby devices yet. Armada or bitchat devices in Bluetooth range appear here."
+                    : "Starting Bluetooth mesh…"
+                  : "Mesh chat runs on the Armada Android app."}
+              </p>
+            ) : (
+              peers.map((peer) => (
+                <MemberRow
+                  key={peer.peerID}
+                  peer={peer}
+                  active={activePeerID === peer.peerID}
+                  onClick={() => onOpenDM(peer.peerID)}
+                />
+              ))
+            )}
+          </div>
+        </aside>
+      </div>
+    </div>
   );
 }
 

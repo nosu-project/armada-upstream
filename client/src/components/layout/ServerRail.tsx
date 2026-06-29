@@ -1,4 +1,4 @@
-import { Headphones, MessageSquare, Plus, Radio, Settings, ShieldCheck } from "lucide-react";
+import { Bluetooth, Headphones, MessageSquare, Plus, Settings, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -579,7 +579,7 @@ export function ServerRail({
                     "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
                   )}
                 >
-                  <Radio className="size-5" />
+                  <Bluetooth className="size-5" />
                 </span>
               </span>
             </NavLink>
