@@ -112,8 +112,44 @@ public class ArmadaNotificationPlugin extends Plugin {
     }
 
     /**
-     * Drain buffered raw events (those received while the WebView was down).
+     * Concord inner events the service ALREADY decrypted (it holds the channel
+     * key to render the notification). Buffered like {@link #eventBuffer} so a
+     * cold-launched app drains them too. Each entry is a 3-line tuple:
+     * inner-event JSON, the outer `z` pseudonym, and the outer event id — enough
+     * for the WebView to bind it to a held epoch, verify the inner Schnorr
+     * signature, and fold it in WITHOUT re-decrypting or hitting the relay.
+     */
+    private static final java.util.ArrayDeque<String[]> concordBuffer = new java.util.ArrayDeque<>();
+
+    /**
+     * Hand a decrypted Concord inner event to the WebView. The WebView still
+     * fully verifies it (the service only checked HMAC + channel/epoch binding,
+     * not the author's Schnorr signature), so a forged inner is dropped there.
+     * Emits live if the bridge is up; otherwise buffers for the next drain.
+     */
+    static void feedConcordInner(String innerJson, String z, String outerId) {
+        if (innerJson == null || z == null || outerId == null) return;
+        ArmadaNotificationPlugin p = instance;
+        if (p != null) {
+            JSObject data = new JSObject();
+            data.put("inner", innerJson);
+            data.put("z", z);
+            data.put("outerId", outerId);
+            p.notifyListeners("concordMessage", data);
+            return;
+        }
+        synchronized (concordBuffer) {
+            if (concordBuffer.size() >= EVENT_BUFFER_MAX) concordBuffer.pollFirst();
+            concordBuffer.addLast(new String[] { innerJson, z, outerId });
+        }
+    }
+
+    /**
+     * Drain buffered raw outer events (received while the WebView was down).
      * Returns { events: [json, …] }; the JS layer writes them to its store.
+     * (Concord decrypted inners are a SEPARATE buffer — see drainConcord — so
+     * the two consumers, useNativeEventFeed and useConcordChannel, don't race to
+     * empty a shared queue.)
      */
     @PluginMethod
     public void drainEvents(PluginCall call) {
@@ -124,6 +160,30 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
         JSObject ret = new JSObject();
         ret.put("events", arr);
+        call.resolve(ret);
+    }
+
+    /**
+     * Drain buffered Concord inner events the service already decrypted. Returns
+     * { concord: [{ inner, z, outerId }, …] }. The open channel verifies each
+     * inner's signature + binding and folds it straight in — no second decrypt,
+     * no relay round-trip.
+     */
+    @PluginMethod
+    public void drainConcord(PluginCall call) {
+        JSArray concord = new JSArray();
+        synchronized (concordBuffer) {
+            String[] c;
+            while ((c = concordBuffer.pollFirst()) != null) {
+                JSObject o = new JSObject();
+                o.put("inner", c[0]);
+                o.put("z", c[1]);
+                o.put("outerId", c[2]);
+                concord.put(o);
+            }
+        }
+        JSObject ret = new JSObject();
+        ret.put("concord", concord);
         call.resolve(ret);
     }
 

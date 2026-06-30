@@ -4,6 +4,28 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.10.0] - 2026-06-30
+
+Notifications now open the right place instantly. Tapping a message notification
+jumps straight to that conversation and the message is already on screen — no
+waiting for the chat to catch up — even when the app was fully closed. Encrypted
+communities get the same instant arrival. There's also more to do inside chat:
+watch YouTube together and run little in-chat apps, with clearer voice thanks to
+background-noise removal.
+
+### Added
+- Watch YouTube videos together in sync, and run lightweight in-chat apps,
+  right inside a channel.
+- Background-noise removal for voice calls, with a toggle in settings.
+
+### Changed
+- Tapping a notification opens the exact conversation it's about and shows the
+  message immediately, instead of reloading the app and landing on the wrong or
+  default room — including after the app has been closed.
+- Encrypted community messages a notification was about now appear the instant
+  the channel opens.
+- Encrypted communities are faster to open and load.
+
 ## [0.9.2] - 2026-06-28
 
 Direct messages get a real workout: search within a conversation, mute someone,

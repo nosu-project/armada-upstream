@@ -7,6 +7,8 @@ import { useConcordChannelEpochs } from "@/hooks/useConcordRekey";
 import { useConcordRoster } from "@/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { useRotatorSecretKey } from "@/hooks/useRotatorSecretKey";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatus, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import { forgetSkips, openMemoizedBatch } from "@/lib/concord/decodeCache";
@@ -15,6 +17,7 @@ import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
 import {
   buildInnerEvent,
   openedFromSealed,
+  openVerifiedInner,
   sealWithSignedInner,
   type OpenedMessage,
 } from "@/lib/concord/envelope";
@@ -22,6 +25,7 @@ import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE, KIN
 import { canActOnMember, Permissions } from "@/lib/concord/roles";
 import type { Channel, Community } from "@/lib/concord/types";
 
+import { App as CapacitorApp } from "@capacitor/app";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -537,6 +541,100 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, community, channelIdHex, epochSig, moderation, queryClient]);
+
+  // Android fast path: the background notification service already decrypted the
+  // sealed Concord message to render its notification, and hands us the inner
+  // event directly (via `concordMessage` live / the `concord` drain on resume).
+  // We re-verify it fully here — the service only checked HMAC + channel/epoch
+  // binding, NOT the inner Schnorr signature — then fold it straight in. This is
+  // what makes a tapped notification's message appear the instant the channel
+  // opens, with no second NIP-44 decrypt and no relay round-trip (the previous
+  // path forced a re-decode/refetch, which is the lag you'd see on cold launch).
+  useEffect(() => {
+    if (!isNativeRuntime()) return;
+    if (!channel || !channelIdHex || allEpochKeys.length === 0) return;
+    let cancelled = false;
+
+    // The pseudonyms this channel listens on — only fold inners whose outer `z`
+    // matches one of ours (the service feeds inners for every subscribed channel).
+    const ourZs = new Set(channelPseudonyms(channel));
+
+    /** Verify a decrypted inner + bind/sig-check, then upsert it by message id. */
+    const foldInner = (innerJson: string, z: string, outerId: string) => {
+      if (cancelled || !ourZs.has(z)) return;
+      let inner: NostrEvent;
+      try {
+        inner = JSON.parse(innerJson) as NostrEvent;
+      } catch {
+        return;
+      }
+      let opened: OpenedMessage;
+      try {
+        // Full trust re-established here: select held epoch by `z`, verify the
+        // author's Schnorr signature, enforce the channel/epoch binding triad.
+        opened = openVerifiedInner(inner, z, outerId, channel.id, allEpochKeys);
+      } catch {
+        return; // forged/unbound/undecodable — drop it
+      }
+      if (moderation.banned.has(opened.author)) return;
+      if (opened.kind !== KIND_COMMUNITY_MESSAGE) return; // only chat renders here
+
+      queryClient.setQueryData<OpenedMessage[]>(queryKey, (old = []) => {
+        const existing = old.find((m) => m.messageId === opened.messageId);
+        if (existing && existing.content === opened.content && existing.ms === opened.ms) {
+          return old; // already have an identical copy (e.g. our own echo)
+        }
+        const byId = new Map(old.map((m) => [m.messageId, m]));
+        byId.set(opened.messageId, opened);
+        return [...byId.values()].sort((a, b) => a.ms - b.ms);
+      });
+      // Clear any optimistic pending/failed status the relay/native echoed back.
+      queryClient.setQueryData<ConcordSendStatusMap>(statusKey(channelIdHex), (s = {}) => {
+        if (!(opened.messageId in s)) return s;
+        const next = { ...s };
+        delete next[opened.messageId];
+        return next;
+      });
+    };
+
+    // Resume / cold-open: drain inners buffered while the WebView was down.
+    const drain = () => {
+      ArmadaNotification.drainConcord()
+        .then(({ concord }) => {
+          for (const c of concord ?? []) foldInner(c.inner, c.z, c.outerId);
+        })
+        .catch(() => undefined);
+    };
+    drain();
+
+    let resumeHandle: { remove: () => void } | undefined;
+    CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+      if (isActive) drain();
+    })
+      .then((h) => {
+        if (cancelled) h.remove();
+        else resumeHandle = h;
+      })
+      .catch(() => undefined);
+
+    // Live: a Concord message decrypted while the app is open.
+    let handle: { remove: () => void } | undefined;
+    ArmadaNotification.addListener("concordMessage", ({ inner, z, outerId }) =>
+      foldInner(inner, z, outerId),
+    )
+      .then((h) => {
+        if (cancelled) h.remove();
+        else handle = h;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      handle?.remove();
+      resumeHandle?.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelIdHex, epochSig, moderation, queryClient]);
 
   const query = useQuery({
     queryKey,

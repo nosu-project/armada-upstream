@@ -965,6 +965,13 @@ public class NotificationRelayService extends Service {
                 return;
             }
 
+            // Feed the DECRYPTED inner straight to the WebView so the message
+            // renders the instant the app opens — no second NIP-44 decrypt, no
+            // relay round-trip. We only checked HMAC + channel/epoch binding
+            // here, so the WebView re-verifies the inner Schnorr signature before
+            // trusting it (a channel-key holder could otherwise forge `pubkey`).
+            ArmadaNotificationPlugin.feedConcordInner(inner.toString(), z, id);
+
             String author = inner.optString("pubkey");
             if (author.equals(userPubkey)) {
                 return; // our own message echoed back
@@ -1348,6 +1355,11 @@ public class NotificationRelayService extends Service {
     private PendingIntent roomPendingIntent(RoomNotif room) {
         Intent intent = new Intent(this, MainActivity.class);
         String url = room.url != null ? room.url : "/";
+        // ACTION_VIEW is REQUIRED: Capacitor's @capacitor/app plugin only surfaces
+        // the launch URL (getLaunchUrl / appUrlOpen) for an intent whose action is
+        // ACTION_VIEW. Without it the data URI is present but ignored, so a
+        // notification tap delivers the intent yet the web layer never navigates.
+        intent.setAction(Intent.ACTION_VIEW);
         intent.setData(Uri.parse("armada://open" + url));
         intent.putExtra("armada_path", url);
         intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
