@@ -39,6 +39,7 @@ import {
   setAudioProcessing,
   type AudioProcessingPrefs,
 } from "@/lib/voiceDevices";
+import { rnnoiseSupported } from "@/lib/voiceProcessor";
 
 import type { EncryptedSettings } from "@/lib/schemas";
 
@@ -243,6 +244,17 @@ export function SettingsPage() {
             <SettingsRow>
               <VoiceDeviceSettings />
             </SettingsRow>
+            {rnnoiseSupported() && (
+              <SettingsRow
+                label="Noise cancellation"
+                description="ML background-noise removal (RNNoise) — removes keyboards, fans, and chatter. Applied to your next call."
+              >
+                <Switch
+                  checked={voiceProcessing.rnnoise}
+                  onCheckedChange={setVoiceToggle("rnnoise")}
+                />
+              </SettingsRow>
+            )}
             <SettingsRow
               label="Noise suppression"
               description="Filter out background hum and keyboard noise."

@@ -10,6 +10,7 @@ import {
   DEFAULT_AUTO_GAIN_CONTROL,
   DEFAULT_ECHO_CANCELLATION,
   DEFAULT_NOISE_SUPPRESSION,
+  DEFAULT_RNNOISE,
 } from "@/lib/platform";
 
 const MIC_KEY = "armada:voice:micDeviceId";
@@ -66,17 +67,25 @@ export function rememberVoiceDevice(kind: MediaDeviceKind, deviceId: string): vo
  * Browser audio-processing constraints applied to the captured mic track.
  * These map directly onto the standard MediaTrackConstraints; LiveKit defaults
  * them all to `true`, which we mirror when no preference is stored.
+ *
+ * `rnnoise` is different in kind: it's an ML noise-cancellation track processor
+ * (AudioWorklet + WASM, BSD RNNoise) layered on top of the captured track, not
+ * a browser constraint. It's far more effective at removing background noise
+ * than the browser's basic `noiseSuppression`, so when it's on we leave the
+ * browser `noiseSuppression` constraint alone (the two stack harmlessly).
  */
 export interface AudioProcessingPrefs {
   noiseSuppression: boolean;
   echoCancellation: boolean;
   autoGainControl: boolean;
+  rnnoise: boolean;
 }
 
 const DEFAULT_PROCESSING: AudioProcessingPrefs = {
   noiseSuppression: DEFAULT_NOISE_SUPPRESSION,
   echoCancellation: DEFAULT_ECHO_CANCELLATION,
   autoGainControl: DEFAULT_AUTO_GAIN_CONTROL,
+  rnnoise: DEFAULT_RNNOISE,
 };
 
 /** The remembered audio-processing preferences (defaults: all enabled). */
@@ -89,6 +98,7 @@ export function getAudioProcessing(): AudioProcessingPrefs {
       noiseSuppression: parsed.noiseSuppression ?? DEFAULT_PROCESSING.noiseSuppression,
       echoCancellation: parsed.echoCancellation ?? DEFAULT_PROCESSING.echoCancellation,
       autoGainControl: parsed.autoGainControl ?? DEFAULT_PROCESSING.autoGainControl,
+      rnnoise: parsed.rnnoise ?? DEFAULT_PROCESSING.rnnoise,
     };
   } catch {
     return { ...DEFAULT_PROCESSING };

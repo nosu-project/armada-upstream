@@ -47,7 +47,7 @@ import { encryptFileForUpload } from "@/lib/encryptedMedia";
 import { IMETA_MEDIA_URL_REGEX, IMETA_MEDIA_URL_TEST_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
-import { parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCommand } from "@/lib/slashCommands";
+import { parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 import type { AddrCoords } from "@/hooks/useEvent";
@@ -190,6 +190,17 @@ interface ChatComposerProps {
    * emoji, media and mentions just like NIP-29 does.
    */
   sendOverride?: (finalText: string, tags: string[][]) => Promise<void>;
+  /**
+   * Explicit candidate set for @-mention autocomplete, used when the composer
+   * can't derive a room roster itself. In NIP-29 mode the composer builds this
+   * from the group's admins/members + recent speakers via `useGroup`; but DM
+   * mode (`relayUrl === "dm"`) has no such lookup. Concord reuses DM mode for
+   * its encrypted send path yet *does* have a roster (control-plane members +
+   * recent posters), so it passes that list here to re-enable mentions. When
+   * provided (even empty), the @-mention dropdown is enabled and scoped to
+   * these pubkeys. Omit it (plain DMs) to keep mentions disabled.
+   */
+  mentionPubkeys?: string[];
   /** Placeholder text for the input (defaults to the group placeholder). */
   placeholder?: string;
   /**
@@ -237,7 +248,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
@@ -250,11 +261,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const { launchApp } = useApps();
 
   // Scope @-mentions to people in the room: admins, members, and anyone who
-  // has spoken in this view. DMs (relayUrl === "dm") have no room, so mentions
-  // are disabled there.
+  // has spoken in this view. Plain DMs (relayUrl === "dm" with no caller-
+  // supplied roster) have no room, so mentions are disabled there. Callers
+  // that reuse DM mode but do have a roster (e.g. Concord) pass `mentionPubkeys`
+  // to re-enable mentions scoped to that list.
   const isDM = relayUrl === "dm";
   const { data: groupDetails } = useGroup(isDM ? undefined : relayUrl, isDM ? undefined : groupId);
   const memberPubkeys = useMemo(() => {
+    if (mentionPubkeys) return mentionPubkeys;
     if (isDM) return undefined;
     const set = new Set<string>();
     for (const a of groupDetails?.admins ?? []) set.add(a.pubkey);
@@ -262,7 +276,26 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     for (const m of messages) set.add(m.pubkey);
     if (user) set.add(user.pubkey);
     return [...set];
-  }, [isDM, groupDetails?.admins, groupDetails?.members, messages, user]);
+  }, [mentionPubkeys, isDM, groupDetails?.admins, groupDetails?.members, messages, user]);
+  // Whether the inline @-mention autocomplete should render at all. Available
+  // whenever we have a candidate roster (NIP-29 groups always; Concord via
+  // `mentionPubkeys`); off for plain DMs, which have no room.
+  const mentionsEnabled = memberPubkeys !== undefined;
+
+  // Slash-command capabilities this composer advertises. Group-only commands
+  // (/poll, /thread, /kick, /ban) need features the delegated DM/Concord send
+  // path lacks; universal ones (/me, /shrug, /mention, …) work everywhere. The
+  // menu and on-send execution are filtered to this set, so Concord now gets
+  // slash commands without the NIP-29-specific ones.
+  const slashCapabilities = useMemo(() => {
+    const caps = new Set<SlashCapability>();
+    if (!sendOverride) caps.add("poll"); // poll mode is the group publish path
+    if (onSlashAction) {
+      caps.add("thread");
+      if (canModerate) caps.add("moderation");
+    }
+    return caps;
+  }, [sendOverride, onSlashAction, canModerate]);
 
   const draftKey = `chat-draft:${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
@@ -795,6 +828,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   /** Execute a parsed slash command's result (run action / send rewritten text). */
   const executeSlashCommand = useCallback(async (command: SlashCommand, arg: string) => {
+    // Guard commands that need a capability this composer lacks (e.g. a literally
+    // typed "/poll" in Concord). Such a command isn't in the menu, but a user
+    // could still type it; rather than misfire, send it as plain text.
+    if (command.requires?.some((r) => !slashCapabilities.has(r))) {
+      await publishMessage(`/${command.name}${arg ? ` ${arg}` : ""}`);
+      return;
+    }
     const result = command.run(arg, { canModerate, resolvePubkey: resolveNpubArg });
     if (result.type === "error") {
       toast({ title: "Command failed", description: result.message, variant: "destructive" });
@@ -836,7 +876,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
     // result.type === "send": publish the rewritten text.
     await publishMessage(result.text);
-  }, [canModerate, onSlashAction, resetComposeState, toast, publishMessage]);
+  }, [canModerate, onSlashAction, resetComposeState, toast, publishMessage, slashCapabilities]);
 
   /** Run a command picked from the autocomplete menu (Tab/Enter/click). */
   const runSlashFromMenu = useCallback((command: SlashCommand) => {
@@ -847,11 +887,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const handleSend = useCallback(async () => {
     const text = content.trim();
 
-    // Slash commands: only when the message is purely a "/command …" with no
-    // attachments, in group mode (not delegated DM/thread sends). Text commands
-    // (/me, /shrug) rewrite the outgoing message; action/moderation commands
-    // run a side-effect and send nothing.
-    if (!sendOverride && text.startsWith("/") && attachments.length === 0) {
+    // Slash commands: when the message is purely a "/command …" with no
+    // attachments. Text commands (/me, /shrug) rewrite the outgoing message;
+    // action/moderation commands run a side-effect and send nothing. Works in
+    // both group mode and the delegated DM/Concord send path — executeSlashCommand
+    // guards commands needing an unsupported capability.
+    if (text.startsWith("/") && attachments.length === 0) {
       const parsed = parseSlashCommand(text);
       if (parsed) {
         await executeSlashCommand(parsed.command, parsed.arg);
@@ -1223,7 +1264,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   maxLength={MAX_CHARS}
                   className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto align-middle"
                 />
-                {!isDM && (
+                {mentionsEnabled && (
                   <MentionAutocomplete
                     textareaRef={textareaRef}
                     content={content}
@@ -1231,15 +1272,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     restrictToPubkeys={memberPubkeys}
                   />
                 )}
-                {!sendOverride && (
-                  <SlashCommandAutocomplete
-                    textareaRef={textareaRef}
-                    content={content}
-                    canModerate={canModerate}
-                    onInsertCommand={insertAtCursor}
-                    onRunCommand={runSlashFromMenu}
-                  />
-                )}
+                <SlashCommandAutocomplete
+                  textareaRef={textareaRef}
+                  content={content}
+                  canModerate={canModerate}
+                  capabilities={slashCapabilities}
+                  onInsertCommand={insertAtCursor}
+                  onRunCommand={runSlashFromMenu}
+                />
                 <EmojiShortcodeAutocomplete
                   textareaRef={textareaRef}
                   content={content}

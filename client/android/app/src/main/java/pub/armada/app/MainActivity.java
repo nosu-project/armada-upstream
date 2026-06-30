@@ -1,7 +1,5 @@
 package pub.armada.app;
 
-import android.content.Intent;
-import android.net.Uri;
 import android.os.Bundle;
 
 import androidx.activity.EdgeToEdge;
@@ -28,40 +26,16 @@ public class MainActivity extends BridgeActivity {
         // app's CSS consumes for top/bottom safe-area handling.
         EdgeToEdge.enable(this);
         super.onCreate(savedInstanceState);
-
-        handleNotificationIntent(getIntent());
     }
 
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        handleNotificationIntent(intent);
-    }
-
-    /**
-     * When the activity is launched from a notification tap, navigate the
-     * in-app WebView to the in-app path the notification points at (e.g.
-     * /s/<server>/<groupId> or /dms/<peer>). The path is carried both as an
-     * armada://open<path> data URI and an armada_path extra.
-     */
-    private void handleNotificationIntent(Intent intent) {
-        if (intent == null) return;
-        String path = intent.getStringExtra("armada_path");
-        if (path == null) {
-            Uri data = intent.getData();
-            if (data != null && "armada".equals(data.getScheme())) {
-                // armada://open/s/<server>/<id> → strip the "open" host.
-                String full = data.getSchemeSpecificPart(); // "//open/s/..."
-                int idx = full.indexOf("/open");
-                path = idx >= 0 ? full.substring(idx + "/open".length()) : null;
-            }
-        }
-        if (path == null || path.isEmpty()) return;
-
-        final String target = path;
-        getBridge().getWebView().post(() ->
-                getBridge().getWebView().evaluateJavascript(
-                        "window.location.href = '" + target.replace("'", "\\'") + "';",
-                        null));
-    }
+    // Notification taps deep-link via the `armada://open<path>` data URI set on
+    // the launch Intent (see NotificationRelayService.roomPendingIntent). We rely
+    // on Capacitor's @capacitor/app plugin to surface it — `App.getLaunchUrl()`
+    // on a cold launch and the `appUrlOpen` event on a warm one. BridgeActivity
+    // already forwards the launch Intent to that plugin (its own onCreate +
+    // onNewIntent), so no custom intent handling is needed here. The web layer
+    // (useNotificationNavigation) reads the URL and routes via React Router —
+    // a soft navigation, never a `window.location.href` document reload (which
+    // would cold-boot the whole app: re-mount providers, re-open IndexedDB and
+    // pay its multi-second WebView warm-up, re-run sync, re-subscribe relays).
 }

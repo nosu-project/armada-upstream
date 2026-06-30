@@ -130,11 +130,11 @@ export function EmojiShortcodeAutocomplete({
   const [colonStart, setColonStart] = useState(-1);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ bottom: number; left: number } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const handleClose = useCallback(() => setIsOpen(false), []);
-  const { computePosition, renderPortal } = usePortalDropdown({
+  const { computeBottomPosition, renderPortal } = usePortalDropdown({
     textareaRef,
     isOpen,
     onClose: handleClose,
@@ -185,8 +185,8 @@ export function EmojiShortcodeAutocomplete({
     setSelectedIndex(0);
 
     const coords = getCaretCoordinates(textarea, colonPos);
-    setDropdownPos(computePosition(coords));
-  }, [textareaRef, computePosition]);
+    setDropdownPos(computeBottomPosition(coords));
+  }, [textareaRef, computeBottomPosition]);
 
   // Listen for input/cursor changes on the textarea element
   useEffect(() => {
@@ -301,8 +301,8 @@ export function EmojiShortcodeAutocomplete({
   const dropdown = (
     <div
       data-autocomplete-dropdown
-      className="fixed z-[300] w-[280px] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150 pointer-events-auto"
-      style={{ top: dropdownPos.top, left: dropdownPos.left }}
+      className="fixed z-[300] w-[280px] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
+      style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
       <div ref={listRef} className="max-h-[280px] overflow-y-auto py-1">
         {results.map((emoji, index) => (
