@@ -56,6 +56,7 @@ import {
   setAudioProcessing,
   type AudioProcessingPrefs,
 } from "@/lib/voiceDevices";
+import { rnnoiseSupported, syncRnnoise } from "@/lib/voiceProcessor";
 import {
   getAvatarShape,
   shapedAvatarBorderStyle,
@@ -315,11 +316,11 @@ function DeviceMenu() {
   const { localParticipant } = useLocalParticipant();
   const [processing, setProcessing] = useState<AudioProcessingPrefs>(() => getAudioProcessing());
 
-  // Apply a processing change live: persist it, then restart the published mic
-  // track with the new capture constraints so it takes effect this call (not
-  // just the next one). audioCaptureDefaults only applies at track creation, so
-  // an explicit restartTrack is required to re-acquire the mic with the new
-  // noise-suppression / echo-cancellation / auto-gain constraints.
+  // Apply a processing change live: persist it, then make it take effect this
+  // call (not just the next one). The browser constraints (noise/echo/gain) only
+  // apply at track creation, so they need an explicit restartTrack to re-acquire
+  // the mic. RNNoise is a track processor, added/removed in place via
+  // syncRnnoise without re-acquiring the device.
   const update = useCallback(
     (patch: Partial<AudioProcessingPrefs>) => {
       setProcessing((prev) => {
@@ -328,13 +329,20 @@ function DeviceMenu() {
         const pub = localParticipant.getTrackPublication(Track.Source.Microphone);
         const track = pub?.audioTrack;
         if (track instanceof LocalAudioTrack) {
-          void track
-            .restartTrack({
-              noiseSuppression: next.noiseSuppression,
-              echoCancellation: next.echoCancellation,
-              autoGainControl: next.autoGainControl,
-            })
-            .catch((err) => console.warn("failed to apply audio processing", err));
+          if ("rnnoise" in patch) {
+            void syncRnnoise(track, next.rnnoise);
+          } else {
+            // restartTrack re-acquires the mic and drops any active processor,
+            // so re-apply RNNoise afterwards if it's enabled.
+            void track
+              .restartTrack({
+                noiseSuppression: next.noiseSuppression,
+                echoCancellation: next.echoCancellation,
+                autoGainControl: next.autoGainControl,
+              })
+              .then(() => syncRnnoise(track, next.rnnoise))
+              .catch((err) => console.warn("failed to apply audio processing", err));
+          }
         }
         return next;
       });
@@ -343,6 +351,9 @@ function DeviceMenu() {
   );
 
   const toggles: { key: keyof AudioProcessingPrefs; label: string }[] = [
+    ...(rnnoiseSupported()
+      ? [{ key: "rnnoise" as const, label: "Noise cancellation" }]
+      : []),
     { key: "noiseSuppression", label: "Noise suppression" },
     { key: "echoCancellation", label: "Echo cancellation" },
     { key: "autoGainControl", label: "Auto gain control" },

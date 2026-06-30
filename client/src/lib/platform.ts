@@ -183,6 +183,17 @@ export const DEFAULT_AUTO_GAIN_CONTROL: boolean = envBool(
 );
 
 /**
+ * Default for the RNNoise ML noise-cancellation track processor (the
+ * Discord-style background-noise remover, BSD-licensed, the same engine Jitsi
+ * ships). Unlike the three constraints above — which are simple browser
+ * MediaTrackConstraints — this runs an AudioWorklet + WASM model over the
+ * captured mic and publishes the cleaned track. On by default; operators can
+ * disable it at build time (e.g. for low-power clients) and users can toggle it
+ * per-device in voice settings.
+ */
+export const DEFAULT_RNNOISE: boolean = envBool(import.meta.env.VITE_DEFAULT_RNNOISE, true);
+
+/**
  * Cross-origin sandbox domain for in-chat apps (webxdc / YouTube watchalong).
  *
  * Untrusted app content (an arbitrary `.xdc` archive, or a third-party YouTube

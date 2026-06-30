@@ -1,10 +1,19 @@
-import { LiveKitRoom, RoomAudioRenderer, useRoomContext } from "@livekit/components-react";
 import {
+  LiveKitRoom,
+  RoomAudioRenderer,
+  useLocalParticipant,
+  useRoomContext,
+} from "@livekit/components-react";
+import {
+  AudioPresets,
   ConnectionState,
   DisconnectReason,
   ExternalE2EEKeyProvider,
+  LocalAudioTrack,
+  ParticipantEvent,
   Room,
   RoomEvent,
+  Track,
   VideoPresets,
   type RoomOptions,
 } from "livekit-client";
@@ -31,6 +40,7 @@ import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
 import { getAudioProcessing, getPreferredCameraId, getPreferredMicId } from "@/lib/voiceDevices";
+import { syncRnnoise } from "@/lib/voiceProcessor";
 import { voiceMediaKey } from "@/lib/concord/voice";
 import { cn } from "@/lib/utils";
 import { bytesToHex } from "@noble/hashes/utils.js";
@@ -68,6 +78,49 @@ function CallSoundEffects() {
 }
 
 /**
+ * Applies the user's RNNoise noise-cancellation preference to the published mic
+ * track. Mounted inside the `LiveKitRoom` (so it covers both NIP-29 and Concord
+ * rooms, which share `VoiceRoomShell`). The processor must be attached to the
+ * `LocalAudioTrack` after it's published — `audioCaptureDefaults` only carries
+ * browser constraints, not track processors — and re-attached whenever the mic
+ * track is (re)published (initial join, unmute, device switch via restartTrack).
+ */
+function MicNoiseProcessor() {
+  const { localParticipant } = useLocalParticipant();
+
+  useEffect(() => {
+    const apply = () => {
+      const enabled = getAudioProcessing().rnnoise;
+      const pub = localParticipant.getTrackPublication(Track.Source.Microphone);
+      const track = pub?.audioTrack;
+      if (track instanceof LocalAudioTrack) void syncRnnoise(track, enabled);
+    };
+    // Apply now (mic may already be published) and on every (re)publish.
+    apply();
+    localParticipant.on(ParticipantEvent.LocalTrackPublished, apply);
+    return () => {
+      localParticipant.off(ParticipantEvent.LocalTrackPublished, apply);
+    };
+  }, [localParticipant]);
+
+  return null;
+}
+
+/**
+ * Audio encoding defaults shared by both room types. LiveKit already defaults to
+ * the `music` preset (48 kbps) with RED + DTX for mono; we bump to
+ * `musicHighQuality` (96 kbps) for noticeably crisper voice and assert RED
+ * (redundant audio, resilient to packet loss) + DTX (don't transmit silence)
+ * explicitly so intent survives any future default change. Kept mono — stereo
+ * doubles bandwidth for no benefit on voice.
+ */
+const audioPublishDefaults = {
+  audioPreset: AudioPresets.musicHighQuality,
+  red: true,
+  dtx: true,
+} as const;
+
+/**
  * Shared capture/encoding room options (mic device + audio processing + video
  * presets). Read per mount; rooms remount on room switch.
  */
@@ -90,6 +143,7 @@ function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
         resolution: VideoPresets.h720.resolution,
       },
       publishDefaults: {
+        ...audioPublishDefaults,
         videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
         screenShareEncoding: VideoPresets.h1080.encoding,
       },
@@ -282,6 +336,7 @@ function VoiceRoomShell({
     >
       <RoomAudioRenderer />
       <CallSoundEffects />
+      <MicNoiseProcessor />
       {placeStage(
         <ServerScopeProvider relayUrl={scopeRelayUrl}>
           <CallStage callLabel={label} open={stageOpen} />
@@ -429,6 +484,7 @@ function ConcordVoiceRoom({
         };
       })(),
       publishDefaults: {
+        ...audioPublishDefaults,
         videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
         screenShareEncoding: VideoPresets.h1080.encoding,
       },
