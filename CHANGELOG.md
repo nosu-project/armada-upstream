@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.11.0] - 2026-06-30
+
+Encrypted communities now feel like the rest of chat. You can @-mention people
+right from the composer, run quick slash commands like /me and /shrug, and see
+who's typing by name. The channel name shows in the message box, messages send
+instantly without a spinner, and the emoji picker sits neatly against the
+composer.
+
+### Added
+- Mention people with `@` in encrypted-community channels, picking from members
+  and recent participants.
+- Slash commands in encrypted communities — `/me`, `/shrug`, `/tableflip`,
+  `/unflip`, `/slap`, and `/mention`.
+
+### Changed
+- The typing indicator in encrypted communities now names who's typing
+  (e.g. "Alice and Bob are typing…") instead of a generic "Someone".
+- The message box shows the channel name (e.g. "Message #general") instead of a
+  generic "(encrypted)" hint.
+- Messages in encrypted communities send instantly, without a sending spinner;
+  a failed send still offers a retry.
+- The emoji shortcode menu hugs the message box for a short list instead of
+  floating away from it.
+
 ## [0.10.0] - 2026-06-30
 
 Notifications now open the right place instantly. Tapping a message notification
