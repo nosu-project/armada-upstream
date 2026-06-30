@@ -168,6 +168,10 @@ func main() {
 			9021, 9022,
 			// Armada extension: admin-pinned messages (addressable on group id).
 			39041,
+			// Armada extension: in-chat app (webxdc) coordination, scoped to a
+			// group via `h`. 9450 = durable state updates (sendUpdate); 24450 =
+			// ephemeral realtime data (joinRealtimeChannel), forwarded not stored.
+			9450, 24450,
 			// unmanaged kinds (profiles, NIP-04 DMs, per-server self-labels,
 			// user group lists)
 			0, 4, 1985, 10009,

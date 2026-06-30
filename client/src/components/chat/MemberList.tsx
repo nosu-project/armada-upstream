@@ -155,7 +155,7 @@ function MemberRow({
             variant="ghost"
             size="icon"
             aria-label={`Manage ${displayName}`}
-            className="size-6 opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 text-muted-foreground hover:text-foreground"
+            className="size-6 touch:size-9 opacity-0 group-hover:opacity-100 touch:opacity-100 data-[state=open]:opacity-100 text-muted-foreground hover:text-foreground"
           >
             <MoreVertical className="size-3.5" />
           </Button>

@@ -20,6 +20,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useRelayUnread } from "@/hooks/useRelayUnread";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
+import { impact } from "@/lib/haptics";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
@@ -514,7 +515,7 @@ export function ServerRail({
         setDragPos({ x: e.clientX, y: e.clientY });
         setTargetIndex(serversRef.current.indexOf(url));
         // Haptic nudge on supported devices.
-        navigator.vibrate?.(15);
+        impact("medium");
       }, 300);
     },
     [indexForY, orderForTarget, persistOrder],
@@ -545,7 +546,10 @@ export function ServerRail({
         // both screen edges on mobile, so it owns the top/bottom safe-area
         // insets (status bar above, gesture/nav bar below) on top of its base
         // padding. On desktop the env() insets are 0, so this is a no-op there.
-        "flex flex-col items-center gap-5 w-[72px] shrink-0 overflow-y-auto bg-chrome-deep",
+        // Slimmer + tighter on the mobile drill-down (where it shares the width
+        // with the channel/DM list) so it doesn't read as a squeezed desktop
+        // rail; widens to the full desktop rail at the `sidebar:` breakpoint.
+        "flex flex-col items-center gap-4 sidebar:gap-5 w-[60px] sidebar:w-[72px] shrink-0 overflow-y-auto bg-chrome-deep",
         "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
         "pb-[calc(0.75rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]",
         // Lock scrolling while dragging so the rail doesn't fight the gesture.

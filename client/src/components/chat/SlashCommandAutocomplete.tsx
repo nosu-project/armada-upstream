@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
-import { matchSlashCommands, type SlashCommand } from "@/lib/slashCommands";
+import { matchSlashCommands, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 interface SlashCommandAutocompleteProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   content: string;
   canModerate: boolean;
+  /** Composer capabilities; commands needing an unsupported one are hidden. */
+  capabilities?: ReadonlySet<SlashCapability>;
   /**
    * Optional extra filter on which commands the menu offers (on top of the
-   * built-in moderation gate). Used by surfaces that support only a subset —
-   * e.g. the Bluetooth mesh, which has no polls/threads/moderation.
+   * built-in moderation/capability gates). Used by surfaces that support only a
+   * subset — e.g. the Bluetooth mesh, which has no polls/threads/moderation.
    */
   commandFilter?: (command: SlashCommand) => boolean;
   /** Replace the command word `/query` with `/<name> ` (keeps the menu intent). */
@@ -30,6 +32,7 @@ export function SlashCommandAutocomplete({
   textareaRef,
   content,
   canModerate,
+  capabilities,
   commandFilter,
   onInsertCommand,
   onRunCommand,
@@ -53,10 +56,10 @@ export function SlashCommandAutocomplete({
   const matches = useMemo(
     () => {
       if (!isOpen) return [];
-      const base = matchSlashCommands(query, canModerate);
+      const base = matchSlashCommands(query, canModerate, capabilities);
       return commandFilter ? base.filter(commandFilter) : base;
     },
-    [isOpen, query, canModerate, commandFilter],
+    [isOpen, query, canModerate, capabilities, commandFilter],
   );
 
   const detect = useCallback(() => {
@@ -145,7 +148,7 @@ export function SlashCommandAutocomplete({
   const dropdown = (
     <div
       data-autocomplete-dropdown
-      className="fixed z-[300] w-[320px] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
+      className="fixed z-[300] w-[320px] max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
       style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
       <div ref={listRef} className="max-h-[260px] overflow-y-auto py-1">

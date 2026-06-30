@@ -1,6 +1,7 @@
 /// <reference types="@capacitor-community/safe-area" />
 
 import type { CapacitorConfig } from '@capacitor/cli';
+import { KeyboardResize } from '@capacitor/keyboard';
 
 const config: CapacitorConfig = {
   appId: 'pub.armada.app',
@@ -30,6 +31,16 @@ const config: CapacitorConfig = {
     // plugin docs require disabling it so the plugin owns edge-to-edge insets.
     SystemBars: {
       insetsHandling: 'disable',
+    },
+    // Soft keyboard handling. `Native` resize lets Android's own
+    // windowSoftInputMode="adjustResize" (set in AndroidManifest.xml) shrink the
+    // WebView viewport when the keyboard opens, so the in-flow chat composer is
+    // pushed up above the keyboard instead of being covered — the single biggest
+    // "this is a webpage in a box" giveaway when it's missing. The on-screen
+    // accessory bar is suppressed for a cleaner native feel.
+    Keyboard: {
+      resize: KeyboardResize.Native,
+      resizeOnFullScreen: true,
     },
   },
 };

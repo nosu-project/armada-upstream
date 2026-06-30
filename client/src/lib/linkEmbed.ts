@@ -18,6 +18,64 @@ export function extractYouTubeId(url: string): string | null {
   return null;
 }
 
+/** A YouTube watch target: a single video, a playlist, or both. */
+export interface YouTubeTarget {
+  /** Video id, when the link points at a specific video. */
+  videoId?: string;
+  /** Playlist id, when the link includes one (`list=` or `/playlist`). */
+  playlistId?: string;
+  /** 0-based index within the playlist, when present. */
+  index?: number;
+}
+
+/**
+ * Parse a YouTube URL into a watch target, recognising videos AND playlists.
+ * Returns null if it isn't a usable YouTube link. Handles `watch?v=`,
+ * `watch?v=…&list=…`, `youtu.be/…`, `/embed/…`, `/shorts/…`, and
+ * `/playlist?list=…`. A bare 11-char video id or a `PL…`/`UU…`-style playlist id
+ * is also accepted, so users can paste just an id.
+ */
+export function parseYouTubeTarget(input: string): YouTubeTarget | null {
+  const raw = input.trim();
+  if (!raw) return null;
+
+  // Bare id shortcuts.
+  if (/^[a-zA-Z0-9_-]{11}$/.test(raw)) return { videoId: raw };
+  if (/^(PL|UU|LL|FL|RD|OL)[a-zA-Z0-9_-]{10,}$/.test(raw)) return { playlistId: raw };
+
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  const host = u.hostname.replace(/^(www|m|music)\./, "");
+  if (host !== "youtube.com" && host !== "youtu.be") return null;
+
+  const target: YouTubeTarget = {};
+
+  if (host === "youtu.be") {
+    const id = u.pathname.slice(1);
+    if (id) target.videoId = id;
+  } else if (u.pathname === "/watch") {
+    const v = u.searchParams.get("v");
+    if (v) target.videoId = v;
+  } else if (u.pathname.startsWith("/embed/") || u.pathname.startsWith("/shorts/")) {
+    const id = u.pathname.split("/")[2];
+    if (id) target.videoId = id;
+  }
+
+  const list = u.searchParams.get("list");
+  if (list) target.playlistId = list;
+  const idx = u.searchParams.get("index");
+  if (idx && /^\d+$/.test(idx)) {
+    // YouTube's `index` is 1-based; convert to 0-based.
+    target.index = Math.max(0, parseInt(idx, 10) - 1);
+  }
+
+  return target.videoId || target.playlistId ? target : null;
+}
+
 /** Spotify embed info extracted from an open.spotify.com URL. */
 export interface SpotifyEmbedInfo {
   /** Content type: track, album, playlist, episode, show. */

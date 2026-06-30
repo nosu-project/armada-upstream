@@ -134,7 +134,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
   }, [onSelect]);
 
   return (
-    <div className="flex flex-col w-full h-[360px] bg-popover rounded-lg overflow-hidden">
+    <div className="flex flex-col w-full h-[360px] max-h-[55dvh] bg-popover rounded-lg overflow-hidden">
       {/* Search input */}
       <div className="px-3 pt-3 pb-2">
         <div className="relative">

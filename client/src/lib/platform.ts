@@ -181,3 +181,28 @@ export const DEFAULT_AUTO_GAIN_CONTROL: boolean = envBool(
   import.meta.env.VITE_DEFAULT_AUTO_GAIN_CONTROL,
   true,
 );
+
+/**
+ * Default for the RNNoise ML noise-cancellation track processor (the
+ * Discord-style background-noise remover, BSD-licensed, the same engine Jitsi
+ * ships). Unlike the three constraints above — which are simple browser
+ * MediaTrackConstraints — this runs an AudioWorklet + WASM model over the
+ * captured mic and publishes the cleaned track. On by default; operators can
+ * disable it at build time (e.g. for low-power clients) and users can toggle it
+ * per-device in voice settings.
+ */
+export const DEFAULT_RNNOISE: boolean = envBool(import.meta.env.VITE_DEFAULT_RNNOISE, true);
+
+/**
+ * Cross-origin sandbox domain for in-chat apps (webxdc / YouTube watchalong).
+ *
+ * Untrusted app content (an arbitrary `.xdc` archive, or a third-party YouTube
+ * iframe) runs inside an `<iframe>` on a *distinct* origin — a per-app
+ * HMAC-derived subdomain of this domain — so it is fully origin-isolated from
+ * the Armada client (no access to our localStorage/IndexedDB/cookies). The
+ * subdomain hosts a tiny Service Worker (the "iframe.diy" loader) that proxies
+ * every `fetch` back to the parent over `postMessage`; the parent serves the
+ * app's files from memory (see `SandboxFrame`). The public `iframe.diy` service
+ * provides this; operators may self-host an equivalent and override here.
+ */
+export const SANDBOX_DOMAIN: string = import.meta.env.VITE_SANDBOX_DOMAIN || "iframe.diy";

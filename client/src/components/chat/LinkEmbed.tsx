@@ -140,7 +140,7 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
       <div className="px-3.5 py-2.5 space-y-0.5">
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="truncate">{data.provider_name || displayDomain(url)}</span>
-          <ExternalLink className="size-3 ml-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+          <ExternalLink className="size-3 ml-auto shrink-0 opacity-0 group-hover:opacity-100 touch:opacity-100 transition-opacity" />
         </div>
         {data.title && <p className="text-sm font-semibold leading-snug line-clamp-2">{data.title}</p>}
         {data.author_name && (

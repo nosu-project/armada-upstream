@@ -1,6 +1,12 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
+import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
+import {
+  coldLaunchPending,
+  consumeColdLaunchDeepLink,
+  onColdLaunchResolved,
+} from "@/lib/coldLaunchDeepLink";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { AboutPage } from "@/pages/AboutPage";
 import { ConcordPage } from "@/pages/ConcordPage";
@@ -35,6 +41,33 @@ function HomeRedirect() {
   const { user } = useCurrentUser();
   const online = useOnlineStatus();
 
+  // Cold launch from a notification tap: the launch URL resolves async (see
+  // coldLaunchDeepLink). Hold the default redirect until it's known — otherwise
+  // we'd send `/` to the default server, ServerPage would auto-open the default
+  // group, and the late deep-link navigate would lose that race. Once resolved,
+  // a captured deep link wins; otherwise fall through to the normal default.
+  const [state, setState] = useState<{ ready: boolean; deepLink: string | null }>(() =>
+    coldLaunchPending()
+      ? { ready: false, deepLink: null }
+      : { ready: true, deepLink: consumeColdLaunchDeepLink() },
+  );
+  useEffect(
+    () =>
+      onColdLaunchResolved(() => {
+        setState((prev) => (prev.ready ? prev : { ready: true, deepLink: consumeColdLaunchDeepLink() }));
+      }),
+    [],
+  );
+
+  if (!state.ready) {
+    // Launch URL not yet known — render nothing (blank root / splash) rather
+    // than committing to a destination we might immediately have to override.
+    return null;
+  }
+  if (state.deepLink) {
+    return <Navigate to={state.deepLink} replace />;
+  }
+
   if (!user) {
     return <Navigate to="/welcome" replace />;
   }
@@ -64,9 +97,19 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Mounts the notification-tap → React Router navigation bridge. Rendered inside
+ * <BrowserRouter> so `useNavigate` resolves; renders nothing.
+ */
+function NotificationNavigation() {
+  useNotificationNavigation();
+  return null;
+}
+
 export function AppRouter() {
   return (
     <BrowserRouter>
+      <NotificationNavigation />
       <Routes>
         <Route element={<MainLayout />}>
           <Route path="/" element={<HomeRedirect />} />

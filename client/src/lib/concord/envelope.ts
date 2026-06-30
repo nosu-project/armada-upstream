@@ -311,4 +311,74 @@ export function openedFromSealed(
   };
 }
 
+/**
+ * Open a Concord message from an inner event that was ALREADY decrypted off the
+ * WebView (e.g. by the Android background service, which holds the channel key
+ * and decrypts the sealed outer to render its notification). The native side
+ * verifies only the NIP-44 HMAC + channel/epoch binding, NOT the inner Schnorr
+ * signature — so we re-establish full trust here before rendering:
+ *
+ *   1. select the epoch key whose pseudonym matches the outer `z` (so the inner
+ *      is bound to a channel/epoch we actually hold a key for);
+ *   2. verify the inner author's Schnorr signature (defeats a channel-key holder
+ *      forging another member's `pubkey` — native can't catch this);
+ *   3. enforce the same kind/channel/epoch binding triad as {@link openMessage}.
+ *
+ * Returns the {@link OpenedMessage} ready to fold into the timeline — with the
+ * exact same shape and `messageId` (inner id) the relay-fetched + decrypted path
+ * produces, so it dedupes/reconciles cleanly when the outer is later seen.
+ *
+ * Throws {@link EnvelopeError} on any failure (no held epoch, bad signature,
+ * binding mismatch), so a malformed/forged native feed is simply dropped.
+ */
+export function openVerifiedInner(
+  inner: NostrEvent,
+  z: string,
+  outerId: string,
+  channelId: Uint8Array,
+  epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
+): OpenedMessage {
+  // 1. Bind to a held epoch via the outer pseudonym.
+  let epoch: bigint | undefined;
+  for (const ek of epochKeys) {
+    if (bytesToHex(channelPseudonym(ek.key, channelId, ek.epoch)) === z) {
+      epoch = ek.epoch;
+      break;
+    }
+  }
+  if (epoch === undefined) {
+    throw new EnvelopeError("no-held-epoch", "no held epoch key for this pseudonym");
+  }
+
+  // 2. Full author authentication — the native side did NOT do this.
+  if (!verifyEvent(inner)) {
+    throw new EnvelopeError("bad-signature", "inner author signature invalid");
+  }
+
+  // 3. Binding triad (channel + epoch), matching openMessage's checks.
+  const innerChannel = uniqueTag(inner, TAG_CHANNEL);
+  if (innerChannel === undefined) throw new EnvelopeError("missing-tag", "missing inner tag: channel");
+  if (innerChannel !== bytesToHex(channelId)) {
+    throw new EnvelopeError("channel-mismatch", "channel-binding mismatch (splice)");
+  }
+  const innerEpoch = uniqueTag(inner, TAG_EPOCH);
+  if (innerEpoch === undefined) throw new EnvelopeError("missing-tag", "missing inner tag: epoch");
+  if (innerEpoch !== epoch.toString()) {
+    throw new EnvelopeError("epoch-mismatch", "epoch-binding mismatch (splice)");
+  }
+
+  return {
+    messageId: inner.id,
+    author: inner.pubkey,
+    content: inner.content,
+    channelId,
+    epoch,
+    ms: resolveMs(inner.created_at, uniqueTag(inner, TAG_MS)),
+    createdAt: inner.created_at,
+    kind: inner.kind,
+    wrapperId: outerId,
+    tags: inner.tags,
+  };
+}
+
 export { getPublicKey };

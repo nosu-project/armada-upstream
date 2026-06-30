@@ -9,7 +9,9 @@ import {
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayClaim } from "@/hooks/useRelayMembership";
 import { toast } from "@/hooks/useToast";
+import { writeClipboardText } from "@/lib/clipboard";
 import { relayToRouteParam } from "@/lib/platform";
+import { canShare, share as nativeShare } from "@/lib/share";
 
 import type { Nip29Group } from "@/lib/nip29";
 
@@ -82,7 +84,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
 
   const copy = () => {
     if (!url) return;
-    navigator.clipboard?.writeText(url).then(
+    writeClipboardText(url).then(
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1800);
@@ -93,14 +95,14 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
 
   const share = () => {
     if (!url) return;
-    navigator.share?.({
+    void nativeShare({
       title: `Join #${group.name} on Armada`,
       text: `You're invited to #${group.name}!`,
       url,
-    }).catch(() => undefined);
+    });
   };
 
-  const canShare = typeof navigator !== "undefined" && "share" in navigator;
+  const showShare = canShare();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -150,7 +152,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
                     ? <><Check className="size-4 mr-2" /> Copied!</>
                     : <><Copy className="size-4 mr-2" /> Copy link</>}
                 </Button>
-                {canShare && (
+                {showShare && (
                   <Button variant="outline" className="clip-corner-lg" onClick={share} aria-label="Share">
                     <Share2 className="size-4" />
                   </Button>

@@ -4,6 +4,82 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.12.0] - 2026-06-30
+
+The Android app now feels like a real app instead of a website in a box. The
+keyboard pushes the message box up instead of covering it, buttons buzz when you
+tap them, sharing an invite opens the system share sheet, and the status bar
+matches your theme. Tapping is crisper — no more grey flashes, accidental text
+selection, or rubber-band bounce — and touch targets, headers, and the server
+rail are sized for fingers. On small phones, the less-used channel actions tuck
+themselves into the channel menu so the channel name always has room.
+
+### Added
+- Buttons and toggles give haptic feedback on tap.
+- Sharing an invite opens the native share sheet.
+
+### Changed
+- The on-screen keyboard now pushes the message box up above it instead of
+  covering it.
+- The status bar tint follows the app theme.
+- Larger, finger-friendly headers, action buttons, and inputs on touch devices;
+  the server rail is slimmer on phones.
+- Controls that only appeared on hover (member actions, edit buttons, and more)
+  now show on touch too.
+- On narrow screens the channel header tucks the pins and events actions into
+  the channel menu when there isn't room for everything.
+
+### Fixed
+- No more grey tap-flash, accidental long-press text selection, or whole-page
+  rubber-band scrolling in the app.
+- The whole app can no longer be pinch-zoomed like a web page.
+
+## [0.11.0] - 2026-06-30
+
+Encrypted communities now feel like the rest of chat. You can @-mention people
+right from the composer, run quick slash commands like /me and /shrug, and see
+who's typing by name. The channel name shows in the message box, messages send
+instantly without a spinner, and the emoji picker sits neatly against the
+composer.
+
+### Added
+- Mention people with `@` in encrypted-community channels, picking from members
+  and recent participants.
+- Slash commands in encrypted communities — `/me`, `/shrug`, `/tableflip`,
+  `/unflip`, `/slap`, and `/mention`.
+
+### Changed
+- The typing indicator in encrypted communities now names who's typing
+  (e.g. "Alice and Bob are typing…") instead of a generic "Someone".
+- The message box shows the channel name (e.g. "Message #general") instead of a
+  generic "(encrypted)" hint.
+- Messages in encrypted communities send instantly, without a sending spinner;
+  a failed send still offers a retry.
+- The emoji shortcode menu hugs the message box for a short list instead of
+  floating away from it.
+
+## [0.10.0] - 2026-06-30
+
+Notifications now open the right place instantly. Tapping a message notification
+jumps straight to that conversation and the message is already on screen — no
+waiting for the chat to catch up — even when the app was fully closed. Encrypted
+communities get the same instant arrival. There's also more to do inside chat:
+watch YouTube together and run little in-chat apps, with clearer voice thanks to
+background-noise removal.
+
+### Added
+- Watch YouTube videos together in sync, and run lightweight in-chat apps,
+  right inside a channel.
+- Background-noise removal for voice calls, with a toggle in settings.
+
+### Changed
+- Tapping a notification opens the exact conversation it's about and shows the
+  message immediately, instead of reloading the app and landing on the wrong or
+  default room — including after the app has been closed.
+- Encrypted community messages a notification was about now appear the instant
+  the channel opens.
+- Encrypted communities are faster to open and load.
+
 ## [0.9.2] - 2026-06-28
 
 Direct messages get a real workout: search within a conversation, mute someone,

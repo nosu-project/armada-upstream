@@ -85,6 +85,70 @@
   }
 
   /*
+   * Native-app feel resets. Applied in the Capacitor APK (`html.native`) and on
+   * coarse-pointer touch devices generally. These switch off the browser
+   * behaviors that read as "a web page in a box":
+   *   - the grey tap-flash on every tappable element,
+   *   - long-press text selection / the magnifier on chrome and controls,
+   *   - rubber-band / bounce overscroll of the whole document,
+   *   - the iOS callout (copy/define) menu on long-press.
+   * Text selection is re-enabled on actual content (messages, inputs, code).
+   */
+  html.native,
+  html.native body {
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+  html.native {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  @media (hover: none) and (pointer: coarse) {
+    body {
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior-y: none;
+    }
+    button, a, [role="button"], label {
+      -webkit-tap-highlight-color: transparent;
+    }
+  }
+  /* Re-enable selection where reading/copying text is the point. */
+  html.native input,
+  html.native textarea,
+  html.native [contenteditable],
+  html.native p,
+  html.native pre,
+  html.native code,
+  html.native .select-text,
+  html.native [data-selectable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /*
+   * On touch the OS draws thin overlay scrollbars; the fat 12px desktop pill we
+   * draw below reads as a desktop web page. Collapse our custom scrollbars to
+   * the native overlay on coarse-pointer devices and in the APK.
+   */
+  @media (hover: none) and (pointer: coarse) {
+    * {
+      scrollbar-width: none;
+    }
+    *::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+    }
+  }
+  html.native *::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+  html.native * {
+    scrollbar-width: none;
+  }
+
+  /*
    * Native date/time inputs. Tie `color-scheme` to the active theme so the
    * browser draws the calendar-picker indicator with a glyph that contrasts
    * against the input (on dark themes the default near-black indicator is

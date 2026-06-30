@@ -4,6 +4,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStage";
+import { AppStageSlot } from "@/components/chat/AppStage";
+import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage, getReplyToId, ReplyContextLine, replyPreviewText } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
@@ -68,6 +70,41 @@ function ConcordReplyContext({
   const displayName = useScopedDisplayName(pubkey, author.data?.metadata);
   if (!pubkey) return null;
   return <ReplyContextLine name={displayName} preview={preview} onClick={onClick} />;
+}
+
+/** One typer's scoped display name, resolved like the rest of the channel. */
+function TypingName({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  return <span className="font-medium not-italic">{useScopedDisplayName(pubkey, author.data?.metadata)}</span>;
+}
+
+/**
+ * Discord-style "who is typing" line. Names up to three typers inline (resolved
+ * to their scoped display names, like message authors); beyond that it collapses
+ * to "Several people are typing…" to keep the line short and avoid resolving an
+ * unbounded list of profiles.
+ */
+function ConcordTypingIndicator({ pubkeys }: { pubkeys: string[] }) {
+  if (pubkeys.length === 0) return null;
+  if (pubkeys.length > 3) {
+    return (
+      <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
+        Several people are typing…
+      </div>
+    );
+  }
+  const names = pubkeys.map((pk) => <TypingName key={pk} pubkey={pk} />);
+  return (
+    <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
+      {names.map((name, i) => (
+        <span key={pubkeys[i]}>
+          {name}
+          {i < names.length - 2 ? ", " : i === names.length - 2 ? (names.length > 2 ? ", and " : " and ") : ""}
+        </span>
+      ))}
+      {names.length === 1 ? " is typing…" : " are typing…"}
+    </div>
+  );
 }
 
 /** The community's decrypted GroupRoot logo for the channel-list title, with a
@@ -606,7 +643,7 @@ export function ConcordPage() {
       >
       {/* Chat */}
       <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
-        <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+        <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
           {/* Mobile back → slides the chat away to reveal the channel list.
               (The same reveal is also driven by a left-edge swipe.) */}
           <Button
@@ -645,7 +682,7 @@ export function ConcordPage() {
             {user && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="size-8" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
+                  <Button variant="ghost" size="icon" className="size-8 touch:size-10" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
                     <UserPlus className="size-4" />
                   </Button>
                 </TooltipTrigger>
@@ -658,7 +695,7 @@ export function ConcordPage() {
               size="icon"
               aria-label="Members"
               aria-pressed={membersOpen}
-              className="size-8 sidebar:hidden"
+              className="size-8 touch:size-10 sidebar:hidden"
               onClick={() => setMembersOpen((v) => !v)}
             >
               <Users className="size-4" />
@@ -685,7 +722,7 @@ export function ConcordPage() {
             {user && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="size-8" aria-label="Community actions">
+                  <Button variant="ghost" size="icon" className="size-8 touch:size-10" aria-label="Community actions">
                     <MoreVertical className="size-4" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -732,7 +769,15 @@ export function ConcordPage() {
             the one in encrypted voice). */}
         <CallStageSlot active={inThisVoice} />
 
+        {/* Top-of-chat app stage (YouTube watchalong, webxdc) for this channel. */}
+        {community && channel && (
+          <AppStageSlot scope={{ kind: "concord", community, channel }} />
+        )}
+
         {/* Chat + members. Member panel mirrors the NIP-29 GroupPage. */}
+        <ChatScopeContext.Provider
+          value={community && channel ? { kind: "concord", community, channel } : undefined}
+        >
         <div className="relative flex flex-1 min-h-0">
           <div className="flex-1 min-w-0 flex flex-col">
             <MessageTimeline
@@ -774,18 +819,17 @@ export function ConcordPage() {
             />
 
             {(typingPubkeys?.length ?? 0) > 0 && (
-              <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
-                {typingPubkeys!.length === 1 ? "Someone is typing…" : `${typingPubkeys!.length} people are typing…`}
-              </div>
+              <ConcordTypingIndicator pubkeys={typingPubkeys!} />
             )}
             {channel && (
               <ChatComposer
                 relayUrl="dm"
                 groupId={channel ? bytesToHex(channel.id) : "concord"}
                 messages={[]}
+                mentionPubkeys={memberPubkeys}
                 replyTo={replyTo}
                 onCancelReply={() => setReplyTo(undefined)}
-                placeholder={user ? "Message (encrypted)…" : "Sign in to send"}
+                placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                 sendOverride={handleSend}
                 onTyping={publishTyping}
                 encryptAttachments
@@ -835,6 +879,7 @@ export function ConcordPage() {
             </div>
           </div>
         </div>
+        </ChatScopeContext.Provider>
       </main>
       </SwipeReveal>
 

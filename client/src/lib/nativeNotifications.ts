@@ -17,12 +17,21 @@ export interface ArmadaNotificationPlugin {
   /** Hand a signed NIP-42 kind-22242 event back to the service for a relay. */
   submitAuth(options: { relayUrl: string; event: NostrEvent }): Promise<void>;
   /**
-   * Drain raw outer events the background service received while the WebView was
-   * down (it buffers them). The JS layer writes each into its event store so a
-   * freshly-opened app already holds the messages the notifications were about —
-   * no relay round-trip. Returns the events as wire JSON strings.
+   * Drain raw outer wire events the background service received while the WebView
+   * was down (it buffers them). The JS layer writes each into its event store so
+   * a freshly-opened app already holds the messages the notifications were about.
+   * Concord decrypted inners are drained separately via {@link drainConcord} so
+   * the two consumers don't race to empty a shared buffer.
    */
   drainEvents(): Promise<{ events: string[] }>;
+  /**
+   * Drain Concord inner events the service already decrypted (it holds the
+   * channel key for the notification), each with the outer `z` pseudonym and
+   * outer id. The open channel verifies the inner signature + binding and folds
+   * it straight in — no second decrypt, no relay round-trip — so a tapped
+   * notification's message is on screen at once.
+   */
+  drainConcord(): Promise<{ concord: Array<{ inner: string; z: string; outerId: string }> }>;
   /**
    * Fired when a relay issues a NIP-42 AUTH challenge. The JS layer signs a
    * kind-22242 with the user's signer and calls submitAuth — so no private key
@@ -41,6 +50,18 @@ export interface ArmadaNotificationPlugin {
   addListener(
     eventName: "relayEvent",
     listener: (data: { event: string }) => void,
+  ): Promise<PluginListenerHandle>;
+  /**
+   * Fired when the background service receives AND decrypts a Concord message
+   * (kind 3300) while the WebView is up. Carries the decrypted inner event JSON,
+   * the outer `z` pseudonym, and the outer event id. The WebView verifies the
+   * inner Schnorr signature + channel/epoch binding (the service only checked
+   * HMAC + binding) and folds it into the open channel — instant render, no
+   * second decrypt, no relay round-trip.
+   */
+  addListener(
+    eventName: "concordMessage",
+    listener: (data: { inner: string; z: string; outerId: string }) => void,
   ): Promise<PluginListenerHandle>;
   /**
    * Configure (and start/stop) the background service. Passing `enabled: false`

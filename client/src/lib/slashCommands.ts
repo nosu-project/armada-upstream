@@ -14,6 +14,15 @@ import type { NostrEvent } from "@nostrify/nostrify";
  */
 export type SlashCommandKind = "text" | "action" | "moderation";
 
+/**
+ * A composer capability a command depends on. The composer advertises which it
+ * supports (e.g. NIP-29 group chat has all of them; Concord's encrypted send
+ * path has none of the group-only ones), and commands needing an unsupported
+ * capability are hidden from the menu and rejected on send. Universal commands
+ * (e.g. /me, /shrug, /mention) declare no requirement and work everywhere.
+ */
+export type SlashCapability = "poll" | "thread" | "moderation";
+
 /** Marker prefix the renderer styles as an italic third-person action line. */
 export const ME_ACTION_PREFIX = "\u200b/me ";
 
@@ -50,6 +59,12 @@ export interface SlashCommand {
   /** Usage hint shown in the menu, e.g. "/kick @user". */
   usage?: string;
   kind: SlashCommandKind;
+  /**
+   * Composer capabilities this command needs. Omitted/empty means universal
+   * (works in any composer, including Concord's delegated send). The composer
+   * filters the menu and guards execution by its advertised capabilities.
+   */
+  requires?: SlashCapability[];
   /**
    * Whether picking this command from the menu (Tab/Enter/click) should run it
    * immediately. True for commands that need no argument (e.g. /poll, /thread,
@@ -116,6 +131,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: "poll",
     description: "Create a poll",
     kind: "action",
+    requires: ["poll"],
     runsOnSelect: true,
     run: () => ({ type: "action", action: { kind: "openPoll" } }),
   },
@@ -130,6 +146,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: "thread",
     description: "Start a thread on the latest message",
     kind: "action",
+    requires: ["thread"],
     runsOnSelect: true,
     run: () => ({ type: "action", action: { kind: "openThread" } }),
   },
@@ -158,6 +175,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: "Remove a user from the channel",
     usage: "/kick @user",
     kind: "moderation",
+    requires: ["moderation"],
     run: (arg, ctx) => requireTarget(arg, ctx, (pubkey) => ({ type: "action", action: { kind: "kick", pubkey } })),
   },
   {
@@ -165,6 +183,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: "Remove a user (with a reason)",
     usage: "/ban @user [reason]",
     kind: "moderation",
+    requires: ["moderation"],
     run: (arg, ctx) =>
       requireTarget(arg, ctx, (pubkey, reason) => ({ type: "action", action: { kind: "ban", pubkey, reason } })),
   },
@@ -270,10 +289,16 @@ export async function executeSlashCommand(
 }
 
 /** Commands whose name/alias starts with `query` (no leading slash), for the menu. */
-export function matchSlashCommands(query: string, canModerate: boolean): SlashCommand[] {
+export function matchSlashCommands(
+  query: string,
+  canModerate: boolean,
+  capabilities?: ReadonlySet<SlashCapability>,
+): SlashCommand[] {
   const q = query.toLowerCase();
   return SLASH_COMMANDS.filter((c) => {
     if (c.kind === "moderation" && !canModerate) return false;
+    // Hide commands needing a capability this composer doesn't advertise.
+    if (capabilities && c.requires?.some((r) => !capabilities.has(r))) return false;
     if (!q) return true;
     return c.name.startsWith(q) || c.aliases?.some((a) => a.startsWith(q));
   });

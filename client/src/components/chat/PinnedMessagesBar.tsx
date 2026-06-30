@@ -65,7 +65,7 @@ function PinnedRow({
               variant="ghost"
               size="icon"
               aria-label="Unpin message"
-              className="size-6 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 focus-visible:opacity-100 transition-opacity"
+              className="size-6 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
               onClick={() => onUnpin(eventId)}
             >
               <X className="size-3.5" />

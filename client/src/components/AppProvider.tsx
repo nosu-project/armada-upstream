@@ -4,6 +4,7 @@ import { AppConfigSchema } from "@/lib/schemas";
 import { AppContext, defaultConfig, type AppConfig } from "@/contexts/AppContext";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { hslStringToHex, isDarkTheme } from "@/lib/colorUtils";
+import { syncNativeStatusBar } from "@/lib/statusBar";
 import {
   buildThemeCssFromCore,
   builtinThemes,
@@ -80,6 +81,9 @@ function useApplyTheme(config: AppConfig) {
       // Keep the browser chrome <meta theme-color> in sync.
       const meta = document.querySelector('meta[name="theme-color"]');
       if (meta) meta.setAttribute("content", hslStringToHex(colors.background));
+
+      // Keep the native status/navigation bar style in sync (no-op on web).
+      syncNativeStatusBar(colors.background);
     };
 
     apply();
