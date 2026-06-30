@@ -887,7 +887,10 @@ export function useSendConcordMessage(community: Community | undefined, channel:
       const outer = signed.sealed;
       const innerId = signed.signedInner.id;
 
-      // Optimistically render real messages immediately as "pending".
+      // Optimistically render real messages immediately. Unlike NIP-29, we do
+      // NOT show a "pending" spinner: the broadcast is fire-and-forget and
+      // near-instant, so the message is treated as sent the moment it's signed.
+      // Only a genuine broadcast failure flips it to "failed" (with Retry).
       if (isChatMessage) {
         const optimistic = openedFromSealed(signed.signedInner, signed.sealed, channel.id, channel.epoch);
         queryClient.setQueryData<OpenedMessage[]>(channelKey(channelIdHex), (old = []) =>
@@ -895,12 +898,11 @@ export function useSendConcordMessage(community: Community | undefined, channel:
             ? old
             : [...old, optimistic].sort((a, b) => a.ms - b.ms),
         );
-        setStatus(innerId, "pending");
       }
 
       // Broadcast in the background so the composer never blocks on the relay.
-      // Real messages reconcile their status via the message-list refetch (the
-      // relay echo clears "pending"); mark "failed" if no relay accepts.
+      // The echo reconciles the message content when it arrives; mark "failed"
+      // only if no relay accepts.
       void broadcast(outer)
         .then(() => {
           if (channel) {
@@ -963,6 +965,9 @@ export function useRetryConcordMessage(community: Community | undefined, channel
           if (!results.some((r) => r.status === "fulfilled")) {
             throw new Error("No relay accepted the message.");
           }
+          // Optimistic: a relay accepted it, so clear "pending" now rather than
+          // waiting for the polled echo to reconcile (matches the send path).
+          setStatus(id, undefined);
           queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });
         } catch {
           setStatus(id, "failed");

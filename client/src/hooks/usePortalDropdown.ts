@@ -6,6 +6,12 @@ interface DropdownPosition {
   left: number;
 }
 
+/** Bottom-anchored position: the dropdown's bottom edge hugs the composer top. */
+interface DropdownBottomPosition {
+  bottom: number;
+  left: number;
+}
+
 interface UsePortalDropdownOptions {
   /** Ref to the textarea the dropdown is anchored to. */
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -62,6 +68,26 @@ export function usePortalDropdown({
     [textareaRef, dropdownHeight, dropdownWidth],
   );
 
+  /**
+   * Compute a BOTTOM-anchored position: the dropdown's bottom edge sits just
+   * above the textarea's top, so a short list hugs the composer (and a long one
+   * grows upward) instead of floating at a fixed offset below the caret. `left`
+   * still tracks the caret column, clamped to the viewport.
+   */
+  const computeBottomPosition = useCallback(
+    (caretCoords: { left: number }): DropdownBottomPosition => {
+      const textarea = textareaRef.current;
+      if (!textarea) return { bottom: 0, left: 0 };
+      const rect = textarea.getBoundingClientRect();
+      const left = rect.left + Math.max(0, Math.min(caretCoords.left, textarea.clientWidth - dropdownWidth));
+      return {
+        bottom: window.innerHeight - rect.top + 6,
+        left: Math.max(8, Math.min(left, window.innerWidth - dropdownWidth - 8)),
+      };
+    },
+    [textareaRef, dropdownWidth],
+  );
+
   // Dismiss the dropdown when any ancestor scrolls or the window resizes,
   // since fixed positioning would cause the dropdown to become misaligned.
   // Scrolling *inside* the dropdown itself (e.g. paging through a long list)
@@ -84,5 +110,5 @@ export function usePortalDropdown({
     };
   }, [isOpen, onClose]);
 
-  return { computePosition, renderPortal: createPortal };
+  return { computePosition, computeBottomPosition, renderPortal: createPortal };
 }

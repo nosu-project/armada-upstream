@@ -829,7 +829,7 @@ export function ConcordPage() {
                 mentionPubkeys={memberPubkeys}
                 replyTo={replyTo}
                 onCancelReply={() => setReplyTo(undefined)}
-                placeholder={user ? "Message (encrypted)…" : "Sign in to send"}
+                placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                 sendOverride={handleSend}
                 onTyping={publishTyping}
                 encryptAttachments

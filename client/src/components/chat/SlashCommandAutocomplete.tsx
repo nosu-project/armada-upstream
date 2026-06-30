@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
-import { matchSlashCommands, type SlashCommand } from "@/lib/slashCommands";
+import { matchSlashCommands, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 interface SlashCommandAutocompleteProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   content: string;
   canModerate: boolean;
+  /** Composer capabilities; commands needing an unsupported one are hidden. */
+  capabilities: ReadonlySet<SlashCapability>;
   /** Replace the command word `/query` with `/<name> ` (keeps the menu intent). */
   onInsertCommand: (params: { start: number; end: number; replacement: string }) => void;
   /** Run a command immediately (for argument-less commands picked from the menu). */
@@ -24,6 +26,7 @@ export function SlashCommandAutocomplete({
   textareaRef,
   content,
   canModerate,
+  capabilities,
   onInsertCommand,
   onRunCommand,
 }: SlashCommandAutocompleteProps) {
@@ -44,8 +47,8 @@ export function SlashCommandAutocomplete({
   });
 
   const matches = useMemo(
-    () => (isOpen ? matchSlashCommands(query, canModerate) : []),
-    [isOpen, query, canModerate],
+    () => (isOpen ? matchSlashCommands(query, canModerate, capabilities) : []),
+    [isOpen, query, canModerate, capabilities],
   );
 
   const detect = useCallback(() => {

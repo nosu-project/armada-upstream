@@ -47,7 +47,7 @@ import { encryptFileForUpload } from "@/lib/encryptedMedia";
 import { IMETA_MEDIA_URL_REGEX, IMETA_MEDIA_URL_TEST_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
-import { parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCommand } from "@/lib/slashCommands";
+import { parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 import type { AddrCoords } from "@/hooks/useEvent";
@@ -281,6 +281,21 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // whenever we have a candidate roster (NIP-29 groups always; Concord via
   // `mentionPubkeys`); off for plain DMs, which have no room.
   const mentionsEnabled = memberPubkeys !== undefined;
+
+  // Slash-command capabilities this composer advertises. Group-only commands
+  // (/poll, /thread, /kick, /ban) need features the delegated DM/Concord send
+  // path lacks; universal ones (/me, /shrug, /mention, …) work everywhere. The
+  // menu and on-send execution are filtered to this set, so Concord now gets
+  // slash commands without the NIP-29-specific ones.
+  const slashCapabilities = useMemo(() => {
+    const caps = new Set<SlashCapability>();
+    if (!sendOverride) caps.add("poll"); // poll mode is the group publish path
+    if (onSlashAction) {
+      caps.add("thread");
+      if (canModerate) caps.add("moderation");
+    }
+    return caps;
+  }, [sendOverride, onSlashAction, canModerate]);
 
   const draftKey = `chat-draft:${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
@@ -813,6 +828,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   /** Execute a parsed slash command's result (run action / send rewritten text). */
   const executeSlashCommand = useCallback(async (command: SlashCommand, arg: string) => {
+    // Guard commands that need a capability this composer lacks (e.g. a literally
+    // typed "/poll" in Concord). Such a command isn't in the menu, but a user
+    // could still type it; rather than misfire, send it as plain text.
+    if (command.requires?.some((r) => !slashCapabilities.has(r))) {
+      await publishMessage(`/${command.name}${arg ? ` ${arg}` : ""}`);
+      return;
+    }
     const result = command.run(arg, { canModerate, resolvePubkey: resolveNpubArg });
     if (result.type === "error") {
       toast({ title: "Command failed", description: result.message, variant: "destructive" });
@@ -854,7 +876,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
     // result.type === "send": publish the rewritten text.
     await publishMessage(result.text);
-  }, [canModerate, onSlashAction, resetComposeState, toast, publishMessage]);
+  }, [canModerate, onSlashAction, resetComposeState, toast, publishMessage, slashCapabilities]);
 
   /** Run a command picked from the autocomplete menu (Tab/Enter/click). */
   const runSlashFromMenu = useCallback((command: SlashCommand) => {
@@ -865,11 +887,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const handleSend = useCallback(async () => {
     const text = content.trim();
 
-    // Slash commands: only when the message is purely a "/command …" with no
-    // attachments, in group mode (not delegated DM/thread sends). Text commands
-    // (/me, /shrug) rewrite the outgoing message; action/moderation commands
-    // run a side-effect and send nothing.
-    if (!sendOverride && text.startsWith("/") && attachments.length === 0) {
+    // Slash commands: when the message is purely a "/command …" with no
+    // attachments. Text commands (/me, /shrug) rewrite the outgoing message;
+    // action/moderation commands run a side-effect and send nothing. Works in
+    // both group mode and the delegated DM/Concord send path — executeSlashCommand
+    // guards commands needing an unsupported capability.
+    if (text.startsWith("/") && attachments.length === 0) {
       const parsed = parseSlashCommand(text);
       if (parsed) {
         await executeSlashCommand(parsed.command, parsed.arg);
@@ -1249,15 +1272,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     restrictToPubkeys={memberPubkeys}
                   />
                 )}
-                {!sendOverride && (
-                  <SlashCommandAutocomplete
-                    textareaRef={textareaRef}
-                    content={content}
-                    canModerate={canModerate}
-                    onInsertCommand={insertAtCursor}
-                    onRunCommand={runSlashFromMenu}
-                  />
-                )}
+                <SlashCommandAutocomplete
+                  textareaRef={textareaRef}
+                  content={content}
+                  canModerate={canModerate}
+                  capabilities={slashCapabilities}
+                  onInsertCommand={insertAtCursor}
+                  onRunCommand={runSlashFromMenu}
+                />
                 <EmojiShortcodeAutocomplete
                   textareaRef={textareaRef}
                   content={content}
