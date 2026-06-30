@@ -544,7 +544,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                 <Button
                   size="sm"
                   onClick={() => setJoinDialogOpen(true)}
-                  className="clip-corner-lg h-7 px-4"
+                  className="clip-corner-lg h-7 touch:h-9 px-4"
                 >
                   Join
                 </Button>

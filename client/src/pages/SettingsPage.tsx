@@ -148,7 +148,7 @@ export function SettingsPage() {
       {/* Header — a detached floating command bar matching the group/Concord/DM
           chrome (cut-corner card, recessed shade), but capped to the settings
           content width and centered on desktop. */}
-      <header className="relative h-12 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+      <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
         <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={() => navigate(-1)}>
           <ArrowLeft className="size-5" />
         </Button>

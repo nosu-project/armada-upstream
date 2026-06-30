@@ -53,7 +53,7 @@ function EventRow({
               variant="ghost"
               size="icon"
               aria-label="Delete event"
-              className="size-6 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/event:opacity-100 focus-visible:opacity-100 transition-opacity"
+              className="size-6 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/event:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
               onClick={() => onDelete(event)}
             >
               <Trash2 className="size-3.5" />

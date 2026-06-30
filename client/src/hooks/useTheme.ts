@@ -2,6 +2,7 @@ import { useCallback, useRef } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { syncNativeStatusBar } from "@/lib/statusBar";
 import {
   buildThemeCssFromCore,
   builtinThemes,
@@ -53,6 +54,10 @@ export function useTheme() {
       document.head.appendChild(el);
     }
     el.textContent = buildThemeCssFromCore(colors);
+
+    // Retint the native status/navigation bars to contrast with the new theme
+    // background (no-op on web).
+    syncNativeStatusBar(colors.background);
 
     requestAnimationFrame(() => {
       noTransition.remove();

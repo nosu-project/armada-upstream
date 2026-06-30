@@ -34,6 +34,7 @@ import { useCall } from "@/hooks/useCall";
 import { useGroup } from "@/hooks/useGroup";
 import { useGroupMembership, useJoinGroup, useLeaveGroup } from "@/hooks/useGroupMembership";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
+import { useHeaderOverflow } from "@/hooks/useHeaderOverflow";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
 import { useCalendarEvents } from "@/hooks/useCalendarEvents";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
@@ -140,6 +141,20 @@ export function GroupPage() {
   const { events: calendarEvents, remove: removeEvent } = useCalendarEvents(relayUrl, groupId);
   const hasEvents = calendarEvents.length > 0;
 
+  // Header action overflow. Pins + Events are the lower-priority toggles; on a
+  // narrow phone (e.g. iPhone SE) where the bar can't fit everything alongside
+  // the channel name, they fold into the channel-info (⋮) menu. Events folds
+  // first, then pins. Measured (not breakpoint'd) because the action set is
+  // conditional, so a fixed breakpoint would mis-collapse. Must be called
+  // before any early return (rules-of-hooks).
+  const showEvents = hasEvents || isAdmin;
+  const showPins = hasPins;
+  const collapsibleCount = (showEvents ? 1 : 0) + (showPins ? 1 : 0);
+  const { ref: headerActionsRef, overflowCount } = useHeaderOverflow(collapsibleCount);
+  // Collapse order: events first (overflowCount >= 1), then pins (>= 2).
+  const eventsCollapsed = showEvents && overflowCount >= 1;
+  const pinsCollapsed = showPins && overflowCount >= (showEvents ? 2 : 1);
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Lets the pinned-messages bar jump to a message in the timeline; GroupChat
   // assigns the scroll function into this ref.
@@ -238,6 +253,11 @@ export function GroupPage() {
   // NIP-29 relays generally only accept writes from members (relay29 always
   // does), so gate the composer on membership.
   const canWrite = Boolean(user) && isMember;
+  // The ⋮ channel-info menu renders for admins/members, and also whenever a
+  // pins/events action has overflowed into it (so a non-member still reaches
+  // the collapsed toggle).
+  const showChannelMenu =
+    isAdmin || Boolean(user && isMember) || pinsCollapsed || eventsCollapsed;
   // Membership is a TRI-STATE: while the group details or the membership query
   // are still resolving and we don't yet have a positive membership signal, the
   // member-vs-not answer is UNKNOWN — not "not a member". Surfacing the "join to
@@ -302,7 +322,10 @@ export function GroupPage() {
         <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
         {/* Channel header — detached floating command bar, matching the right
             roster: same margin, cut-corner card, and recessed chrome shade. */}
-        <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+        <header
+          ref={headerActionsRef}
+          className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome"
+        >
           {/* Mobile back → slides the chat away to reveal the channel list.
               (The same reveal is also driven by a left-edge swipe.) */}
           <Button
@@ -318,7 +341,10 @@ export function GroupPage() {
           {group?.hasLivekit
             ? <Volume2 className="size-5 text-muted-foreground shrink-0" />
             : <Hash className="size-5 text-muted-foreground shrink-0" />}
-          <div className="min-w-0 flex-1">
+          {/* Title keeps a min-width floor so the action buttons can't squeeze
+              it to nothing — instead the row overflows, which is what
+              useHeaderOverflow measures to fold pins/events into the ⋮ menu. */}
+          <div className="min-w-[5rem] flex-1">
             <h1 className="font-semibold truncate leading-tight">
               {isLoading ? "…" : group?.name ?? groupId}
             </h1>
@@ -341,7 +367,7 @@ export function GroupPage() {
                   variant="ghost"
                   size="icon"
                   aria-label="Join voice"
-                  className="size-8 text-muted-foreground hover:text-success"
+                  className="size-8 touch:size-10 text-muted-foreground hover:text-success"
                   onClick={() => joinCall(relayUrl, groupId)}
                 >
                   <Phone className="size-4" />
@@ -350,8 +376,9 @@ export function GroupPage() {
               <TooltipContent>Join voice</TooltipContent>
             </Tooltip>
           )}
-          {/* Pinned messages — toggles the browse bar below the header. */}
-          {hasPins && (
+          {/* Pinned messages — toggles the browse bar below the header. Folds
+              into the ⋮ menu when the header runs out of room (pinsCollapsed). */}
+          {showPins && !pinsCollapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -359,7 +386,7 @@ export function GroupPage() {
                   size="icon"
                   aria-label="Pinned messages"
                   aria-pressed={pinsOpen}
-                  className={cn("size-8 text-muted-foreground", pinsOpen && "text-foreground")}
+                  className={cn("size-8 touch:size-10 text-muted-foreground", pinsOpen && "text-foreground")}
                   onClick={() => setPinsOpen((v) => !v)}
                 >
                   <Pin className="size-4" />
@@ -368,8 +395,9 @@ export function GroupPage() {
               <TooltipContent>Pinned messages</TooltipContent>
             </Tooltip>
           )}
-          {/* Calendar events — toggles the events bar below the header. */}
-          {(hasEvents || isAdmin) && (
+          {/* Calendar events — toggles the events bar below the header. Folds
+              into the ⋮ menu first when space is tight (eventsCollapsed). */}
+          {showEvents && !eventsCollapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -377,7 +405,7 @@ export function GroupPage() {
                   size="icon"
                   aria-label="Events"
                   aria-pressed={eventsOpen}
-                  className={cn("size-8 text-muted-foreground", eventsOpen && "text-foreground")}
+                  className={cn("size-8 touch:size-10 text-muted-foreground", eventsOpen && "text-foreground")}
                   onClick={() => setEventsOpen((v) => !v)}
                 >
                   <CalendarClock className="size-4" />
@@ -394,7 +422,7 @@ export function GroupPage() {
                 size="icon"
                 aria-label="Search messages"
                 aria-pressed={searchOpen}
-                className={cn("size-8 text-muted-foreground", searchOpen && "text-foreground")}
+                className={cn("size-8 touch:size-10 text-muted-foreground", searchOpen && "text-foreground")}
                 onClick={() => setSearchOpen(true)}
               >
                 <Search className="size-4" />
@@ -408,7 +436,7 @@ export function GroupPage() {
             size="icon"
             aria-label="Members"
             aria-pressed={membersOpen}
-            className="size-8 sidebar:hidden"
+            className="size-8 touch:size-10 sidebar:hidden"
             onClick={() => setMembersOpen((v) => !v)}
           >
             <Users className="size-4" />
@@ -432,14 +460,14 @@ export function GroupPage() {
             </TooltipTrigger>
             <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
           </Tooltip>
-          {(isAdmin || (user && isMember)) && (
+          {showChannelMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
                   aria-label="More options"
-                  className="size-8 text-muted-foreground"
+                  className="size-8 touch:size-10 text-muted-foreground"
                 >
                   <MoreVertical className="size-4" />
                 </Button>
@@ -448,6 +476,32 @@ export function GroupPage() {
                 <DropdownMenuLabel className="text-[11px] uppercase tracking-wide text-muted-foreground/80">
                   {group?.name ?? "Channel"}
                 </DropdownMenuLabel>
+                {/* Pins / Events overflow here when the header is too narrow to
+                    show them inline. They keep their toggle behavior + active
+                    state (a check-style highlight when the browse bar is open). */}
+                {(pinsCollapsed || eventsCollapsed) && (
+                  <>
+                    {pinsCollapsed && (
+                      <DropdownMenuItem
+                        className={cn("px-3 py-2", pinsOpen && "text-foreground font-medium")}
+                        onClick={() => setPinsOpen((v) => !v)}
+                      >
+                        <Pin className="size-4" />
+                        Pinned messages
+                      </DropdownMenuItem>
+                    )}
+                    {eventsCollapsed && (
+                      <DropdownMenuItem
+                        className={cn("px-3 py-2", eventsOpen && "text-foreground font-medium")}
+                        onClick={() => setEventsOpen((v) => !v)}
+                      >
+                        <CalendarClock className="size-4" />
+                        Events
+                      </DropdownMenuItem>
+                    )}
+                    {(isAdmin || (user && isMember)) && <DropdownMenuSeparator />}
+                  </>
+                )}
                 {user && (
                   <DropdownMenuItem className="px-3 py-2" onClick={() => setServerProfileOpen(true)}>
                     <IdCard className="size-4" />

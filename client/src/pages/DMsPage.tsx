@@ -364,7 +364,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <header className="h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+      <header className="h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         {/* Mobile back → returns to the rail + conversation list (the shared
             DM-list view), the same panes that are persistently rendered. */}
         <Button
@@ -395,7 +395,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 variant="ghost"
                 size="icon"
                 aria-label="Start voice call"
-                className="relative size-8 shrink-0 text-muted-foreground hover:text-success"
+                className="relative size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-success"
                 onClick={() => joinDmCall(voiceRelay!, roomId!, peer)}
               >
                 <Phone className="size-4" />
@@ -416,7 +416,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
               size="icon"
               aria-label={searchOpen ? "Close search" : "Search messages"}
               aria-pressed={searchOpen}
-              className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+              className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
               onClick={() => setSearchOpen((open) => !open)}
             >
               {searchOpen ? <X className="size-4" /> : <Search className="size-4" />}
@@ -430,7 +430,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
               variant="ghost"
               size="icon"
               aria-label={`Mute ${name}`}
-              className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+              className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-destructive"
               onClick={() => setMuteConfirmOpen(true)}
             >
               <BellOff className="size-4" />
@@ -710,7 +710,7 @@ function NewDMPane({
 
   return (
     <div className="flex h-full min-h-0 flex-col safe-area-top">
-      <header className="h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+      <header className="h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         <Button
           variant="ghost"
           size="icon"
@@ -894,7 +894,7 @@ function ConversationList({
                 size="icon"
                 aria-label={friendsOnly ? "Showing people you follow" : "Show only people you follow"}
                 aria-pressed={friendsOnly}
-                className={cn("size-8 text-muted-foreground", friendsOnly && "text-primary")}
+                className={cn("size-8 touch:size-10 text-muted-foreground", friendsOnly && "text-primary")}
                 onClick={() => setFriendsOnly((v) => !v)}
               >
                 <Users className="size-4" />
@@ -908,7 +908,7 @@ function ConversationList({
             variant="ghost"
             size="icon"
             aria-label="New message"
-            className="size-8"
+            className="size-8 touch:size-10"
             onClick={onCompose}
           >
             <Plus className="size-5" />

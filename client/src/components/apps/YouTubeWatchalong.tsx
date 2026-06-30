@@ -426,7 +426,7 @@ function QueueRow({
           </p>
         </div>
       </button>
-      <div className="flex shrink-0 items-center opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
+      <div className="flex shrink-0 items-center opacity-0 group-hover/row:opacity-100 touch:opacity-100 focus-within:opacity-100 transition-opacity">
         <Button variant="ghost" size="icon" className="size-6 text-muted-foreground" aria-label="Move up" disabled={!canUp} onClick={onUp}>
           <ArrowUp className="size-3.5" />
         </Button>

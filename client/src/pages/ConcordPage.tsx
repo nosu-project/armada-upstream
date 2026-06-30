@@ -643,7 +643,7 @@ export function ConcordPage() {
       >
       {/* Chat */}
       <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
-        <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+        <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
           {/* Mobile back → slides the chat away to reveal the channel list.
               (The same reveal is also driven by a left-edge swipe.) */}
           <Button
@@ -682,7 +682,7 @@ export function ConcordPage() {
             {user && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="size-8" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
+                  <Button variant="ghost" size="icon" className="size-8 touch:size-10" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
                     <UserPlus className="size-4" />
                   </Button>
                 </TooltipTrigger>
@@ -695,7 +695,7 @@ export function ConcordPage() {
               size="icon"
               aria-label="Members"
               aria-pressed={membersOpen}
-              className="size-8 sidebar:hidden"
+              className="size-8 touch:size-10 sidebar:hidden"
               onClick={() => setMembersOpen((v) => !v)}
             >
               <Users className="size-4" />
@@ -722,7 +722,7 @@ export function ConcordPage() {
             {user && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="size-8" aria-label="Community actions">
+                  <Button variant="ghost" size="icon" className="size-8 touch:size-10" aria-label="Community actions">
                     <MoreVertical className="size-4" />
                   </Button>
                 </DropdownMenuTrigger>
