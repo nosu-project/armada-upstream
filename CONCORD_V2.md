@@ -386,12 +386,20 @@ space-delimited `key value` strings:
   "name <original filename>",      (optional; may contain spaces)
   "thumb <thumbhash>",     (optional, images)
   "dim <w>x<h>",           (optional, images)
-  "webxdc-topic <topic>"   (optional, Mini Apps realtime)
+  "webxdc <id>"            (optional, Mini Apps realtime)
 ]
 ```
 
 Required for a valid attachment: `url`, `decryption-key`, `decryption-nonce`. A value is
 everything after the first space (so filenames with spaces survive).
+
+A **webxdc Mini App** is just such an attachment: a `.xdc` (ZIP) file with `m
+application/x-webxdc` (the official DeltaChat MIME) and a `webxdc <id>` property carrying a
+randomly generated coordination identifier, exactly the app-attachment form of
+[NIP-DC](https://github.com/nostr-protocol/nips/pull/2230) (which itself rides a NIP-92
+`imeta` / NIP-94 kind-1063 attachment). Concord encrypts the `.xdc` like any other attachment.
+The `webxdc` id is the coordination handle that the realtime peer signal (kind 3310, §9.2)
+references as its `topic` — the same value NIP-DC carries in its realtime/state `i` tag.
 
 ---
 
