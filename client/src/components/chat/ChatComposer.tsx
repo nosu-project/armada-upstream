@@ -190,6 +190,17 @@ interface ChatComposerProps {
    * emoji, media and mentions just like NIP-29 does.
    */
   sendOverride?: (finalText: string, tags: string[][]) => Promise<void>;
+  /**
+   * Explicit candidate set for @-mention autocomplete, used when the composer
+   * can't derive a room roster itself. In NIP-29 mode the composer builds this
+   * from the group's admins/members + recent speakers via `useGroup`; but DM
+   * mode (`relayUrl === "dm"`) has no such lookup. Concord reuses DM mode for
+   * its encrypted send path yet *does* have a roster (control-plane members +
+   * recent posters), so it passes that list here to re-enable mentions. When
+   * provided (even empty), the @-mention dropdown is enabled and scoped to
+   * these pubkeys. Omit it (plain DMs) to keep mentions disabled.
+   */
+  mentionPubkeys?: string[];
   /** Placeholder text for the input (defaults to the group placeholder). */
   placeholder?: string;
   /**
@@ -237,7 +248,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
@@ -250,11 +261,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const { launchApp } = useApps();
 
   // Scope @-mentions to people in the room: admins, members, and anyone who
-  // has spoken in this view. DMs (relayUrl === "dm") have no room, so mentions
-  // are disabled there.
+  // has spoken in this view. Plain DMs (relayUrl === "dm" with no caller-
+  // supplied roster) have no room, so mentions are disabled there. Callers
+  // that reuse DM mode but do have a roster (e.g. Concord) pass `mentionPubkeys`
+  // to re-enable mentions scoped to that list.
   const isDM = relayUrl === "dm";
   const { data: groupDetails } = useGroup(isDM ? undefined : relayUrl, isDM ? undefined : groupId);
   const memberPubkeys = useMemo(() => {
+    if (mentionPubkeys) return mentionPubkeys;
     if (isDM) return undefined;
     const set = new Set<string>();
     for (const a of groupDetails?.admins ?? []) set.add(a.pubkey);
@@ -262,7 +276,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     for (const m of messages) set.add(m.pubkey);
     if (user) set.add(user.pubkey);
     return [...set];
-  }, [isDM, groupDetails?.admins, groupDetails?.members, messages, user]);
+  }, [mentionPubkeys, isDM, groupDetails?.admins, groupDetails?.members, messages, user]);
+  // Whether the inline @-mention autocomplete should render at all. Available
+  // whenever we have a candidate roster (NIP-29 groups always; Concord via
+  // `mentionPubkeys`); off for plain DMs, which have no room.
+  const mentionsEnabled = memberPubkeys !== undefined;
 
   const draftKey = `chat-draft:${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
@@ -1223,7 +1241,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   maxLength={MAX_CHARS}
                   className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto align-middle"
                 />
-                {!isDM && (
+                {mentionsEnabled && (
                   <MentionAutocomplete
                     textareaRef={textareaRef}
                     content={content}

@@ -72,6 +72,41 @@ function ConcordReplyContext({
   return <ReplyContextLine name={displayName} preview={preview} onClick={onClick} />;
 }
 
+/** One typer's scoped display name, resolved like the rest of the channel. */
+function TypingName({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  return <span className="font-medium not-italic">{useScopedDisplayName(pubkey, author.data?.metadata)}</span>;
+}
+
+/**
+ * Discord-style "who is typing" line. Names up to three typers inline (resolved
+ * to their scoped display names, like message authors); beyond that it collapses
+ * to "Several people are typing…" to keep the line short and avoid resolving an
+ * unbounded list of profiles.
+ */
+function ConcordTypingIndicator({ pubkeys }: { pubkeys: string[] }) {
+  if (pubkeys.length === 0) return null;
+  if (pubkeys.length > 3) {
+    return (
+      <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
+        Several people are typing…
+      </div>
+    );
+  }
+  const names = pubkeys.map((pk) => <TypingName key={pk} pubkey={pk} />);
+  return (
+    <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
+      {names.map((name, i) => (
+        <span key={pubkeys[i]}>
+          {name}
+          {i < names.length - 2 ? ", " : i === names.length - 2 ? (names.length > 2 ? ", and " : " and ") : ""}
+        </span>
+      ))}
+      {names.length === 1 ? " is typing…" : " are typing…"}
+    </div>
+  );
+}
+
 /** The community's decrypted GroupRoot logo for the channel-list title, with a
  *  shield fallback (and a shield accent overlay so the E2E trust model stays
  *  visually distinct from relay-hosted servers). */
@@ -784,15 +819,14 @@ export function ConcordPage() {
             />
 
             {(typingPubkeys?.length ?? 0) > 0 && (
-              <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
-                {typingPubkeys!.length === 1 ? "Someone is typing…" : `${typingPubkeys!.length} people are typing…`}
-              </div>
+              <ConcordTypingIndicator pubkeys={typingPubkeys!} />
             )}
             {channel && (
               <ChatComposer
                 relayUrl="dm"
                 groupId={channel ? bytesToHex(channel.id) : "concord"}
                 messages={[]}
+                mentionPubkeys={memberPubkeys}
                 replyTo={replyTo}
                 onCancelReply={() => setReplyTo(undefined)}
                 placeholder={user ? "Message (encrypted)…" : "Sign in to send"}
