@@ -4,6 +4,32 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.13.0] - 2026-06-30
+
+Armada now works with no internet at all. On Android, a new Bluetooth mesh lets
+you chat with people nearby — your phones relay messages to each other directly,
+so you can talk in channels or one-on-one even with no signal and no Wi-Fi. It's
+compatible with bitchat, so Armada and bitchat users on the same mesh see each
+other. You can pick a nickname or stay incognito, and @-mention nearby people
+and run quick commands like /me right from the mesh composer. Signing up no
+longer needs a connection either: you can create your account offline, and
+anything you send while offline is queued and sent automatically once you're
+back online.
+
+### Added
+- Bluetooth mesh chat on Android: talk to nearby people with no internet, in
+  channels or direct messages. Compatible with bitchat.
+- Choose a nickname or stay incognito on the mesh, with a colored name and a
+  tappable profile popover to message or mention a peer.
+- @-mentions and slash commands (like /me and /shrug) in the mesh composer.
+- A "Nearby" roster and in-chat members toggle show who's currently reachable
+  over the mesh.
+- Offline signup: create your account without a connection.
+
+### Changed
+- Messages you send while offline are queued and sent automatically when you
+  reconnect.
+
 ## [0.12.0] - 2026-06-30
 
 The Android app now feels like a real app instead of a website in a box. The
