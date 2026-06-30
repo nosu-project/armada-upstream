@@ -2,7 +2,9 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
 import { APP_NAME } from "@/lib/platform";
+import { PublishQueuedError, isPublishQueuedError, queueSignedEvent, removeQueuedPublish } from "@/lib/publishOutbox";
 import { useCurrentUser } from "./useCurrentUser";
+import { useEventStore } from "./useEventStore";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -37,6 +39,7 @@ function isReplaceableKind(kind: number): boolean {
 export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTemplate> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const eventStore = useEventStore();
 
   return useMutation({
     mutationFn: async (t: EventTemplate) => {
@@ -77,18 +80,30 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         );
       }
 
+      // Store the signed event locally before any network work. This makes
+      // offline-created profiles/settings visible immediately and gives the
+      // retry worker a durable copy if the app closes before relays recover.
+      void eventStore.then((store) => store.event(event)).catch(() => undefined);
+      queueSignedEvent(event, relay);
+
       // Let callers optimistically render the event before the network call.
       onSigned?.(event);
 
-      if (relay) {
-        await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(8000) });
-      } else {
-        await nostr.event(event, { signal: AbortSignal.timeout(8000) });
+      try {
+        if (relay) {
+          await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(8000) });
+        } else {
+          await nostr.event(event, { signal: AbortSignal.timeout(8000) });
+        }
+        removeQueuedPublish(event.id);
+      } catch (error) {
+        throw new PublishQueuedError(event, error);
       }
 
       return event;
     },
     onError: (error) => {
+      if (isPublishQueuedError(error)) return;
       console.error("Failed to publish event:", error);
     },
   });

@@ -2,6 +2,7 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import React, { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Eye, EyeOff, KeyRound, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,10 +10,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { toast } from '@/hooks/useToast';
+import { parseAuthorEvent } from '@/hooks/useAuthor';
 import { useLoginActions } from '@/hooks/useLoginActions';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { saveNsec } from '@/lib/credentialManager';
+import { isPublishQueuedError } from '@/lib/publishOutbox';
 
 interface SignupDialogProps {
   isOpen: boolean;
@@ -23,8 +26,10 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
   const [step, setStep] = useState<'generate' | 'download' | 'profile'>('generate');
   const [nsec, setNsec] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const [pubkey, setPubkey] = useState('');
   const [name, setName] = useState('');
   const [about, setAbout] = useState('');
+  const queryClient = useQueryClient();
   const login = useLoginActions();
   const { mutateAsync: publishEvent, isPending: isPublishing } = useNostrPublish();
 
@@ -51,6 +56,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
       await saveNsec(npub, nsec);
 
       login.nsec(nsec);
+      setPubkey(pubkey);
       setStep('profile');
     } catch {
       toast({
@@ -71,14 +77,24 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
           kind: 0,
           content: JSON.stringify(data),
           tags: [],
+          onSigned: (event) => {
+            queryClient.setQueryData(['author', pubkey || event.pubkey], parseAuthorEvent(event));
+          },
         });
       }
-    } catch {
-      toast({
-        title: 'Profile Setup Failed',
-        description: 'Your account was created but profile setup failed. You can update it later.',
-        variant: 'destructive',
-      });
+    } catch (error) {
+      if (isPublishQueuedError(error)) {
+        toast({
+          title: 'Profile saved locally',
+          description: 'It will publish automatically when you are back online.',
+        });
+      } else {
+        toast({
+          title: 'Profile Setup Failed',
+          description: 'Your account was created but profile setup failed. You can update it later.',
+          variant: 'destructive',
+        });
+      }
     } finally {
       onClose();
     }
@@ -96,6 +112,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
       setStep('generate');
       setNsec('');
       setShowKey(false);
+      setPubkey('');
       setName('');
       setAbout('');
     }

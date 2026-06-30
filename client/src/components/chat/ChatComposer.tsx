@@ -47,7 +47,7 @@ import { encryptFileForUpload } from "@/lib/encryptedMedia";
 import { IMETA_MEDIA_URL_REGEX, IMETA_MEDIA_URL_TEST_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
-import { parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
+import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 import type { AddrCoords } from "@/hooks/useEvent";
@@ -827,7 +827,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [user, isSending, sendOverride, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed]);
 
   /** Execute a parsed slash command's result (run action / send rewritten text). */
-  const executeSlashCommand = useCallback(async (command: SlashCommand, arg: string) => {
+  const executeSlash = useCallback(async (command: SlashCommand, arg: string) => {
     // Guard commands that need a capability this composer lacks (e.g. a literally
     // typed "/poll" in Concord). Such a command isn't in the menu, but a user
     // could still type it; rather than misfire, send it as plain text.
@@ -835,54 +835,51 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       await publishMessage(`/${command.name}${arg ? ` ${arg}` : ""}`);
       return;
     }
-    const result = command.run(arg, { canModerate, resolvePubkey: resolveNpubArg });
-    if (result.type === "error") {
-      toast({ title: "Command failed", description: result.message, variant: "destructive" });
-      return;
-    }
-    if (result.type === "noop") {
-      resetComposeState();
-      return;
-    }
-    if (result.type === "action") {
-      if (result.action.kind === "openPoll") {
-        setContent("");
-        setMode("poll");
-        textareaRef.current?.focus();
-      } else if (result.action.kind === "openMention") {
-        // Seed an "@" so the mention autocomplete opens for the next keystroke.
-        // A `prefix` (e.g. "/slap ") keeps a wrapping command so the resolved
-        // mention re-runs that command on send.
-        const prefix = result.action.prefix ?? "";
-        const seed = `${prefix}@`;
-        setContent(seed);
-        requestAnimationFrame(() => {
-          const el = textareaRef.current;
-          el?.focus();
-          el?.setSelectionRange(seed.length, seed.length);
-        });
-      } else if (result.action.kind === "clearDraft") {
-        resetComposeState();
-      } else {
-        // Delegated actions (moderation, open thread) handled by the parent.
-        try {
-          await onSlashAction?.(result.action);
-          resetComposeState();
-        } catch {
-          toast({ title: "Command failed", description: "The action could not be completed.", variant: "destructive" });
-        }
-      }
-      return;
-    }
-    // result.type === "send": publish the rewritten text.
-    await publishMessage(result.text);
+    await executeSlashCommand(
+      command,
+      arg,
+      { canModerate, resolvePubkey: resolveNpubArg },
+      {
+        send: publishMessage,
+        openMention: (prefix) => {
+          // Seed an "@" so the mention autocomplete opens for the next
+          // keystroke. A `prefix` (e.g. "/slap ") keeps a wrapping command so
+          // the resolved mention re-runs that command on send.
+          const seed = `${prefix ?? ""}@`;
+          setContent(seed);
+          requestAnimationFrame(() => {
+            const el = textareaRef.current;
+            el?.focus();
+            el?.setSelectionRange(seed.length, seed.length);
+          });
+        },
+        clearDraft: resetComposeState,
+        onError: (message) =>
+          toast({ title: "Command failed", description: message, variant: "destructive" }),
+        onAction: async (action) => {
+          if (action.kind === "openPoll") {
+            setContent("");
+            setMode("poll");
+            textareaRef.current?.focus();
+            return;
+          }
+          // Delegated actions (moderation, open thread) handled by the parent.
+          try {
+            await onSlashAction?.(action);
+            resetComposeState();
+          } catch {
+            toast({ title: "Command failed", description: "The action could not be completed.", variant: "destructive" });
+          }
+        },
+      },
+    );
   }, [canModerate, onSlashAction, resetComposeState, toast, publishMessage, slashCapabilities]);
 
   /** Run a command picked from the autocomplete menu (Tab/Enter/click). */
   const runSlashFromMenu = useCallback((command: SlashCommand) => {
     const parsed = parseSlashCommand(textareaRef.current?.value ?? "");
-    void executeSlashCommand(command, parsed?.command === command ? parsed.arg : "");
-  }, [executeSlashCommand]);
+    void executeSlash(command, parsed?.command === command ? parsed.arg : "");
+  }, [executeSlash]);
 
   const handleSend = useCallback(async () => {
     const text = content.trim();
@@ -895,7 +892,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     if (text.startsWith("/") && attachments.length === 0) {
       const parsed = parseSlashCommand(text);
       if (parsed) {
-        await executeSlashCommand(parsed.command, parsed.arg);
+        await executeSlash(parsed.command, parsed.arg);
         return;
       }
       // Unknown /command: fall through and send it literally.
@@ -908,7 +905,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       .filter((url) => !text.includes(url));
     const finalText = [text, ...extraUrls].filter(Boolean).join("\n");
     await publishMessage(finalText);
-  }, [content, attachments, sendOverride, executeSlashCommand, publishMessage]);
+  }, [content, attachments, sendOverride, executeSlash, publishMessage]);
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;

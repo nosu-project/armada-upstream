@@ -21,6 +21,12 @@ interface ChannelSidebarViewProps {
   addChannelLabel?: string;
   onAddChannel?: () => void;
   /**
+   * Render the add-channel "+" as a disabled placeholder (no action yet). Keeps
+   * the "Channels" header row at the same height as transports that do have an
+   * add action, so sidebars without one (e.g. Mesh) line up identically.
+   */
+  addChannelDisabled?: boolean;
+  /**
    * Inline content under the "Channels" label (e.g. a create-channel form).
    * Concord renders its add form here; NIP-29 leaves it empty (it uses a dialog).
    */
@@ -47,18 +53,20 @@ export function ChannelSidebarView({
   badge,
   addChannelLabel,
   onAddChannel,
+  addChannelDisabled,
   channelsHeaderExtra,
   children,
   footer,
   className,
 }: ChannelSidebarViewProps) {
-  const addButton = onAddChannel && (
+  const addButton = (onAddChannel || addChannelDisabled) && (
     <Button
       variant="ghost"
       size="icon"
       className="size-5"
       aria-label={addChannelLabel ?? "Add channel"}
       onClick={onAddChannel}
+      disabled={!onAddChannel}
     >
       <Plus className="size-4" />
     </Button>

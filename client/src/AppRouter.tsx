@@ -13,12 +13,14 @@ import { ConcordPage } from "@/pages/ConcordPage";
 import { DMsPage } from "@/pages/DMsPage";
 import { GroupPage } from "@/pages/GroupPage";
 import { InvitePage } from "@/pages/InvitePage";
+import { MeshPage } from "@/pages/MeshPage";
 import { NotFound } from "@/pages/NotFound";
 import { ServerPage } from "@/pages/ServerPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { WelcomePage } from "@/pages/WelcomePage";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 
 /**
@@ -37,6 +39,7 @@ import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 function HomeRedirect() {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
+  const online = useOnlineStatus();
 
   // Cold launch from a notification tap: the launch URL resolves async (see
   // coldLaunchDeepLink). Hold the default redirect until it's known — otherwise
@@ -69,9 +72,13 @@ function HomeRedirect() {
     return <Navigate to="/welcome" replace />;
   }
 
+  if (!online) {
+    return <Navigate to="/mesh" replace />;
+  }
+
   const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0];
   if (!firstServer) {
-    return <Navigate to="/welcome" replace />;
+    return <Navigate to="/mesh" replace />;
   }
   return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
 }
@@ -113,6 +120,7 @@ export function AppRouter() {
           <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
           <Route path="/invite" element={<InvitePage />} />
           <Route path="/about" element={<AboutPage />} />
+          <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
           <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
           <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
           <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />

@@ -9,7 +9,13 @@ interface SlashCommandAutocompleteProps {
   content: string;
   canModerate: boolean;
   /** Composer capabilities; commands needing an unsupported one are hidden. */
-  capabilities: ReadonlySet<SlashCapability>;
+  capabilities?: ReadonlySet<SlashCapability>;
+  /**
+   * Optional extra filter on which commands the menu offers (on top of the
+   * built-in moderation/capability gates). Used by surfaces that support only a
+   * subset — e.g. the Bluetooth mesh, which has no polls/threads/moderation.
+   */
+  commandFilter?: (command: SlashCommand) => boolean;
   /** Replace the command word `/query` with `/<name> ` (keeps the menu intent). */
   onInsertCommand: (params: { start: number; end: number; replacement: string }) => void;
   /** Run a command immediately (for argument-less commands picked from the menu). */
@@ -27,6 +33,7 @@ export function SlashCommandAutocomplete({
   content,
   canModerate,
   capabilities,
+  commandFilter,
   onInsertCommand,
   onRunCommand,
 }: SlashCommandAutocompleteProps) {
@@ -47,8 +54,12 @@ export function SlashCommandAutocomplete({
   });
 
   const matches = useMemo(
-    () => (isOpen ? matchSlashCommands(query, canModerate, capabilities) : []),
-    [isOpen, query, canModerate, capabilities],
+    () => {
+      if (!isOpen) return [];
+      const base = matchSlashCommands(query, canModerate, capabilities);
+      return commandFilter ? base.filter(commandFilter) : base;
+    },
+    [isOpen, query, canModerate, capabilities, commandFilter],
   );
 
   const detect = useCallback(() => {
@@ -149,8 +160,14 @@ export function SlashCommandAutocomplete({
               "w-full flex items-baseline gap-2 px-3 py-2 text-left transition-colors cursor-pointer",
               index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
             )}
-            onClick={() => selectCommand(command)}
-            onMouseDown={(e) => e.preventDefault()}
+            // Select on pointer-down (not click): preventDefault keeps the
+            // composer focused, and acting on pointer-down fires reliably on
+            // touch, where a mousedown-preventDefault can swallow the synthetic
+            // click (the menu would just close and nothing would prefill).
+            onPointerDown={(e) => {
+              e.preventDefault();
+              selectCommand(command);
+            }}
           >
             <span className="font-mono text-sm font-semibold shrink-0">
               {command.usage ?? `/${command.name}`}
