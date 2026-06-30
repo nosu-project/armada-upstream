@@ -4,6 +4,36 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.12.0] - 2026-06-30
+
+The Android app now feels like a real app instead of a website in a box. The
+keyboard pushes the message box up instead of covering it, buttons buzz when you
+tap them, sharing an invite opens the system share sheet, and the status bar
+matches your theme. Tapping is crisper — no more grey flashes, accidental text
+selection, or rubber-band bounce — and touch targets, headers, and the server
+rail are sized for fingers. On small phones, the less-used channel actions tuck
+themselves into the channel menu so the channel name always has room.
+
+### Added
+- Buttons and toggles give haptic feedback on tap.
+- Sharing an invite opens the native share sheet.
+
+### Changed
+- The on-screen keyboard now pushes the message box up above it instead of
+  covering it.
+- The status bar tint follows the app theme.
+- Larger, finger-friendly headers, action buttons, and inputs on touch devices;
+  the server rail is slimmer on phones.
+- Controls that only appeared on hover (member actions, edit buttons, and more)
+  now show on touch too.
+- On narrow screens the channel header tucks the pins and events actions into
+  the channel menu when there isn't room for everything.
+
+### Fixed
+- No more grey tap-flash, accidental long-press text selection, or whole-page
+  rubber-band scrolling in the app.
+- The whole app can no longer be pinch-zoomed like a web page.
+
 ## [0.11.0] - 2026-06-30
 
 Encrypted communities now feel like the rest of chat. You can @-mention people
