@@ -11,9 +11,11 @@ import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { useRotatorSecretKey } from "@/hooks/useRotatorSecretKey";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatus, type SendStatusMap } from "@/hooks/useSendStatusMap";
+import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
 import { forgetSkips, openMemoizedBatch } from "@/lib/concord/decodeCache";
 import { channelPseudonym } from "@/lib/concord/derive";
 import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
+import { concordSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 import {
   buildInnerEvent,
   openedFromSealed,
@@ -388,6 +390,8 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   // Epoch signature: changes when a rekey is caught up, so we can re-read.
   const epochSig = allEpochKeys.map((e) => e.epoch.toString()).join(",");
   const queryKey = ["concord", "channel", channelIdHex];
+  // Last-known-good localStorage snapshot scope (instant cold-launch paint).
+  const snapshotScope = channelIdHex ? concordSnapshotScope(channelIdHex) : undefined;
 
   // Per-channel backfill cursor (oldest created_at walked so far). Lets each
   // poll resume paging OLDER history into the local store instead of re-walking
@@ -640,6 +644,14 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
+    // Seed with the last visit's screenful from the synchronous localStorage
+    // snapshot (already-decrypted OpenedMessages — same at-rest trust level as
+    // the folded cache, see timelineSnapshot.ts). A cold launch paints the
+    // channel on the first frame instead of behind the IndexedDB cold-open +
+    // decrypt. Marked already-stale so the store read + relay refresh run
+    // immediately and re-apply moderation/deletes on top of the seed.
+    initialData: () => readTimelineSnapshot<OpenedMessage>(snapshotScope),
+    initialDataUpdatedAt: 0,
     // Keep the previous channel's messages on screen while the next channel's
     // first read resolves, so switching never flashes a skeleton.
     placeholderData: keepPreviousData,
@@ -799,6 +811,10 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       setIsLoadingOlder(false);
     }
   }, [hasMore, isLoadingOlder, query]);
+
+  // Keep the localStorage snapshot fresh with the decoded timeline (debounced),
+  // so the next cold launch paints this channel instantly.
+  useTimelineSnapshotWriter(snapshotScope, query.data);
 
   return { ...query, loadOlder, hasMore, isLoadingOlder };
 }

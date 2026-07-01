@@ -91,13 +91,52 @@ public class ArmadaNotificationPlugin extends Plugin {
     private static final int EVENT_BUFFER_MAX = 200;
 
     /**
-     * Hand a raw outer event (the wire JSON the service received) to the WebView.
-     * Emits live if the bridge is up; otherwise buffers for the next drain.
-     * Same event for NIP-29 (kind 9/1068/…) and Concord (sealed kind 3300) — the
-     * WebView writes it into its IndexedDB store and its read path decodes it.
+     * Rolling per-room cache of raw outer events, keyed by room
+     * ("h:<groupId>" / "z:<pseudonym>" / "dm"), newest last. Unlike
+     * {@link #eventBuffer} (a one-shot drain of what arrived while the WebView
+     * was down, shared across ALL rooms), this survives drains and retains the
+     * last screenful per room for the service's lifetime — so opening a room
+     * from a notification can paint natively-received history even when the
+     * global buffer overflowed or was already drained. LRU-bounded.
      */
-    static void feedRelayEvent(String eventJson) {
+    private static final int ROOM_CACHE_MAX_ROOMS = 24;
+    private static final int ROOM_CACHE_MAX_EVENTS = 30;
+    private static final java.util.LinkedHashMap<String, java.util.ArrayDeque<String>> roomEvents =
+            new java.util.LinkedHashMap<String, java.util.ArrayDeque<String>>(16, 0.75f, /*accessOrder=*/true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, java.util.ArrayDeque<String>> eldest) {
+                    return size() > ROOM_CACHE_MAX_ROOMS;
+                }
+            };
+
+    /** Record an event into its room's rolling cache (no-op without a room key). */
+    private static void recordRoomEvent(String roomKey, String eventJson) {
+        if (roomKey == null || eventJson == null) return;
+        synchronized (roomEvents) {
+            java.util.ArrayDeque<String> q = roomEvents.get(roomKey);
+            if (q == null) {
+                q = new java.util.ArrayDeque<>();
+                roomEvents.put(roomKey, q);
+            }
+            if (q.size() >= ROOM_CACHE_MAX_EVENTS) q.pollFirst();
+            q.addLast(eventJson);
+        }
+    }
+
+    /**
+     * Hand a raw outer event (the wire JSON the service received) to the WebView.
+     * Emits live if the bridge is up; otherwise buffers for the next drain. Also
+     * recorded in the per-room rolling cache regardless of bridge state.
+     * Same event for NIP-29 (kind 9/1068/…), DMs (kind 4, ciphertext) and
+     * Concord (sealed kind 3300) — the WebView writes it into its IndexedDB
+     * store and its read path decodes it.
+     *
+     * @param roomKey per-room cache key ("h:<groupId>" / "z:<z>" / "dm"), or
+     *                null to skip the room cache.
+     */
+    static void feedRelayEvent(String roomKey, String eventJson) {
         if (eventJson == null) return;
+        recordRoomEvent(roomKey, eventJson);
         ArmadaNotificationPlugin p = instance;
         if (p != null) {
             JSObject data = new JSObject();
@@ -157,6 +196,29 @@ public class ArmadaNotificationPlugin extends Plugin {
         synchronized (eventBuffer) {
             String e;
             while ((e = eventBuffer.pollFirst()) != null) arr.put(e);
+        }
+        JSObject ret = new JSObject();
+        ret.put("events", arr);
+        call.resolve(ret);
+    }
+
+    /**
+     * Return (without consuming) the rolling per-room cache for one room —
+     * the newest raw outer events the service received for it this service
+     * lifetime. Keys: "h:<groupId>", "z:<pseudonym>", "dm". The JS layer merges
+     * them by event id, so re-reads are idempotent.
+     */
+    @PluginMethod
+    public void getRoomEvents(PluginCall call) {
+        String room = call.getString("room");
+        JSArray arr = new JSArray();
+        if (room != null) {
+            synchronized (roomEvents) {
+                java.util.ArrayDeque<String> q = roomEvents.get(room);
+                if (q != null) {
+                    for (String e : q) arr.put(e);
+                }
+            }
         }
         JSObject ret = new JSObject();
         ret.put("events", arr);

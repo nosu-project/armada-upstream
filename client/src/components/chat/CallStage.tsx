@@ -24,6 +24,10 @@ import {
 } from "@/lib/avatarShape";
 import { cn } from "@/lib/utils";
 
+// Back-compat re-export: the slot moved to its own (LiveKit-free) module so
+// pages can render it without pulling the voice stack into their chunks.
+export { CallStageSlot } from "@/components/chat/CallStageSlot";
+
 /** The tile aspect ratio (16:9) used for fit calculations. */
 const TILE_ASPECT = 16 / 9;
 
@@ -89,29 +93,6 @@ function useElementSize<T extends HTMLElement>() {
   }, []);
   return [ref, size] as const;
 }
-
-/**
- * The top-of-chat host into which the active call's stage portals. A chat
- * surface renders this when its conversation matches the active call
- * (`active`), registering its DOM node as the stage slot; the persistent
- * `CallStage` (which lives in the LiveKitRoom) renders into it. When not active
- * it renders nothing, so non-matching surfaces never show the stage.
- */
-export function CallStageSlot({ active }: { active: boolean }) {
-  const { registerCallStageSlot } = useCall();
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!active) return;
-    const el = ref.current;
-    if (!el) return;
-    return registerCallStageSlot(el);
-  }, [active, registerCallStageSlot]);
-
-  if (!active) return null;
-  return <div ref={ref} className="shrink-0" />;
-}
-
 
 /**
  * A stable key identifying a focusable tile: a participant's camera/screenshare

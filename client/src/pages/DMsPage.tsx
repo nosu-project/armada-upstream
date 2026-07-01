@@ -3,7 +3,7 @@ import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
 
-import { CallStageSlot } from "@/components/chat/CallStage";
+import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { MessageRow } from "@/components/chat/MessageRow";

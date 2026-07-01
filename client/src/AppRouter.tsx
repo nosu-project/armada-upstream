@@ -1,5 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 
 import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
 import {
@@ -7,21 +7,27 @@ import {
   consumeColdLaunchDeepLink,
   onColdLaunchResolved,
 } from "@/lib/coldLaunchDeepLink";
+import { BootSplash } from "@/components/brand/BootSplash";
 import { MainLayout } from "@/components/layout/MainLayout";
-import { AboutPage } from "@/pages/AboutPage";
-import { ConcordPage } from "@/pages/ConcordPage";
-import { DMsPage } from "@/pages/DMsPage";
-import { GroupPage } from "@/pages/GroupPage";
-import { InvitePage } from "@/pages/InvitePage";
-import { MeshPage } from "@/pages/MeshPage";
-import { NotFound } from "@/pages/NotFound";
-import { ServerPage } from "@/pages/ServerPage";
-import { SettingsPage } from "@/pages/SettingsPage";
-import { WelcomePage } from "@/pages/WelcomePage";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
+
+// Route-level code splitting: each page loads as its own chunk on first visit,
+// so the boot bundle carries only the shell + the landing route's code. This is
+// a large cut on a mid-range Android WebView, where parsing the previously
+// monolithic bundle was a visible slice of every cold start.
+const AboutPage = lazy(() => import("@/pages/AboutPage").then((m) => ({ default: m.AboutPage })));
+const ConcordPage = lazy(() => import("@/pages/ConcordPage").then((m) => ({ default: m.ConcordPage })));
+const DMsPage = lazy(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage })));
+const GroupPage = lazy(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage })));
+const InvitePage = lazy(() => import("@/pages/InvitePage"));
+const MeshPage = lazy(() => import("@/pages/MeshPage"));
+const NotFound = lazy(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound })));
+const ServerPage = lazy(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage })));
+const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const WelcomePage = lazy(() => import("@/pages/WelcomePage").then((m) => ({ default: m.WelcomePage })));
 
 /**
  * Land the user somewhere sensible.
@@ -60,9 +66,11 @@ function HomeRedirect() {
   );
 
   if (!state.ready) {
-    // Launch URL not yet known — render nothing (blank root / splash) rather
-    // than committing to a destination we might immediately have to override.
-    return null;
+    // Launch URL not yet known — committing to a default destination here
+    // would lose the race against the deep link, so hold the redirect. Show
+    // the branded splash rather than a blank frame (this wait can reach the
+    // 1.5s bridge-guard timeout on a slow cold start).
+    return <BootSplash />;
   }
   if (state.deepLink) {
     return <Navigate to={state.deepLink} replace />;
@@ -110,23 +118,27 @@ export function AppRouter() {
   return (
     <BrowserRouter>
       <NotificationNavigation />
-      <Routes>
-        <Route element={<MainLayout />}>
-          <Route path="/" element={<HomeRedirect />} />
-          <Route path="/welcome" element={<WelcomePage />} />
-          <Route path="/s/:server" element={<ServerPage />} />
-          <Route path="/s/:server/:groupId" element={<GroupPage />} />
-          <Route path="/c/:communityId" element={<ConcordPage />} />
-          <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
-          <Route path="/invite" element={<InvitePage />} />
-          <Route path="/about" element={<AboutPage />} />
-          <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
-          <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
-          <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
-          <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
-        </Route>
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+      {/* Lazy route chunks paint the branded splash while they load, never a
+          blank frame. */}
+      <Suspense fallback={<BootSplash />}>
+        <Routes>
+          <Route element={<MainLayout />}>
+            <Route path="/" element={<HomeRedirect />} />
+            <Route path="/welcome" element={<WelcomePage />} />
+            <Route path="/s/:server" element={<ServerPage />} />
+            <Route path="/s/:server/:groupId" element={<GroupPage />} />
+            <Route path="/c/:communityId" element={<ConcordPage />} />
+            <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
+            <Route path="/invite" element={<InvitePage />} />
+            <Route path="/about" element={<AboutPage />} />
+            <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
+            <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
+            <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
+            <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
+          </Route>
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

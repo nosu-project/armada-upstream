@@ -61,18 +61,11 @@ function getWasmBinary(): Promise<ArrayBuffer> {
 }
 
 /**
- * Whether RNNoise can run in this environment: AudioWorklet support is required.
- * Used to hide the toggle / skip applying the processor where it can't work.
+ * Whether RNNoise can run in this environment. Re-exported from the
+ * dependency-free module (see rnnoiseSupport.ts) for existing importers.
  */
-export function rnnoiseSupported(): boolean {
-  return (
-    typeof AudioWorkletNode !== "undefined" &&
-    typeof window !== "undefined" &&
-    (typeof window.AudioContext !== "undefined" ||
-      typeof (window as unknown as { webkitAudioContext?: unknown }).webkitAudioContext !==
-        "undefined")
-  );
-}
+export { rnnoiseSupported } from "@/lib/rnnoiseSupport";
+import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 
 class RnnoiseTrackProcessor implements AudioTrackProcessor {
   name = "rnnoise-noise-suppression";

@@ -68,34 +68,47 @@ function writeCachedInfo(relayUrl: string, info: RelayInfoDocument): void {
   }
 }
 
+/**
+ * Fetch a relay's NIP-11 document directly (no react-query). Exported so
+ * useRelayGroups can resolve the relay's signing key WITHOUT gating its
+ * channel-list query on this hook's query lifecycle. Persists the last
+ * known-good doc to the same localStorage seed the hook reads.
+ */
+export async function fetchRelayInfoDoc(
+  relayUrl: string,
+  signal?: AbortSignal,
+): Promise<RelayInfoDocument> {
+  const httpUrl = relayToHttpUrl(relayUrl);
+  if (!httpUrl) {
+    throw new Error('Invalid relay URL');
+  }
+
+  const signals = [AbortSignal.timeout(8000), ...(signal ? [signal] : [])];
+  const response = await fetch(httpUrl, {
+    headers: { Accept: 'application/nostr+json' },
+    signal: AbortSignal.any(signals),
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const payload: unknown = await response.json();
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Invalid NIP-11 response');
+  }
+
+  const info = payload as RelayInfoDocument;
+  writeCachedInfo(relayUrl, info);
+  return info;
+}
+
 export function useRelayInfo(relayUrl: string | undefined) {
   const httpUrl = relayUrl ? relayToHttpUrl(relayUrl) : null;
 
   return useQuery<RelayInfoDocument>({
     queryKey: ['relay-info', relayUrl],
-    queryFn: async ({ signal }) => {
-      if (!httpUrl) {
-        throw new Error('Invalid relay URL');
-      }
-
-      const response = await fetch(httpUrl, {
-        headers: { Accept: 'application/nostr+json' },
-        signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const payload: unknown = await response.json();
-      if (!payload || typeof payload !== 'object') {
-        throw new Error('Invalid NIP-11 response');
-      }
-
-      const info = payload as RelayInfoDocument;
-      if (relayUrl) writeCachedInfo(relayUrl, info);
-      return info;
-    },
+    queryFn: ({ signal }) => fetchRelayInfoDoc(relayUrl!, signal),
     enabled: !!httpUrl,
     // Seed from the persisted last-known-good doc so name/avatar render
     // instantly and survive a reload on a flaky connection. `initialData` puts

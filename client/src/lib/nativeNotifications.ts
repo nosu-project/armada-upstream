@@ -33,6 +33,15 @@ export interface ArmadaNotificationPlugin {
    */
   drainConcord(): Promise<{ concord: Array<{ inner: string; z: string; outerId: string }> }>;
   /**
+   * The service's rolling per-room cache of raw outer wire events (newest
+   * last). Unlike {@link drainEvents} — a one-shot global buffer of what
+   * arrived while the WebView was down — this retains the last screenful PER
+   * ROOM for the whole service lifetime, so opening a room from a notification
+   * can paint natively-received history even if the global buffer overflowed.
+   * Room keys: `h:<groupId>` (NIP-29), `z:<pseudonym>` (Concord), `dm` (kind 4).
+   */
+  getRoomEvents(options: { room: string }): Promise<{ events: string[] }>;
+  /**
    * Fired when a relay issues a NIP-42 AUTH challenge. The JS layer signs a
    * kind-22242 with the user's signer and calls submitAuth — so no private key
    * ever enters native code, and bunker/extension signers work too.
@@ -43,9 +52,10 @@ export interface ArmadaNotificationPlugin {
   ): Promise<PluginListenerHandle>;
   /**
    * Fired when the background service receives a raw outer event (NIP-29 kind
-   * 9/1068/7/1111/5 or a Concord sealed kind 3300) while the WebView is up. The
-   * JS layer writes it straight into its event store, so the live timeline shows
-   * it with zero relay latency — the same message the notification was about.
+   * 9/1068/7/1111/5, a kind-4 DM, or a Concord sealed kind 3300) while the
+   * WebView is up. The JS layer writes it straight into its event store, so the
+   * live timeline shows it with zero relay latency — the same message the
+   * notification was about.
    */
   addListener(
     eventName: "relayEvent",

@@ -33,10 +33,13 @@ function pathFromOpenUrl(url: string | undefined | null): string | null {
 
 let resolved = !isNativeRuntime(); // web: nothing to wait for
 let deepLinkPath: string | null = null;
+/** The launch deep link, retained past consumption (for non-navigation uses). */
+let launchDeepLinkPath: string | null = null;
 const waiters = new Set<() => void>();
 
 function settle(path: string | null): void {
   deepLinkPath = path;
+  launchDeepLinkPath = path;
   resolved = true;
   for (const w of waiters) w();
   waiters.clear();
@@ -70,6 +73,16 @@ export function consumeColdLaunchDeepLink(): string | null {
   const p = deepLinkPath;
   deepLinkPath = null;
   return p;
+}
+
+/**
+ * Non-consuming read of the cold-launch deep-link path, retained even after
+ * HomeRedirect consumes it for navigation. Used by the warmup path
+ * (pre-connecting the target room's relay). Null before resolution / when the
+ * launch wasn't a deep link.
+ */
+export function peekColdLaunchDeepLink(): string | null {
+  return launchDeepLinkPath;
 }
 
 /** Run `cb` once the launch URL resolves (immediately if already resolved). */

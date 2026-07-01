@@ -905,6 +905,23 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /**
+     * Per-room cache key for the plugin's rolling event cache (see
+     * ArmadaNotificationPlugin.getRoomEvents): NIP-29 events key by their group
+     * (`h` tag), Concord sealed outers by pseudonym (`z` tag), DMs share one
+     * bucket (the WebView splits threads by counterparty itself). Null when the
+     * event carries no usable room scope.
+     */
+    private static String roomKeyFor(JSONObject event, int kind) {
+        if (kind == 4) return "dm";
+        if (kind == 3300) {
+            String z = tagValue(event, "z");
+            return z != null ? "z:" + z : null;
+        }
+        String h = tagValue(event, "h");
+        return h != null ? "h:" + h : null;
+    }
+
     private void handleEvent(JSONObject event, String relayUrl) {
         String id = event.optString("id");
         if (id.isEmpty() || notifiedIds.contains(id)) {
@@ -917,12 +934,14 @@ public class NotificationRelayService extends Service {
         // otherwise) so a message the service already received is in the app's
         // store the instant it opens — no relay round-trip, no "wait for the
         // chat to catch up". Covers the timeline kinds the WebView renders:
-        // NIP-29 chat/polls/reactions/replies/deletes and Concord sealed outers
-        // (kind 3300, decrypted in the WebView). DMs (kind 4) are NIP-04 and
-        // handled by their own flow, so we skip them here.
+        // NIP-29 chat/polls/reactions/replies/deletes, Concord sealed outers
+        // (kind 3300, decrypted in the WebView) and DMs (kind 4 — ciphertext;
+        // the WebView holds the NIP-04 keys). Each is also recorded in the
+        // plugin's per-room rolling cache (see getRoomEvents) so opening a room
+        // can pull its natively-received history directly.
         switch (kind) {
-            case 9: case 1068: case 7: case 1111: case 5: case 3300:
-                ArmadaNotificationPlugin.feedRelayEvent(event.toString());
+            case 9: case 1068: case 7: case 1111: case 5: case 3300: case 4:
+                ArmadaNotificationPlugin.feedRelayEvent(roomKeyFor(event, kind), event.toString());
                 break;
             default:
                 break;

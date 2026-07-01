@@ -2,7 +2,7 @@ import { CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogO
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router-dom";
 
-import { CallStageSlot } from "@/components/chat/CallStage";
+import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { GroupChat } from "@/components/chat/GroupChat";

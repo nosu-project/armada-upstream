@@ -8,8 +8,17 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
+import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
+import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { decryptCached, getRenderedPlaintext, hasRenderedPlaintext, setRenderedPlaintext, type DecryptFn } from "@/hooks/dmRenderCache";
+import { nativeDmEvents, recordNativeEvent } from "@/lib/nativeEventInbox";
+import { ArmadaNotification } from "@/lib/nativeNotifications";
+import {
+  dmConversationsSnapshotScope,
+  dmThreadSnapshotScope,
+  readTimelineSnapshot,
+} from "@/lib/timelineSnapshot";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -367,6 +376,10 @@ export function useDMConversations() {
   const relayKey = relays.join(",");
 
   const queryKey = ["dm", "conversations", user?.pubkey, relayKey];
+  // Last-known-good localStorage snapshot (newest kind-4 per counterparty) so
+  // the conversation list paints on the first frame of a cold launch, before
+  // the IndexedDB cold-open. Ciphertext only — previews decrypt as usual.
+  const snapshotScope = user?.pubkey ? dmConversationsSnapshotScope(user.pubkey) : undefined;
 
   // Per-relay, per-direction pagination cursors for the "load older
   // conversations" backfill. Kept in a ref (not state) so advancing them
@@ -396,7 +409,10 @@ export function useDMConversations() {
         { kinds: [KIND_DM], "#p": [pubkey], limit: DM_PAGE_SIZE },
       ]);
       const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
-      const local = mergeDmEvents(prev, cachedEvents);
+      // Fold in DMs the native Android service received (e.g. the one whose
+      // notification was just tapped) — they may not be in IndexedDB yet.
+      const fed = nativeDmEvents().filter((e) => dmCounterparty(e, pubkey));
+      const local = mergeDmEvents(mergeDmEvents(prev, cachedEvents), fed);
 
       // 2. BACKGROUND refresh: query EACH relay individually (not a pooled
       //    group) for its newest page, merge all in, and seed the per-relay
@@ -427,6 +443,12 @@ export function useDMConversations() {
       return local;
     },
     staleTime: 15_000,
+    // Seed from the localStorage snapshot (newest event per conversation),
+    // marked already-stale so the local-first queryFn still runs immediately.
+    // The merge floor (mergeDmEvents) is append-only, so the seed can never
+    // shrink or mask fresher data.
+    initialData: () => readTimelineSnapshot<NostrEvent>(snapshotScope),
+    initialDataUpdatedAt: 0,
     // Backstop the live socket: a backgrounded mobile WebSocket can wedge with
     // no error and no event, silently stalling delivery. A periodic local-first
     // re-read heals the gap (matches the NIP-29/Concord hooks, which DMs had
@@ -436,6 +458,56 @@ export function useDMConversations() {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
+
+  // Keep the conversation-list snapshot fresh: the newest event per
+  // counterparty (ascending, so the shared writer's tail-slice keeps the most
+  // recent conversations). Ciphertext only.
+  const snapshotItems = useMemo(() => {
+    if (!user?.pubkey || !query.data || query.data.length === 0) return undefined;
+    const newestByPeer = new Map<string, NostrEvent>();
+    for (const e of query.data) {
+      const peer = dmCounterparty(e, user.pubkey);
+      if (!peer) continue;
+      const cur = newestByPeer.get(peer);
+      if (!cur || cur.created_at < e.created_at) newestByPeer.set(peer, e);
+    }
+    return [...newestByPeer.values()].sort((a, b) => a.created_at - b.created_at);
+  }, [query.data, user?.pubkey]);
+  useTimelineSnapshotWriter(snapshotScope, snapshotItems);
+
+  // Native (Android) DM warmup: pull the background service's rolling "dm"
+  // cache (kind-4 ciphertext it received over its own sockets) once per mount,
+  // record it in the session inbox (the thread queryFn reads it) and merge it
+  // into the conversation list immediately.
+  useEffect(() => {
+    if (!user?.pubkey || !isNativeRuntime()) return;
+    let cancelled = false;
+    ArmadaNotification.getRoomEvents({ room: "dm" })
+      .then(({ events }) => {
+        if (cancelled) return;
+        const parsed: NostrEvent[] = [];
+        for (const json of events) {
+          try {
+            const ev = JSON.parse(json) as NostrEvent;
+            if (ev && typeof ev.id === "string" && ev.kind === KIND_DM) {
+              recordNativeEvent(ev);
+              parsed.push(ev);
+            }
+          } catch {
+            // malformed line — skip
+          }
+        }
+        if (parsed.length === 0) return;
+        queryClient.setQueryData<NostrEvent[]>(
+          ["dm", "conversations", user.pubkey, relayKey],
+          (old = []) => mergeDmEvents(old, parsed),
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.pubkey, relayKey, queryClient]);
 
   // Load an older page of conversations: advance each non-exhausted relay's
   // cursor one page and merge. Because each relay pages independently, a dense
@@ -632,6 +704,10 @@ export function useDirectMessages(peer: string | undefined) {
     () => ["dm", "thread", self, peer, relayKey] as const,
     [self, peer, relayKey],
   );
+  // Last-known-good localStorage snapshot of this thread's newest decrypted
+  // rows (plaintext at rest — same trust level as the signer's persistent
+  // decrypt cache; see timelineSnapshot.ts).
+  const threadSnapshotScope = self && peer ? dmThreadSnapshotScope(self, peer) : undefined;
 
   const query = useQuery<DecryptedDM[]>({
     queryKey,
@@ -649,7 +725,12 @@ export function useDirectMessages(peer: string | undefined) {
         { kinds: [KIND_DM], authors: [self!], limit: 1000 },
         { kinds: [KIND_DM], "#p": [self!], limit: 1000 },
       ]);
-      const localThread = localEvents.filter((e) => dmCounterparty(e, self!) === peer);
+      // Fold in DMs the native Android service received for this thread (e.g.
+      // a tapped notification's message) — they may not be in IndexedDB yet.
+      const fed = nativeDmEvents();
+      const byId = new Map<string, NostrEvent>();
+      for (const e of [...localEvents, ...fed]) byId.set(e.id, e);
+      const localThread = [...byId.values()].filter((e) => dmCounterparty(e, self!) === peer);
       const prevLocal = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
       const localPlaceholders = mergeDmThread(prevLocal, buildThreadPlaceholders(localThread));
       if (localThread.length > 0) {
@@ -699,6 +780,18 @@ export function useDirectMessages(peer: string | undefined) {
       return localPlaceholders;
     },
     staleTime: 10_000,
+    // Seed with the last visit's decrypted screenful from the localStorage
+    // snapshot so a cold-launched thread paints readable messages on the first
+    // frame. The snapshot rows also prime the plaintext render memo, so the
+    // queryFn's placeholder build keeps them decrypted (mergeDmThread never
+    // downgrades a decrypted row) and `decryptVisible` short-circuits instead
+    // of re-asking the signer.
+    initialData: () => {
+      const rows = readTimelineSnapshot<DecryptedDM>(threadSnapshotScope);
+      if (rows) for (const r of rows) setRenderedPlaintext(r.id, r.content);
+      return rows;
+    },
+    initialDataUpdatedAt: 0,
     // Backstop the live socket (see the conversations query above): heal a
     // wedged mobile WebSocket with a periodic local-first re-read, and catch up
     // on focus/reconnect.
@@ -706,6 +799,18 @@ export function useDirectMessages(peer: string | undefined) {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
+
+  // Keep the thread snapshot fresh with the newest DECRYPTED rows — encrypted
+  // placeholders are useless to persist, and a transient "sending"/"failed"
+  // badge must not be frozen into the next launch's first paint.
+  const threadSnapshotItems = useMemo(() => {
+    if (!query.data) return undefined;
+    const rows = query.data
+      .filter((m) => !m.encrypted && !m.status)
+      .map(({ id, pubkey, created_at, content }) => ({ id, pubkey, created_at, content }));
+    return rows.length > 0 ? rows : undefined;
+  }, [query.data]);
+  useTimelineSnapshotWriter(threadSnapshotScope, threadSnapshotItems);
 
   // Live subscription for new messages in this thread.
   useEffect(() => {

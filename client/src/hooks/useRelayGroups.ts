@@ -1,9 +1,9 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { useEventStore } from "@/hooks/useEventStore";
-import { useRelayInfo } from "@/hooks/useRelayInfo";
+import { fetchRelayInfoDoc, useRelayInfo } from "@/hooks/useRelayInfo";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import {
   buildRelayGroups,
@@ -13,6 +13,17 @@ import {
 import { eventIdsForRelay } from "@/lib/relayProvenance";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+
+/**
+ * How long the channel-list query waits for the NIP-11 doc (for the relay's
+ * signing key) before querying without the `authors` filter. On a first visit
+ * the doc usually resolves in one HTTP round-trip well inside this; a slow or
+ * broken NIP-11 endpoint must not hold the whole channel list hostage (it used
+ * to gate `enabled`, serializing NIP-11's full 8s timeout in front of the
+ * channel skeleton). When the key arrives after an unfiltered fetch, the query
+ * refetches once with the filter applied (see below).
+ */
+const NIP11_RACE_MS = 2_000;
 
 /**
  * Fetch all groups hosted on a server (relay).
@@ -63,8 +74,8 @@ export function useRelayGroups(relayUrl: string | undefined) {
   // it has none yet (nothing fetched from this relay this install), we return
   // nothing from cache and let the live single-relay network read populate it —
   // the network read is correctly isolated, so this never shows bled channels.
-  async function readScopedCache(): Promise<NostrEvent[]> {
-    const filters = relayGroupCacheFilters(relaySelf, rememberedIds);
+  async function readScopedCache(selfKey: string | undefined): Promise<NostrEvent[]> {
+    const filters = relayGroupCacheFilters(selfKey, rememberedIds);
     if (filters.length === 0) return [];
     const [store, provenance] = await Promise.all([eventStore, eventIdsForRelay(relayUrl!)]);
     if (provenance.size === 0) return [];
@@ -82,7 +93,7 @@ export function useRelayGroups(relayUrl: string | undefined) {
     let cancelled = false;
     void (async () => {
       if (queryClient.getQueryData(queryKey)) return;
-      const cached = await readScopedCache();
+      const cached = await readScopedCache(relaySelf);
       if (cancelled || cached.length === 0) return;
       if (queryClient.getQueryData(queryKey)) return;
       queryClient.setQueryData(queryKey, buildRelayGroups(cached, relayUrl));
@@ -93,10 +104,30 @@ export function useRelayGroups(relayUrl: string | undefined) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relayUrl, relaySelf, rememberedIds.join(","), eventStore, queryClient]);
 
+  // Whether the most recent queryFn run had the relay's signing key for the
+  // `authors` filter. When the NIP-11 doc resolves only AFTER an unfiltered
+  // fetch, we refetch once so forged metadata from other publishers is dropped.
+  const fetchedWithSelfRef = useRef(false);
+
   const query = useQuery({
     queryKey,
     queryFn: async ({ signal }) => {
-      const authors = relaySelf ? { authors: [relaySelf] } : {};
+      // Resolve the relay's signing key WITHOUT gating on the NIP-11 query's
+      // lifecycle: use it if already resolved, otherwise race a direct fetch
+      // for a bounded beat. A relay with a broken NIP-11 endpoint costs at
+      // most NIP11_RACE_MS here instead of blocking the channel list for the
+      // full doc timeout.
+      let selfKey = relaySelf;
+      if (!selfKey) {
+        const info = await Promise.race([
+          fetchRelayInfoDoc(relayUrl!, signal).catch(() => undefined),
+          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), NIP11_RACE_MS)),
+        ]);
+        selfKey = info?.self || info?.pubkey;
+      }
+      fetchedWithSelfRef.current = Boolean(selfKey);
+
+      const authors = selfKey ? { authors: [selfKey] } : {};
       const filters: NostrFilter[] = [
         { kinds: [KIND_GROUP_METADATA], ...authors, limit: 500 },
       ];
@@ -113,10 +144,10 @@ export function useRelayGroups(relayUrl: string | undefined) {
       // re-introducing the cross-relay bleed for same-key relays. The fresh
       // network events (correctly isolated to this relay) also get their
       // provenance recorded by NostrBatcher, so subsequent reads stay scoped.
-      const cached = await readScopedCache();
+      const cached = await readScopedCache(selfKey);
       return buildRelayGroups([...cached, ...events], relayUrl!);
     },
-    enabled: Boolean(relayUrl) && !infoLoading,
+    enabled: Boolean(relayUrl),
     // Relay-signed, rarely-changing data. Keep it fresh for the whole session
     // and rely on explicit invalidation for the rare real change.
     staleTime: 60 * 60 * 1000,
@@ -140,6 +171,19 @@ export function useRelayGroups(relayUrl: string | undefined) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relayUrl, data, rememberedIds.join(",")]);
+
+  // If the current data was fetched WITHOUT the relay's signing key (NIP-11
+  // hadn't resolved inside the race window), refetch once when the key lands so
+  // the `authors` filter re-applies and forged metadata can't linger for the
+  // hour-long staleTime.
+  useEffect(() => {
+    if (!relayUrl || !relaySelf || !data) return;
+    if (!fetchedWithSelfRef.current) {
+      fetchedWithSelfRef.current = true;
+      void query.refetch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relayUrl, relaySelf, data]);
 
   // While the NIP-11 info doc is still loading AND we have no channel data yet,
   // surface that as "loading" — otherwise a stuck/slow info fetch would read as

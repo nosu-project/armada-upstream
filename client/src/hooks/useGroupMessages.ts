@@ -3,8 +3,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useEventStore } from "@/hooks/useEventStore";
+import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { useSendStatusMap } from "@/hooks/useSendStatusMap";
+import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
+import { nativeGroupTimelineEvents, recordNativeEvent } from "@/lib/nativeEventInbox";
+import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { nip29SnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -109,6 +114,12 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   const cursorRef = useRef<number | undefined>(undefined);
   const loadingRef = useRef(false);
 
+  // Last-known-good localStorage snapshot scope for this room. Read
+  // synchronously as the query's initialData so the previous visit's screenful
+  // paints on the FIRST frame of a cold launch — before the (slow-on-Android)
+  // IndexedDB cold open and the relay refresh, which then merge in on top.
+  const snapshotScope = relayUrl && groupId ? nip29SnapshotScope(relayUrl, groupId) : undefined;
+
   const query = useQuery<NostrEvent[]>({
     queryKey: messagesKey(relayUrl, groupId),
     queryFn: async ({ signal }) => {
@@ -130,11 +141,15 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       //    once instead of behind the skeleton. NostrBatcher mirrors every
       //    `#h`-scoped event the relay returns into this store, so it holds the
       //    group's history after the first visit. Merge with `existing` so a
-      //    re-run never clobbers subscription-delivered messages.
+      //    re-run never clobbers subscription-delivered messages, and with the
+      //    native event inbox so a message the Android service received (e.g.
+      //    the one whose notification was just tapped) is in the very first
+      //    result even if the drain ran before this query existed.
       const cached = await store.query([
         { kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE },
       ]);
-      const local = sortDedupe([...existing, ...cached]);
+      const fed = nativeGroupTimelineEvents(groupId!);
+      const local = sortDedupe([...existing, ...cached, ...fed]);
 
       // 2. BACKGROUND refresh: fetch the newest page from the relay, mirror it
       //    into the store, and merge into the cache. NOT awaited — the network
@@ -168,6 +183,14 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     },
     enabled: Boolean(relayUrl && groupId),
     staleTime: 10_000,
+    // Seed with the last visit's screenful from the synchronous localStorage
+    // snapshot, so a cold launch paints the room instantly instead of behind
+    // the IndexedDB cold-open skeleton. `initialDataUpdatedAt: 0` marks the
+    // seed already-stale so the local-first queryFn still runs immediately and
+    // merges the durable store + relay refresh on top (append-only, so the
+    // seed can never mask fresher data).
+    initialData: () => readTimelineSnapshot<NostrEvent>(snapshotScope),
+    initialDataUpdatedAt: 0,
     // Backstop poll. The live `req` delivers new messages instantly on a healthy
     // socket, but a half-dead socket (one the OS silently severed while the app
     // was backgrounded on Android) leaves the streaming `for await` blocked with
@@ -189,6 +212,9 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   // with Concord via useSendStatusMap).
   const { status, setStatus } = useSendStatusMap(statusKey(relayUrl, groupId));
 
+  // Keep the localStorage snapshot fresh with the rendered timeline (debounced).
+  useTimelineSnapshotWriter(snapshotScope, query.data);
+
   const upsertMessage = useCallback(
     (event: NostrEvent) => {
       queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) => {
@@ -198,6 +224,35 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     },
     [queryClient, relayUrl, groupId],
   );
+
+  // Native (Android) room warmup: pull the background service's rolling
+  // per-room cache for this group — the newest raw events it received over its
+  // own persistent sockets, retained even after the global drain buffer
+  // overflowed or was consumed. One bridge call per room open; every event is
+  // recorded in the session inbox (so later queryFn runs see it) and timeline
+  // kinds are upserted straight into the visible cache.
+  useEffect(() => {
+    if (!relayUrl || !groupId || !isNativeRuntime()) return;
+    let cancelled = false;
+    ArmadaNotification.getRoomEvents({ room: `h:${groupId}` })
+      .then(({ events }) => {
+        if (cancelled) return;
+        for (const json of events) {
+          try {
+            const ev = JSON.parse(json) as NostrEvent;
+            if (!ev || typeof ev.id !== "string" || typeof ev.kind !== "number") continue;
+            recordNativeEvent(ev);
+            if (TIMELINE_KINDS.includes(ev.kind)) upsertMessage(ev);
+          } catch {
+            // malformed line — skip
+          }
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [relayUrl, groupId, upsertMessage]);
 
   /**
    * Fetch the next older page of history (scroll-up pagination). Resolves to

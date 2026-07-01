@@ -39,7 +39,7 @@ import {
   setAudioProcessing,
   type AudioProcessingPrefs,
 } from "@/lib/voiceDevices";
-import { rnnoiseSupported } from "@/lib/voiceProcessor";
+import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 
 import type { EncryptedSettings } from "@/lib/schemas";
 

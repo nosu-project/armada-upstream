@@ -3,7 +3,7 @@ import { ChevronLeft, Hash, Headphones, Loader2, LogOut, MoreVertical, Phone, Pl
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
-import { CallStageSlot } from "@/components/chat/CallStage";
+import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";

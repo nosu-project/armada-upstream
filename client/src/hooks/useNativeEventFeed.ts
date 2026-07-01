@@ -4,6 +4,7 @@ import { useEffect } from "react";
 
 import { useEventStore } from "@/hooks/useEventStore";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { recordNativeEvent } from "@/lib/nativeEventInbox";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -120,11 +121,18 @@ export function useNativeEventFeed(): void {
       // fed event into the cache *now* (not after the await) is what makes the
       // notification's message appear on the first paint instead of a beat later.
       //
+      // Every event is ALSO recorded into the session inbox
+      // (nativeEventInbox), which the timeline queryFns merge synchronously —
+      // that covers the other side of the race, where this drain runs BEFORE
+      // the deep-linked channel's query cache entry exists (the cache insert
+      // below would be a no-op) and the IndexedDB write hasn't landed yet.
+      //
       // Concord (kind 3300) is NOT handled here: its messages render via the
       // service-decrypted `concordMessage` feed (see useConcordChannel), which is
       // instant AND signature-verified. We still PERSIST the sealed outer below
       // so a later cold read / backfill reconciles against it.
       for (const ev of events) {
+        recordNativeEvent(ev);
         if (NIP29_TIMELINE_KINDS.has(ev.kind)) {
           insertNip29(ev); // plaintext → direct cache insert, instant
         }
