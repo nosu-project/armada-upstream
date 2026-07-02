@@ -1,4 +1,4 @@
-import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -14,6 +14,15 @@ export interface ArmadaNotificationPlugin {
   checkPermission(): Promise<{ granted: boolean }>;
   /** Prompt for POST_NOTIFICATIONS (Android 13+). */
   requestPermission(): Promise<{ granted: boolean }>;
+  /**
+   * Android: whether the app is exempt from battery optimizations (Doze).
+   * Battery optimization tears down the persistent relay websockets while the
+   * device is idle, and on Android 15+ the exemption is also required for the
+   * boot receiver to restart the service after a reboot.
+   */
+  isIgnoringBatteryOptimizations(): Promise<{ ignoring: boolean }>;
+  /** Android: show the one-tap system dialog to grant the exemption. */
+  requestIgnoreBatteryOptimizations(): Promise<void>;
   /** Hand a signed NIP-42 kind-22242 event back to the service for a relay. */
   submitAuth(options: { relayUrl: string; event: NostrEvent }): Promise<void>;
   /**
@@ -107,3 +116,33 @@ export interface ArmadaNotificationPlugin {
 
 export const ArmadaNotification =
   registerPlugin<ArmadaNotificationPlugin>("ArmadaNotification");
+
+/**
+ * Check whether Armada is exempt from Android battery optimizations.
+ *
+ * Returns `true` (exempt / nothing to do) on non-Android platforms or when
+ * the native method is unavailable (older app binary), so callers never show
+ * a false warning.
+ */
+export async function isIgnoringBatteryOptimizations(): Promise<boolean> {
+  if (Capacitor.getPlatform() !== "android") return true;
+  try {
+    const { ignoring } = await ArmadaNotification.isIgnoringBatteryOptimizations();
+    return ignoring;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Open the one-tap system dialog asking the user to exempt Armada from
+ * battery optimizations. No-op outside Android.
+ */
+export async function requestIgnoreBatteryOptimizations(): Promise<void> {
+  if (Capacitor.getPlatform() !== "android") return;
+  try {
+    await ArmadaNotification.requestIgnoreBatteryOptimizations();
+  } catch (err) {
+    console.warn("[native-notif] Failed to request battery optimization exemption:", err);
+  }
+}

@@ -43,6 +43,18 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Restarts the notification service after reboot or app update. Not
+             exported: BOOT_COMPLETED / MY_PACKAGE_REPLACED are system
+             broadcasts and are delivered regardless. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Bluetooth mesh (bitchat) foreground service: keeps the BLE mesh
              advertising/scanning while the app is backgrounded. -->
         <service
@@ -60,6 +72,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Restart the notification service after device reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Let the user exempt Armada from battery optimization so the persistent
+         relay connections survive Doze and the service can restart on boot
+         (Android 15+). Only requested when background notifications are on. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Bluetooth mesh (bitchat) permissions -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />

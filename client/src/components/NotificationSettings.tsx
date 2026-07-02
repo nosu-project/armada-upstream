@@ -1,7 +1,15 @@
+import { useEffect, useState } from "react";
+import { AlertTriangle } from "lucide-react";
+
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNativeNotifications } from "@/hooks/useNativeNotifications";
 import { usePushNotifications, type PushPrefs } from "@/hooks/usePushNotifications";
+import {
+  isIgnoringBatteryOptimizations,
+  requestIgnoreBatteryOptimizations,
+} from "@/lib/nativeNotifications";
 
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 
 /**
@@ -27,20 +35,82 @@ export function NotificationSettings() {
   // Native APK: instant background notifications via the relay connection.
   if (native.supported) {
     return (
-      <NotificationToggles
-        title="Background notifications"
-        description="Armada stays connected in the background and notifies you instantly — no Google services."
-        enabled={native.enabled}
-        busy={native.busy}
-        blocked={false}
-        prefs={native.prefs}
-        onToggle={(v) => (v ? native.enable() : native.disable())}
-        onSetPrefs={(p) => native.setPrefs(p).catch(() => {})}
-      />
+      <div className="space-y-4">
+        <NotificationToggles
+          title="Background notifications"
+          description="Armada stays connected in the background and notifies you instantly — no Google services."
+          enabled={native.enabled}
+          busy={native.busy}
+          blocked={false}
+          prefs={native.prefs}
+          onToggle={(v) => (v ? native.enable() : native.disable())}
+          onSetPrefs={(p) => native.setPrefs(p).catch(() => {})}
+        />
+        {native.enabled && <BatteryOptimizationWarning />}
+      </div>
     );
   }
 
   return <WebPushSettings />;
+}
+
+/**
+ * Warns when Android battery optimization is still active for Armada.
+ *
+ * Battery optimization tears down the persistent relay websockets while the
+ * device is idle, and on Android 15+ it also prevents the boot receiver from
+ * restarting the service after a reboot. Offers the one-tap system exemption
+ * dialog and re-checks when the user returns from it.
+ */
+function BatteryOptimizationWarning() {
+  const [optimized, setOptimized] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = () => {
+      isIgnoringBatteryOptimizations().then((ignoring) => {
+        if (!cancelled) setOptimized(!ignoring);
+      });
+    };
+
+    check();
+
+    // Re-check when the user returns from the system exemption dialog.
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+
+  if (!optimized) return null;
+
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs">
+            Battery optimization is enabled for Armada. Android may close the background
+            connection while your device is idle and prevent notifications from resuming
+            after a reboot.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-2 h-8 text-xs"
+            onClick={() => requestIgnoreBatteryOptimizations()}
+          >
+            Disable battery optimization
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function WebPushSettings() {
