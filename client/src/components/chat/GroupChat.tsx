@@ -20,6 +20,7 @@ import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useGroupReactions } from "@/hooks/useReactions";
 import { useGroupReplyCounts } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";
+import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -195,6 +196,13 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);
   const { mutate: deleteOwnMessage } = useDeleteOwnMessage(relayUrl, groupId);
   const { markRead } = useReadState();
+  // Where the red "NEW" divider sits for this visit (captured before markRead
+  // stamps the channel below, frozen until the channel changes).
+  const newDividerId = useNewMessagesDivider(
+    channelReadKey(relayUrl, groupId),
+    messages,
+    user?.pubkey,
+  );
   const { results: searchResults, isLoading: searchLoading, active: searching } = useGroupSearch(
     relayUrl,
     groupId,
@@ -484,6 +492,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           <MessageTimeline
             transport={transport}
             handleRef={timelineRef}
+            newDividerId={newDividerId}
             className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
             emptyState={
               <div className="flex flex-col items-center justify-center py-16 text-center">

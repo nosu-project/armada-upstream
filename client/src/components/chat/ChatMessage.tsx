@@ -1,4 +1,5 @@
-import { AlertCircle, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
+import { AlertCircle, Copy, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
+import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
@@ -6,6 +7,13 @@ import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
 import { PollCard } from "@/components/chat/PollCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -448,35 +456,95 @@ const ChatMessageInner = memo(function ChatMessageInner({
   );
 
   return (
-    <MessageRow
-      pubkey={event.pubkey}
-      identityOverride={identityOverride}
-      createdAt={event.created_at}
-      pending={isPending}
-      edited={wasEdited && !isEditing}
-      actions={toolbar}
-      beforeBody={replyToId && replyContext}
-      afterBody={afterBody}
-      continuation={
-        // Collapse into the previous message only for plain consecutive chats;
-        // a reply line, edit field, pin or mention needs the full header.
-        continuation && !replyToId && !isEditing && !isPinned && !mentionsMe
-      }
-      className={cn(
-        active && "bg-secondary/40",
-        isPinned && "bg-amber-500/5",
-        mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
-        isPending && "opacity-60",
-        isFailed && "bg-destructive/5",
-      )}
-      containerProps={{
-        onMouseLeave: disarmDelete,
-        onClick: handleRowClick,
-        "data-active": active || undefined,
-        "data-event-id": event.id,
-      } as React.HTMLAttributes<HTMLDivElement>}
-    >
-      {body}
-    </MessageRow>
+    <ContextMenu>
+      <ContextMenuTrigger className="block">
+        <MessageRow
+          pubkey={event.pubkey}
+          identityOverride={identityOverride}
+          createdAt={event.created_at}
+          pending={isPending}
+          edited={wasEdited && !isEditing}
+          actions={toolbar}
+          beforeBody={replyToId && replyContext}
+          afterBody={afterBody}
+          continuation={
+            // Collapse into the previous message only for plain consecutive chats;
+            // a reply line, edit field, pin or mention needs the full header.
+            continuation && !replyToId && !isEditing && !isPinned && !mentionsMe
+          }
+          className={cn(
+            active && "bg-secondary/40",
+            isPinned && "bg-amber-500/5",
+            mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
+            isPending && "opacity-60",
+            isFailed && "bg-destructive/5",
+          )}
+          containerProps={{
+            onMouseLeave: disarmDelete,
+            onClick: handleRowClick,
+            "data-active": active || undefined,
+            "data-event-id": event.id,
+          } as React.HTMLAttributes<HTMLDivElement>}
+        >
+          {body}
+        </MessageRow>
+      </ContextMenuTrigger>
+      {/* Discord-style right-click menu, mirroring the hover toolbar's
+          capability gating. */}
+      <ContextMenuContent className="w-52">
+        {canWrite && !isEditing && onReply && (
+          <ContextMenuItem onSelect={() => onReply(event)}>
+            <Reply className="mr-2 size-4" /> Reply
+          </ContextMenuItem>
+        )}
+        {canWrite && !isEditing && onOpenThread && (
+          <ContextMenuItem onSelect={() => onOpenThread(event)}>
+            <MessagesSquare className="mr-2 size-4" /> Reply in thread
+          </ContextMenuItem>
+        )}
+        {canEdit && !isEditing && (
+          <ContextMenuItem onSelect={() => onEdit?.(event)}>
+            <Pencil className="mr-2 size-4" /> Edit message
+          </ContextMenuItem>
+        )}
+        {canPin && !isEditing && (
+          <ContextMenuItem onSelect={() => onTogglePin?.(event)}>
+            {isPinned
+              ? <><PinOff className="mr-2 size-4" /> Unpin message</>
+              : <><Pin className="mr-2 size-4" /> Pin message</>}
+          </ContextMenuItem>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => navigator.clipboard?.writeText(event.content)}>
+          <Copy className="mr-2 size-4" /> Copy text
+        </ContextMenuItem>
+        {!identityOverride && (
+          <ContextMenuItem
+            onSelect={() => {
+              try {
+                navigator.clipboard?.writeText(
+                  `nostr:${nip19.neventEncode({ id: event.id, author: event.pubkey })}`,
+                );
+              } catch {
+                navigator.clipboard?.writeText(event.id);
+              }
+            }}
+          >
+            <Link2 className="mr-2 size-4" /> Copy message ID
+          </ContextMenuItem>
+        )}
+        {canDelete && !isEditing && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              className="text-destructive focus:text-destructive"
+              onSelect={() => onDelete?.(event)}
+            >
+              <Trash2 className="mr-2 size-4" /> Delete message
+            </ContextMenuItem>
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 });

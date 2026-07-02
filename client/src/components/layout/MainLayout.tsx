@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import { AppsProvider } from "@/components/AppsProvider";
 import { CallProvider } from "@/components/CallProvider";
 import { ConcordInvitesPrompt } from "@/components/ConcordInvitesPrompt";
+import { QuickSwitcher } from "@/components/QuickSwitcher";
 
 /**
  * Application frame. Desktop renders the multi-pane Discord layout (server
@@ -21,6 +22,7 @@ export function MainLayout() {
       <AppsProvider>
         <Outlet />
         <ConcordInvitesPrompt />
+        <QuickSwitcher />
       </AppsProvider>
     </CallProvider>
   );

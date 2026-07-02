@@ -1,5 +1,5 @@
-import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useImperativeHandle, useRef } from "react";
+import { ChevronDown, Loader2 } from "lucide-react";
+import { Fragment, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -11,6 +11,57 @@ import type { ReactNode, RefObject } from "react";
  * render as a compact continuation (no repeated avatar/name/timestamp).
  */
 const CONTINUATION_WINDOW_SECONDS = 5 * 60;
+
+/** Whether two unix-second timestamps fall on the same local calendar day. */
+function isSameDay(a: number, b: number): boolean {
+  const da = new Date(a * 1000);
+  const db = new Date(b * 1000);
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth() === db.getMonth() &&
+    da.getDate() === db.getDate()
+  );
+}
+
+/** "Today" / "Yesterday" / a long local date, for the day separators. */
+function formatDayLabel(ts: number): string {
+  const date = new Date(ts * 1000);
+  const now = new Date();
+  if (isSameDay(ts, Math.floor(now.getTime() / 1000))) return "Today";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (isSameDay(ts, Math.floor(yesterday.getTime() / 1000))) return "Yesterday";
+  return date.toLocaleDateString(undefined, {
+    month: "long",
+    day: "numeric",
+    year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  });
+}
+
+/** Discord-style day boundary: a hairline with the date pinned in the middle. */
+function DateSeparator({ ts }: { ts: number }) {
+  return (
+    <div className="flex items-center gap-3 px-2 pt-3 pb-1 select-none" aria-hidden>
+      <div className="h-px flex-1 bg-border/60" />
+      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80">
+        {formatDayLabel(ts)}
+      </span>
+      <div className="h-px flex-1 bg-border/60" />
+    </div>
+  );
+}
+
+/** Discord-style unread marker: a red hairline with a "NEW" tag. */
+function NewMessagesDivider() {
+  return (
+    <div className="flex items-center px-2 py-1 select-none" role="separator" aria-label="New messages">
+      <div className="h-px flex-1 bg-destructive/70" />
+      <span className="pl-1.5 text-[10px] font-semibold uppercase tracking-wider text-destructive">
+        New
+      </span>
+    </div>
+  );
+}
 
 /** Imperative handle a parent can use to jump the timeline to a message by id. */
 export interface MessageTimelineHandle {
@@ -44,6 +95,11 @@ interface MessageTimelineProps {
    * overlay (e.g. search results) — backfill on scroll is suppressed.
    */
   paused?: boolean;
+  /**
+   * Id of the first unread message: the red "NEW" divider renders directly
+   * above it (computed by the parent, e.g. {@link useNewMessagesDivider}).
+   */
+  newDividerId?: string;
   className?: string;
 }
 
@@ -61,6 +117,7 @@ export function MessageTimeline({
   emptyState,
   handleRef,
   paused = false,
+  newDividerId,
   className,
 }: MessageTimelineProps) {
   const { messages, isLoading, loadOlder, hasMore, isLoadingOlder } = transport;
@@ -83,6 +140,10 @@ export function MessageTimeline({
   // to the bottom as message rows grow.
   const contentRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
+  // Whether the user has scrolled far enough up that a "jump to present" pill
+  // should be offered. (setState bails out when unchanged, so updating this on
+  // every scroll event is cheap.)
+  const [showJumpPill, setShowJumpPill] = useState(false);
   // Set right before we programmatically change scrollTop, so the resulting
   // `scroll` event doesn't get mistaken for the user scrolling away and unpin
   // us. (Reactions/threads appearing grow a row, shift content, and fire a
@@ -101,6 +162,7 @@ export function MessageTimeline({
     if (!el) return;
     programmaticScrollRef.current = true;
     el.scrollTop = el.scrollHeight;
+    setShowJumpPill(false);
     requestAnimationFrame(() => {
       programmaticScrollRef.current = false;
     });
@@ -151,7 +213,9 @@ export function MessageTimeline({
     // Ignore the scroll event we caused ourselves (pin/restore) — only genuine
     // user scrolls should change whether we're pinned. (Self-clears next frame.)
     if (programmaticScrollRef.current) return;
-    isAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isAutoScrollRef.current = distanceFromBottom < 60;
+    setShowJumpPill(distanceFromBottom > 300);
     // Near the top: backfill older history. Capture current metrics first so
     // the post-prepend effect can hold the reading position steady.
     if (!paused && loadOlder && hasMore && !isLoadingOlder && el.scrollTop < 200) {
@@ -217,15 +281,46 @@ export function MessageTimeline({
           )}
           {messages.map((msg, i) => {
             const prev = messages[i - 1];
+            const newDay = !!prev && !isSameDay(prev.created_at, msg.created_at);
             const continuation =
               !!prev &&
+              !newDay &&
               prev.pubkey === msg.pubkey &&
               msg.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
-            return renderMessage(msg, continuation);
+            return (
+              <Fragment key={msg.id}>
+                {newDay && <DateSeparator ts={msg.created_at} />}
+                {newDividerId === msg.id && <NewMessagesDivider />}
+                {renderMessage(msg, continuation)}
+              </Fragment>
+            );
           })}
         </>
       )}
       </div>
+      {/* Jump-to-present pill: a zero-height sticky anchor at the end of the
+          scroll content keeps the pill floating at the bottom edge while the
+          user reads older history; clicking re-pins to the bottom. */}
+      {showJumpPill && (
+        // `items-end` is load-bearing: the anchor is 0px tall, and the default
+        // `stretch` would squash the button to that height (padding-only box).
+        // End-aligned, the button keeps its natural height and overflows
+        // upward from the anchor line.
+        <div className="sticky bottom-3 z-10 h-0 flex justify-center items-end pointer-events-none">
+          <button
+            type="button"
+            onClick={() => {
+              isAutoScrollRef.current = true;
+              pinToBottomNow();
+            }}
+            className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border/60 bg-secondary/90 backdrop-blur px-5 py-2.5 text-sm font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
+            aria-label="Jump to the latest messages"
+          >
+            <ChevronDown className="size-4" />
+            Jump to present
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { emojify } from "@/components/chat/CustomEmoji";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
+import { CodeBlock, InlineCode, renderInlineMarkdown } from "@/components/chat/Markdown";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { XdcAttachment } from "@/components/chat/XdcAttachment";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -16,6 +17,7 @@ import { buildEmojiMap } from "@/lib/customEmoji";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
 import { parseImetaMap } from "@/lib/imeta";
+import { splitInlineCode, splitMarkdownBlocks } from "@/lib/markdown";
 import { EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
@@ -83,7 +85,10 @@ type ContentToken =
   | { type: "nostr-link"; id: string; raw: string }
   | { type: "hashtag"; tag: string; raw: string }
   | { type: "relay-link"; url: string }
-  | { type: "lightning-invoice"; invoice: string };
+  | { type: "lightning-invoice"; invoice: string }
+  | { type: "code-block"; code: string; lang?: string }
+  | { type: "inline-code"; code: string }
+  | { type: "quote"; tokens: ContentToken[] };
 
 /**
  * Render text with a highlighted search term, after custom-emoji replacement.
@@ -197,158 +202,182 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
       return undefined;
     };
 
-    // Match: BOLT11 invoices | URLs | nostr:-prefixed NIP-19 ids | @-prefixed or bare NIP-19 ids | hashtags
-    const regex = new RegExp(
-      "(?:lightning:)?(ln(?:bc|tb|bcrt|tbs)\\d*[munp]?1[023456789acdefghjklmnpqrstuvwxyz]+)" +
-      "|((?:https?|wss?):\\/\\/[^\\s]+)" +
-      "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
-      "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
-      `|(${HASHTAG_PATTERN})`,
-      "giu",
-    );
+    // Tokenize one plain-text segment (already free of markdown code spans):
+    // BOLT11 invoices | URLs | nostr:-prefixed NIP-19 ids | @-prefixed or
+    // bare NIP-19 ids | hashtags.
+    const tokenizeSegment = (segment: string): ContentToken[] => {
+      const regex = new RegExp(
+        "(?:lightning:)?(ln(?:bc|tb|bcrt|tbs)\\d*[munp]?1[023456789acdefghjklmnpqrstuvwxyz]+)" +
+        "|((?:https?|wss?):\\/\\/[^\\s]+)" +
+        "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
+        "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
+        `|(${HASHTAG_PATTERN})`,
+        "giu",
+      );
 
-    const result: ContentToken[] = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-    let hadMatches = false;
+      const out: ContentToken[] = [];
+      let lastIndex = 0;
+      let match: RegExpExecArray | null;
 
-    while ((match = regex.exec(text)) !== null) {
-      let [fullMatch] = match;
-      const bolt11 = match[1];
-      let url = match[2];
-      const hashtag = match[7];
-      const { 3: nostrPrefix, 4: nostrData, 5: barePrefix, 6: bareData } = match;
-      const index = match.index;
-      hadMatches = true;
+      while ((match = regex.exec(segment)) !== null) {
+        let [fullMatch] = match;
+        const bolt11 = match[1];
+        let url = match[2];
+        const hashtag = match[7];
+        const { 3: nostrPrefix, 4: nostrData, 5: barePrefix, 6: bareData } = match;
+        const index = match.index;
 
-      // Add text before this match
-      if (index > lastIndex) {
-        result.push({ type: "text", value: text.substring(lastIndex, index) });
-      }
-
-      if (bolt11) {
-        result.push({ type: "lightning-invoice", invoice: bolt11.toLowerCase() });
-      } else if (url) {
-        // Strip common trailing punctuation that's likely not part of the URL
-        const trailingPunctMatch = url.match(/^(.*?)([.,;:!?)\]]+)$/);
-        if (trailingPunctMatch) {
-          const [, urlWithoutPunct] = trailingPunctMatch;
-          if (urlWithoutPunct && urlWithoutPunct.length > 10) {
-            url = urlWithoutPunct;
-            fullMatch = urlWithoutPunct;
-          }
+        // Add text before this match
+        if (index > lastIndex) {
+          out.push({ type: "text", value: segment.substring(lastIndex, index) });
         }
 
-        // WebSocket relay URLs → internal server page link
-        if (/^wss?:\/\//i.test(url)) {
-          result.push({ type: "relay-link", url });
-          lastIndex = index + fullMatch.length;
-          continue;
-        }
-
-        // Image URLs → render inline at their position in the text. Match by
-        // extension, or by an imeta entry declaring an image MIME (covers
-        // extension-less / encrypted Blossom URLs). Encrypted attachments carry
-        // their decryption key/nonce so the embed can fetch+decrypt the blob.
-        const inlineImeta = imetaByUrl.get(url);
-        const inlineImetaMime = inlineImeta ? imageMimeFor(inlineImeta) : undefined;
-        const isImetaImage = inlineImetaMime?.startsWith("image/") ?? false;
-        if (IMAGE_URL_REGEX.test(url) || isImetaImage) {
-          if (result.length > 0) {
-            const prev = result[result.length - 1];
-            if (prev.type === "text") {
-              prev.value = prev.value.replace(/\s+$/, "");
+        if (bolt11) {
+          out.push({ type: "lightning-invoice", invoice: bolt11.toLowerCase() });
+        } else if (url) {
+          // Strip common trailing punctuation that's likely not part of the URL
+          const trailingPunctMatch = url.match(/^(.*?)([.,;:!?)\]]+)$/);
+          if (trailingPunctMatch) {
+            const [, urlWithoutPunct] = trailingPunctMatch;
+            if (urlWithoutPunct && urlWithoutPunct.length > 10) {
+              url = urlWithoutPunct;
+              fullMatch = urlWithoutPunct;
             }
           }
-          result.push({
-            type: "image-embed",
-            url,
-            encryption: inlineImeta?.encryption,
-            mime: inlineImetaMime,
-          });
-          lastIndex = index + fullMatch.length;
-          const leadingWs = text.substring(lastIndex).match(/^\s+/);
-          if (leadingWs) lastIndex += leadingWs[0].length;
-          continue;
-        }
 
-        // Non-image media URLs (video, audio) — render inline at their position.
-        // Match by extension, or by an imeta-declared audio/video MIME (covers
-        // extension-less upload URLs like blossom sha256 filenames).
-        const imetaMime = imetaMimeByUrl.get(url);
-        const isImetaMedia = imetaMime?.startsWith("audio/") || imetaMime?.startsWith("video/");
-        if (EMBED_MEDIA_URL_REGEX.test(url) || isImetaMedia) {
-          if (result.length > 0) {
-            const prev = result[result.length - 1];
-            if (prev.type === "text") {
-              prev.value = prev.value.replace(/\s+$/, "");
-            }
+          // WebSocket relay URLs → internal server page link
+          if (/^wss?:\/\//i.test(url)) {
+            out.push({ type: "relay-link", url });
+            lastIndex = index + fullMatch.length;
+            continue;
           }
-          result.push({ type: "media-embed", url });
-          lastIndex = index + fullMatch.length;
-          const leadingWs = text.substring(lastIndex).match(/^\s+/);
-          if (leadingWs) lastIndex += leadingWs[0].length;
-          continue;
-        }
 
-        // A URL gets a preview card when nothing meaningful follows it on
-        // the same line; mid-sentence URLs stay plain links.
-        const afterUrl = text.substring(index + fullMatch.length);
-        const nextNewline = afterUrl.indexOf("\n");
-        const lineSuffix = nextNewline === -1 ? afterUrl : afterUrl.substring(0, nextNewline);
-        const isEndOfLine = lineSuffix.trim() === "";
-
-        const naddrFromUrl = extractNaddrFromUrl(url);
-        if (naddrFromUrl) {
-          result.push({ type: "naddr-embed", addr: naddrFromUrl, url });
-        } else if (isEndOfLine) {
-          result.push({ type: "link-embed", url });
-        } else {
-          result.push({ type: "inline-link", url });
-        }
-      } else if ((nostrPrefix && nostrData) || (barePrefix && bareData)) {
-        const prefix = nostrPrefix || barePrefix;
-        const data = nostrData || bareData;
-        try {
-          const nostrId = `${prefix}${data}`;
-          const decoded = nip19.decode(nostrId);
-
-          if (decoded.type === "npub") {
-            result.push({ type: "mention", pubkey: decoded.data });
-          } else if (decoded.type === "nprofile") {
-            result.push({ type: "mention", pubkey: decoded.data.pubkey });
-          } else if (decoded.type === "note") {
-            result.push({ type: "nevent-embed", eventId: decoded.data as string });
-          } else if (decoded.type === "nevent") {
-            result.push({
-              type: "nevent-embed",
-              eventId: decoded.data.id,
-              relays: decoded.data.relays,
-              author: decoded.data.author,
+          // Image URLs → render inline at their position in the text. Match by
+          // extension, or by an imeta entry declaring an image MIME (covers
+          // extension-less / encrypted Blossom URLs). Encrypted attachments carry
+          // their decryption key/nonce so the embed can fetch+decrypt the blob.
+          const inlineImeta = imetaByUrl.get(url);
+          const inlineImetaMime = inlineImeta ? imageMimeFor(inlineImeta) : undefined;
+          const isImetaImage = inlineImetaMime?.startsWith("image/") ?? false;
+          if (IMAGE_URL_REGEX.test(url) || isImetaImage) {
+            if (out.length > 0) {
+              const prev = out[out.length - 1];
+              if (prev.type === "text") {
+                prev.value = prev.value.replace(/\s+$/, "");
+              }
+            }
+            out.push({
+              type: "image-embed",
+              url,
+              encryption: inlineImeta?.encryption,
+              mime: inlineImetaMime,
             });
-          } else if (decoded.type === "naddr") {
-            result.push({ type: "naddr-embed", addr: decoded.data as AddrCoords });
-          } else {
-            result.push({ type: "nostr-link", id: nostrId, raw: fullMatch });
+            lastIndex = index + fullMatch.length;
+            const leadingWs = segment.substring(lastIndex).match(/^\s+/);
+            if (leadingWs) lastIndex += leadingWs[0].length;
+            continue;
           }
-        } catch {
-          result.push({ type: "text", value: fullMatch });
+
+          // Non-image media URLs (video, audio) — render inline at their position.
+          // Match by extension, or by an imeta-declared audio/video MIME (covers
+          // extension-less upload URLs like blossom sha256 filenames).
+          const imetaMime = imetaMimeByUrl.get(url);
+          const isImetaMedia = imetaMime?.startsWith("audio/") || imetaMime?.startsWith("video/");
+          if (EMBED_MEDIA_URL_REGEX.test(url) || isImetaMedia) {
+            if (out.length > 0) {
+              const prev = out[out.length - 1];
+              if (prev.type === "text") {
+                prev.value = prev.value.replace(/\s+$/, "");
+              }
+            }
+            out.push({ type: "media-embed", url });
+            lastIndex = index + fullMatch.length;
+            const leadingWs = segment.substring(lastIndex).match(/^\s+/);
+            if (leadingWs) lastIndex += leadingWs[0].length;
+            continue;
+          }
+
+          // A URL gets a preview card when nothing meaningful follows it on
+          // the same line; mid-sentence URLs stay plain links.
+          const afterUrl = segment.substring(index + fullMatch.length);
+          const nextNewline = afterUrl.indexOf("\n");
+          const lineSuffix = nextNewline === -1 ? afterUrl : afterUrl.substring(0, nextNewline);
+          const isEndOfLine = lineSuffix.trim() === "";
+
+          const naddrFromUrl = extractNaddrFromUrl(url);
+          if (naddrFromUrl) {
+            out.push({ type: "naddr-embed", addr: naddrFromUrl, url });
+          } else if (isEndOfLine) {
+            out.push({ type: "link-embed", url });
+          } else {
+            out.push({ type: "inline-link", url });
+          }
+        } else if ((nostrPrefix && nostrData) || (barePrefix && bareData)) {
+          const prefix = nostrPrefix || barePrefix;
+          const data = nostrData || bareData;
+          try {
+            const nostrId = `${prefix}${data}`;
+            const decoded = nip19.decode(nostrId);
+
+            if (decoded.type === "npub") {
+              out.push({ type: "mention", pubkey: decoded.data });
+            } else if (decoded.type === "nprofile") {
+              out.push({ type: "mention", pubkey: decoded.data.pubkey });
+            } else if (decoded.type === "note") {
+              out.push({ type: "nevent-embed", eventId: decoded.data as string });
+            } else if (decoded.type === "nevent") {
+              out.push({
+                type: "nevent-embed",
+                eventId: decoded.data.id,
+                relays: decoded.data.relays,
+                author: decoded.data.author,
+              });
+            } else if (decoded.type === "naddr") {
+              out.push({ type: "naddr-embed", addr: decoded.data as AddrCoords });
+            } else {
+              out.push({ type: "nostr-link", id: nostrId, raw: fullMatch });
+            }
+          } catch {
+            out.push({ type: "text", value: fullMatch });
+          }
+        } else if (hashtag) {
+          const tag = hashtag.slice(1);
+          out.push({ type: "hashtag", tag, raw: hashtag });
         }
-      } else if (hashtag) {
-        const tag = hashtag.slice(1);
-        result.push({ type: "hashtag", tag, raw: hashtag });
+
+        lastIndex = index + fullMatch.length;
       }
 
-      lastIndex = index + fullMatch.length;
-    }
+      // Add any remaining text
+      if (lastIndex < segment.length) {
+        out.push({ type: "text", value: segment.substring(lastIndex) });
+      }
+      return out;
+    };
 
-    // Add any remaining text
-    if (lastIndex < text.length) {
-      result.push({ type: "text", value: text.substring(lastIndex) });
-    }
+    // A text run may still contain `inline code` spans — extract those first
+    // so code never gets linkified/emojified.
+    const tokenizeRun = (run: string): ContentToken[] => {
+      const out: ContentToken[] = [];
+      for (const seg of splitInlineCode(run)) {
+        if (seg.code) out.push({ type: "inline-code", code: seg.value });
+        else out.push(...tokenizeSegment(seg.value));
+      }
+      return out;
+    };
 
-    if (result.length === 0 && !hadMatches) {
-      result.push({ type: "text", value: text });
+    // Markdown block pass first (fenced ``` code, > quotes), then tokenize
+    // each non-code run. Quote blocks carry their own token list and render
+    // inside a <blockquote> (media inside quotes demotes to plain links).
+    const result: ContentToken[] = [];
+    for (const block of splitMarkdownBlocks(text)) {
+      if (block.type === "code") {
+        result.push({ type: "code-block", code: block.code, lang: block.lang });
+      } else if (block.type === "quote") {
+        result.push({ type: "quote", tokens: tokenizeRun(block.text) });
+      } else {
+        result.push(...tokenizeRun(block.text));
+      }
     }
 
     // Enrich nevent-embed tokens with relay/author hints from `q` tags.
@@ -404,7 +433,8 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
       const token = result[i];
       const isBlock = token.type === "image-embed" || token.type === "media-embed"
         || token.type === "link-embed" || token.type === "nevent-embed"
-        || (token.type === "naddr-embed" && !token.url) || token.type === "lightning-invoice";
+        || (token.type === "naddr-embed" && !token.url) || token.type === "lightning-invoice"
+        || token.type === "code-block" || token.type === "quote";
 
       if (isBlock) {
         if (i > 0) {
@@ -526,163 +556,192 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     && groupedTokens[0].type === "text"
     && isOnlyEmojisOrCustom(groupedTokens[0].value, emojiMap);
 
+  // Plain <a> for a URL (also the demoted rendering for media/embeds inside
+  // quote blocks, where cards would be visually wrong).
+  const inlineLink = (key: React.Key, url: string) => {
+    const safe = sanitizeUrl(url);
+    if (!safe) return <span key={key}>{url}</span>;
+    return (
+      <a
+        key={key}
+        href={safe}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-primary hover:underline break-all"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {url}
+      </a>
+    );
+  };
+
+  /**
+   * Render one token. `topIndex` is the token's index in `groupedTokens`
+   * (drives lightbox image indexing; null inside quotes). Inside quotes,
+   * block-level media/embed tokens demote to inline links.
+   */
+  const renderToken = (token: ContentToken, key: React.Key, topIndex: number | null, inQuote = false): ReactNode => {
+    switch (token.type) {
+      case "text": {
+        const imgClass = isEmojiOnly ? "inline h-10 w-10 object-contain align-text-bottom" : undefined;
+        return (
+          <span key={key}>
+            {renderInlineMarkdown(
+              token.value,
+              (leaf) => highlightText(leaf, highlight, emojiMap, imgClass),
+              `${key}-`,
+            )}
+          </span>
+        );
+      }
+      case "code-block":
+        return <CodeBlock key={key} code={token.code} lang={token.lang} />;
+      case "inline-code":
+        return <InlineCode key={key} code={token.code} />;
+      case "quote":
+        return (
+          <blockquote
+            key={key}
+            className="my-0.5 border-l-[3px] border-border/80 pl-2.5 text-foreground/90"
+          >
+            {token.tokens.map((t, j) => renderToken(t, `${key}-q${j}`, null, true))}
+          </blockquote>
+        );
+      case "image-embed": {
+        if (inQuote) return inlineLink(key, token.url);
+        const imgIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
+        return (
+          <InlineImage
+            key={key}
+            image={{ url: token.url, encryption: token.encryption, mime: token.mime }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightboxIndex(imgIndex);
+            }}
+          />
+        );
+      }
+      case "image-gallery": {
+        const galleryStartIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
+        return (
+          <ImageGrid
+            key={key}
+            images={token.urls}
+            onOpen={(idx) => setLightboxIndex(galleryStartIndex + idx)}
+          />
+        );
+      }
+      case "link-embed":
+        if (inQuote) return inlineLink(key, token.url);
+        return <LinkEmbed key={key} url={token.url} className="my-1.5" />;
+      case "inline-link":
+        return inlineLink(key, token.url);
+      case "media-embed": {
+        if (inQuote) return inlineLink(key, token.url);
+        const imeta = imetaMap.get(token.url);
+        const mime = imeta?.mime ?? "";
+        const isXdc = mime === "application/x-webxdc"
+          || /\.xdc(\?[^\s]*)?$/i.test(token.url);
+        if (isXdc) {
+          return <XdcAttachment key={key} url={token.url} imeta={imeta} />;
+        }
+        const isAudio = mime.startsWith("audio/")
+          || /\.(mp3|wav|ogg|flac|m4a|aac|opus)(\?[^\s]*)?$/i.test(token.url);
+        if (isAudio) {
+          const waveform = imeta ? getImetaField(event.tags, token.url, "waveform") : undefined;
+          const duration = imeta ? getImetaField(event.tags, token.url, "duration") : undefined;
+          return (
+            <AudioMessage
+              key={key}
+              src={token.url}
+              mime={imeta?.mime}
+              waveform={waveform}
+              duration={duration}
+            />
+          );
+        }
+        return <VideoPlayer key={key} src={token.url} poster={imeta?.thumbnail} dim={imeta?.dim} />;
+      }
+      case "nevent-embed": {
+        if (disableNoteEmbeds || inQuote) {
+          return <TruncatedNostrLink key={key} encode={() =>
+            nip19.neventEncode({
+              id: token.eventId,
+              ...(token.author ? { author: token.author } : {}),
+              ...(token.relays?.length ? { relays: token.relays } : {}),
+            })}
+          />;
+        }
+        return (
+          <EmbeddedNote
+            key={key}
+            eventId={token.eventId}
+            relays={token.relays}
+            authorHint={token.author}
+          />
+        );
+      }
+      case "naddr-embed": {
+        if (disableNoteEmbeds || inQuote) {
+          return <TruncatedNostrLink key={key} encode={() => nip19.naddrEncode(token.addr)} />;
+        }
+        return (
+          <span key={key}>
+            {token.url && (
+              <a
+                href={token.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline break-all"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {token.url}
+              </a>
+            )}
+            <EmbeddedNaddr addr={token.addr} />
+          </span>
+        );
+      }
+      case "mention":
+        return <NostrMention key={key} pubkey={token.pubkey} noAtPrefix={noMentionAtPrefix} />;
+      case "nostr-link":
+        return (
+          <a
+            key={key}
+            href={`https://njump.me/${token.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline break-all"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {token.raw.slice(0, 16)}…
+          </a>
+        );
+      case "hashtag":
+        return (
+          <span key={key} className="text-primary font-medium">
+            {token.raw}
+          </span>
+        );
+      case "relay-link":
+        return (
+          <Link
+            key={key}
+            to={`/s/${relayToRouteParam(token.url)}`}
+            className="text-primary hover:underline break-all"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {token.url}
+          </Link>
+        );
+      case "lightning-invoice":
+        return <LightningInvoice key={key} invoice={token.invoice} />;
+    }
+  };
+
   return (
     <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, isEmojiOnly && "text-4xl leading-tight")}>
-      {groupedTokens.map((token, i) => {
-        switch (token.type) {
-          case "text":
-            return (
-              <span key={i}>
-                {highlightText(
-                  token.value,
-                  highlight,
-                  emojiMap,
-                  isEmojiOnly ? "inline h-10 w-10 object-contain align-text-bottom" : undefined,
-                )}
-              </span>
-            );
-          case "image-embed": {
-            const imgIndex = tokenImageIndex.get(i) ?? 0;
-            return (
-              <InlineImage
-                key={i}
-                image={{ url: token.url, encryption: token.encryption, mime: token.mime }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setLightboxIndex(imgIndex);
-                }}
-              />
-            );
-          }
-          case "image-gallery": {
-            const galleryStartIndex = tokenImageIndex.get(i) ?? 0;
-            return (
-              <ImageGrid
-                key={i}
-                images={token.urls}
-                onOpen={(idx) => setLightboxIndex(galleryStartIndex + idx)}
-              />
-            );
-          }
-          case "link-embed":
-            return <LinkEmbed key={i} url={token.url} className="my-1.5" />;
-          case "inline-link": {
-            const safe = sanitizeUrl(token.url);
-            if (!safe) return <span key={i}>{token.url}</span>;
-            return (
-              <a
-                key={i}
-                href={safe}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline break-all"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {token.url}
-              </a>
-            );
-          }
-          case "media-embed": {
-            const imeta = imetaMap.get(token.url);
-            const mime = imeta?.mime ?? "";
-            const isXdc = mime === "application/x-webxdc"
-              || /\.xdc(\?[^\s]*)?$/i.test(token.url);
-            if (isXdc) {
-              return <XdcAttachment key={i} url={token.url} imeta={imeta} />;
-            }
-            const isAudio = mime.startsWith("audio/")
-              || /\.(mp3|wav|ogg|flac|m4a|aac|opus)(\?[^\s]*)?$/i.test(token.url);
-            if (isAudio) {
-              const waveform = imeta ? getImetaField(event.tags, token.url, "waveform") : undefined;
-              const duration = imeta ? getImetaField(event.tags, token.url, "duration") : undefined;
-              return (
-                <AudioMessage
-                  key={i}
-                  src={token.url}
-                  mime={imeta?.mime}
-                  waveform={waveform}
-                  duration={duration}
-                />
-              );
-            }
-            return <VideoPlayer key={i} src={token.url} poster={imeta?.thumbnail} dim={imeta?.dim} />;
-          }
-          case "nevent-embed": {
-            if (disableNoteEmbeds) {
-              return <TruncatedNostrLink key={i} encode={() =>
-                nip19.neventEncode({
-                  id: token.eventId,
-                  ...(token.author ? { author: token.author } : {}),
-                  ...(token.relays?.length ? { relays: token.relays } : {}),
-                })}
-              />;
-            }
-            return (
-              <EmbeddedNote
-                key={i}
-                eventId={token.eventId}
-                relays={token.relays}
-                authorHint={token.author}
-              />
-            );
-          }
-          case "naddr-embed": {
-            if (disableNoteEmbeds) {
-              return <TruncatedNostrLink key={i} encode={() => nip19.naddrEncode(token.addr)} />;
-            }
-            return (
-              <span key={i}>
-                {token.url && (
-                  <a
-                    href={token.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline break-all"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {token.url}
-                  </a>
-                )}
-                <EmbeddedNaddr addr={token.addr} />
-              </span>
-            );
-          }
-          case "mention":
-            return <NostrMention key={i} pubkey={token.pubkey} noAtPrefix={noMentionAtPrefix} />;
-          case "nostr-link":
-            return (
-              <a
-                key={i}
-                href={`https://njump.me/${token.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline break-all"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {token.raw.slice(0, 16)}…
-              </a>
-            );
-          case "hashtag":
-            return (
-              <span key={i} className="text-primary font-medium">
-                {token.raw}
-              </span>
-            );
-          case "relay-link":
-            return (
-              <Link
-                key={i}
-                to={`/s/${relayToRouteParam(token.url)}`}
-                className="text-primary hover:underline break-all"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {token.url}
-              </Link>
-            );
-          case "lightning-invoice":
-            return <LightningInvoice key={i} invoice={token.invoice} />;
-        }
-      })}
+      {groupedTokens.map((token, i) => renderToken(token, i, i))}
 
       {lightboxIndex !== null && (
         <Lightbox

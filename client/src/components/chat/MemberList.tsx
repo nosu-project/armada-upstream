@@ -7,6 +7,14 @@ import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { StatusDialog } from "@/components/dialogs/StatusDialog";
 import { Button } from "@/components/ui/button";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -25,10 +33,22 @@ import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
 
 import type { Nip29Admin } from "@/lib/nip29";
+import type { ComponentType, ReactNode } from "react";
 
 const ROLE_OWNER = "owner";
 const ROLE_ADMIN = "admin";
 const ROLE_MODERATOR = "moderator";
+
+/**
+ * The menu primitives shared by the ⋮ dropdown and the right-click context
+ * menu — Radix's DropdownMenu and ContextMenu items have compatible props, so
+ * the member actions are defined once and rendered through either family.
+ */
+interface MenuParts {
+  Item: ComponentType<{ className?: string; onSelect?: (e: Event) => void; children?: ReactNode }>;
+  Separator: ComponentType<{ className?: string }>;
+  Label: ComponentType<{ className?: string; children?: ReactNode }>;
+}
 
 interface MemberRowProps {
   pubkey: string;
@@ -93,8 +113,116 @@ function MemberRow({
     );
   };
 
+  // Shared between the ⋮ dropdown and the right-click context menu.
+  const renderMenuItems = ({ Item, Separator, Label }: MenuParts) => (
+    <>
+      <Item className="gap-3 px-3 py-2.5" onSelect={() => requestMention(pubkey)}>
+        <AtSign className="size-4" />
+        Mention
+      </Item>
+      <Item className="gap-3 px-3 py-2.5" onSelect={copyNpub}>
+        <Copy className="size-4" />
+        Copy npub
+      </Item>
+
+      {isSelf && (
+        <Item className="gap-3 px-3 py-2.5" onSelect={() => setStatusOpen(true)}>
+          <Smile className="size-4" />
+          Set status
+        </Item>
+      )}
+
+      {isSelf && onEditProfile && (
+        <Item className="gap-3 px-3 py-2.5" onSelect={onEditProfile}>
+          <IdCard className="size-4" />
+          Server identity
+        </Item>
+      )}
+
+      {canActOnUser && (onSetRole || onRemove || onKick || onBan || onUnban) && (
+        <>
+          <Separator />
+          <Label className="px-2 pb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+            Moderation
+          </Label>
+
+          {onSetRole && viewerIsAdmin && !isAdmin && (
+            <Item
+              className="gap-3 px-3 py-2.5"
+              onSelect={() => onSetRole(pubkey, [ROLE_ADMIN])}
+            >
+              <Crown className="size-4" />
+              Make admin
+            </Item>
+          )}
+          {onSetRole && !isModerator && !isAdmin && (
+            <Item
+              className="gap-3 px-3 py-2.5"
+              onSelect={() => onSetRole(pubkey, [ROLE_MODERATOR])}
+            >
+              <Shield className="size-4" />
+              Make moderator
+            </Item>
+          )}
+          {onSetRole && isAdmin && (
+            <Item
+              className="gap-3 px-3 py-2.5"
+              onSelect={() => onSetRole(pubkey, [ROLE_MODERATOR])}
+            >
+              <Shield className="size-4" />
+              Demote to moderator
+            </Item>
+          )}
+          {onSetRole && (isAdmin || isModerator) && (
+            <Item
+              className="gap-3 px-3 py-2.5"
+              onSelect={() => onSetRole(pubkey, [])}
+            >
+              <ShieldOff className="size-4" />
+              Remove role
+            </Item>
+          )}
+
+          {onRemove && (
+            <Item
+              className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
+              onSelect={() => onRemove(pubkey)}
+            >
+              <UserMinus className="size-4" />
+              Remove from channel
+            </Item>
+          )}
+
+          {onKick && (
+            <Item className="gap-3 px-3 py-2.5" onSelect={() => onKick(pubkey)}>
+              <UserMinus className="size-4" />
+              Kick (can rejoin)
+            </Item>
+          )}
+          {onBan && !isBanned && (
+            <Item
+              className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
+              onSelect={() => onBan(pubkey)}
+            >
+              <Ban className="size-4" />
+              Ban &amp; lock out
+            </Item>
+          )}
+          {onUnban && isBanned && (
+            <Item className="gap-3 px-3 py-2.5" onSelect={() => onUnban(pubkey)}>
+              <ShieldOff className="size-4" />
+              Unban
+            </Item>
+          )}
+        </>
+      )}
+    </>
+  );
+
   return (
     <>
+    <ContextMenu>
+    <ContextMenuTrigger className="block">
     <div className="gutter-tick group flex items-center gap-2.5 pl-3 pr-2 py-2 clip-corner-lg transition-colors hover:bg-accent/50 hover:text-foreground">
       <ProfilePreviewCard pubkey={pubkey}>
         <button type="button" className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -161,109 +289,23 @@ function MemberRow({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64 p-2">
-          <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => requestMention(pubkey)}>
-            <AtSign className="size-4" />
-            Mention
-          </DropdownMenuItem>
-          <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={copyNpub}>
-            <Copy className="size-4" />
-            Copy npub
-          </DropdownMenuItem>
-
-          {isSelf && (
-            <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setStatusOpen(true)}>
-              <Smile className="size-4" />
-              Set status
-            </DropdownMenuItem>
-          )}
-
-          {isSelf && onEditProfile && (
-            <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={onEditProfile}>
-              <IdCard className="size-4" />
-              Server identity
-            </DropdownMenuItem>
-          )}
-
-          {canActOnUser && (onSetRole || onRemove || onKick || onBan || onUnban) && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="px-2 pb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground/80">
-                Moderation
-              </DropdownMenuLabel>
-
-              {onSetRole && viewerIsAdmin && !isAdmin && (
-                <DropdownMenuItem
-                  className="gap-3 px-3 py-2.5"
-                  onClick={() => onSetRole(pubkey, [ROLE_ADMIN])}
-                >
-                  <Crown className="size-4" />
-                  Make admin
-                </DropdownMenuItem>
-              )}
-              {onSetRole && !isModerator && !isAdmin && (
-                <DropdownMenuItem
-                  className="gap-3 px-3 py-2.5"
-                  onClick={() => onSetRole(pubkey, [ROLE_MODERATOR])}
-                >
-                  <Shield className="size-4" />
-                  Make moderator
-                </DropdownMenuItem>
-              )}
-              {onSetRole && isAdmin && (
-                <DropdownMenuItem
-                  className="gap-3 px-3 py-2.5"
-                  onClick={() => onSetRole(pubkey, [ROLE_MODERATOR])}
-                >
-                  <Shield className="size-4" />
-                  Demote to moderator
-                </DropdownMenuItem>
-              )}
-              {onSetRole && (isAdmin || isModerator) && (
-                <DropdownMenuItem
-                  className="gap-3 px-3 py-2.5"
-                  onClick={() => onSetRole(pubkey, [])}
-                >
-                  <ShieldOff className="size-4" />
-                  Remove role
-                </DropdownMenuItem>
-              )}
-
-              {onRemove && (
-                <DropdownMenuItem
-                  className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
-                  onClick={() => onRemove(pubkey)}
-                >
-                  <UserMinus className="size-4" />
-                  Remove from channel
-                </DropdownMenuItem>
-              )}
-
-              {onKick && (
-                <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => onKick(pubkey)}>
-                  <UserMinus className="size-4" />
-                  Kick (can rejoin)
-                </DropdownMenuItem>
-              )}
-              {onBan && !isBanned && (
-                <DropdownMenuItem
-                  className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
-                  onClick={() => onBan(pubkey)}
-                >
-                  <Ban className="size-4" />
-                  Ban &amp; lock out
-                </DropdownMenuItem>
-              )}
-              {onUnban && isBanned && (
-                <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => onUnban(pubkey)}>
-                  <ShieldOff className="size-4" />
-                  Unban
-                </DropdownMenuItem>
-              )}
-            </>
-          )}
+          {renderMenuItems({
+            Item: DropdownMenuItem,
+            Separator: DropdownMenuSeparator,
+            Label: DropdownMenuLabel,
+          })}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+    </ContextMenuTrigger>
+    <ContextMenuContent className="w-64 p-2">
+      {renderMenuItems({
+        Item: ContextMenuItem,
+        Separator: ContextMenuSeparator,
+        Label: ContextMenuLabel,
+      })}
+    </ContextMenuContent>
+    </ContextMenu>
     {isSelf && <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />}
     </>
   );

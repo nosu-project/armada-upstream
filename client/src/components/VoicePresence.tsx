@@ -33,6 +33,46 @@ function ParticipantName({ pubkey }: { pubkey: string }) {
 }
 
 /**
+ * Discord-style nested voice roster: one indented row per participant (small
+ * avatar + name), rendered directly under a channel's row in the sidebar so a
+ * live call reads as a first-class voice channel.
+ */
+export function VoiceParticipantList({
+  participants,
+  className,
+}: {
+  participants: string[];
+  className?: string;
+}) {
+  if (participants.length === 0) return null;
+  return (
+    <div className={cn("flex flex-col pb-0.5", className)} aria-label={`${participants.length} in voice`}>
+      {participants.map((pk) => (
+        <VoiceParticipantRow key={pk} pubkey={pk} />
+      ))}
+    </div>
+  );
+}
+
+/** One row of the nested voice roster. */
+function VoiceParticipantRow({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata;
+  const name = getDisplayName(metadata, pubkey);
+  return (
+    <div className="flex items-center gap-2 pl-10 pr-2 py-0.5 text-[13px] text-muted-foreground">
+      <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
+        <AvatarImage src={metadata?.picture} alt={name} />
+        <AvatarFallback className="bg-success/20 text-success text-[9px]">
+          {name[0]?.toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+      <span className="truncate">{name}</span>
+    </div>
+  );
+}
+
+/**
  * Shows who is currently in a voice room: a small overlapping avatar stack
  * (capped, with a "+N" overflow) and a tooltip listing each participant by
  * name. Used in the channel list and DM list so you can see — and who is in —

@@ -13,7 +13,7 @@ import {
   Waypoints,
   Wrench,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
@@ -21,7 +21,7 @@ import { ConcordResyncCard } from "@/components/ConcordResyncCard";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
-import { SettingsRow, SettingsSection } from "@/components/settings/SettingsSection";
+import { SettingsRow } from "@/components/settings/SettingsSection";
 import { ThemeSelector } from "@/components/ThemeSelector";
 import { VoiceDeviceSettings } from "@/components/VoiceDeviceSettings";
 import { Button } from "@/components/ui/button";
@@ -42,8 +42,45 @@ import {
 import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 
 import type { EncryptedSettings } from "@/lib/schemas";
+import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
-/** App settings: account, theme, the server list, app relays, and search relays. */
+type SectionId =
+  | "account"
+  | "profile"
+  | "notifications"
+  | "appearance"
+  | "voice"
+  | "servers"
+  | "app-relays"
+  | "search-relays"
+  | "dms"
+  | "advanced"
+  | "about";
+
+interface NavItem {
+  id: SectionId;
+  title: string;
+  icon: LucideIcon;
+  /**
+   * Render this section's row(s) directly in the list (no collapsible
+   * header). Used for single-item sections — Account (the login pill), About
+   * (one link row), and Advanced (whose one row is already its own
+   * collapsible) — where a header would just hide a single tap target.
+   */
+  inline?: boolean;
+}
+
+interface NavGroup {
+  heading: string;
+  items: NavItem[];
+}
+
+/**
+ * App settings: one scrolling list (same format on every viewport). Sections
+ * with multiple controls sit behind a collapsible header (icon + title,
+ * expands in place); single-item sections render their row directly.
+ */
 export function SettingsPage() {
   const navigate = useNavigate();
   const { config, updateConfig } = useAppContext();
@@ -143,84 +180,99 @@ export function SettingsPage() {
     }
   };
 
-  return (
-    <main className="flex-1 min-w-0 flex flex-col safe-area-top">
-      {/* Header — a detached floating command bar matching the group/Concord/DM
-          chrome (cut-corner card, recessed shade), but capped to the settings
-          content width and centered on desktop. */}
-      <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={() => navigate(-1)}>
-          <ArrowLeft className="size-5" />
-        </Button>
-        <h1 className="font-semibold truncate leading-tight">Settings</h1>
-      </header>
+  // Section list, gated the same way the old flat sections were.
+  const navGroups = useMemo<NavGroup[]>(() => {
+    const userItems: NavItem[] = [
+      { id: "account", title: "Account", icon: UserCircle, inline: true },
+    ];
+    if (user) {
+      userItems.push(
+        { id: "profile", title: "Profile", icon: UserCircle },
+        { id: "notifications", title: "Notifications", icon: Bell },
+      );
+    }
+    const appItems: NavItem[] = [
+      { id: "appearance", title: "Appearance", icon: Palette },
+      { id: "voice", title: "Voice", icon: Mic },
+      { id: "servers", title: "Servers", icon: Server },
+      { id: "app-relays", title: "App relays", icon: Waypoints },
+      { id: "search-relays", title: "Search relays", icon: Search },
+      { id: "dms", title: "Direct messages", icon: MessageSquareLock },
+    ];
+    if (user && CONCORD_ENABLED) {
+      appItems.push({ id: "advanced", title: "Advanced", icon: Wrench, inline: true });
+    }
+    appItems.push({ id: "about", title: "About", icon: Anchor, inline: true });
+    return [
+      { heading: "User settings", items: userItems },
+      { heading: "App settings", items: appItems },
+    ];
+  }, [user]);
 
-      <div className="flex-1 min-h-0 overflow-y-auto safe-area-bottom">
-        <div className="max-w-2xl mx-auto px-4 sm:px-6 pb-12">
-          <div className="space-y-6 pt-4">
-          <SettingsSection title="Account" icon={UserCircle}>
-            <SettingsRow>
-              <LoginArea className="w-full flex" />
-            </SettingsRow>
-          </SettingsSection>
-
-          {user && (
-            <SettingsSection title="Profile" icon={UserCircle}>
-              <SettingsRow>
-                <ProfileSettings />
-              </SettingsRow>
-            </SettingsSection>
-          )}
-
-          {user && (
-            <SettingsSection title="Notifications" icon={Bell}>
-              <SettingsRow>
-                <NotificationSettings />
-              </SettingsRow>
-            </SettingsSection>
-          )}
-
-          <SettingsSection title="Appearance" icon={Palette}>
-            <SettingsRow>
-              <ThemeSelector />
-            </SettingsRow>
-          </SettingsSection>
-
-          <SettingsSection title="Servers" icon={Server}>
-            <SettingsRow>
-              <RelayListEditor
-                pinned={PLATFORM_RELAYS}
-                relays={config.addedRelays}
-                onChange={setAddedRelays}
-                emptyText="No extra servers added. Use the + button in the server rail to add one."
-                placeholder="wss://server.example.com"
-              />
-            </SettingsRow>
-          </SettingsSection>
-
-          <SettingsSection title="App relays" icon={Waypoints}>
-            <SettingsRow>
-              <RelayListEditor
-                relays={config.appRelays}
-                onChange={setRelays("appRelays")}
-                onReset={() => setRelays("appRelays")([...APP_RELAYS])}
-                emptyText="No app relays — profiles and lists are stored on your internal servers only."
-              />
-            </SettingsRow>
-          </SettingsSection>
-
-          <SettingsSection title="Search relays" icon={Search}>
-            <SettingsRow>
-              <RelayListEditor
-                relays={config.searchRelays}
-                onChange={setRelays("searchRelays")}
-                onReset={() => setRelays("searchRelays")([...SEARCH_RELAYS])}
-                emptyText="No search relays — search falls back to your app relays."
-              />
-            </SettingsRow>
-          </SettingsSection>
-
-          <SettingsSection title="Direct messages" icon={MessageSquareLock}>
+  /** The row(s) inside one section's chrome card. */
+  const sectionBody = (id: SectionId): ReactNode => {
+    switch (id) {
+      case "account":
+        return (
+          <SettingsRow>
+            <LoginArea className="w-full flex" />
+          </SettingsRow>
+        );
+      case "profile":
+        return (
+          <SettingsRow>
+            <ProfileSettings />
+          </SettingsRow>
+        );
+      case "notifications":
+        return (
+          <SettingsRow>
+            <NotificationSettings />
+          </SettingsRow>
+        );
+      case "appearance":
+        return (
+          <SettingsRow>
+            <ThemeSelector />
+          </SettingsRow>
+        );
+      case "servers":
+        return (
+          <SettingsRow>
+            <RelayListEditor
+              pinned={PLATFORM_RELAYS}
+              relays={config.addedRelays}
+              onChange={setAddedRelays}
+              emptyText="No extra servers added. Use the + button in the server rail to add one."
+              placeholder="wss://server.example.com"
+            />
+          </SettingsRow>
+        );
+      case "app-relays":
+        return (
+          <SettingsRow>
+            <RelayListEditor
+              relays={config.appRelays}
+              onChange={setRelays("appRelays")}
+              onReset={() => setRelays("appRelays")([...APP_RELAYS])}
+              emptyText="No app relays — profiles and lists are stored on your internal servers only."
+            />
+          </SettingsRow>
+        );
+      case "search-relays":
+        return (
+          <SettingsRow>
+            <RelayListEditor
+              relays={config.searchRelays}
+              onChange={setRelays("searchRelays")}
+              onReset={() => setRelays("searchRelays")([...SEARCH_RELAYS])}
+              emptyText="No search relays — search falls back to your app relays."
+            />
+          </SettingsRow>
+        );
+      case "dms":
+        return (
+          <>
             <SettingsRow
               label="Use my own DM relays"
               description="Store and read DMs on your own relays instead of the app relays."
@@ -238,9 +290,11 @@ export function SettingsPage() {
                 />
               </SettingsRow>
             )}
-          </SettingsSection>
-
-          <SettingsSection title="Voice" icon={Mic}>
+          </>
+        );
+      case "voice":
+        return (
+          <>
             <SettingsRow>
               <VoiceDeviceSettings />
             </SettingsRow>
@@ -282,47 +336,112 @@ export function SettingsPage() {
                 onCheckedChange={setVoiceToggle("autoGainControl")}
               />
             </SettingsRow>
-          </SettingsSection>
-
-          {user && CONCORD_ENABLED && (
-            <SettingsSection title="Advanced" icon={Wrench}>
-              <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
-                <CollapsibleTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
-                    aria-expanded={showAdvanced}
-                  >
-                    <div className="min-w-0 flex-1 space-y-0.5">
-                      <div className="text-sm font-medium leading-tight">Recover communities</div>
-                      <div className="text-xs text-muted-foreground leading-snug">
-                        Find and restore encrypted rooms missing from your list.
-                      </div>
-                    </div>
-                    <ChevronDown
-                      className="size-4 text-muted-foreground shrink-0 transition-transform duration-200 [[data-state=open]_&]:rotate-180"
-                    />
-                  </button>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <div className="border-t border-chrome px-4 py-3.5">
-                    <ConcordResyncCard />
+          </>
+        );
+      case "advanced":
+        return (
+          <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
+                aria-expanded={showAdvanced}
+              >
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="text-sm font-medium leading-tight">Recover communities</div>
+                  <div className="text-xs text-muted-foreground leading-snug">
+                    Find and restore encrypted rooms missing from your list.
                   </div>
-                </CollapsibleContent>
-              </Collapsible>
-            </SettingsSection>
-          )}
+                </div>
+                <ChevronDown
+                  className="size-4 text-muted-foreground shrink-0 transition-transform duration-200 [[data-state=open]_&]:rotate-180"
+                />
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+              <div className="border-t border-chrome px-4 py-3.5">
+                <ConcordResyncCard />
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        );
+      case "about":
+        return (
+          <SettingsRow
+            label="How Armada works"
+            description="The two ways to talk, and what stays private."
+            onClick={() => navigate("/about")}
+          >
+            <ChevronRight className="size-4 text-muted-foreground" />
+          </SettingsRow>
+        );
+    }
+  };
 
-          <SettingsSection title="About" icon={Anchor}>
-            <SettingsRow
-              label="How Armada works"
-              description="The two ways to talk, and what stays private."
-              onClick={() => navigate("/about")}
-            >
-              <ChevronRight className="size-4 text-muted-foreground" />
-            </SettingsRow>
-          </SettingsSection>
-          </div>
+  return (
+    <main className="flex-1 min-w-0 flex flex-col safe-area-top">
+      {/* Header — a detached floating command bar matching the group/Concord/DM
+          chrome (cut-corner card, recessed shade), capped to the settings
+          content width and centered on desktop. */}
+      <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-9 shrink-0"
+          aria-label="Back"
+          onClick={() => navigate(-1)}
+        >
+          <ArrowLeft className="size-5" />
+        </Button>
+        <h1 className="font-semibold truncate leading-tight">Settings</h1>
+      </header>
+
+      <div className="flex-1 min-h-0 overflow-y-auto safe-area-bottom">
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 pb-12 pt-4 space-y-6">
+          {navGroups.map((group) => (
+            <section key={group.heading} className="space-y-1.5">
+              <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {group.heading}
+              </h2>
+              <div className="space-y-1.5">
+                {group.items.map((item) =>
+                  item.inline ? (
+                    /* Single-item section: its row IS the list entry. */
+                    <div
+                      key={item.id}
+                      className="bg-chrome clip-corner-lg overflow-hidden [&>*]:border-chrome [&>*:not(:first-child)]:border-t"
+                    >
+                      {sectionBody(item.id)}
+                    </div>
+                  ) : (
+                    /* Multi-control section: collapsible header, expands in place. */
+                    <Collapsible
+                      key={item.id}
+                      className="bg-chrome clip-corner-lg overflow-hidden"
+                    >
+                      <CollapsibleTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent/40"
+                        >
+                          <item.icon className="size-4 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1 text-sm font-medium truncate">
+                            {item.title}
+                          </span>
+                          <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" />
+                        </button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+                        <div className="border-t border-chrome [&>*]:border-chrome [&>*:not(:first-child)]:border-t">
+                          {sectionBody(item.id)}
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  ),
+                )}
+              </div>
+            </section>
+          ))}
         </div>
       </div>
     </main>

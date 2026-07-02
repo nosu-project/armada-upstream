@@ -1,20 +1,27 @@
-import { Hash, Headphones, Loader2, Lock, RefreshCw, Volume2 } from "lucide-react";
+import { CheckCheck, Hash, Headphones, Link as LinkIcon, Loader2, Lock, RefreshCw, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { CreateGroupDialog } from "@/components/dialogs/CreateGroupDialog";
 import { LoginArea } from "@/components/auth/LoginArea";
 import LoginDialog from "@/components/auth/LoginDialog";
-import { VoicePresence } from "@/components/VoicePresence";
+import { VoiceParticipantList } from "@/components/VoicePresence";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
 import { useLivekitParticipants, useRelayLivekitSupport } from "@/hooks/useLivekit";
+import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
 import { relayToRouteParam } from "@/lib/platform";
@@ -32,6 +39,7 @@ function ChannelLink({
   onNavigate?: () => void;
 }) {
   const { activeCall } = useCall();
+  const { markRead } = useReadState();
   // Voice capability: prefer the per-group `livekit` metadata tag, but fall
   // back to the relay-level capability (`/.well-known/nip29/livekit` 204).
   // Armada's relay29 metadata doesn't emit the `livekit` group tag, so
@@ -57,46 +65,72 @@ function ChannelLink({
   const Icon = callActive ? Volume2 : Hash;
 
   return (
-    <NavLink
-      to={`/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`}
-      onClick={onNavigate}
-      className={({ isActive }) =>
-        cn(
-          // Chart-rule HUD entry: a glowing left gutter-tick marks state
-          // instead of a full-bleed grey hover block. Raked left padding
-          // echoes the console's diagonal.
-          "gutter-tick flex items-center gap-2 pl-4 pr-2 py-1.5 text-sm transition-colors",
-          "text-muted-foreground hover:text-foreground",
-          // Unread channels read brighter even when not selected.
-          !isActive && hasUnread && "text-foreground font-medium",
-          isActive && "is-active text-foreground font-medium",
+    <ContextMenu>
+      <ContextMenuTrigger className="block">
+        <div>
+          <NavLink
+        to={`/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`}
+        onClick={onNavigate}
+        className={({ isActive }) =>
+          cn(
+            // Chart-rule HUD entry: a glowing left gutter-tick marks state
+            // instead of a full-bleed grey hover block. Raked left padding
+            // echoes the console's diagonal.
+            "gutter-tick flex items-center gap-2 pl-4 pr-2 py-1.5 text-sm transition-colors",
+            "text-muted-foreground hover:text-foreground",
+            // Unread channels read brighter even when not selected.
+            !isActive && hasUnread && "text-foreground font-medium",
+            isActive && "is-active text-foreground font-medium",
+          )}
+      >
+        <Icon className="size-4 shrink-0" />
+        <span className="truncate flex-1">{group.name}</span>
+        {inCall && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Headphones className="size-3.5 shrink-0 text-success" aria-label="Voice active" />
+            </TooltipTrigger>
+            <TooltipContent>You're in voice here</TooltipContent>
+          </Tooltip>
         )}
-    >
-      <Icon className="size-4 shrink-0" />
-      <span className="truncate flex-1">{group.name}</span>
-      {inCall ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Headphones className="size-3.5 shrink-0 text-success" aria-label="Voice active" />
-          </TooltipTrigger>
-          <TooltipContent>You're in voice here</TooltipContent>
-        </Tooltip>
-      ) : othersInVoice ? (
-        <VoicePresence participants={participants!} className="text-success/90" />
-      ) : null}
-      {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
-      {/* Unread / mention indicator: an "@" pill for mentions, else a dot. */}
-      {hasMention ? (
-        <span
-          className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
-          aria-label="You were mentioned"
+        {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
+        {/* Unread / mention indicator: an "@" pill for mentions, else a dot. */}
+        {hasMention ? (
+          <span
+            className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+            aria-label="You were mentioned"
+          >
+            @
+          </span>
+        ) : hasUnread ? (
+          <span className="shrink-0 size-2 rounded-full bg-foreground" aria-label="Unread messages" />
+        ) : null}
+      </NavLink>
+      {/* Discord-style nested voice roster: who's in the live call here. */}
+      {callActive && (participants?.length ?? 0) > 0 && (
+        <VoiceParticipantList participants={participants!} />
+      )}
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem
+          disabled={!hasUnread}
+          onSelect={() => {
+            if (unread) markRead(channelReadKey(group.relay, group.id), unread.latest);
+          }}
         >
-          @
-        </span>
-      ) : hasUnread ? (
-        <span className="shrink-0 size-2 rounded-full bg-foreground" aria-label="Unread messages" />
-      ) : null}
-    </NavLink>
+          <CheckCheck className="mr-2 size-4" /> Mark as read
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => {
+            const url = `${window.location.origin}/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`;
+            navigator.clipboard?.writeText(url);
+          }}
+        >
+          <LinkIcon className="mr-2 size-4" /> Copy channel link
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
