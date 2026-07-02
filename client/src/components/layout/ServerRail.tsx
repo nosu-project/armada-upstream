@@ -16,6 +16,7 @@ import { useCommunityImageDescriptors } from "@/hooks/useCommunityImageDescripto
 import { useDecryptedCommunityImage } from "@/hooks/useDecryptedCommunityImage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
+import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useRelayUnread } from "@/hooks/useRelayUnread";
@@ -339,6 +340,7 @@ export function ServerRail({
   const navigate = useNavigate();
   const { activeCall } = useCall();
   const { user } = useCurrentUser();
+  const { mesh } = useMeshTransport();
   const hasUnreadDMs = useHasUnreadDMs();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const { data: concord } = useConcordList();
@@ -557,10 +559,12 @@ export function ServerRail({
         className,
       )}
     >
-      {/* Nearby Bluetooth mesh chat — peer-to-peer, above DMs. Android-only at
-          runtime; the page shows an "unavailable here" state elsewhere, so the
-          entry is always present when signed in. */}
-      {user && (
+      {/* Nearby Bluetooth mesh chat — peer-to-peer, above DMs. Only shown when
+          the platform can actually run it (Android with BLE hardware): a rail
+          entry that leads to a permanent "unavailable here" page on web/desktop
+          is dead weight. Hidden while the availability probe resolves; still
+          shown when supported-but-off (the page hosts the opt-in toggle). */}
+      {user && mesh.available && (
         <Tooltip>
           <TooltipTrigger asChild>
             <NavLink

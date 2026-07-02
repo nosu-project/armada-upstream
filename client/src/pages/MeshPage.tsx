@@ -7,6 +7,7 @@ import {
   Hash,
   Loader2,
   MessageCircle,
+  Power,
   Radio,
   Send,
   Users,
@@ -219,6 +220,7 @@ export function MeshPage() {
           <MeshSidebar
             view={view}
             available={mesh.available}
+            enabled={mesh.enabled}
             started={mesh.started}
             error={mesh.error}
             peers={mesh.peers}
@@ -234,6 +236,8 @@ export function MeshPage() {
       <main className="flex flex-col flex-1 min-w-0 safe-area-top bg-background h-full">
         {!mesh.available ? (
           <UnavailableState />
+        ) : !mesh.enabled ? (
+          <DisabledState onEnable={() => mesh.setEnabled(true)} />
         ) : !view ? (
           <SelectState started={mesh.started} />
         ) : (
@@ -244,6 +248,7 @@ export function MeshPage() {
               started={mesh.started}
               incognito={mesh.incognito}
               onToggleIncognito={() => mesh.setIncognito(!mesh.incognito)}
+              onTurnOff={() => mesh.setEnabled(false)}
               onBack={() => setView(null)}
               peerCount={mesh.peers.length}
               membersVisible={membersVisible}
@@ -364,6 +369,7 @@ export function MeshPage() {
 function MeshSidebar({
   view,
   available,
+  enabled,
   started,
   error,
   peers,
@@ -375,6 +381,7 @@ function MeshSidebar({
 }: {
   view: MeshView;
   available: boolean;
+  enabled: boolean;
   started: boolean;
   error: string | null;
   peers: MeshPeer[];
@@ -390,9 +397,11 @@ function MeshSidebar({
       title="Mesh"
       subtitle={
         available
-          ? started
-            ? "Nearby · Noise XX encrypted"
-            : "Starting Bluetooth mesh…"
+          ? enabled
+            ? started
+              ? "Nearby · Noise XX encrypted"
+              : "Starting Bluetooth mesh…"
+            : "Off"
           : "Unavailable here"
       }
       addChannelDisabled
@@ -432,9 +441,11 @@ function MeshSidebar({
       {peers.length === 0 ? (
         <p className="px-4 py-1 text-xs text-muted-foreground/70">
           {available
-            ? started
-              ? "No nearby devices yet. Armada or bitchat devices in Bluetooth range appear here."
-              : "Starting Bluetooth mesh…"
+            ? enabled
+              ? started
+                ? "No nearby devices yet. Armada or bitchat devices in Bluetooth range appear here."
+                : "Starting Bluetooth mesh…"
+              : "Mesh chat is off. Turn it on to find nearby devices."
             : "Mesh chat runs on the Armada Android app."}
         </p>
       ) : (
@@ -522,6 +533,7 @@ function ChatHeader({
   started,
   incognito,
   onToggleIncognito,
+  onTurnOff,
   onBack,
   peerCount,
   membersVisible,
@@ -533,6 +545,7 @@ function ChatHeader({
   started: boolean;
   incognito: boolean;
   onToggleIncognito: () => void;
+  onTurnOff: () => void;
   onBack: () => void;
   peerCount: number;
   membersVisible: boolean;
@@ -614,6 +627,22 @@ function ChatHeader({
         <TooltipContent>
           {incognito ? "Incognito on · tap to show your name" : "Incognito off · tap to go anonymous"}
         </TooltipContent>
+      </Tooltip>
+      {/* Turn the mesh off entirely (stops Bluetooth + the background service).
+          Mesh is opt-in, so the off switch lives right where it runs. */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Turn mesh off"
+            className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+            onClick={onTurnOff}
+          >
+            <Power className="size-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Turn mesh off</TooltipContent>
       </Tooltip>
       {started ? (
         <Bluetooth className="size-4 text-success shrink-0" />
@@ -735,6 +764,31 @@ function UnavailableState() {
         <p className="text-xs text-muted-foreground/70">
           Nearby Bluetooth chat runs on the Armada Android app, which talks to other devices directly over Bluetooth.
         </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The opt-in landing state: mesh is supported on this device but the user
+ * hasn't turned it on. Nothing Bluetooth-related happens (no permission
+ * prompt, no foreground service) until they do.
+ */
+function DisabledState({ onEnable }: { onEnable: () => void }) {
+  return (
+    <div className="flex flex-1 items-center justify-center text-muted-foreground">
+      <div className="flex flex-col items-center gap-3 max-w-xs text-center px-6">
+        <Bluetooth className="size-12 opacity-30" />
+        <p className="text-sm font-medium text-foreground">Mesh chat is off</p>
+        <p className="text-xs text-muted-foreground/70">
+          Chat with nearby Armada and bitchat devices directly over Bluetooth — no
+          internet needed. Turning it on asks for Bluetooth permission and keeps a
+          background connection (with a persistent notification) while active.
+        </p>
+        <Button className="mt-2" onClick={onEnable}>
+          <Bluetooth className="size-4" />
+          Turn on mesh chat
+        </Button>
       </div>
     </div>
   );

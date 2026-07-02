@@ -50,6 +50,9 @@ export function useMeshTransportState(): MeshContextType {
   const { user, metadata } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   const incognito = config.meshIncognito;
+  // Opt-in gate: the mesh never starts (no permission prompt, no foreground
+  // service) until the user turns it on from the Mesh page. Persisted.
+  const enabled = config.meshEnabled;
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [directMessages, setDirectMessages] = useState<Record<string, ChatMsg[]>>({});
   const [peers, setPeers] = useState<MeshPeer[]>([]);
@@ -137,6 +140,16 @@ export function useMeshTransportState(): MeshContextType {
     }
   }, []);
 
+  const setEnabled = useCallback(
+    (next: boolean) => {
+      updateConfig((c) => ({ ...c, meshEnabled: next }));
+      // Turning off tears the mesh down immediately (stops the FGS + BLE);
+      // turning on lets the auto-start effect below bring it up.
+      if (!next) void stop().catch(() => undefined);
+    },
+    [updateConfig, stop],
+  );
+
   // Probe availability + wire listeners once.
   useEffect(() => {
     let cancelled = false;
@@ -164,14 +177,16 @@ export function useMeshTransportState(): MeshContextType {
     };
   }, [appendMessage]);
 
-  // Auto-start once available. Incognito doesn't need a nickname up front (the
-  // native anon default covers the gap until our peer id resolves); otherwise
-  // wait for the real name so we never announce a blank.
+  // Auto-start once available AND the user has opted in. Incognito doesn't
+  // need a nickname up front (the native anon default covers the gap until our
+  // peer id resolves); otherwise wait for the real name so we never announce a
+  // blank. `enabled` is the consent gate: without it we never prompt for
+  // Bluetooth permissions or start the foreground service.
   useEffect(() => {
-    if (available && !started && (incognito || realName)) void start();
-    // Only react to availability/name readiness; `start` is stable enough.
+    if (enabled && available && !started && (incognito || realName)) void start();
+    // Only react to enablement/availability/name readiness; `start` is stable enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [available, incognito, realName]);
+  }, [enabled, available, incognito, realName]);
 
   // Keep the announced nickname in sync when it changes mid-session (profile
   // edit, incognito toggle, or the anon name resolving once we learn our peer id).
@@ -240,10 +255,10 @@ export function useMeshTransportState(): MeshContextType {
 
   const mesh = useMemo<MeshState>(
     () => ({
-      available, started, myPeerID, peers, directMessages, error,
-      incognito, myNickname, start, stop, setIncognito,
+      available, probing: isLoading, enabled, started, myPeerID, peers, directMessages, error,
+      incognito, myNickname, start, stop, setEnabled, setIncognito,
     }),
-    [available, started, myPeerID, peers, directMessages, error, incognito, myNickname, start, stop, setIncognito],
+    [available, isLoading, enabled, started, myPeerID, peers, directMessages, error, incognito, myNickname, start, stop, setEnabled, setIncognito],
   );
 
   return useMemo(

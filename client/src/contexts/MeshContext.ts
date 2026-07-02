@@ -16,6 +16,14 @@ import type { MeshPeer } from "@/lib/bluetoothMesh";
 export interface MeshState {
   /** Whether the platform can run the BLE mesh (Android only). */
   available: boolean;
+  /** True while the availability probe is still resolving (app boot). */
+  probing: boolean;
+  /**
+   * Whether the user has turned mesh chat on (persisted, off by default).
+   * Starting the mesh prompts for Bluetooth permissions and runs a foreground
+   * service, so it's strictly opt-in.
+   */
+  enabled: boolean;
   /** Whether the mesh is currently running. */
   started: boolean;
   /** This device's mesh peer id, once started. */
@@ -37,6 +45,8 @@ export interface MeshState {
   start: () => Promise<void>;
   /** Stop the mesh. */
   stop: () => Promise<void>;
+  /** Turn mesh chat on/off (persisted). Off also stops a running mesh. */
+  setEnabled: (enabled: boolean) => void;
   /** Toggle incognito mode (persisted) and re-announce under the new name. */
   setIncognito: (incognito: boolean) => void;
 }

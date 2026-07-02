@@ -9,6 +9,7 @@ import { AddDialog } from "@/components/dialogs/AddDialog";
 import { Button } from "@/components/ui/button";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 
@@ -27,6 +28,7 @@ import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 export function WelcomePage() {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
+  const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
   const [joinOpen, setJoinOpen] = useState(false);
   const [signupOpen, setSignupOpen] = useState(false);
@@ -34,8 +36,10 @@ export function WelcomePage() {
 
   // Once signed in, leave the welcome screen for a real server: the pinned
   // platform relay on a hosted build, or the user's first added server.
+  // Offline, the mesh is the fallback — but only where it exists (Android
+  // with BLE); web/desktop stays here rather than landing on a dead page.
   const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0];
-  if (user && !online) {
+  if (user && !online && mesh.available) {
     return <Navigate to="/mesh" replace />;
   }
   if (user && firstServer) {

@@ -82,6 +82,13 @@ export interface AppConfig {
    * Toggling it off announces the real display name. Persisted per-device.
    */
   meshIncognito: boolean;
+  /**
+   * Whether Bluetooth mesh chat is turned on. OFF by default — starting the
+   * mesh prompts for Bluetooth permissions and runs a foreground service with
+   * a persistent notification, which must never happen without the user asking
+   * for it. Enabled from the Mesh page; persisted per-device.
+   */
+  meshEnabled: boolean;
 }
 
 export interface AppContextType {
@@ -100,6 +107,7 @@ export const defaultConfig: AppConfig = {
   dmRelays: [...APP_RELAYS],
   lastChannelByServer: {},
   meshIncognito: true,
+  meshEnabled: false,
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);

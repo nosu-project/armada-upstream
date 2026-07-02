@@ -11,6 +11,7 @@ import { BootSplash } from "@/components/brand/BootSplash";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 
@@ -45,6 +46,7 @@ const WelcomePage = lazy(() => import("@/pages/WelcomePage").then((m) => ({ defa
 function HomeRedirect() {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
+  const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
 
   // Cold launch from a notification tap: the launch URL resolves async (see
@@ -80,13 +82,25 @@ function HomeRedirect() {
     return <Navigate to="/welcome" replace />;
   }
 
+  // Offline: the mesh is the only transport that still works — but only where
+  // it exists (Android with BLE). Redirecting a web/desktop user to a
+  // permanently-unavailable /mesh page is a dead end; they're better off on
+  // the cached server view. Hold the redirect briefly while the availability
+  // probe resolves so an offline Android launch still lands on mesh.
   if (!online) {
-    return <Navigate to="/mesh" replace />;
+    if (mesh.probing) {
+      return <BootSplash />;
+    }
+    if (mesh.available) {
+      return <Navigate to="/mesh" replace />;
+    }
   }
 
   const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0];
   if (!firstServer) {
-    return <Navigate to="/mesh" replace />;
+    // No servers configured (standalone/rogue build): fall back to the mesh
+    // where it exists, otherwise the welcome screen to add a server.
+    return <Navigate to={mesh.available ? "/mesh" : "/welcome"} replace />;
   }
   return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
 }
