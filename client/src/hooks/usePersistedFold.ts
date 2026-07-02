@@ -20,6 +20,16 @@ export function usePersistedFold<T>(key: string | null, live: T | undefined): T 
   // value (new object, same content) doesn't churn an IndexedDB write.
   const lastWritten = useRef<string | undefined>(undefined);
 
+  // Reset synchronously (during render) when the key changes: if the NEW key's
+  // IndexedDB read misses (first visit), `restored` must not keep serving the
+  // PREVIOUS key's value — that leaks one community's fold into another.
+  const [prevKey, setPrevKey] = useState(key);
+  if (prevKey !== key) {
+    setPrevKey(key);
+    setRestored(undefined);
+    lastWritten.current = undefined;
+  }
+
   // Load the persisted snapshot from IndexedDB once per key.
   useEffect(() => {
     if (!key) {

@@ -199,9 +199,15 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     // after the stale snapshot painted.
     initialData: () => {
       const snap = readTimelineSnapshot<NostrEvent>(snapshotScope);
+      // Only seed events that belong to THIS group (every timeline event
+      // carries its `h` tag): a snapshot written by an older client during a
+      // room switch could hold another room's messages (the placeholderData
+      // race — see the snapshot writer below).
+      const own = snap?.filter((e) => e.tags.some(([t, v]) => t === "h" && v === groupId));
+      const seed = own && own.length > 0 ? own : undefined;
       const fed = groupId ? nativeGroupTimelineEvents(groupId) : [];
-      if (fed.length === 0) return snap;
-      return sortDedupe([...(snap ?? []), ...fed]);
+      if (fed.length === 0) return seed;
+      return sortDedupe([...(seed ?? []), ...fed]);
     },
     initialDataUpdatedAt: 0,
     // Backstop poll. The live `req` delivers new messages instantly on a healthy
@@ -226,7 +232,10 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   const { status, setStatus } = useSendStatusMap(statusKey(relayUrl, groupId));
 
   // Keep the localStorage snapshot fresh with the rendered timeline (debounced).
-  useTimelineSnapshotWriter(snapshotScope, query.data);
+  // Disabled while the query is showing the PREVIOUS room's messages
+  // (placeholderData during a room switch) so they're never persisted under
+  // this room's scope.
+  useTimelineSnapshotWriter(snapshotScope, query.data, !query.isPlaceholderData);
 
   const upsertMessage = useCallback(
     (event: NostrEvent) => {

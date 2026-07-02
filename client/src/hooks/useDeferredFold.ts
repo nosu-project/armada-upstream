@@ -38,6 +38,21 @@ export function useDeferredFold<T>(
   const computeRef = useRef(compute);
   computeRef.current = compute;
 
+  // Reset synchronously (during render) the moment the key changes, so one
+  // community's fold can NEVER render — or persist — under another community's
+  // key. Without this, switching A → B keeps A's `live` fold on screen until
+  // B's deferred recompute lands, and if B's compute returns undefined (its
+  // control events haven't loaded) while B has no persisted snapshot, the hook
+  // would fall back to A's stale `restored` — leaking A's roster/metadata/
+  // banlist into B (and letting A's ban set moderate B's messages).
+  const [prevKey, setPrevKey] = useState(key);
+  if (prevKey !== key) {
+    setPrevKey(key);
+    setLive(undefined);
+    setRestored(undefined);
+    lastWritten.current = undefined;
+  }
+
   // Restore the persisted snapshot once per key so the UI paints from cache.
   useEffect(() => {
     if (!key) {
@@ -55,7 +70,9 @@ export function useDeferredFold<T>(
 
   // Recompute the live fold AFTER paint, not during render. `requestIdleCallback`
   // (falling back to a macrotask) lets React commit + the browser paint the
-  // cached UI before the verify-heavy fold runs.
+  // cached UI before the verify-heavy fold runs. `key` is included so a key
+  // change always reschedules a compute even if the caller's deps happen to be
+  // referentially stable across the switch.
   useEffect(() => {
     let cancelled = false;
     const run = () => {
@@ -72,7 +89,7 @@ export function useDeferredFold<T>(
       else clearTimeout(handle);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [key, ...deps]);
 
   // Persist the live fold whenever its CONTENT changes (best-effort).
   useEffect(() => {

@@ -650,7 +650,17 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     // channel on the first frame instead of behind the IndexedDB cold-open +
     // decrypt. Marked already-stale so the store read + relay refresh run
     // immediately and re-apply moderation/deletes on top of the seed.
-    initialData: () => readTimelineSnapshot<OpenedMessage>(snapshotScope),
+    //
+    // Only messages that actually BELONG to this channel are seeded: a snapshot
+    // written by an older client during a room switch could hold another
+    // channel's messages (the keepPreviousData race, see the snapshot writer
+    // below), and seeding them would leak one room's timeline into another.
+    initialData: () => {
+      const snap = readTimelineSnapshot<OpenedMessage>(snapshotScope);
+      if (!snap || !channelIdHex) return snap;
+      const own = snap.filter((m) => m.channelId && bytesToHex(m.channelId) === channelIdHex);
+      return own.length > 0 ? own : undefined;
+    },
     initialDataUpdatedAt: 0,
     // Keep the previous channel's messages on screen while the next channel's
     // first read resolves, so switching never flashes a skeleton.
@@ -688,8 +698,11 @@ export function useConcordChannelMessages(community: Community | undefined, chan
 
         // Union by message id with what's already shown; the store read wins on
         // conflict (it's verified), but a just-arrived live message / optimistic
-        // send not yet in the store survives.
-        const prev = queryClient.getQueryData<OpenedMessage[]>(queryKey) ?? [];
+        // send not yet in the store survives. Foreign-channel entries (from a
+        // polluted pre-fix snapshot seed) are dropped, never merged forward.
+        const prev = (queryClient.getQueryData<OpenedMessage[]>(queryKey) ?? []).filter(
+          (m) => m.channelId && bytesToHex(m.channelId) === channelIdHex,
+        );
         const byId = new Map<string, OpenedMessage>();
         for (const m of prev) byId.set(m.messageId, m);
         for (const m of opened) byId.set(m.messageId, m);
@@ -813,8 +826,11 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   }, [hasMore, isLoadingOlder, query]);
 
   // Keep the localStorage snapshot fresh with the decoded timeline (debounced),
-  // so the next cold launch paints this channel instantly.
-  useTimelineSnapshotWriter(snapshotScope, query.data);
+  // so the next cold launch paints this channel instantly. Disabled while the
+  // query is showing the PREVIOUS channel's messages (keepPreviousData during a
+  // room switch) — writing those under the new channel's scope is exactly the
+  // cross-room pollution bug the seed filter above also guards against.
+  useTimelineSnapshotWriter(snapshotScope, query.data, !query.isPlaceholderData);
 
   return { ...query, loadOlder, hasMore, isLoadingOlder };
 }
