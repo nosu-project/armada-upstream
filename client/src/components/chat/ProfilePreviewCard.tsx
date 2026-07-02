@@ -2,6 +2,7 @@ import { AtSign, Check, Copy, MessageSquare } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { DittoIcon } from "@/components/brand/DittoIcon";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { requestMention } from "@/hooks/useMentionBus";
 import { useUserStatus } from "@/hooks/useUserStatus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { dittoFollowUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
@@ -58,6 +60,7 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
   };
 
   const shortNpub = npub ? `${npub.slice(0, 12)}…${npub.slice(-6)}` : "";
+  const dittoFollowHref = dittoFollowUrl(pubkey);
 
   return (
     <>
@@ -144,6 +147,26 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
               Mention
             </Button>
           </div>
+        )}
+
+        {/* Follow this person on ditto.pub — the fuller social view. */}
+        {dittoFollowHref && (
+          <Button
+            size="sm"
+            className="mt-2 w-full clip-corner-lg h-8"
+            asChild
+          >
+            <a
+              href={dittoFollowHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => onAction?.()}
+              title="Follow on Ditto"
+            >
+              <DittoIcon className="size-3.5 mr-1.5" />
+              Follow on Ditto
+            </a>
+          </Button>
         )}
       </div>
     </>
