@@ -4,6 +4,31 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.13.1] - 2026-07-01
+
+Faster and more dependable. The app now opens straight into your chats — the
+last messages in every room appear instantly instead of loading spinners, even
+when launched from a notification tap. On Android, background notifications now
+survive reboots and app updates, and Settings warns you (with a one-tap fix)
+when battery optimization would silence them. Bluetooth mesh chat is now
+opt-in, so nothing Bluetooth-related happens until you turn it on.
+
+### Changed
+- The app opens instantly to your recent messages instead of loading spinners,
+  including when launched from a notification tap.
+- A branded splash screen replaces the blank frame while the app starts up.
+- Bluetooth mesh chat is now opt-in: it stays completely off (no permission
+  prompts, no persistent notification) until you enable it, and you can turn
+  it off from the mesh screen.
+- The mesh icon only appears on devices that can actually use it, so web and
+  desktop no longer show a dead-end Bluetooth screen.
+
+### Fixed
+- Background notifications on Android resume automatically after a reboot or
+  app update instead of staying off until you reopen the app.
+- Notification settings now warn when battery optimization would stop
+  background notifications, with a one-tap button to fix it.
+
 ## [0.13.0] - 2026-06-30
 
 Armada now works with no internet at all. On Android, a new Bluetooth mesh lets
