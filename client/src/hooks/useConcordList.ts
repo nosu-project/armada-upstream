@@ -26,6 +26,7 @@ import {
   type CommunityInvite,
 } from "@/lib/concord/invite";
 import { KIND_GIFT_WRAP } from "@/lib/concord/kinds";
+import { CORD_TRUSTED_RELAYS } from "@/lib/concord/publicInvite";
 import { capRelays, type Community } from "@/lib/concord/types";
 import { acceptCordInvite, isCordInvite } from "@/lib/cord/community";
 import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
@@ -651,6 +652,13 @@ export function useApplyConcordResync() {
  * never drops them in favor of app relays. This union is applied to the runtime
  * Community only; the sealed invite bundle is untouched, so a re-shared link
  * still points other clients at the owner's original relay set.
+ *
+ * CORD communities union with the CORD-05 §3 stock set ({@link
+ * CORD_TRUSTED_RELAYS}) instead: CORD reads are `authors`-filtered kind-1059
+ * REQs, which DM-protecting app relays refuse (auth-required), so pinning the
+ * stock set — which includes the Vector relays that serve them — is what keeps
+ * the streams readable. This also retrofits communities minted before the
+ * stock set was pinned at creation.
  */
 export function useConcordCommunity(communityIdHex: string | undefined): Community | undefined {
   const { data } = useConcordList();
@@ -668,7 +676,7 @@ export function useConcordCommunity(communityIdHex: string | undefined): Communi
       const cordBundle = entry.current.keys.cord;
       if (isCordInvite(cordBundle)) {
         const community = acceptCordInvite(cordBundle);
-        return { ...community, relays: capRelays([...community.relays, ...APP_RELAYS]) };
+        return { ...community, relays: capRelays([...community.relays, ...CORD_TRUSTED_RELAYS]) };
       }
       const bundle = entry.current.keys.invite as CommunityInvite | undefined;
       if (!bundle) return undefined;

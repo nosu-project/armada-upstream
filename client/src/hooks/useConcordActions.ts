@@ -17,7 +17,7 @@ import { communityMetadataOf } from "@/lib/concord/metadata";
 import {
   buildOwnerAttestationUnsigned,
 } from "@/lib/concord/owner";
-import { isExpired, locatorHex, parseInviteUrl, parsePublicInviteEvent, signerPubkey } from "@/lib/concord/publicInvite";
+import { CORD_TRUSTED_RELAYS, isExpired, locatorHex, parseInviteUrl, parsePublicInviteEvent, signerPubkey } from "@/lib/concord/publicInvite";
 import { adminRole, type Role } from "@/lib/concord/roles";
 import { createCommunity as mintCommunity, random32, type Channel, type Community } from "@/lib/concord/types";
 import { acceptCordInvite, buildCordInvite, mintCordCommunity } from "@/lib/cord/community";
@@ -154,7 +154,12 @@ export function useConcordActions() {
       // creation and is immutable — every other community (and its invite
       // links) stays byte-compatible with Concord/Vector v1.
       if (experimental) {
-        const community = mintCordCommunity(name.trim(), "general", relays, user.pubkey);
+        // CORD communities pin the CORD-05 §3 stock relay set (Vector +
+        // Soapbox), NOT this deployment's APP_RELAYS: the stock set is what
+        // every CORD client's relay dictionary encodes to a single invite
+        // byte, and the Vector relays serve `authors`-filtered kind-1059
+        // reads that DM-protecting relays (e.g. the Soapbox pair) refuse.
+        const community = mintCordCommunity(name.trim(), "general", [...CORD_TRUSTED_RELAYS], user.pubkey);
         // No attestation event: the community id itself commits to the owner.
         // The owner-signed genesis control plane proves secret-key possession.
         await publishCordGenesis(community);
