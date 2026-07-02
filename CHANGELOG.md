@@ -4,6 +4,20 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.15.2] - 2026-07-02
+
+Adds experimental support for CORD, the next generation of Armada's private
+community protocol, built for stronger privacy and spam resistance. Invites to
+CORD communities can be accepted everywhere; creating one is an opt-in preview
+in development builds while the protocol stabilizes. Messages in CORD
+communities also trigger native Android notifications.
+
+### Added
+- Experimental CORD community protocol: joining CORD community invites works
+  everywhere, and creating CORD communities is available as a preview in
+  development builds
+- Native Android notifications for messages in CORD communities
+
 ## [0.15.1] - 2026-07-02
 
 Fixes a nasty cache bug where messages and member lists from one room could
