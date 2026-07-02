@@ -4,6 +4,32 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.14.0] - 2026-07-01
+
+A big Discord-style chat refresh. The interface now feels more familiar if
+you're coming from Discord: a quick switcher (Ctrl/Cmd+K) to jump anywhere,
+date separators and an unread "New" divider in the message timeline, live voice
+participants shown directly in the sidebar under their channel, markdown code
+blocks in messages, and a cleaner collapsible settings page.
+
+### Added
+- Quick switcher (Ctrl/Cmd+K): fuzzy-search servers, channels, DMs, and
+  settings from a palette. Alt+Up/Down hops between channels in the current
+  server.
+- Date separators in the message timeline group messages by day, with "Today"
+  and "Yesterday" labels.
+- Unread "New" divider marks where you left off in a channel.
+- Voice participants are shown as an indented roster under their channel in the
+  sidebar, so you can see who's in a call at a glance.
+- Markdown code blocks and inline code in messages are now rendered with syntax
+  highlighting.
+
+### Changed
+- Settings page is reorganized into collapsible sections, making it easier to
+  find what you're looking for.
+- Member list and channel sidebar have been polished for a more Discord-like
+  feel.
+
 ## [0.13.2] - 2026-07-01
 
 Sharper notification taps: the message you tapped now shows up in the very
