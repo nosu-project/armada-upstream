@@ -4,6 +4,7 @@ import {
   Bell,
   ChevronDown,
   ChevronRight,
+  Download,
   MessageSquareLock,
   Mic,
   Palette,
@@ -31,6 +32,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/lib/concord";
 import { APP_RELAYS, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
@@ -56,6 +58,7 @@ type SectionId =
   | "search-relays"
   | "dms"
   | "advanced"
+  | "install"
   | "about";
 
 interface NavItem {
@@ -97,6 +100,7 @@ export function SettingsPage() {
     getAudioProcessing(),
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const { canInstall, install } = useInstallPrompt();
   const setVoiceToggle = (key: keyof AudioProcessingPrefs) => (value: boolean) => {
     setVoiceProcessing((prev) => {
       const next = { ...prev, [key]: value };
@@ -202,12 +206,15 @@ export function SettingsPage() {
     if (user && CONCORD_ENABLED) {
       appItems.push({ id: "advanced", title: "Advanced", icon: Wrench, inline: true });
     }
+    if (canInstall) {
+      appItems.push({ id: "install", title: "Install app", icon: Download, inline: true });
+    }
     appItems.push({ id: "about", title: "About", icon: Anchor, inline: true });
     return [
       { heading: "User settings", items: userItems },
       { heading: "App settings", items: appItems },
     ];
-  }, [user]);
+  }, [user, canInstall]);
 
   /** The row(s) inside one section's chrome card. */
   const sectionBody = (id: SectionId): ReactNode => {
@@ -364,6 +371,16 @@ export function SettingsPage() {
               </div>
             </CollapsibleContent>
           </Collapsible>
+        );
+      case "install":
+        return (
+          <SettingsRow
+            label="Install Armada"
+            description="Add to your home screen or desktop for a standalone app experience."
+            onClick={() => install()}
+          >
+            <Download className="size-4 text-muted-foreground" />
+          </SettingsRow>
         );
       case "about":
         return (

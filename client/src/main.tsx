@@ -13,8 +13,9 @@ if (Capacitor.isNativePlatform()) {
 
 createRoot(document.getElementById("root")!).render(<App />);
 
-// Register the service worker that receives Web Push notifications. Best-effort:
-// push simply stays unavailable if registration fails or isn't supported.
+// Register the service worker for offline app-shell caching and Web Push.
+// Best-effort: PWA install + push stays unavailable if registration fails or
+// isn't supported (e.g. insecure origin, private browsing).
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((err) => {

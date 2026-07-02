@@ -28,6 +28,7 @@ const MeshPage = lazy(() => import("@/pages/MeshPage"));
 const NotFound = lazy(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound })));
 const ServerPage = lazy(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage })));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const SharePage = lazy(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage })));
 const WelcomePage = lazy(() => import("@/pages/WelcomePage").then((m) => ({ default: m.WelcomePage })));
 
 /**
@@ -171,6 +172,7 @@ export function AppRouter() {
             <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
             <Route path="/invite" element={<InvitePage />} />
             <Route path="/about" element={<AboutPage />} />
+            <Route path="/share" element={<SharePage />} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
             <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
             <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
