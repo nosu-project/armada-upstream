@@ -37,6 +37,14 @@ export interface CordWrapKey {
   author: string;
   /** The group conversation key (hex) that opens both the wrap and the seal. */
   convKey: string;
+  /**
+   * The group SIGNING key (hex) — lets the native service answer a relay's
+   * NIP-42 challenge AS the stream ("AUTH as the room"), which DM-protecting
+   * relays require before serving `authors`-filtered kind-1059 REQs. Same
+   * trust domain as `convKey` (both derive from the community secret and live
+   * in the same on-device store the WebView already keeps the root key in).
+   */
+  sk: string;
   /** Channel id (hex) the rumor's `channel` tag must equal. */
   channelId: string;
   /** Epoch (decimal string) the rumor's `epoch` tag must equal. */
@@ -116,6 +124,7 @@ export function buildConcordSubs(list: ConcordList | undefined): ConcordSub[] {
         const wraps: CordWrapKey[] = cordChannelGroups(community, channel).map((eg) => ({
           author: eg.group.pk,
           convKey: bytesToHex(eg.group.conv),
+          sk: bytesToHex(eg.group.sk),
           channelId,
           epoch: eg.epoch.toString(),
         }));

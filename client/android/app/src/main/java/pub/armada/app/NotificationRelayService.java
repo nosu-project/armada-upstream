@@ -200,10 +200,19 @@ public class NotificationRelayService extends Service {
         final byte[] key;        // raw 32-byte channel key (NIP-44 conversation key)
         final String channelId;  // hex; the inner `channel` tag must match (best-effort)
         final String epoch;      // decimal string; the inner `epoch` tag must match
+        // CORD only: the group SIGNING key, so the service can answer a NIP-42
+        // challenge AS the stream ("AUTH as the room") — DM-protecting relays
+        // require it before serving `authors`-filtered kind-1059 REQs. Null
+        // for v1 `z`-keyed entries (and for configs from older builds).
+        final byte[] sk;
         ConcordKey(byte[] key, String channelId, String epoch) {
+            this(key, channelId, epoch, null);
+        }
+        ConcordKey(byte[] key, String channelId, String epoch, byte[] sk) {
             this.key = key;
             this.channelId = channelId;
             this.epoch = epoch;
+            this.sk = sk;
         }
     }
 
@@ -420,9 +429,10 @@ public class NotificationRelayService extends Service {
                 }
 
                 // CORD (experimental): per-address stream decrypt material
-                // ([{author, convKey, channelId, epoch}, …]). The author is the
-                // derived group pubkey (the `authors` filter value); the conv
-                // key opens both the wrap and the seal.
+                // ([{author, convKey, sk, channelId, epoch}, …]). The author is
+                // the derived group pubkey (the `authors` filter value); the
+                // conv key opens both the wrap and the seal; the sk signs
+                // NIP-42 AUTH as the stream on auth-gating relays.
                 JSONArray wraps = sub.optJSONArray("wraps");
                 if (wraps != null && wraps.length() > 0) {
                     List<String> authorList = new ArrayList<>();
@@ -432,10 +442,12 @@ public class NotificationRelayService extends Service {
                         String author = w.optString("author", null);
                         byte[] conv = ConcordCrypto.hexToBytes(w.optString("convKey", null));
                         if (author == null || author.isEmpty() || conv == null || conv.length != 32) continue;
+                        byte[] groupSk = ConcordCrypto.hexToBytes(w.optString("sk", null));
+                        if (groupSk != null && groupSk.length != 32) groupSk = null;
                         authorList.add(author);
                         authorToName.put(author, name);
                         authorToUrl.put(author, url);
-                        authorToKey.put(author, new ConcordKey(conv, w.optString("channelId", ""), w.optString("epoch", "")));
+                        authorToKey.put(author, new ConcordKey(conv, w.optString("channelId", ""), w.optString("epoch", ""), groupSk));
                     }
                     for (int j = 0; j < relays.length(); j++) {
                         String relay = relays.optString(j);
@@ -474,6 +486,10 @@ public class NotificationRelayService extends Service {
         // id of the last kind-22242 we sent; used to match the AUTH OK so a
         // relay's OK for some other event can't trigger a REQ re-send.
         String authEventId;
+        // Pending native CORD stream AUTH ids ("AUTH as the room") for the
+        // current challenge round; the round's OKs re-send the REQs once.
+        final Set<String> cordAuthIds = new HashSet<>();
+        boolean cordAuthAnyOk = false;
 
         RelayConnection(String relayUrl) {
             this.relayUrl = relayUrl;
@@ -586,6 +602,42 @@ public class NotificationRelayService extends Service {
         }
 
         /**
+         * Answer a NIP-42 challenge AS each CORD stream key subscribed on this
+         * relay ("AUTH as the room"). DM-protecting relays only serve
+         * {@code authors}-filtered kind-1059 REQs to connections authed as
+         * those authors — and they accumulate multiple AUTHs per connection —
+         * so one kind-22242 per held group key unlocks the CORD stream sub.
+         * Signed natively ({@link Bip340}) with the group sk from the
+         * subscription config: no WebView bridge, works from cold starts.
+         * The round's OKs re-send the REQs (see {@code onRelayMessage}).
+         */
+        void sendCordAuths(String challenge) {
+            if (ws == null || challenge == null || challenge.isEmpty()) return;
+            cordAuthIds.clear(); // a fresh challenge supersedes the last round
+            cordAuthAnyOk = false;
+            Set<String> authors = relayToAuthors.get(relayUrl);
+            if (authors == null || authors.isEmpty()) return;
+            for (String author : authors) {
+                ConcordKey ck = authorToKey.get(author);
+                if (ck == null || ck.sk == null) continue;
+                JSONObject event = NostrAuth.buildAuthEvent(ck.sk, relayUrl, challenge);
+                if (event == null) continue;
+                String id = event.optString("id", null);
+                if (id == null || id.isEmpty()) continue;
+                try {
+                    JSONArray auth = new JSONArray();
+                    auth.put("AUTH");
+                    auth.put(event);
+                    ws.send(auth.toString());
+                    cordAuthIds.add(id);
+                } catch (Exception ignored) {}
+            }
+            if (BuildConfig.DEBUG && !cordAuthIds.isEmpty()) {
+                Log.d(TAG, "Sent " + cordAuthIds.size() + " CORD stream AUTHs to " + relayUrl);
+            }
+        }
+
+        /**
          * Fire a one-shot kind-0 REQ for {@code pubkey}. The matching EVENT is
          * picked up in {@link #onRelayMessage} (sub id starts with
          * {@link #profilePrefix}); the relay's EOSE / our timeout closes it.
@@ -668,14 +720,21 @@ public class NotificationRelayService extends Service {
             JSONArray msg = new JSONArray(text);
             String type = msg.optString(0);
             if ("AUTH".equals(type)) {
-                // NIP-42 challenge. Ask the WebView's signer (handles nsec /
-                // bunker / extension) to sign a kind-22242; it comes back via
+                // NIP-42 challenge. CORD stream keys are signed natively right
+                // here ("AUTH as the room" — no bridge needed); the USER's
+                // kind-22242 still goes through the WebView's signer (handles
+                // nsec / bunker / extension) and comes back via
                 // ArmadaNotificationPlugin.submitAuth → deliverAuth.
                 String challenge = msg.optString(1);
                 if (BuildConfig.DEBUG) Log.d(TAG, "AUTH challenge from " + relayUrl);
+                for (RelayConnection rc : connections) {
+                    if (rc.relayUrl.equals(relayUrl) && rc.ws != null) {
+                        rc.sendCordAuths(challenge);
+                    }
+                }
                 boolean bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge);
                 if (!bridged) {
-                    Log.w(TAG, "No bridge (WebView down) — can't AUTH " + relayUrl);
+                    Log.w(TAG, "No bridge (WebView down) — can't AUTH " + relayUrl + " as the user (CORD stream AUTHs unaffected)");
                 }
                 return;
             }
@@ -704,16 +763,27 @@ public class NotificationRelayService extends Service {
             }
             if ("OK".equals(type)) {
                 // AUTH ack (["OK", <event-id>, true/false, msg]). On success,
-                // and only when the id matches the kind-22242 we sent, the
-                // matching connection re-sends its REQs.
+                // and only when the id matches a kind-22242 we sent, the
+                // matching connection re-sends its REQs. Two flavors: the
+                // user's bridged AUTH (authEventId), and the native CORD
+                // stream AUTHs (cordAuthIds) — the latter resub once, when the
+                // whole round has been acked (the AUTH frames were all sent
+                // before any OK came back, so in-order relays have them all
+                // applied by then).
                 String okId = msg.optString(1);
                 boolean ok = msg.optBoolean(2, false);
                 if (BuildConfig.DEBUG) Log.d(TAG, "OK from " + relayUrl + " ok=" + ok + " " + msg.optString(3));
-                if (ok) {
-                    for (RelayConnection rc : connections) {
-                        if (rc.relayUrl.equals(relayUrl) && rc.ws != null
-                                && okId.equals(rc.authEventId)) {
-                            rc.authEventId = null;
+                for (RelayConnection rc : connections) {
+                    if (!rc.relayUrl.equals(relayUrl) || rc.ws == null) continue;
+                    if (ok && okId.equals(rc.authEventId)) {
+                        rc.authEventId = null;
+                        rc.sendReqs(rc.ws);
+                        continue;
+                    }
+                    if (rc.cordAuthIds.remove(okId)) {
+                        if (ok) rc.cordAuthAnyOk = true;
+                        if (rc.cordAuthIds.isEmpty() && rc.cordAuthAnyOk) {
+                            rc.cordAuthAnyOk = false;
                             rc.sendReqs(rc.ws);
                         }
                     }
