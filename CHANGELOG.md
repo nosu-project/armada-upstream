@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.13.2] - 2026-07-01
+
+Sharper notification taps: the message you tapped now shows up in the very
+first frame instead of popping in a moment after the room opens.
+
+### Fixed
+- Opening a chat from a notification no longer shows the room briefly without
+  the new message — it's there on the first paint.
+- Navigating to a screen you haven't visited yet this session no longer pauses
+  on the splash while it loads.
+
 ## [0.13.1] - 2026-07-01
 
 Faster and more dependable. The app now opens straight into your chats — the
