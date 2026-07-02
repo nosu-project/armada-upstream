@@ -189,7 +189,20 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     // seed already-stale so the local-first queryFn still runs immediately and
     // merges the durable store + relay refresh on top (append-only, so the
     // seed can never mask fresher data).
-    initialData: () => readTimelineSnapshot<NostrEvent>(snapshotScope),
+    //
+    // The native event inbox is folded in SYNCHRONOUSLY: on a notification tap
+    // the Android service has already handed the tapped message to the WebView
+    // (the drain runs at App mount, before this route's lazy chunk finishes
+    // loading), so it must be part of the FIRST frame. Without this it only
+    // arrives via the async paths — the getRoomEvents bridge round-trip or the
+    // queryFn behind the IndexedDB cold-open — and visibly pops in a beat
+    // after the stale snapshot painted.
+    initialData: () => {
+      const snap = readTimelineSnapshot<NostrEvent>(snapshotScope);
+      const fed = groupId ? nativeGroupTimelineEvents(groupId) : [];
+      if (fed.length === 0) return snap;
+      return sortDedupe([...(snap ?? []), ...fed]);
+    },
     initialDataUpdatedAt: 0,
     // Backstop poll. The live `req` delivers new messages instantly on a healthy
     // socket, but a half-dead socket (one the OS silently severed while the app

@@ -120,6 +120,31 @@ function RequireAuth({ children }: { children: ReactNode }) {
 }
 
 /**
+ * Warm the chat route chunks shortly after boot. Route-level code splitting
+ * keeps the boot bundle small, but it also means a LATER navigation — e.g. a
+ * notification tap into a room whose page chunk hasn't been visited this
+ * session — pauses on the Suspense splash for a chunk fetch + parse. Prefetch
+ * the pages a notification tap can target once the landing route has settled,
+ * off the critical path (delayed, idle priority), so both hold: small boot
+ * AND instant taps.
+ */
+function useWarmRouteChunks() {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      for (const load of [
+        () => import("@/pages/GroupPage"),
+        () => import("@/pages/ConcordPage"),
+        () => import("@/pages/DMsPage"),
+        () => import("@/pages/ServerPage"),
+      ]) {
+        void load().catch(() => undefined);
+      }
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, []);
+}
+
+/**
  * Mounts the notification-tap → React Router navigation bridge. Rendered inside
  * <BrowserRouter> so `useNavigate` resolves; renders nothing.
  */
@@ -129,6 +154,7 @@ function NotificationNavigation() {
 }
 
 export function AppRouter() {
+  useWarmRouteChunks();
   return (
     <BrowserRouter>
       <NotificationNavigation />

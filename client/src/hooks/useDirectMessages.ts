@@ -446,8 +446,17 @@ export function useDMConversations() {
     // Seed from the localStorage snapshot (newest event per conversation),
     // marked already-stale so the local-first queryFn still runs immediately.
     // The merge floor (mergeDmEvents) is append-only, so the seed can never
-    // shrink or mask fresher data.
-    initialData: () => readTimelineSnapshot<NostrEvent>(snapshotScope),
+    // shrink or mask fresher data. Natively-received DMs (e.g. the one whose
+    // notification was just tapped — drained into the session inbox at App
+    // mount) are folded in synchronously so they're on the FIRST frame instead
+    // of popping in behind a bridge round-trip or the IndexedDB cold-open.
+    initialData: () => {
+      const snap = readTimelineSnapshot<NostrEvent>(snapshotScope);
+      const pubkey = user?.pubkey;
+      const fed = pubkey ? nativeDmEvents().filter((e) => dmCounterparty(e, pubkey)) : [];
+      if (fed.length === 0) return snap;
+      return mergeDmEvents(snap ?? [], fed);
+    },
     initialDataUpdatedAt: 0,
     // Backstop the live socket: a backgrounded mobile WebSocket can wedge with
     // no error and no event, silently stalling delivery. A periodic local-first
@@ -786,10 +795,19 @@ export function useDirectMessages(peer: string | undefined) {
     // queryFn's placeholder build keeps them decrypted (mergeDmThread never
     // downgrades a decrypted row) and `decryptVisible` short-circuits instead
     // of re-asking the signer.
+    //
+    // Natively-received DMs for this thread (session inbox, drained at App
+    // mount) are folded in synchronously as placeholder rows, so a tapped
+    // notification's message holds its place on the FIRST frame — its
+    // plaintext streams in via the queryFn's eager decrypt — instead of the
+    // whole row popping in a beat after the stale snapshot painted.
     initialData: () => {
       const rows = readTimelineSnapshot<DecryptedDM>(threadSnapshotScope);
       if (rows) for (const r of rows) setRenderedPlaintext(r.id, r.content);
-      return rows;
+      const fed =
+        self && peer ? nativeDmEvents().filter((e) => dmCounterparty(e, self) === peer) : [];
+      if (fed.length === 0) return rows;
+      return mergeDmThread(rows ?? [], buildThreadPlaceholders(fed));
     },
     initialDataUpdatedAt: 0,
     // Backstop the live socket (see the conversations query above): heal a
