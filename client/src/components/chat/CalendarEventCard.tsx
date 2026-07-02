@@ -6,6 +6,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventRsvps } from "@/hooks/useEventRsvps";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { dittoHashtagUrl } from "@/lib/dittoUrl";
 import {
   type CalendarEvent,
   calendarEventCoord,
@@ -217,9 +218,15 @@ export function EventDetailDialog({ relayUrl, groupId, event, open, onOpenChange
           {event.hashtags.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {event.hashtags.map((t) => (
-                <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">
+                <a
+                  key={t}
+                  href={dittoHashtagUrl(t)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
                   #{t}
-                </span>
+                </a>
               ))}
             </div>
           )}

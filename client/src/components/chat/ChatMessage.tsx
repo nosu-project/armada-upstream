@@ -6,6 +6,7 @@ import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
 import { PollCard } from "@/components/chat/PollCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
+import { DittoIcon } from "@/components/brand/DittoIcon";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -19,6 +20,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { dittoEventUrl } from "@/lib/dittoUrl";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { isMeAction, meActionText } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
@@ -531,6 +533,16 @@ const ChatMessageInner = memo(function ChatMessageInner({
             }}
           >
             <Link2 className="mr-2 size-4" /> Copy message ID
+          </ContextMenuItem>
+        )}
+        {!identityOverride && dittoEventUrl(event) && (
+          <ContextMenuItem
+            onSelect={() => {
+              const href = dittoEventUrl(event);
+              if (href) window.open(href, "_blank", "noopener,noreferrer");
+            }}
+          >
+            <DittoIcon className="mr-2 size-4" /> View on Ditto
           </ContextMenuItem>
         )}
         {canDelete && !isEditing && (

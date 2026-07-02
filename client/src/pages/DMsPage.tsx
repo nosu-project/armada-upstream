@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { useNavigate, useParams, Navigate } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
+import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { MessageRow } from "@/components/chat/MessageRow";
@@ -45,6 +46,7 @@ import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
+import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { DM_VOICE_RELAYS, PLATFORM_RELAYS } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
@@ -195,6 +197,7 @@ function DmPlaceholderRow({
 function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
+  const dittoProfileHref = dittoProfileUrl(peer);
   const { transport, encryptedIds, decryptVisible, send } = useDmTransport(peer);
   const { messages } = transport;
   const { markRead } = useReadState();
@@ -424,6 +427,24 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           </TooltipTrigger>
           <TooltipContent>{searchOpen ? "Close search" : "Search messages"}</TooltipContent>
         </Tooltip>
+        {dittoProfileHref && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`View ${name} on Ditto`}
+                className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
+                asChild
+              >
+                <a href={dittoProfileHref} target="_blank" rel="noopener noreferrer">
+                  <DittoIcon className="size-4" />
+                </a>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>View on Ditto</TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

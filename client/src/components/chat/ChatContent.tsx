@@ -14,6 +14,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { buildEmojiMap } from "@/lib/customEmoji";
+import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
 import { parseImetaMap } from "@/lib/imeta";
@@ -708,7 +709,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         return (
           <a
             key={key}
-            href={`https://njump.me/${token.id}`}
+            href={dittoNip19Url(token.id)}
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary hover:underline break-all"
@@ -719,9 +720,16 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         );
       case "hashtag":
         return (
-          <span key={key} className="text-primary font-medium">
+          <a
+            key={key}
+            href={dittoHashtagUrl(token.tag)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary font-medium hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
             {token.raw}
-          </span>
+          </a>
         );
       case "relay-link":
         return (
@@ -904,7 +912,7 @@ function TruncatedNostrLink({ encode }: { encode: () => string }) {
 
   return (
     <a
-      href={`https://njump.me/${id}`}
+      href={dittoNip19Url(id)}
       target="_blank"
       rel="noopener noreferrer"
       className="text-primary hover:underline break-all"

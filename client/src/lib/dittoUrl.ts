@@ -10,7 +10,7 @@
  *   2. Everything else (kind 1 notes, 1111 comments, …) → `/<nevent1…>`,
  *      which carries the author for relay hints.
  *   3. Profiles → `/<npub1…>` (Ditto's resolver renders the profile).
- *   4. Follow deep-link → `/follow/<npub1…>`.
+ *   4. Hashtag timelines → `/t/<tag>`.
  *
  * Ditto's root resolver accepts any NIP-19 identifier at the path root, so
  * `ditto.pub/<nevent…>`, `ditto.pub/<naddr…>` and `ditto.pub/<npub…>` all
@@ -53,8 +53,17 @@ export function dittoProfileUrl(pubkey: string): string | undefined {
   return npub ? `${DITTO_ORIGIN}/${npub}` : undefined;
 }
 
-/** Follow deep-link on Ditto. Returns `undefined` for a malformed pubkey. */
-export function dittoFollowUrl(pubkey: string): string | undefined {
-  const npub = tryNpubEncode(pubkey);
-  return npub ? `${DITTO_ORIGIN}/follow/${npub}` : undefined;
+/** Hashtag timeline on Ditto (`/t/<tag>`). Tags are lowercased to match. */
+export function dittoHashtagUrl(tag: string): string {
+  return `${DITTO_ORIGIN}/t/${encodeURIComponent(tag.toLowerCase())}`;
+}
+
+/**
+ * Off-ramp for an arbitrary NIP-19 identifier (npub/note/nevent/naddr/…)
+ * that already exists as a bech32 string. Ditto's root resolver renders
+ * whatever the identifier points at, so this is the general fallback for
+ * references Armada doesn't expand inline.
+ */
+export function dittoNip19Url(id: string): string {
+  return `${DITTO_ORIGIN}/${id}`;
 }
