@@ -4,6 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.15.0] - 2026-07-02
+
+Armada is now installable as an app. Add it to your home screen or desktop for a
+full-screen, offline-capable experience, and share links and images straight
+into a chat from other apps. This release also adds "View on Ditto" shortcuts
+throughout, so you can jump to the richer social view of any post, profile, or
+hashtag on ditto.pub.
+
+### Added
+- Install Armada as an app (PWA): add it to your home screen or desktop for a
+  standalone, full-screen window, with offline caching and faster loads.
+- Share into Armada: send links and images from other apps directly into a chat.
+- "View on Ditto" throughout: embedded posts, the message menu, profiles, and
+  the DM header link out to the full post/profile on ditto.pub.
+- Hashtags in messages and events are now tappable and open the hashtag feed on
+  ditto.pub.
+
+### Changed
+- Embedded posts are rendered as cleaner, Ditto-style note cards.
+- Links to posts and profiles that Armada doesn't expand now open on ditto.pub.
+
 ## [0.14.0] - 2026-07-01
 
 A big Discord-style chat refresh. The interface now feels more familiar if
