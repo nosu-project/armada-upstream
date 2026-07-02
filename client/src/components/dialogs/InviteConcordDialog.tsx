@@ -103,6 +103,8 @@ function InviteBody({ community }: { community: Community | undefined }) {
     }
   };
 
+  const isCord = community?.proto === "cord";
+
   return (
     <div className="flex flex-col items-center gap-6">
       <div className="flex flex-col items-center gap-3 text-center">
@@ -121,25 +123,28 @@ function InviteBody({ community }: { community: Community | undefined }) {
         </div>
       </div>
 
-      {/* Direct invite — search by name, follows first. */}
-      <div className="w-full space-y-2">
-        <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          <UserPlus className="size-3.5" />
-          Invite someone directly
+      {/* Direct invite — search by name, follows first. (Link-only for the
+          experimental CORD protocol until targeted invites land.) */}
+      {!isCord && (
+        <div className="w-full space-y-2">
+          <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <UserPlus className="size-3.5" />
+            Invite someone directly
+          </div>
+          <ProfileSearchSelect onSelect={handleSelect} busyPubkey={pendingPubkey} autoFocus />
+          {sentPubkey && !isSendingInvite && (
+            <p className="flex items-center gap-1.5 text-xs text-success">
+              <Check className="size-3.5" /> Invite sent. Search again to invite more.
+            </p>
+          )}
         </div>
-        <ProfileSearchSelect onSelect={handleSelect} busyPubkey={pendingPubkey} autoFocus />
-        {sentPubkey && !isSendingInvite && (
-          <p className="flex items-center gap-1.5 text-xs text-success">
-            <Check className="size-3.5" /> Invite sent. Search again to invite more.
-          </p>
-        )}
-      </div>
+      )}
 
       {/* Public link — the escape hatch / share-anywhere path. */}
-      <div className="w-full space-y-2 border-t border-chrome pt-5">
+      <div className={`w-full space-y-2 ${isCord ? "" : "border-t border-chrome pt-5"}`}>
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <LinkIcon className="size-3.5" />
-          Or share a link
+          {isCord ? "Share a link" : "Or share a link"}
         </div>
         {link ? (
           <>

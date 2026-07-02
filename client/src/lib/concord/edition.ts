@@ -110,6 +110,20 @@ function decodeHash(hex: string | undefined, field: string): Uint8Array {
  */
 export function parseEditionInner(inner: NostrEvent): ParsedEdition {
   if (!verifyEvent(inner)) throw { code: "bad-signature" } as EditionError;
+  return parseEditionFields(inner, inner.pubkey);
+}
+
+/**
+ * Parse an edition's FIELDS from an event whose authorship was proven
+ * elsewhere (CORD: the seal signature; the rumor itself is unsigned). `author`
+ * is the proven actor; `hashLabel` selects the chain's domain label (v1 default
+ * vs `concord/edition`). Shared by the v1 and CORD control planes.
+ */
+export function parseEditionFields(
+  inner: Pick<NostrEvent, "tags" | "content" | "created_at" | "id">,
+  author: string,
+  hashLabel?: string,
+): ParsedEdition {
 
   for (const name of [TAG_SUBKIND, TAG_ENTITY, TAG_EVERSION, TAG_EPREV, TAG_AUTHORITY_CITATION]) {
     const count = inner.tags.filter((t) => t[0] === name).length;
@@ -131,10 +145,10 @@ export function parseEditionInner(inner: NostrEvent): ParsedEdition {
   const prevHash = epStr !== undefined ? decodeHash(epStr, "ep") : undefined;
 
   const content = inner.content;
-  const selfHash = editionHash(entityId, version, prevHash, new TextEncoder().encode(content));
+  const selfHash = editionHash(entityId, version, prevHash, new TextEncoder().encode(content), hashLabel);
 
   return {
-    author: inner.pubkey,
+    author,
     vsk,
     entityId,
     version,

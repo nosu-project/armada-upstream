@@ -303,8 +303,8 @@ function foldRosterUncached(
     const parsed = openAndParseEditionMemo(outer, serverRoot);
     if (!parsed) continue;
     const key = bytesToHex(parsed.entityId);
-    if (parsed.vsk === VSK_ROLE) push(roleEntities, key, parsed);
-    else if (parsed.vsk === VSK_GRANT) push(grantEntities, key, parsed);
+    if (parsed.vsk === VSK_ROLE) pushEdition(roleEntities, key, parsed);
+    else if (parsed.vsk === VSK_GRANT) pushEdition(grantEntities, key, parsed);
   }
 
   // 2. Fold each entity chain to its head edition.
@@ -368,8 +368,8 @@ export function foldMetadata(
     const parsed = openAndParseEditionMemo(outer, serverRoot);
     if (!parsed) continue;
     const key = bytesToHex(parsed.entityId);
-    if (parsed.vsk === VSK_COMMUNITY_ROOT) push(rootEntities, key, parsed);
-    else if (parsed.vsk === VSK_CHANNEL) push(channelEntities, key, parsed);
+    if (parsed.vsk === VSK_COMMUNITY_ROOT) pushEdition(rootEntities, key, parsed);
+    else if (parsed.vsk === VSK_CHANNEL) pushEdition(channelEntities, key, parsed);
   }
 
   const heads = new Map<string, { version: bigint; hash: Uint8Array }>();
@@ -407,8 +407,8 @@ export function foldMetadata(
   return { root, channelNames, heads };
 }
 
-/** Owner or a holder of `permission` may edit metadata. */
-function metadataAuthorized(
+/** Owner or a holder of `permission` may edit metadata. (Shared with the CORD fold.) */
+export function metadataAuthorized(
   roster: CommunityRoles,
   authorHex: string,
   ownerHex: string | undefined,
@@ -469,14 +469,14 @@ export function foldBanlist(
 }
 
 
-function push(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdition) {
+export function pushEdition(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdition) {
   const list = m.get(key);
   if (list) list.push(p);
   else m.set(key, [p]);
 }
 
-/** Fold every entity's chain; record heads; return the chosen head editions. */
-function foldEntities(
+/** Fold every entity's chain; record heads; return the chosen head editions. (Shared with CORD.) */
+export function foldEntities(
   byEntity: Map<string, ParsedEdition[]>,
   heads: Map<string, { version: bigint; hash: Uint8Array }>,
 ): ParsedEdition[] {
@@ -496,9 +496,9 @@ function foldEntities(
  * The delegation fixpoint. Start with the owner authorized; admit role/grant
  * entries whose signer is authorized to make them, repeating until no new entry
  * is admitted. The owner can author anything; a non-owner needs MANAGE_ROLES +
- * a strict outrank of the position they're editing.
+ * a strict outrank of the position they're editing. (Shared with the CORD fold.)
  */
-function authorizeDelegation(
+export function authorizeDelegation(
   roleHeads: Array<{ role: Role; author: string }>,
   grantHeads: Array<{ grant: MemberGrant; author: string }>,
   ownerHex: string | undefined,

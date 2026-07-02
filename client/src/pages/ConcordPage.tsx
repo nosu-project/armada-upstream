@@ -39,7 +39,9 @@ import { useCommunityImageDescriptors } from "@/hooks/useCommunityImageDescripto
 import { useConcordModeration } from "@/hooks/useConcordModeration";
 import { useConcordTyping, useConcordTypingPublisher } from "@/hooks/useConcordTyping";
 import { useConcordRosterActions, concordMembers } from "@/hooks/useConcordRoster";
+import { useConcordControlEvents } from "@/hooks/useConcordRoster";
 import { useConcordDissolved } from "@/hooks/useConcordRoster";
+import { useCordRootCatchUp } from "@/hooks/useConcordRekey";
 import { useConcordTransport } from "@/hooks/useConcordTransport";
 import { useConcordVoiceServer } from "@/hooks/useConcordVoice";
 import { useConcordVoicePresence } from "@/hooks/useConcordVoice";
@@ -49,7 +51,9 @@ import { useDecryptedCommunityImage } from "@/hooks/useDecryptedCommunityImage";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/lib/concord/roles";
-import type { Channel, Community, CommunityImage } from "@/lib/concord/types";
+import { hex32, type Channel, type Community, type CommunityImage } from "@/lib/concord/types";
+import { derivedCordChannel } from "@/lib/cord/community";
+import { foldCordChannels, foldCordRoster } from "@/lib/cord/control";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
@@ -294,16 +298,44 @@ export function ConcordPage() {
   // and channel names reflect authoritative, owner-controlled edits — while keys
   // and relays stay sourced from the sealed bundle.
   const { data: folded } = useConcordMetadata(baseCommunity);
+  // CORD: a PUBLIC channel derives its key from the CommunityRoot, so channels
+  // added after this member's invite are fully joinable from the control plane
+  // alone — materialize every authorized vsk=2 public channel we don't already
+  // hold. (v1 channels need a key delivered via invite, so nothing to add.)
+  const { data: controlEvents } = useConcordControlEvents(baseCommunity);
+  // CORD: follow base rotations (refoundings) forward so a member who was kept
+  // through a ban derives the new addresses automatically.
+  useCordRootCatchUp(baseCommunity);
+  const cordFoldedChannels = useMemo(() => {
+    if (!baseCommunity || baseCommunity.proto !== "cord" || !controlEvents) return undefined;
+    const roster = foldCordRoster(controlEvents, baseCommunity);
+    return foldCordChannels(controlEvents, baseCommunity, roster);
+  }, [baseCommunity, controlEvents]);
   // Resolve icon/banner descriptors with a synchronous, disk-backed fallback so
   // they paint on the first frame after reload instead of flickering through the
   // initials/shield fallback while the (async) folded metadata lands.
   const { icon: seededIcon, banner: seededBanner } = useCommunityImageDescriptors(baseCommunity, folded);
   const community = useMemo<Community | undefined>(() => {
     if (!baseCommunity) return undefined;
+    /** Bundle channels ∪ (CORD) control-plane-discovered public channels. */
+    const withDiscovered = (channels: Channel[]): Channel[] => {
+      if (!cordFoldedChannels) return channels;
+      const have = new Set(channels.map((c) => bytesToHex(c.id)));
+      const out = [...channels];
+      for (const fc of cordFoldedChannels) {
+        if (fc.isPrivate || have.has(fc.channelId)) continue;
+        try {
+          out.push(derivedCordChannel(baseCommunity, hex32(fc.channelId), fc.name));
+        } catch {
+          // malformed id — skip
+        }
+      }
+      return out;
+    };
     if (!folded) {
       // Even before the fold lands, carry the last-known-good icon/banner so the
       // header/rail don't blank.
-      return { ...baseCommunity, icon: seededIcon, banner: seededBanner };
+      return { ...baseCommunity, icon: seededIcon, banner: seededBanner, channels: withDiscovered(baseCommunity.channels) };
     }
     const channelNames = folded.channelNames instanceof Map ? folded.channelNames : undefined;
     return {
@@ -312,12 +344,12 @@ export function ConcordPage() {
       description: folded.root?.description ?? baseCommunity.description,
       icon: folded.root?.icon ?? seededIcon,
       banner: folded.root?.banner ?? seededBanner,
-      channels: baseCommunity.channels.map((ch) => {
+      channels: withDiscovered(baseCommunity.channels).map((ch) => {
         const name = channelNames?.get(bytesToHex(ch.id));
         return name ? { ...ch, name } : ch;
       }),
     };
-  }, [baseCommunity, folded, seededIcon, seededBanner]);
+  }, [baseCommunity, folded, cordFoldedChannels, seededIcon, seededBanner]);
   const [channelIdHex, setChannelIdHex] = useState<string | null>(routeChannelId ?? null);
 
   // A deep-link to a specific channel (e.g. tapping a notification, which routes
@@ -568,7 +600,13 @@ export function ConcordPage() {
       title={community?.name ?? "…"}
       titleIcon={<CommunityTitleIcon icon={community?.icon} />}
       banner={<CommunityBanner banner={community?.banner} />}
-      subtitle={<span className="text-success/80">End-to-end encrypted</span>}
+      subtitle={
+        community?.proto === "cord" ? (
+          <span className="text-success/80">End-to-end encrypted · CORD (experimental)</span>
+        ) : (
+          <span className="text-success/80">End-to-end encrypted</span>
+        )
+      }
       addChannelLabel={user && community ? "Add channel" : undefined}
       onAddChannel={user && community ? () => setCreatingChannel((v) => !v) : undefined}
       footer={<ConcordSidebarFooter />}
@@ -750,7 +788,7 @@ export function ConcordPage() {
                     <LogOut className="size-4" />
                     Leave community
                   </DropdownMenuItem>
-                  {iAmOwner && (
+                  {iAmOwner && community?.proto !== "cord" && (
                     <DropdownMenuItem
                       className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
                       onClick={handleDissolve}
@@ -769,8 +807,9 @@ export function ConcordPage() {
             the one in encrypted voice). */}
         <CallStageSlot active={inThisVoice} />
 
-        {/* Top-of-chat app stage (YouTube watchalong, webxdc) for this channel. */}
-        {community && channel && (
+        {/* Top-of-chat app stage (YouTube watchalong, webxdc) for this channel.
+            (In-chat apps are v1-only until the CORD rollout grows past core.) */}
+        {community && channel && community.proto !== "cord" && (
           <AppStageSlot scope={{ kind: "concord", community, channel }} />
         )}
 

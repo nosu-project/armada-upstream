@@ -27,6 +27,7 @@ import {
 } from "@/lib/concord/invite";
 import { KIND_GIFT_WRAP } from "@/lib/concord/kinds";
 import { capRelays, type Community } from "@/lib/concord/types";
+import { acceptCordInvite, isCordInvite } from "@/lib/cord/community";
 import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -661,9 +662,16 @@ export function useConcordCommunity(communityIdHex: string | undefined): Communi
     if (!communityIdHex || !data) return undefined;
     const entry = data.list.entries.find((e) => e.communityId === communityIdHex);
     if (!entry) return undefined;
-    const bundle = entry.current.keys.invite as CommunityInvite | undefined;
-    if (!bundle) return undefined;
     try {
+      // Experimental CORD community: the bundle is a CORD invite (owner
+      // commitment + root + derived/private channels).
+      const cordBundle = entry.current.keys.cord;
+      if (isCordInvite(cordBundle)) {
+        const community = acceptCordInvite(cordBundle);
+        return { ...community, relays: capRelays([...community.relays, ...APP_RELAYS]) };
+      }
+      const bundle = entry.current.keys.invite as CommunityInvite | undefined;
+      if (!bundle) return undefined;
       const community = acceptInvite(bundle);
       return { ...community, relays: capRelays([...community.relays, ...APP_RELAYS]) };
     } catch {

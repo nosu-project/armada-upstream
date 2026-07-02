@@ -61,7 +61,8 @@ export function useConcordAppSync(
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
 
-  const enabled = Boolean(community && channel && uuid && user);
+  // In-chat apps are v1-only for now (outside the CORD core rollout's scope).
+  const enabled = Boolean(community && channel && uuid && user) && community?.proto !== "cord";
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
 
   const { data: opened } = useQuery<OpenedMessage[]>({
@@ -121,6 +122,7 @@ export function useConcordAppSync(
   const publishSealed = useCallback(
     async (content: string, extraTags: string[][]) => {
       if (!community || !channel || !user) return;
+      if (community.proto === "cord") return; // apps are v1-only for now
       const inner = buildInnerEvent({
         channelId: channel.id,
         epoch: channel.epoch,

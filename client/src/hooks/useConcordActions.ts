@@ -20,6 +20,15 @@ import {
 import { isExpired, locatorHex, parseInviteUrl, parsePublicInviteEvent, signerPubkey } from "@/lib/concord/publicInvite";
 import { adminRole, type Role } from "@/lib/concord/roles";
 import { createCommunity as mintCommunity, random32, type Channel, type Community } from "@/lib/concord/types";
+import { acceptCordInvite, buildCordInvite, mintCordCommunity } from "@/lib/cord/community";
+import {
+  buildCordChannelMetadataRumor,
+  buildCordCommunityRootRumor,
+  buildCordRoleRumor,
+  cordControlGroups,
+} from "@/lib/cord/control";
+import { cordLocatorHex, cordSignerPubkey, isCordBundleExpired, parseCordInviteEvent } from "@/lib/cord/invite";
+import { buildSealTemplate, finalizeRumor, wrapSeal } from "@/lib/cord/stream";
 import { APP_RELAYS } from "@/lib/platform";
 
 /** A preview of where an invite leads, resolved before actually joining. */
@@ -57,10 +66,14 @@ export function useConcordActions() {
       epoch,
       name: c.name,
       relays: c.relays,
-      keys: {
-        // The full invite bundle is the rehydration payload (carries channel keys).
-        invite: buildInvite(c),
-      },
+      keys:
+        c.proto === "cord"
+          ? // The CORD rehydration payload (list-only: prior roots included).
+            { cord: buildCordInvite(c, { includePriorRoots: true }) }
+          : {
+              // The full invite bundle is the rehydration payload (carries channel keys).
+              invite: buildInvite(c),
+            },
     };
   }
 
@@ -72,24 +85,28 @@ export function useConcordActions() {
    * Resolve an invite to its live {@link Community} without joining: decode the
    * token, fetch the sealed bundle from the bootstrap relays, then decrypt +
    * verify it (rejecting impostor/revoked invites). Shared by the preview (look
-   * before you leap) and the actual join.
+   * before you leap) and the actual join. The fragment version selects the
+   * protocol: v1/v2 fragments resolve a Vector-parity bundle, v3 a CORD one —
+   * joining either works without any opt-in (only GENERATION is gated).
    */
   async function resolveInvite(invite: ConcordInvite): Promise<Community> {
     // `invite.token` is the raw `#fragment`; decode it to the real 32-byte
-    // token + bootstrap relays via the v2 fragment parser.
+    // token + bootstrap relays via the fragment parser.
     let tokenBytes: Uint8Array;
     let bootstrapRelays: string[];
+    let proto: "v1" | "cord";
     try {
       const parsed = parseInviteUrl(invite.token);
       tokenBytes = parsed.token;
       bootstrapRelays = parsed.relays;
+      proto = parsed.proto;
     } catch {
       throw new Error("Invalid invite link.");
     }
 
     // Fetch the sealed bundle from the token's locator on the bootstrap relays.
-    const locator = locatorHex(tokenBytes);
-    const author = signerPubkey(tokenBytes);
+    const locator = proto === "cord" ? cordLocatorHex(tokenBytes) : locatorHex(tokenBytes);
+    const author = proto === "cord" ? cordSignerPubkey(tokenBytes) : signerPubkey(tokenBytes);
     const pool = bootstrapRelays.length ? bootstrapRelays : relays;
     const events = await Promise.all(
       pool.map((url) =>
@@ -106,8 +123,16 @@ export function useConcordActions() {
     if (flat.length === 0) throw new Error("Couldn't find that invite on its relays.");
 
     // Decrypt + verify the bundle with the token (rejects impostor/revoked).
+    const nowSecs = Math.floor(Date.now() / 1000);
+    if (proto === "cord") {
+      const bundle = parseCordInviteEvent(flat[0], tokenBytes);
+      if (isCordBundleExpired(bundle, nowSecs)) {
+        throw new Error("This invite link has expired.");
+      }
+      return acceptCordInvite(bundle.join);
+    }
     const bundle = parsePublicInviteEvent(flat[0], tokenBytes);
-    if (isExpired(bundle, Math.floor(Date.now() / 1000))) {
+    if (isExpired(bundle, nowSecs)) {
       throw new Error("This invite link has expired.");
     }
     return acceptInvite(bundle.join);
@@ -121,9 +146,22 @@ export function useConcordActions() {
     },
   });
 
-  const create = useMutation<ConcordCommunity, Error, { name: string }>({
-    mutationFn: async ({ name }) => {
+  const create = useMutation<ConcordCommunity, Error, { name: string; experimental?: boolean }>({
+    mutationFn: async ({ name, experimental }) => {
       if (!user) throw new Error("Sign in to start an encrypted chat.");
+
+      // EXPLICIT OPT-IN: the experimental CORD wire is chosen per community at
+      // creation and is immutable — every other community (and its invite
+      // links) stays byte-compatible with Concord/Vector v1.
+      if (experimental) {
+        const community = mintCordCommunity(name.trim(), "general", relays, user.pubkey);
+        // No attestation event: the community id itself commits to the owner.
+        // The owner-signed genesis control plane proves secret-key possession.
+        await publishCordGenesis(community);
+        await updateList({ bundle: toBundle(community), type: "add" });
+        return toCommunity(community);
+      }
+
       const community = mintCommunity(name.trim(), "general", relays);
 
       // Sign the owner attestation with the user's identity signer (works with
@@ -154,6 +192,56 @@ export function useConcordActions() {
       return toCommunity(community);
     },
   });
+
+  /**
+   * Sign + seal + publish the genesis control plane for a fresh CORD
+   * community: the owner-sealed GroupRoot (whose seal signature is the
+   * secret-key possession proof, CORD-02 §1), an auto Admin role, and one
+   * ChannelMetadata rumor per channel — each a stream event at the control
+   * address.
+   */
+  async function publishCordGenesis(community: Community): Promise<void> {
+    if (!user) return;
+    const now = Math.floor(Date.now() / 1000);
+    const [group] = cordControlGroups(community);
+
+    const seal = async (rumorTemplate: { kind: number; content: string; tags: string[][]; created_at: number }) => {
+      const rumor = finalizeRumor(rumorTemplate, user.pubkey);
+      const signedSeal = await user.signer.signEvent(buildSealTemplate(rumor, group.group));
+      return wrapSeal(signedSeal, group.group);
+    };
+
+    const role: Role = adminRole(bytesToHex(random32()));
+    const editions = await Promise.all([
+      seal(
+        buildCordCommunityRootRumor({
+          communityId: community.id,
+          metadata: communityMetadataOf(community),
+          version: 1n,
+          createdAtSecs: now,
+        }),
+      ),
+      seal(buildCordRoleRumor({ role, version: 1n, createdAtSecs: now })),
+      ...community.channels.map((ch) =>
+        seal(
+          buildCordChannelMetadataRumor({
+            channelId: ch.id,
+            metadata: { name: ch.name },
+            version: 1n,
+            createdAtSecs: now,
+          }),
+        ),
+      ),
+    ]);
+
+    await Promise.all(
+      editions.flatMap((outer) =>
+        community.relays.map((url) =>
+          nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }).catch(() => {}),
+        ),
+      ),
+    );
+  }
 
   /** Sign + seal + publish the genesis vsk=0/1/2 control editions for a freshly minted community. */
   async function publishGenesisControlPlane(community: Community): Promise<void> {
@@ -208,13 +296,16 @@ export function useConcordActions() {
   });
 
   /**
-   * Add a channel to an existing community: mint a fresh random channel key+id,
-   * append it to the local membership-list bundle, AND publish a ChannelMetadata
-   * (vsk=2) control edition so the channel's name is authoritative and
-   * discoverable to every member on the control plane. The channel KEY still
-   * rides to members via an invite re-share (channel keys can't go on the
-   * server-root-readable control plane), but the name/existence is now on-relay
-   * rather than local-only.
+   * Add a channel to an existing community. v1: mint a fresh random channel
+   * key+id, append it to the local membership-list bundle, AND publish a
+   * ChannelMetadata (vsk=2) control edition so the channel's name is
+   * authoritative and discoverable to every member on the control plane. The
+   * channel KEY still rides to members via an invite re-share (channel keys
+   * can't go on the server-root-readable control plane).
+   *
+   * CORD: a new channel is PUBLIC (derived from the CommunityRoot, CORD-03),
+   * so the control edition alone makes it fully joinable by every member — no
+   * key delivery at all. Every member materializes it from the fold.
    */
   const createChannel = useMutation<Community, Error, { community: Community; name: string }>({
     mutationFn: async ({ community, name }) => {
@@ -222,26 +313,52 @@ export function useConcordActions() {
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Channel name is required.");
 
-      const newChannel: Channel = {
-        id: random32(),
-        key: random32(),
-        epoch: 0n,
-        name: trimmed,
-        epochKeys: [],
-      };
+      const isCord = community.proto === "cord";
+      const newChannel: Channel = isCord
+        ? {
+            id: random32(),
+            key: community.serverRootKey,
+            epoch: community.serverRootEpoch,
+            name: trimmed,
+            epochKeys: [],
+            derived: true,
+          }
+        : {
+            id: random32(),
+            key: random32(),
+            epoch: 0n,
+            name: trimmed,
+            epochKeys: [],
+          };
       const updated: Community = { ...community, channels: [...community.channels, newChannel] };
 
       // Publish the channel-metadata edition (owner/MANAGE_CHANNELS signs).
       const now = Math.floor(Date.now() / 1000);
-      const inner = await user.signer.signEvent(
-        buildChannelMetadataEditionUnsigned({
-          channelId: newChannel.id,
-          metadata: { name: trimmed },
-          version: 1n,
-          createdAtSecs: now,
-        }),
-      );
-      const outer = sealControlEdition(inner, community.serverRootKey, community.id, community.serverRootEpoch);
+      let outer;
+      if (isCord) {
+        const [group] = cordControlGroups(community);
+        const rumor = finalizeRumor(
+          buildCordChannelMetadataRumor({
+            channelId: newChannel.id,
+            metadata: { name: trimmed, private: false },
+            version: 1n,
+            createdAtSecs: now,
+          }),
+          user.pubkey,
+        );
+        const seal = await user.signer.signEvent(buildSealTemplate(rumor, group.group));
+        outer = wrapSeal(seal, group.group);
+      } else {
+        const inner = await user.signer.signEvent(
+          buildChannelMetadataEditionUnsigned({
+            channelId: newChannel.id,
+            metadata: { name: trimmed },
+            version: 1n,
+            createdAtSecs: now,
+          }),
+        );
+        outer = sealControlEdition(inner, community.serverRootKey, community.id, community.serverRootEpoch);
+      }
       await Promise.all(
         community.relays.map((url) =>
           nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }).catch(() => {}),

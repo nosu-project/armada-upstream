@@ -11,10 +11,12 @@ import { buildInviteRumorTemplate } from "@/lib/concord/invite";
 import {
   buildPublicInviteEvent,
   buildPublicInviteTombstone,
+  encodeCordInviteUrl,
   encodeInviteUrl,
   newToken,
   parseInviteUrl,
 } from "@/lib/concord/publicInvite";
+import { buildCordInviteEvent, buildCordInviteTombstone } from "@/lib/cord/invite";
 import type { Community } from "@/lib/concord/types";
 
 /**
@@ -33,22 +35,31 @@ export function useConcordCommunityActions(community: Community | undefined) {
    * Mint a public invite link. Posts the token-encrypted bundle to the
    * community's relays at the token-derived locator, and returns the shareable
    * URL (the token lives only in the `#fragment` — never on the wire).
+   *
+   * The link format follows the community's wire: a v1 community mints v2
+   * (Vector-parity) fragments — untouched; a CORD community necessarily mints
+   * v3 CORD fragments (its keys only make sense to the CORD derivations).
+   * Since creating a CORD community is itself the explicit opt-in, no v3 link
+   * can ever be generated without it.
    */
   const createInviteLink = useMutation<string, Error, { expiresAt?: number; label?: string }>({
     mutationFn: async ({ expiresAt, label }) => {
       if (!community) throw new Error("No community.");
       const token = newToken();
-      const event = buildPublicInviteEvent(community, token, {
-        expiresAt,
-        label,
-        creatorNpub: user?.pubkey,
-      });
+      const isCord = community.proto === "cord";
+      const event = isCord
+        ? buildCordInviteEvent(community, token, { expiresAt, label, creatorNpub: user?.pubkey })
+        : buildPublicInviteEvent(community, token, {
+            expiresAt,
+            label,
+            creatorNpub: user?.pubkey,
+          });
       await Promise.all(
         community.relays.map((url) =>
           nostr.relay(url).event(event, { signal: AbortSignal.timeout(8000) }).catch(() => {}),
         ),
       );
-      return encodeInviteUrl(community.relays, token);
+      return isCord ? encodeCordInviteUrl(community.relays, token) : encodeInviteUrl(community.relays, token);
     },
   });
 
@@ -59,8 +70,8 @@ export function useConcordCommunityActions(community: Community | undefined) {
   const revokeInviteLink = useMutation<void, Error, { url: string }>({
     mutationFn: async ({ url }) => {
       if (!community) throw new Error("No community.");
-      const { token } = parseInviteUrl(url);
-      const tomb = buildPublicInviteTombstone(token);
+      const { token, proto } = parseInviteUrl(url);
+      const tomb = proto === "cord" ? buildCordInviteTombstone(token) : buildPublicInviteTombstone(token);
       await Promise.all(
         community.relays.map((u) => nostr.relay(u).event(tomb, { signal: AbortSignal.timeout(8000) }).catch(() => {})),
       );
@@ -76,6 +87,11 @@ export function useConcordCommunityActions(community: Community | undefined) {
   const sendDirectInvite = useMutation<void, Error, { recipientPubkey: string }>({
     mutationFn: async ({ recipientPubkey }) => {
       if (!community) throw new Error("No community.");
+      if (community.proto === "cord") {
+        // CORD core covers link invites (CORD-05); the targeted-DM bundle is a
+        // follow-up. Share a link instead.
+        throw new Error("Direct invites aren't available for experimental communities yet — share an invite link.");
+      }
       const rumorTemplate = buildInviteRumorTemplate(community);
       const ephemeralSk = generateSecretKey();
       // wrapEvent builds seal+wrap to the recipient; the rumor stays unsigned.
@@ -115,6 +131,9 @@ export function useConcordCommunityActions(community: Community | undefined) {
   const dissolve = useMutation<void, Error, void>({
     mutationFn: async () => {
       if (!user || !community) throw new Error("Not ready.");
+      if (community.proto === "cord") {
+        throw new Error("Deleting an experimental community isn't supported yet.");
+      }
       const now = Math.floor(Date.now() / 1000);
       const inner = await user.signer.signEvent(buildDissolvedEditionUnsigned(community.id, now));
       const outer = sealDissolvedEdition(inner, community.id);

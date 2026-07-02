@@ -12,15 +12,12 @@ import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { useRotatorSecretKey } from "@/hooks/useRotatorSecretKey";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatus, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
-import { forgetSkips, openMemoizedBatch } from "@/lib/concord/decodeCache";
 import { channelPseudonym } from "@/lib/concord/derive";
+import { channelWire, type ChannelWire } from "@/lib/concord/wire";
 import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
 import { concordSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 import {
-  buildInnerEvent,
-  openedFromSealed,
   openVerifiedInner,
-  sealWithSignedInner,
   type OpenedMessage,
 } from "@/lib/concord/envelope";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_REACTION } from "@/lib/concord/kinds";
@@ -59,10 +56,13 @@ function readEpochKeys(channel: Channel): Array<{ epoch: bigint; key: Uint8Array
   return [...keys].sort((a, b) => (a.epoch > b.epoch ? -1 : a.epoch < b.epoch ? 1 : 0));
 }
 
-/** The set of `#z` pseudonyms to subscribe/query for a channel (one per held epoch). */
+/** The set of `#z` pseudonyms to subscribe/query for a v1 channel (one per held epoch). */
 function channelPseudonyms(channel: Channel): string[] {
   return readEpochKeys(channel).map((ek) => bytesToHex(channelPseudonym(ek.key, channel.id, ek.epoch)));
 }
+
+/** The append-plane kinds the message timeline folds (messages + edits + deletes). */
+const MESSAGE_PLANE_KINDS = [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT];
 
 /** Moderation context the read path applies while folding. */
 interface ModerationContext {
@@ -148,15 +148,15 @@ function foldOpened(
  * first decode never freezes the UI); the surviving messages are then folded
  * (edits/deletes/bans applied) and returned sorted by time. Shared by the live
  * subscription, the network backfill, and the IndexedDB cache-first seed.
+ * Protocol-agnostic: the wire opens v1 outers or CORD streams alike.
  */
 async function openMessages(
+  wire: ChannelWire,
   events: NostrEvent[],
-  channelId: Uint8Array,
-  epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
   moderation?: ModerationContext,
   signal?: AbortSignal,
 ): Promise<{ messages: OpenedMessage[]; deletes: Map<string, Set<string>> }> {
-  const opened = await openMemoizedBatch(events, channelId, epochKeys, { signal });
+  const opened = await wire.openBatch(events, { signal, kinds: MESSAGE_PLANE_KINDS });
   return foldOpened(opened, moderation);
 }
 
@@ -177,28 +177,26 @@ async function openMessages(
  */
 async function readAndFold(
   store: { query: (filters: NostrFilter[]) => Promise<NostrEvent[]> },
-  channel: Channel,
-  epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
-  zs: string[],
+  wire: ChannelWire,
   limit: number,
   moderation?: ModerationContext,
   signal?: AbortSignal,
 ): Promise<{ messages: OpenedMessage[]; deletes: Map<string, Set<string>>; hasMore: boolean }> {
   // Read the newest `limit` sealed blobs (messages + edits + deletes). The
-  // planner walks the `#z` tag index newest-first and stops at `limit`, so this
+  // planner walks the address index newest-first and stops at `limit`, so this
   // is cheap regardless of how much history the append-only store holds. Edits /
   // deletes for an in-window message are themselves recent (published after it),
   // so they fall inside the same newest window.
   //
-  // The `kinds` constraint is REQUIRED: a channel's `#z` also carries reactions
-  // (3301), typing, presence, and control events, which are far more frequent
-  // than messages. Without `kinds`, the newest-`limit` `#z` window fills with
-  // reactions and pushes actual messages out, so new messages stop appearing.
-  const sealed = await store.query([
-    { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, limit },
-  ]);
+  // The `kinds` constraint is REQUIRED for v1: a channel's `#z` also carries
+  // reactions (3301), typing, presence, and control events, which are far more
+  // frequent than messages. Without `kinds`, the newest-`limit` window fills
+  // with reactions and pushes actual messages out. (A CORD channel carries
+  // everything at one kind-1059 address, so its window is inherently mixed and
+  // the wire post-filters after decode.)
+  const sealed = await store.query([wire.filter(MESSAGE_PLANE_KINDS, { limit })]);
   const hasMore = sealed.length >= limit;
-  const folded = await openMessages(sealed, channel.id, epochKeys, moderation, signal);
+  const folded = await openMessages(wire, sealed, moderation, signal);
   return { ...folded, hasMore };
 }
 
@@ -264,7 +262,7 @@ const LOCAL_REACTION_READ = 150;
 async function backfillStore(
   nostr: ReturnType<typeof useNostr>["nostr"],
   relays: string[],
-  zs: string[],
+  wire: ChannelWire,
   signal: AbortSignal,
   until?: number,
   maxPages: number = BACKFILL_MAX_PAGES,
@@ -293,11 +291,7 @@ async function backfillStore(
 
     const results = await Promise.all(
       active.map(async (relay) => {
-        const filter: NostrFilter = {
-          kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT],
-          "#z": zs,
-          limit: BACKFILL_PAGE,
-        };
+        const filter: NostrFilter = wire.filter(MESSAGE_PLANE_KINDS, { limit: BACKFILL_PAGE });
         if (relay.cursor !== undefined) filter.until = relay.cursor;
         try {
           const r = await nostr
@@ -377,18 +371,19 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     };
   }, [banlist.data, roster.data]);
 
-  /** The full set of epoch keys to decode under: bundle seed ∪ caught-up. */
-  const allEpochKeys = useMemo(() => {
-    if (!channel) return [];
-    const byEpoch = new Map<string, { epoch: bigint; key: Uint8Array }>();
-    for (const ek of readEpochKeys(channel)) byEpoch.set(ek.epoch.toString(), ek);
-    for (const ek of caughtUp.data ?? []) byEpoch.set(ek.epoch.toString(), ek);
-    return [...byEpoch.values()].sort((a, b) => (a.epoch > b.epoch ? -1 : a.epoch < b.epoch ? 1 : 0));
-  }, [channel, caughtUp.data]);
+  /**
+   * The protocol wire for this channel: addresses + filters + open/seal for
+   * whichever format the community speaks (v1 z-pseudonyms or CORD streams).
+   * Carries the full held-epoch set: bundle seed ∪ caught-up rekeys.
+   */
+  const wire = useMemo(
+    () => (community && channel ? channelWire(community, channel, caughtUp.data) : undefined),
+    [community, channel, caughtUp.data],
+  );
 
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
   // Epoch signature: changes when a rekey is caught up, so we can re-read.
-  const epochSig = allEpochKeys.map((e) => e.epoch.toString()).join(",");
+  const epochSig = wire?.epochSig ?? "";
   const queryKey = ["concord", "channel", channelIdHex];
   // Last-known-good localStorage snapshot scope (instant cold-launch paint).
   const snapshotScope = channelIdHex ? concordSnapshotScope(channelIdHex) : undefined;
@@ -429,8 +424,8 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   // rather than waiting for the next poll. Forget remembered decode FAILURES so
   // blobs previously skipped as `no-held-epoch` retry under the new keys.
   useEffect(() => {
-    if (!channelIdHex) return;
-    forgetSkips();
+    if (!channelIdHex || !wire) return;
+    wire.forgetSkips();
     queryClient.invalidateQueries({ queryKey: ["concord", "channel", channelIdHex] });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epochSig]);
@@ -442,8 +437,8 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   // and upserted into the existing query cache by message id; the periodic poll
   // remains a backstop for missed events / reconnection.
   useEffect(() => {
-    if (!community || !channel || !channelIdHex || allEpochKeys.length === 0) return;
-    const zs = allEpochKeys.map((ek) => bytesToHex(channelPseudonym(ek.key, channel.id, ek.epoch)));
+    if (!community || !channel || !channelIdHex || !wire || wire.addresses.length === 0) return;
+    const w = wire;
     const relays = community.relays;
     const controller = new AbortController();
     const since = Math.floor(Date.now() / 1000) - 5;
@@ -451,7 +446,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     /** Fold a batch of sealed outers into the cached timeline (assumes ready). */
     const fold = async (events: NostrEvent[]) => {
       if (events.length === 0) return;
-      const { messages: opened, deletes } = await openMessages(events, channel.id, allEpochKeys, moderation);
+      const { messages: opened, deletes } = await openMessages(w, events, moderation);
       if (opened.length === 0 && deletes.size === 0) return;
       queryClient.setQueryData<OpenedMessage[]>(queryKey, (old = []) => {
         const byId = new Map<string, OpenedMessage>();
@@ -528,7 +523,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       void (async () => {
         try {
           for await (const msg of nostr.relay(url).req(
-            [{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT], "#z": zs, since }],
+            [w.filter(MESSAGE_PLANE_KINDS, { since })],
             { signal: controller.signal },
           )) {
             if (msg[0] === "EVENT") await apply([msg[2] as NostrEvent]);
@@ -556,7 +551,15 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   // path forced a re-decode/refetch, which is the lag you'd see on cold launch).
   useEffect(() => {
     if (!isNativeRuntime()) return;
-    if (!channel || !channelIdHex || allEpochKeys.length === 0) return;
+    // The Android service speaks the v1 wire only (z pseudonyms + raw channel
+    // keys); CORD channels rely on the in-app subscription/poll.
+    if (!community || community.proto === "cord") return;
+    if (!channel || !channelIdHex) return;
+    const byEpoch = new Map<string, { epoch: bigint; key: Uint8Array }>();
+    for (const ek of readEpochKeys(channel)) byEpoch.set(ek.epoch.toString(), ek);
+    for (const ek of caughtUp.data ?? []) byEpoch.set(ek.epoch.toString(), ek);
+    const allEpochKeys = [...byEpoch.values()];
+    if (allEpochKeys.length === 0) return;
     let cancelled = false;
 
     // The pseudonyms this channel listens on — only fold inners whose outer `z`
@@ -672,8 +675,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     // re-read cheap, so re-reading the whole local window each tick is fine.
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
-      const epochKeys = allEpochKeys;
-      const zs = epochKeys.map((ek) => bytesToHex(channelPseudonym(ek.key, channel!.id, ek.epoch)));
+      const w = wire!;
       const relays = community!.relays;
       const store = await eventStore;
 
@@ -687,9 +689,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       const composeFromStore = async (): Promise<OpenedMessage[]> => {
         const { messages: opened, deletes, hasMore: more } = await readAndFold(
           store,
-          channel!,
-          epochKeys,
-          zs,
+          w,
           windowLimitRef.current,
           moderation,
           signal,
@@ -772,10 +772,10 @@ export function useConcordChannelMessages(community: Community | undefined, chan
         if (signal.aborted) return;
         // Re-reading the store is the slow part (seconds on a cold WebView), so
         // walk BOTH backfill phases first, then recompose ONCE — not after each.
-        await backfillStore(nostr, relays, zs, signal, undefined, 1); // newest page
+        await backfillStore(nostr, relays, w, signal, undefined, 1); // newest page
         if (signal.aborted) return;
         const resumeFrom = backfillCursor.current.get(cursorKey);
-        const oldest = await backfillStore(nostr, relays, zs, signal, resumeFrom);
+        const oldest = await backfillStore(nostr, relays, w, signal, resumeFrom);
         if (oldest !== undefined && (resumeFrom === undefined || oldest < resumeFrom)) {
           backfillCursor.current.set(cursorKey, oldest);
         }
@@ -855,6 +855,11 @@ export function useSendConcordMessage(community: Community | undefined, channel:
   const queryClient = useQueryClient();
 
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
+  // The send wire seals at the CURRENT epoch only (no caught-up history needed).
+  const wire = useMemo(
+    () => (community && channel ? channelWire(community, channel) : undefined),
+    [community, channel],
+  );
 
   const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
 
@@ -889,46 +894,35 @@ export function useSendConcordMessage(community: Community | undefined, channel:
       extraTags?: string[][];
     }) => {
       if (!user) throw new Error("Sign in to send a message.");
-      if (!community || !channel) throw new Error("No channel selected.");
+      if (!community || !channel || !wire) throw new Error("No channel selected.");
 
       const signer = user.signer;
       const isChatMessage = kind === KIND_COMMUNITY_MESSAGE || kind === 3302;
 
-      // Inner authorship event signed by the user's real identity (the proof of
-      // who wrote it), then sealed under the channel key with a throwaway outer
-      // key. Signing is serialized per-identity (extension-safe).
+      // The inner authorship proof is signed by the user's real identity (v1:
+      // the inner event; CORD: the kind-13 seal), then sealed for the wire.
+      // Signing is serialized per-identity (extension-safe). If this throws
+      // (signer rejected / sealing failed) it propagates to the caller before
+      // anything is rendered; the composer shows a toast and keeps the draft.
       const ms = Date.now();
-      const innerTemplate = buildInnerEvent({
-        channelId: channel.id,
-        epoch: channel.epoch,
+      const { opened, outer } = await wire.send(signer, user.pubkey, {
         content,
         ms,
         kind,
         reference,
         extraTags,
       });
-
-      // Sign + seal. If this throws (signer rejected / sealing failed) it
-      // propagates to the caller before anything is rendered; the composer
-      // shows a toast and keeps the draft.
-      const signedInner = await signer.signEvent(innerTemplate);
-      const signed = {
-        signedInner,
-        sealed: sealWithSignedInner(signedInner, channel.key, channel.id, channel.epoch),
-      };
-      const outer = signed.sealed;
-      const innerId = signed.signedInner.id;
+      const innerId = opened.messageId;
 
       // Optimistically render real messages immediately. Unlike NIP-29, we do
       // NOT show a "pending" spinner: the broadcast is fire-and-forget and
       // near-instant, so the message is treated as sent the moment it's signed.
       // Only a genuine broadcast failure flips it to "failed" (with Retry).
       if (isChatMessage) {
-        const optimistic = openedFromSealed(signed.signedInner, signed.sealed, channel.id, channel.epoch);
         queryClient.setQueryData<OpenedMessage[]>(channelKey(channelIdHex), (old = []) =>
-          old.some((m) => m.messageId === optimistic.messageId)
+          old.some((m) => m.messageId === opened.messageId)
             ? old
-            : [...old, optimistic].sort((a, b) => a.ms - b.ms),
+            : [...old, opened].sort((a, b) => a.ms - b.ms),
         );
       }
 
@@ -961,12 +955,16 @@ export function useRetryConcordMessage(community: Community | undefined, channel
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
+  const wire = useMemo(
+    () => (community && channel ? channelWire(community, channel) : undefined),
+    [community, channel],
+  );
 
   const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
 
   const retry = useCallback(
     (id: string) => {
-      if (!user || !community || !channel) return;
+      if (!user || !community || !channel || !wire) return;
       const messages = queryClient.getQueryData<OpenedMessage[]>(channelKey(channelIdHex)) ?? [];
       const msg = messages.find((m) => m.messageId === id);
       if (!msg) return;
@@ -975,20 +973,16 @@ export function useRetryConcordMessage(community: Community | undefined, channel
 
       void (async () => {
         try {
-          // Rebuild the inner from the original content/tags. `buildInnerEvent`
-          // re-derives the binding tags; the reply reference (if any) is in the
-          // original inner's `e` tag.
+          // Rebuild from the original content/tags; the wire re-derives the
+          // binding tags, and the reply reference (if any) is in the original's
+          // `e` tag.
           const reference = msg.tags.find((t) => t[0] === "e")?.[1];
-          const innerTemplate = buildInnerEvent({
-            channelId: channel.id,
-            epoch: channel.epoch,
+          const { outer } = await wire.send(signer, user.pubkey, {
             content: msg.content,
             ms: msg.ms,
             kind: msg.kind,
             reference,
           });
-          const signedInner = await signer.signEvent(innerTemplate);
-          const outer = sealWithSignedInner(signedInner, channel.key, channel.id, channel.epoch);
           const results = await Promise.allSettled(
             community.relays.map((url) =>
               nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }),
@@ -1006,7 +1000,7 @@ export function useRetryConcordMessage(community: Community | undefined, channel
         }
       })();
     },
-    [user, community, channel, channelIdHex, queryClient, nostr, setStatus],
+    [user, community, channel, wire, channelIdHex, queryClient, nostr, setStatus],
   );
 
   /** Drop a failed optimistic message from the channel view. */
@@ -1029,7 +1023,7 @@ export function useRetryConcordMessage(community: Community | undefined, channel
    */
   const deleteMessage = useCallback(
     (id: string) => {
-      if (!user || !community || !channel) return;
+      if (!user || !community || !channel || !wire) return;
       const signer = user.signer;
 
       const messages = queryClient.getQueryData<OpenedMessage[]>(channelKey(channelIdHex)) ?? [];
@@ -1059,16 +1053,12 @@ export function useRetryConcordMessage(community: Community | undefined, channel
 
       void (async () => {
         try {
-          const innerTemplate = buildInnerEvent({
-            channelId: channel.id,
-            epoch: channel.epoch,
+          const { outer } = await wire.send(signer, user.pubkey, {
             content: "",
             ms: Date.now(),
             kind: KIND_COMMUNITY_DELETE,
             reference: id,
           });
-          const signedInner = await signer.signEvent(innerTemplate);
-          const outer = sealWithSignedInner(signedInner, channel.key, channel.id, channel.epoch);
           const results = await Promise.allSettled(
             community.relays.map((url) =>
               nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }),
@@ -1085,7 +1075,7 @@ export function useRetryConcordMessage(community: Community | undefined, channel
         }
       })();
     },
-    [user, community, channel, channelIdHex, queryClient, nostr],
+    [user, community, channel, wire, channelIdHex, queryClient, nostr],
   );
 
   return { retry, discard, deleteMessage };
@@ -1154,9 +1144,13 @@ export function useConcordReactions(community: Community | undefined, channel: C
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
   const queryKey = ["concord", "reactions", channelIdHex];
   const persistKey = channelIdHex ? `reactions:${channelIdHex}` : null;
-  // `zs` (epoch pseudonyms) signature, so the live effect re-subscribes when a
-  // rekey is caught up. Kept as a primitive dep.
-  const zsSig = channel ? channelPseudonyms(channel).join(",") : "";
+  const wire = useMemo(
+    () => (community && channel ? channelWire(community, channel) : undefined),
+    [community, channel],
+  );
+  // Address-set signature, so the live effect re-subscribes when a rekey is
+  // caught up. Kept as a primitive dep.
+  const zsSig = wire?.epochSig ?? "";
 
   // Restore the last persisted tally from IndexedDB on mount, so reactions paint
   // INSTANTLY on a refresh of a visited channel instead of waiting for the
@@ -1180,14 +1174,13 @@ export function useConcordReactions(community: Community | undefined, channel: C
   // Live subscription: stream new reactions and fold them into the cached tally
   // the instant the relay forwards them (replaces waiting on the 30s poll).
   useEffect(() => {
-    if (!community || !channel || !channelIdHex) return;
-    const epochKeys = readEpochKeys(channel);
-    const zs = channelPseudonyms(channel);
+    if (!community || !channel || !channelIdHex || !wire) return;
+    const w = wire;
     const controller = new AbortController();
     const since = Math.floor(Date.now() / 1000) - 5;
 
     const apply = async (events: NostrEvent[]) => {
-      const opened = await openMemoizedBatch(events, channel.id, epochKeys, { signal: controller.signal });
+      const opened = await w.openBatch(events, { signal: controller.signal, kinds: [KIND_COMMUNITY_REACTION] });
       if (opened.length === 0) return;
       queryClient.setQueryData<ReactionTallyMap>(queryKey, (old) => tallyReactions(old, opened));
     };
@@ -1196,7 +1189,7 @@ export function useConcordReactions(community: Community | undefined, channel: C
       void (async () => {
         try {
           for await (const msg of nostr.relay(url).req(
-            [{ kinds: [KIND_COMMUNITY_REACTION], "#z": zs, since }],
+            [w.filter([KIND_COMMUNITY_REACTION], { since })],
             { signal: controller.signal },
           )) {
             if (msg[0] === "EVENT") await apply([msg[2] as NostrEvent]);
@@ -1218,8 +1211,7 @@ export function useConcordReactions(community: Community | undefined, channel: C
     // Backstop poll; the live subscription delivers new reactions instantly.
     refetchInterval: 30_000,
     queryFn: async ({ signal }) => {
-      const epochKeys = readEpochKeys(channel!);
-      const zs = channelPseudonyms(channel!);
+      const w = wire!;
       const store = await eventStore;
 
       // 1. LOCAL-FIRST: read mirrored reaction blobs from IndexedDB and tally
@@ -1228,15 +1220,15 @@ export function useConcordReactions(community: Community | undefined, channel: C
       //    blocks paint. (The persisted snapshot — seeded above — already paints
       //    instantly on a revisit while this decode runs.)
       //
-      //    Limit 150, not 500: reactions and messages share one `#z`, and a busy
-      //    channel has several reactions per message, so collecting N reactions
-      //    walks several×N tag-index rows newest-first. The cost grows with the
-      //    limit (measured ~70× slower at 500 than 60 on a reaction-heavy
-      //    channel), and the only-render window is ~30 messages anyway. The
-      //    authoritative network refresh below (and the persisted snapshot) cover
-      //    anything older than this local top-up.
-      const localSealed = await store.query([{ kinds: [KIND_COMMUNITY_REACTION], "#z": zs, limit: LOCAL_REACTION_READ }]);
-      const localOpened = await openMemoizedBatch(localSealed, channel!.id, epochKeys, { signal });
+      //    Limit 150, not 500: reactions and messages share one address, and a
+      //    busy channel has several reactions per message, so collecting N
+      //    reactions walks several×N index rows newest-first. The cost grows
+      //    with the limit (measured ~70× slower at 500 than 60 on a
+      //    reaction-heavy channel), and the only-render window is ~30 messages
+      //    anyway. The authoritative network refresh below (and the persisted
+      //    snapshot) cover anything older than this local top-up.
+      const localSealed = await store.query([w.filter([KIND_COMMUNITY_REACTION], { limit: LOCAL_REACTION_READ })]);
+      const localOpened = await w.openBatch(localSealed, { signal, kinds: [KIND_COMMUNITY_REACTION] });
       const local = tallyReactions(undefined, localOpened);
 
       // 2. BACKGROUND refresh from the relays (NOT awaited — never gates render).
@@ -1247,14 +1239,14 @@ export function useConcordReactions(community: Community | undefined, channel: C
             community!.relays.map((url) =>
               nostr
                 .relay(url)
-                .query([{ kinds: [KIND_COMMUNITY_REACTION], "#z": zs, limit: 500 }], {
+                .query([w.filter([KIND_COMMUNITY_REACTION], { limit: 500 })], {
                   signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
                 })
                 .catch(() => [] as NostrEvent[]),
             ),
           );
           if (signal.aborted) return;
-          const opened = await openMemoizedBatch(results.flat(), channel!.id, epochKeys, { signal });
+          const opened = await w.openBatch(results.flat(), { signal, kinds: [KIND_COMMUNITY_REACTION] });
           if (signal.aborted || opened.length === 0) return;
           // Authoritative rebuild from the full network set (not a merge), so a
           // reaction that was retracted upstream isn't retained. The live

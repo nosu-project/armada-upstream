@@ -13,7 +13,8 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
-const EDITION_LABEL = new TextEncoder().encode("vector-community/v1/edition");
+/** The v1 edition-hash domain label. CORD chains pass their own (see `lib/cord/derive.ts`). */
+const V1_EDITION_LABEL = "vector-community/v1/edition";
 
 function u64be(n: bigint): Uint8Array {
   const out = new Uint8Array(8);
@@ -32,10 +33,12 @@ export function editionSigningBytes(
   version: bigint,
   prevHash: Uint8Array | undefined,
   content: Uint8Array,
+  label: string = V1_EDITION_LABEL,
 ): Uint8Array {
+  const labelBytes = new TextEncoder().encode(label);
   const parts: Uint8Array[] = [
-    u64be(BigInt(EDITION_LABEL.length)),
-    EDITION_LABEL,
+    u64be(BigInt(labelBytes.length)),
+    labelBytes,
     entityId,
     u64be(version),
     new Uint8Array([prevHash ? 1 : 0]),
@@ -59,8 +62,9 @@ export function editionHash(
   version: bigint,
   prevHash: Uint8Array | undefined,
   content: Uint8Array,
+  label?: string,
 ): Uint8Array {
-  return sha256(editionSigningBytes(entityId, version, prevHash, content));
+  return sha256(editionSigningBytes(entityId, version, prevHash, content, label));
 }
 
 /** One fetched edition of an entity, reduced to what the fold needs. */

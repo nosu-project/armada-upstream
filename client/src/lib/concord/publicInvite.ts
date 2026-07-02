@@ -44,6 +44,14 @@ const VSK_PUBLIC_INVITE = "6";
 const VSK_PUBLIC_INVITE_REVOKED = "9";
 
 const URL_V2 = 2;
+/**
+ * Fragment version for the experimental CORD protocol (CORD-05). Same binary
+ * layout as v2 (`[ver][flags][relays?][token:32]`) but the token derives the
+ * `concord/invite-*` sub-keys and the relay dictionary is the CORD one below.
+ * Generation is explicit opt-in (a CORD community's links are always v3);
+ * parsing is always on, so anyone can FOLLOW a CORD link.
+ */
+const URL_V3 = 3;
 const MAX_V2_BOOTSTRAP_RELAYS = 3;
 
 /**
@@ -81,14 +89,39 @@ const RELAY_DICTIONARY: readonly string[] = [
   "wss://relay.damus.io",           // id 4
 ];
 
+/**
+ * The CORD (v3 fragment) stock relay set — CORD-05 §3's four primaries (two
+ * Vector, two Soapbox), selected by the default-set flag so the common CORD
+ * invite carries zero relay bytes. FROZEN for the experiment; keep in lockstep
+ * with the CORD-05 draft.
+ */
+export const CORD_TRUSTED_RELAYS: readonly string[] = [
+  "wss://jskitty.com/nostr",
+  "wss://asia.vectorapp.io/nostr",
+  "wss://relay.ditto.pub",
+  "wss://relay.dreamith.to",
+];
+
+/**
+ * The CORD (v3 fragment) relay dictionary — CORD-05 §3, ids 1–4 = the stock
+ * primaries. Append-only, versioned by the fragment version byte; NEVER
+ * renumber (0 = wss-implied literal, 255 = verbatim literal, as in v2).
+ */
+const CORD_RELAY_DICTIONARY: readonly string[] = [
+  "wss://jskitty.com/nostr",       // id 1 (Vector)
+  "wss://asia.vectorapp.io/nostr", // id 2 (Vector)
+  "wss://relay.ditto.pub",         // id 3 (Soapbox)
+  "wss://relay.dreamith.to",       // id 4 (Soapbox)
+];
+
 /** Order/case/trailing-slash-insensitive relay comparison key (matches Vector's `norm_relay`). */
 function normRelay(r: string): string {
   return r.trim().replace(/\/+$/, "").toLowerCase();
 }
 
-/** True when `relays` is exactly the stock trusted set (set-equal, normalized). */
-function isDefaultRelaySet(relays: string[]): boolean {
-  const want = new Set(TRUSTED_RELAYS.map(normRelay));
+/** True when `relays` is exactly the given stock set (set-equal, normalized). */
+function isDefaultRelaySet(relays: string[], trusted: readonly string[]): boolean {
+  const want = new Set(trusted.map(normRelay));
   const have = new Set(relays.map(normRelay));
   if (want.size !== have.size) return false;
   for (const r of want) if (!have.has(r)) return false;
@@ -96,9 +129,9 @@ function isDefaultRelaySet(relays: string[]): boolean {
 }
 
 /** The 1-based dictionary id for a relay, or `undefined` if it isn't a known relay. */
-function dictionaryId(relay: string): number | undefined {
+function dictionaryId(relay: string, dictionary: readonly string[]): number | undefined {
   const n = normRelay(relay);
-  const i = RELAY_DICTIONARY.findIndex((d) => normRelay(d) === n);
+  const i = dictionary.findIndex((d) => normRelay(d) === n);
   return i >= 0 ? i + 1 : undefined;
 }
 
@@ -269,8 +302,27 @@ function base64urlDecode(str: string): Uint8Array {
  *   - a custom relay is a length-prefixed literal (`wss://` implied as id 0, else verbatim id 255).
  */
 export function encodeInviteUrl(relays: string[], token: Uint8Array): string {
-  const payload: number[] = [URL_V2];
-  if (isDefaultRelaySet(relays)) {
+  return encodeBinaryFragment(URL_V2, TRUSTED_RELAYS, RELAY_DICTIONARY, relays, token);
+}
+
+/**
+ * Build a CORD (v3 fragment) invite URL. Same binary layout as v2, resolved
+ * against the CORD stock set + dictionary. Only ever produced for a CORD
+ * community — v1 communities keep minting v2 links (Vector parity untouched).
+ */
+export function encodeCordInviteUrl(relays: string[], token: Uint8Array): string {
+  return encodeBinaryFragment(URL_V3, CORD_TRUSTED_RELAYS, CORD_RELAY_DICTIONARY, relays, token);
+}
+
+function encodeBinaryFragment(
+  version: number,
+  trusted: readonly string[],
+  dictionary: readonly string[],
+  relays: string[],
+  token: Uint8Array,
+): string {
+  const payload: number[] = [version];
+  if (isDefaultRelaySet(relays, trusted)) {
     payload.push(V2_FLAG_DEFAULT_RELAYS);
   } else {
     payload.push(0);
@@ -281,7 +333,7 @@ export function encodeInviteUrl(relays: string[], token: Uint8Array): string {
       .slice(0, MAX_V2_BOOTSTRAP_RELAYS);
     payload.push(boot.length);
     for (const r of boot) {
-      const id = dictionaryId(r);
+      const id = dictionaryId(r, dictionary);
       if (id !== undefined) {
         payload.push(id);
         continue;
@@ -299,14 +351,22 @@ export function encodeInviteUrl(relays: string[], token: Uint8Array): string {
   return `${inviteUrlBase()}#${base64urlEncode(new Uint8Array(payload))}`;
 }
 
+/** A parsed invite fragment: the bootstrap relays, the token, and the protocol it addresses. */
+export interface ParsedInviteUrl {
+  relays: string[];
+  token: Uint8Array;
+  /** Which invite family the token addresses: v1 (Vector-parity) or the CORD experiment. */
+  proto: "v1" | "cord";
+}
+
 /**
- * Parse a shareable invite URL (or a bare fragment) back to `{ relays, token }`.
- * Accepts the full URL or just the fragment after `#`, in either the v2 binary
- * format or the legacy v1 JSON format (v1 links in the wild stay valid forever).
- * A v1 fragment is base64url(JSON) whose first decoded byte is `{` (0x7B); a v2
- * fragment's first byte is the version (2). The two never collide.
+ * Parse a shareable invite URL (or a bare fragment) back to `{ relays, token,
+ * proto }`. Accepts the full URL or just the fragment after `#`, in the v2
+ * binary format, the v3 (CORD) binary format, or the legacy v1 JSON format. A
+ * v1 fragment is base64url(JSON) whose first decoded byte is `{` (0x7B); the
+ * binary formats' first byte is the version (2 or 3). They never collide.
  */
-export function parseInviteUrl(url: string): { relays: string[]; token: Uint8Array } {
+export function parseInviteUrl(url: string): ParsedInviteUrl {
   const idx = url.lastIndexOf("#");
   const fragment = idx >= 0 ? url.slice(idx + 1) : url;
   if (!fragment) throw new PublicInviteError("bad-url", "no fragment");
@@ -316,8 +376,9 @@ export function parseInviteUrl(url: string): { relays: string[]; token: Uint8Arr
   } catch (e) {
     throw new PublicInviteError("bad-url", `base64: ${e instanceof Error ? e.message : e}`);
   }
-  if (raw[0] === URL_V2) return parseV2(raw);
-  if (raw[0] === 0x7b /* '{' */) return parseV1(raw);
+  if (raw[0] === URL_V2) return { ...parseBinary(raw, TRUSTED_RELAYS, RELAY_DICTIONARY), proto: "v1" };
+  if (raw[0] === URL_V3) return { ...parseBinary(raw, CORD_TRUSTED_RELAYS, CORD_RELAY_DICTIONARY), proto: "cord" };
+  if (raw[0] === 0x7b /* '{' */) return { ...parseV1(raw), proto: "v1" };
   throw new PublicInviteError("bad-url", "unrecognized fragment format");
 }
 
@@ -339,7 +400,11 @@ function parseV1(json: Uint8Array): { relays: string[]; token: Uint8Array } {
   return { relays, token: hexToBytes(frag.t) };
 }
 
-function parseV2(raw: Uint8Array): { relays: string[]; token: Uint8Array } {
+function parseBinary(
+  raw: Uint8Array,
+  trusted: readonly string[],
+  dictionary: readonly string[],
+): { relays: string[]; token: Uint8Array } {
   const bad = (m: string): never => {
     throw new PublicInviteError("bad-url", m);
   };
@@ -349,7 +414,7 @@ function parseV2(raw: Uint8Array): { relays: string[]; token: Uint8Array } {
   let relays: string[];
   if ((flags & V2_FLAG_DEFAULT_RELAYS) !== 0) {
     // No relay bytes — the bundle lives on the stock trusted set.
-    relays = [...TRUSTED_RELAYS];
+    relays = [...trusted];
   } else {
     if (pos >= raw.length) bad("truncated v2 relay count");
     const count = raw[pos++];
@@ -367,8 +432,8 @@ function parseV2(raw: Uint8Array): { relays: string[]; token: Uint8Array } {
         for (let j = pos; j < end; j++) host += String.fromCharCode(raw[j]);
         relays.push(id === 0 ? `wss://${host}` : host);
         pos = end;
-      } else if (id - 1 < RELAY_DICTIONARY.length) {
-        relays.push(RELAY_DICTIONARY[id - 1]);
+      } else if (id - 1 < dictionary.length) {
+        relays.push(dictionary[id - 1]);
       }
       // Unknown dictionary id = an entry appended by a NEWER build — skip it
       // (forward-compat); the remaining entries still bootstrap.

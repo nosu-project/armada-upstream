@@ -376,3 +376,11 @@ export function classifyAddInput(input: string): AddInput {
 
 /** Whether the Concord protocol is wired in. */
 export const CONCORD_ENABLED = true;
+
+/**
+ * Whether GENERATION of experimental CORD communities (and hence their v3
+ * invite links) is offered in the UI. Dev builds only — production keeps the
+ * create flow strictly Vector-parity while the format iterates. JOINING a CORD
+ * invite someone sends you works everywhere regardless (parsing is always on).
+ */
+export const CORD_CREATE_ENABLED: boolean = import.meta.env.DEV;

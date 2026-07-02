@@ -16,12 +16,20 @@ import {
   sealControlEdition,
   type FoldedRoster,
 } from "@/lib/concord/control";
-import { KIND_COMMUNITY_CONTROL } from "@/lib/concord/kinds";
+import { KIND_COMMUNITY_CONTROL, KIND_GIFT_WRAP } from "@/lib/concord/kinds";
 import { adminRole, type MemberGrant, type Role } from "@/lib/concord/roles";
 import { grantLocator } from "@/lib/concord/derive";
 import { hex32, random32, type Community } from "@/lib/concord/types";
+import {
+  buildCordGrantRumor,
+  buildCordRoleRumor,
+  cordControlGroups,
+  foldCordRoster,
+} from "@/lib/cord/control";
+import { cordGrantLocator } from "@/lib/cord/derive";
+import { buildSealTemplate, finalizeRumor, wrapSeal } from "@/lib/cord/stream";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /** Merge two control-event sets by id (dedup), so a partial network round
  *  doesn't drop editions the cache/seed already held. */
@@ -30,6 +38,19 @@ function mergeById(a: NostrEvent[], b: NostrEvent[]): NostrEvent[] {
   for (const e of a) byId.set(e.id, e);
   for (const e of b) byId.set(e.id, e);
   return [...byId.values()];
+}
+
+/**
+ * The relay filter selecting a community's control plane: v1 = sealed 3308
+ * editions at the control `#z` pseudonym; CORD = kind-1059 streams authored by
+ * the control group keys across the held root epochs.
+ */
+function controlFilter(community: Community, limit = 500): NostrFilter {
+  if (community.proto === "cord") {
+    return { kinds: [KIND_GIFT_WRAP], authors: cordControlGroups(community).map((g) => g.group.pk), limit };
+  }
+  const z = controlPseudonym(community.serverRootKey, community.id, community.serverRootEpoch);
+  return { kinds: [KIND_COMMUNITY_CONTROL], "#z": [z], limit };
 }
 
 /**
@@ -62,8 +83,7 @@ export function useConcordControlEvents(community: Community | undefined) {
     void (async () => {
       if ((queryClient.getQueryData<NostrEvent[]>(queryKey)?.length ?? 0) > 0) return;
       const store = await eventStore;
-      const z = controlPseudonym(community.serverRootKey, community.id, community.serverRootEpoch);
-      const cached = await store.query([{ kinds: [KIND_COMMUNITY_CONTROL], "#z": [z], limit: 500 }]);
+      const cached = await store.query([controlFilter(community)]);
       if (cancelled || cached.length === 0) return;
       queryClient.setQueryData<NostrEvent[]>(queryKey, (old) =>
         old && old.length > 0 ? old : cached,
@@ -81,12 +101,11 @@ export function useConcordControlEvents(community: Community | undefined) {
     staleTime: 15_000,
     refetchInterval: 30_000,
     queryFn: async ({ signal }) => {
-      const z = controlPseudonym(community!.serverRootKey, community!.id, community!.serverRootEpoch);
       const results = await Promise.all(
         community!.relays.map((url) =>
           nostr
             .relay(url)
-            .query([{ kinds: [KIND_COMMUNITY_CONTROL], "#z": [z], limit: 500 }], {
+            .query([controlFilter(community!)], {
               signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
             })
             .catch(() => [] as NostrEvent[]),
@@ -119,7 +138,9 @@ export function useConcordRoster(community: Community | undefined) {
     community ? `roster:${bytesToHex(community.id)}` : null,
     () =>
       community && events
-        ? foldRoster(events, community.serverRootKey, community.id, community.ownerAttestation)
+        ? community.proto === "cord"
+          ? foldCordRoster(events, community)
+          : foldRoster(events, community.serverRootKey, community.id, community.ownerAttestation)
         : undefined,
     [community, events],
   );
@@ -152,7 +173,8 @@ export function useConcordDissolved(community: Community | undefined) {
 
   return useQuery<boolean>({
     queryKey: ["concord", "dissolved", community ? bytesToHex(community.id) : null],
-    enabled: Boolean(community) && Boolean(roster.data?.ownerHex),
+    // CORD core has no dissolution mechanism yet — never dissolved.
+    enabled: Boolean(community) && community?.proto !== "cord" && Boolean(roster.data?.ownerHex),
     staleTime: 30_000,
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
@@ -172,18 +194,53 @@ export function useConcordDissolved(community: Community | undefined) {
   });
 }
 
-/** Publish a control edition (role or grant) to the community's relays. */
+/**
+ * Publish a control edition to the community's relays, on either wire:
+ * v1 signs the inner edition with the actor's identity and seals it under the
+ * server root; CORD leaves the rumor unsigned, signs the kind-13 SEAL with the
+ * actor's identity, and wraps it at the control group address.
+ */
 async function publishControl(
   nostr: ReturnType<typeof useNostr>["nostr"],
   user: NonNullable<ReturnType<typeof useCurrentUser>["user"]>,
   community: Community,
   unsigned: { kind: number; content: string; tags: string[][]; created_at: number },
 ): Promise<void> {
-  const signedInner = await user.signer.signEvent(unsigned);
-  const outer = sealControlEdition(signedInner, community.serverRootKey, community.id, community.serverRootEpoch);
+  let outer: NostrEvent;
+  if (community.proto === "cord") {
+    const [group] = cordControlGroups(community);
+    const rumor = finalizeRumor(unsigned, user.pubkey);
+    const seal = await user.signer.signEvent(buildSealTemplate(rumor, group.group));
+    outer = wrapSeal(seal, group.group);
+  } else {
+    const signedInner = await user.signer.signEvent(unsigned);
+    outer = sealControlEdition(signedInner, community.serverRootKey, community.id, community.serverRootEpoch);
+  }
   await Promise.all(
     community.relays.map((url) => nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }).catch(() => {})),
   );
+}
+
+/** The proto-correct grant-entity locator (the CORD label family differs from v1's). */
+function grantLocatorFor(community: Community, memberHex: string): Uint8Array {
+  return community.proto === "cord"
+    ? cordGrantLocator(community.id, hex32(memberHex))
+    : grantLocator(community.id, hex32(memberHex));
+}
+
+/** The proto-correct unsigned Role edition/rumor. */
+function roleEditionFor(community: Community, opts: { role: Role; version: bigint; prevHash?: Uint8Array; createdAtSecs: number }) {
+  return community.proto === "cord" ? buildCordRoleRumor(opts) : buildRoleEditionUnsigned(opts);
+}
+
+/** The proto-correct unsigned Grant edition/rumor. */
+function grantEditionFor(
+  community: Community,
+  opts: { grant: MemberGrant; version: bigint; prevHash?: Uint8Array; createdAtSecs: number },
+) {
+  return community.proto === "cord"
+    ? buildCordGrantRumor({ communityId: community.id, ...opts })
+    : buildGrantEditionUnsigned({ communityId: community.id, ...opts });
 }
 
 /**
@@ -216,19 +273,18 @@ export function useConcordRosterActions(community: Community | undefined) {
       if (!roleId) {
         const role = adminRole(bytesToHex(random32()));
         roleId = role.roleId;
-        await publishControl(nostr, user, community, buildRoleEditionUnsigned({ role, version: 1n, createdAtSecs: now }));
+        await publishControl(nostr, user, community, roleEditionFor(community, { role, version: 1n, createdAtSecs: now }));
       }
 
       // Build the member's next grant edition (version chained off the held head).
-      const locatorKey = bytesToHex(grantLocator(community.id, hex32(member)));
+      const locatorKey = bytesToHex(grantLocatorFor(community, member));
       const head = roster.data?.heads.get(locatorKey);
       const grant: MemberGrant = { member, roleIds: admin ? [roleId] : [] };
       await publishControl(
         nostr,
         user,
         community,
-        buildGrantEditionUnsigned({
-          communityId: community.id,
+        grantEditionFor(community, {
           grant,
           version: head ? head.version + 1n : 1n,
           prevHash: head?.hash,
@@ -253,7 +309,7 @@ export function useConcordRosterActions(community: Community | undefined) {
         nostr,
         user,
         community,
-        buildRoleEditionUnsigned({
+        roleEditionFor(community, {
           role,
           version: head ? head.version + 1n : 1n,
           prevHash: head?.hash,
@@ -270,15 +326,14 @@ export function useConcordRosterActions(community: Community | undefined) {
     mutationFn: async ({ member, roleIds }) => {
       if (!user || !community) throw new Error("Not ready.");
       const now = Math.floor(Date.now() / 1000);
-      const key = bytesToHex(grantLocator(community.id, hex32(member)));
+      const key = bytesToHex(grantLocatorFor(community, member));
       const head = heads?.get(key);
       const grant: MemberGrant = { member, roleIds };
       await publishControl(
         nostr,
         user,
         community,
-        buildGrantEditionUnsigned({
-          communityId: community.id,
+        grantEditionFor(community, {
           grant,
           version: head ? head.version + 1n : 1n,
           prevHash: head?.hash,
