@@ -4,6 +4,28 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.15.3] - 2026-07-02
+
+Makes experimental CORD communities actually work across members: messages sent
+by one member are now visible to everyone else (previously each member only saw
+their own). CORD communities now gather on the protocol's standard relay set
+and authenticate themselves to relays that gate encrypted-message reads — on
+web, desktop, and in Android background notifications. Also updates the CORD
+message envelope to the latest protocol draft.
+
+### Fixed
+- Messages in CORD communities are now visible to other members; previously
+  members could publish but never read each other, so every conversation
+  looked one-sided
+- CORD communities connect to the protocol's standard relays; existing
+  communities pick them up automatically
+- Android background notifications for CORD communities now work on relays
+  that require authentication, even when the app hasn't been opened since boot
+
+### Changed
+- Updated the CORD message envelope to the latest protocol draft; experimental
+  messages sent with earlier builds are no longer readable
+
 ## [0.15.2] - 2026-07-02
 
 Adds experimental support for CORD, the next generation of Armada's private
