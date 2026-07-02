@@ -6,7 +6,7 @@
  * The edition structure (vsk/eid/ev/ep/vac tags + per-entity version chains)
  * carries over from v1 verbatim (the gap-fill convention); what changes is the
  * envelope (streams instead of z-pseudonym outers), the authorship proof (the
- * kind-13 SEAL signature — the rumor itself is unsigned), the edition-hash
+ * kind-20013 SEAL signature — the rumor itself is unsigned), the edition-hash
  * domain label (`concord/edition`), and the owner proof (the self-certifying
  * community id instead of an attestation event).
  */

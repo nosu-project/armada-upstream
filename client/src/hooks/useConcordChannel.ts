@@ -900,7 +900,7 @@ export function useSendConcordMessage(community: Community | undefined, channel:
       const isChatMessage = kind === KIND_COMMUNITY_MESSAGE || kind === 3302;
 
       // The inner authorship proof is signed by the user's real identity (v1:
-      // the inner event; CORD: the kind-13 seal), then sealed for the wire.
+      // the inner event; CORD: the kind-20013 seal), then sealed for the wire.
       // Signing is serialized per-identity (extension-safe). If this throws
       // (signer rejected / sealing failed) it propagates to the caller before
       // anything is rendered; the composer shows a toast and keeps the draft.

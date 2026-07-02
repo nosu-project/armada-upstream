@@ -137,7 +137,7 @@ public class NotificationRelayService extends Service {
     // signed by a derived group key, filtered by `authors` instead of `#z`.
     // Mirrors the z* maps, keyed by the wrap author (the group address); the
     // ConcordKey's `key` is the group CONVERSATION key, which opens BOTH the
-    // wrap and the kind-13 seal inside it (two passes of ConcordCrypto).
+    // wrap and the kind-20013 seal inside it (two passes of ConcordCrypto).
     private final java.util.Map<String, String> authorToName = new java.util.HashMap<>();
     private final java.util.Map<String, String> authorToUrl = new java.util.HashMap<>();
     private final java.util.Map<String, ConcordKey> authorToKey = new java.util.HashMap<>();
@@ -965,7 +965,7 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * Open a CORD stream event (kind-1059 wrap → kind-13 seal → rumor) with the
+     * Open a CORD stream event (kind-1059 wrap → kind-20013 seal → rumor) with the
      * supplied group CONVERSATION key: two passes of the exact raw-key NIP-44
      * decrypt used for v1 ({@link ConcordCrypto}). Returns the rumor (with
      * {@code pubkey} = real author, {@code content} = message text), or
@@ -981,7 +981,7 @@ public class NotificationRelayService extends Service {
             String sealJson = ConcordCrypto.decrypt(ck.key, wrapPayload);
             if (sealJson == null) return null;
             JSONObject seal = new JSONObject(sealJson);
-            if (seal.optInt("kind", -1) != 13) return null;
+            if (seal.optInt("kind", -1) != 20013) return null;
             String rumorJson = ConcordCrypto.decrypt(ck.key, seal.optString("content", ""));
             if (rumorJson == null) return null;
             JSONObject rumor = new JSONObject(rumorJson);

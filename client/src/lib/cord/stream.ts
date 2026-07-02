@@ -7,10 +7,15 @@
  * EPHEMERAL `p` tag (a random throwaway pubkey, so the event blends into
  * ordinary gift-wrap traffic), and its `created_at` is not tweaked. Inside:
  *
- *   rumor      = UNSIGNED Nostr event (has an `id`, no `sig`) — the action
- *   seal (13)  = content = nip44(conv, rumor JSON), SIGNED by the author's
- *                real identity key — the authorship proof
- *   wrap (1059)= content = nip44(conv, seal JSON), signed by the group key
+ *   rumor        = UNSIGNED Nostr event (has an `id`, no `sig`) — the action
+ *   seal (20013) = content = nip44(conv, rumor JSON), SIGNED by the author's
+ *                  real identity key — the authorship proof
+ *   wrap (1059)  = content = nip44(conv, seal JSON), signed by the group key
+ *
+ * CORD seals are kind 20013, NOT the NIP-59 kind 13: clients of unrelated
+ * NIP-59 flows unwrap kind-13 seals leniently (nostr-protocol/nips#2398), and
+ * private streams are queried separately from regular gift wraps anyway, so a
+ * distinct kind creates no compatibility issue.
  *
  * `conv` is the group key's NIP-44 self-ECDH conversation key (CORD-02 A.2) —
  * one derived keypair is address, wrap signer, and encryptor at once. Only a
@@ -36,7 +41,7 @@ import type { GroupKey } from "@/lib/cord/derive";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
 
-const KIND_SEAL = 13;
+const KIND_SEAL = 20013;
 const TAG_CHANNEL = "channel";
 const TAG_EPOCH = "epoch";
 const TAG_MS = "ms";
@@ -99,7 +104,7 @@ export function buildCordRumorTemplate(opts: {
 }
 
 /**
- * Build the kind-13 seal TEMPLATE for a rumor: its content is the rumor JSON
+ * Build the kind-20013 seal TEMPLATE for a rumor: its content is the rumor JSON
  * encrypted under the group conversation key. Sign it with the author's real
  * identity signer (local keys or a bunker — it's an ordinary event), then feed
  * the signed seal to {@link wrapSeal}.
@@ -119,7 +124,7 @@ export function buildSealTemplate(rumor: CordRumor, group: GroupKey): EventTempl
  * ephemeral pubkey so it blends into ordinary gift-wrap traffic (CORD-01).
  */
 export function wrapSeal(seal: NostrEvent, group: GroupKey): NostrEvent {
-  if (seal.kind !== KIND_SEAL) throw new EnvelopeError("kind-mismatch", "seal must be kind 13");
+  if (seal.kind !== KIND_SEAL) throw new EnvelopeError("kind-mismatch", "seal must be kind 20013");
   const ephemeralP = getPublicKey(generateSecretKey());
   const template: EventTemplate = {
     kind: KIND_GIFT_WRAP,
@@ -141,7 +146,7 @@ export interface OpenedStream {
 /**
  * Open one CORD stream event under a specific group key. Verifies, in order:
  * the wrap signer matches the group address, the wrap decrypts (MAC), the seal
- * is kind 13 with a valid Schnorr signature, the seal decrypts, the rumor's
+ * is kind 20013 with a valid Schnorr signature, the seal decrypts, the rumor's
  * `pubkey` equals the seal signer (anti-impersonation), and the rumor `id` is
  * the true event hash. Throws {@link EnvelopeError} on any failure.
  */
@@ -160,7 +165,7 @@ export function openCordStream(outer: NostrEvent, group: GroupKey): OpenedStream
     throw new EnvelopeError("decrypt", `wrap decrypt: ${e instanceof Error ? e.message : e}`);
   }
   if (!seal || seal.kind !== KIND_SEAL) {
-    throw new EnvelopeError("inner-parse", "wrap content is not a kind-13 seal");
+    throw new EnvelopeError("inner-parse", "wrap content is not a kind-20013 seal");
   }
   if (!verifyEvent(seal)) {
     throw new EnvelopeError("bad-signature", "seal signature invalid");

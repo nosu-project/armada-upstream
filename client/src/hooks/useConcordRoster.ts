@@ -197,7 +197,7 @@ export function useConcordDissolved(community: Community | undefined) {
 /**
  * Publish a control edition to the community's relays, on either wire:
  * v1 signs the inner edition with the actor's identity and seals it under the
- * server root; CORD leaves the rumor unsigned, signs the kind-13 SEAL with the
+ * server root; CORD leaves the rumor unsigned, signs the kind-20013 SEAL with the
  * actor's identity, and wraps it at the control group address.
  */
 async function publishControl(

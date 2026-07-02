@@ -28,7 +28,7 @@ export interface ConcordEpochKey {
  * Per-epoch decrypt material for one CORD stream address: the derived group
  * pubkey (the kind-1059 wrap's `authors` filter value) and its NIP-44
  * self-ECDH conversation key. The native service opens the wrap under the
- * conversation key, parses the kind-13 seal, opens the seal under the SAME
+ * conversation key, parses the kind-20013 seal, opens the seal under the SAME
  * key, and recovers the rumor (author + plaintext) — two passes of the exact
  * raw-key NIP-44 primitive it already uses for v1 (`ConcordCrypto`).
  */
