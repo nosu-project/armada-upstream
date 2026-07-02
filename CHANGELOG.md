@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.15.1] - 2026-07-02
+
+Fixes a nasty cache bug where messages and member lists from one room could
+leak into another after switching rooms — most visibly in Concord communities,
+where another channel's messages could appear (and stick) in the wrong channel.
+Affected rooms clean themselves up automatically on the next visit.
+
+### Fixed
+- Switching between rooms could save one room's messages into another room's
+  local cache, making the wrong messages (and their senders in the member list)
+  show up there on later visits. Already-polluted caches self-heal.
+- Switching between communities could briefly show — or fall back to — the
+  previous community's member list, name, and moderation state, which could
+  wrongly hide messages.
+
 ## [0.15.0] - 2026-07-02
 
 Armada is now installable as an app. Add it to your home screen or desktop for a
