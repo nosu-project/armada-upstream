@@ -9,6 +9,7 @@ import { NIndexedDB } from "@nostrify/indexeddb";
 import { EventStoreContext } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { NostrBatcher } from "@/lib/NostrBatcher";
+import { onCordAuthChallenge } from "@/lib/cord/relayAuth";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 
 interface NostrProviderProps {
@@ -134,7 +135,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   if (!pool.current) {
     pool.current = new NPool({
       open(url: string) {
-        return new NRelay1(url, {
+        const relay: NRelay1 = new NRelay1(url, {
           // NIP-42: respond to relay AUTH challenges by signing a kind 22242
           // ephemeral event with the current user's signer.
           //
@@ -146,6 +147,15 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           // bunker can't service — they all time out, leaving every
           // auth-required relay stuck on CLOSED and the room empty).
           auth: async (challenge: string) => {
+            // CORD streams ("AUTH as the room"): before the user's own AUTH,
+            // authenticate as every registered stream key on this relay.
+            // DM-protecting relays gate `authors`-filtered kind-1059 REQs
+            // behind auth-as-author; the derived group keys are held locally,
+            // so these are instant Schnorr signs (no bunker) sent as extra
+            // AUTH frames on the same socket — relays accumulate them. Doing
+            // it synchronously here (before the user sign resolves) keeps the
+            // frames ahead of nostrify's post-auth REQ retries.
+            onCordAuthChallenge(url, challenge, (frame) => relay.socket.send(frame));
             const signer = signerRef.current;
             if (!signer) {
               throw new Error("AUTH failed: no signer available (user not logged in)");
@@ -191,6 +201,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             return signing;
           },
         });
+        return relay;
       },
       reqRouter(filters: NostrFilter[]): Map<string, NostrFilter[]> {
         // NIP-50 search: route to dedicated search relays (Ditto pattern),

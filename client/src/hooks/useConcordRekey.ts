@@ -20,6 +20,7 @@ import { KIND_COMMUNITY_REKEY, KIND_GIFT_WRAP } from "@/lib/concord/kinds";
 import { random32, type Channel, type Community } from "@/lib/concord/types";
 import { buildCordInvite } from "@/lib/cord/community";
 import { baseRekeyGroupKey, cordEpochKeyCommitment, rekeyGroupKey } from "@/lib/cord/derive";
+import { registerCordStreamKeys } from "@/lib/cord/relayAuth";
 import {
   buildCordBaseRekeyEvent,
   buildCordChannelRekeyEvent,
@@ -86,6 +87,10 @@ export function useConcordChannelEpochs(
         for (let i = 0; i < 256; i++) {
           const nextEpoch = cursor + 1n;
           const group = rekeyGroupKey(c.serverRootKey, ch.id, nextEpoch);
+          // AUTH as the probe address before querying: DM-protecting relays
+          // only serve `authors`-filtered 1059 REQs to connections authed as
+          // the author, and this epoch+1 address is minted right here.
+          registerCordStreamKeys(c.relays, [group]);
           const events = await queryRelaysByAuthor(nostr, c.relays, group.pk, signal);
           const wantCommit = bytesToHex(cordEpochKeyCommitment(cursor, currentKey));
           let applied: Uint8Array | undefined;
@@ -428,6 +433,8 @@ export async function catchUpCordRoot(
   for (let i = 0; i < 64; i++) {
     const nextEpoch = epoch + 1n;
     const group = baseRekeyGroupKey(root, community.id, nextEpoch);
+    // AUTH as the probe address (see the channel walk above).
+    registerCordStreamKeys(community.relays, [group]);
     const events = await queryRelaysByAuthor(nostr, community.relays, group.pk);
     const wantCommit = bytesToHex(cordEpochKeyCommitment(epoch, root));
     let next: Uint8Array | undefined;
