@@ -1,4 +1,4 @@
-import { Bluetooth, Headphones, MessageSquare, Plus, Settings, ShieldCheck } from "lucide-react";
+import { Bluetooth, Headphones, MessageSquare, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -302,18 +302,12 @@ function ConcordButton({
                   <span className="text-sm font-semibold">{initials}</span>
                 )}
               </span>
-              {/* Shield sits in the lower-left corner, OUTSIDE the clipped box so
-                  the corner-clip can't crop it. */}
-              <span className="absolute -bottom-1 -left-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
-                <ShieldCheck className="size-2.5" />
-              </span>
             </span>
           )}
         </NavLink>
       </TooltipTrigger>
       <TooltipContent side="right" className="font-medium">
         {name}
-        <span className="block text-xs text-success">End-to-end encrypted</span>
       </TooltipContent>
     </Tooltip>
   );

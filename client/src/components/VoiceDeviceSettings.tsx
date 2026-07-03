@@ -1,4 +1,4 @@
-import { Mic, MicOff, ShieldCheck, Volume2 } from "lucide-react";
+import { Mic, MicOff, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -314,15 +314,14 @@ export function VoiceDeviceSettings() {
         </div>
       )}
 
-      {/* Encrypted voice server (advanced). The blind LiveKit broker your client
+      {/* Voice server (advanced). The blind LiveKit broker your client
           uses to START a call in an empty channel; once anyone's in a call,
           everyone converges on them, so this only matters for cold-starting or
           running your own SFU. */}
       <div className="space-y-2.5">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="size-4 text-muted-foreground shrink-0" />
           <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Encrypted voice server
+            Voice server
           </label>
         </div>
         <Input

@@ -4,6 +4,18 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.15.4] - 2026-07-03
+
+Cleans up the Concord interface by removing the "end-to-end encrypted" badges,
+shields, and labels that appeared throughout voice and community screens. The
+extra chrome was visual noise; the interface is now quieter without changing how
+anything works.
+
+### Changed
+- Removed the encryption shields and "end-to-end encrypted" labels from voice
+  call bars, the join-voice button, community sidebars and icons, voice
+  settings, and the About page
+
 ## [0.15.3] - 2026-07-02
 
 Makes experimental CORD communities actually work across members: messages sent

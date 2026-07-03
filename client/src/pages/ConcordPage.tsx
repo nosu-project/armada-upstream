@@ -602,10 +602,8 @@ export function ConcordPage() {
       banner={<CommunityBanner banner={community?.banner} />}
       subtitle={
         community?.proto === "cord" ? (
-          <span className="text-success/80">End-to-end encrypted · CORD (experimental)</span>
-        ) : (
-          <span className="text-success/80">End-to-end encrypted</span>
-        )
+          <span className="text-muted-foreground">CORD (experimental)</span>
+        ) : undefined
       }
       addChannelLabel={user && community ? "Add channel" : undefined}
       onAddChannel={user && community ? () => setCreatingChannel((v) => !v) : undefined}
@@ -707,14 +705,14 @@ export function ConcordPage() {
                     variant="ghost"
                     size="icon"
                     className={cn("size-8", inThisVoice && "text-success")}
-                    aria-label={inThisVoice ? "In voice" : "Join encrypted voice"}
+                    aria-label={inThisVoice ? "In voice" : "Join voice"}
                     disabled={inThisVoice}
                     onClick={handleJoinVoice}
                   >
                     {inThisVoice ? <Headphones className="size-4" /> : <Phone className="size-4" />}
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>{inThisVoice ? "In voice" : "Join encrypted voice"}</TooltipContent>
+                <TooltipContent>{inThisVoice ? "In voice" : "Join voice"}</TooltipContent>
               </Tooltip>
             )}
             {user && (

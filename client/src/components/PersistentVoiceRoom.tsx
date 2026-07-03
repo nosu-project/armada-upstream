@@ -17,7 +17,7 @@ import {
   VideoPresets,
   type RoomOptions,
 } from "livekit-client";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -532,12 +532,11 @@ function ConcordVoiceRoom({
     [onLeave],
   );
 
-  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting encrypted voice…" />}</>;
+  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
 
   const label = (
     <span className="flex items-center gap-1 min-w-0">
-      <ShieldCheck className="size-3.5 text-success shrink-0" />
       <span className="text-muted-foreground/70 truncate">{community.name}</span>
       <span className="shrink-0">#{channel.name}</span>
     </span>

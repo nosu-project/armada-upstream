@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 interface ChannelSidebarViewProps {
   /** Primary title (server name / community name). */
   title: ReactNode;
-  /** Secondary line under the title (relay host, "End-to-end encrypted", …). */
+  /** Secondary line under the title (relay host, protocol note, …). */
   subtitle?: ReactNode;
   /** Optional leading icon before the title (e.g. a shield for Concord). */
   titleIcon?: ReactNode;

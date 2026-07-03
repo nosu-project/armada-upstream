@@ -68,7 +68,7 @@ const OPTIONS: Option[] = [
       "A Concord chat: serverless and end-to-end encrypted. Nothing to set up and no host. Your key is your membership, and relays only ever store sealed blobs they can't read.",
     traits: [
       { icon: Sparkles, text: "Nothing to host or set up" },
-      { icon: ShieldCheck, text: "End-to-end encrypted, even voice" },
+      { icon: ShieldCheck, text: "End-to-end encrypted" },
       { icon: KeyRound, text: "Your key is your membership" },
     ],
   },
