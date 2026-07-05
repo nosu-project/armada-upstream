@@ -286,9 +286,17 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       const cursorKeyId = channelIdHex ?? "";
       const backfillAndRefresh = async () => {
         if (signal.aborted) return;
-        await backfillStore(nostr, community!.relays, channel!, signal, undefined, 1); // newest page
+        // Pass 1: pull the newest page (no `until`) so live-adjacent history
+        // lands first. Returns the oldest `created_at` it saw on that page.
+        const newestOldest = await backfillStore(nostr, community!.relays, channel!, signal, undefined, 1);
         if (signal.aborted) return;
-        const resumeFrom = backfillCursor.current.get(cursorKeyId);
+        // Pass 2: page OLDER history. Resume from the saved cursor if we have
+        // one; otherwise (cold channel) resume from just below pass 1's newest
+        // page rather than re-fetching that identical page. `resumeFrom` is only
+        // undefined on the very first pass — after that the cursor drives it.
+        const resumeFrom =
+          backfillCursor.current.get(cursorKeyId) ??
+          (newestOldest !== undefined ? newestOldest - 1 : undefined);
         const oldest = await backfillStore(nostr, community!.relays, channel!, signal, resumeFrom);
         if (oldest !== undefined && (resumeFrom === undefined || oldest < resumeFrom)) {
           backfillCursor.current.set(cursorKeyId, oldest);
