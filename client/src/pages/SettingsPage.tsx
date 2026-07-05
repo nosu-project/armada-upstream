@@ -18,7 +18,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
-import { ConcordResyncCard } from "@/components/ConcordResyncCard";
+import { ConcordResyncCard } from "@/concord-v1/components/ConcordResyncCard";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
@@ -34,7 +34,7 @@ import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
-import { CONCORD_ENABLED } from "@/lib/concord";
+import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
 import { APP_RELAYS, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,

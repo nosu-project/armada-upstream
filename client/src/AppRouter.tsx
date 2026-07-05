@@ -20,10 +20,10 @@ import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 // a large cut on a mid-range Android WebView, where parsing the previously
 // monolithic bundle was a visible slice of every cold start.
 const AboutPage = lazy(() => import("@/pages/AboutPage").then((m) => ({ default: m.AboutPage })));
-const ConcordPage = lazy(() => import("@/pages/ConcordPage").then((m) => ({ default: m.ConcordPage })));
+const ConcordPage = lazy(() => import("@/concord-v1/pages/ConcordPage").then((m) => ({ default: m.ConcordPage })));
 const DMsPage = lazy(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage })));
 const GroupPage = lazy(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage })));
-const InvitePage = lazy(() => import("@/pages/InvitePage"));
+const InvitePage = lazy(() => import("@/concord-v1/pages/InvitePage"));
 const MeshPage = lazy(() => import("@/pages/MeshPage"));
 const NotFound = lazy(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound })));
 const ServerPage = lazy(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage })));
@@ -134,7 +134,7 @@ function useWarmRouteChunks() {
     const timer = setTimeout(() => {
       for (const load of [
         () => import("@/pages/GroupPage"),
-        () => import("@/pages/ConcordPage"),
+        () => import("@/concord-v1/pages/ConcordPage"),
         () => import("@/pages/DMsPage"),
         () => import("@/pages/ServerPage"),
       ]) {

@@ -13,7 +13,7 @@ import {
   type UserGroupList,
 } from "@/lib/nip29";
 import { normalizeRelayUrl } from "@/lib/platform";
-import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";

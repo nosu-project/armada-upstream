@@ -1,6 +1,6 @@
 import { createContext } from "react";
 
-import type { Channel, Community } from "@/lib/concord/types";
+import type { Channel, Community } from "@/concord-v1/lib/types";
 
 /**
  * A Concord (serverless, end-to-end-encrypted) voice room: the community +

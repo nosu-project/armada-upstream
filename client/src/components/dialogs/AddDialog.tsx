@@ -19,12 +19,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
-import { useConcordActions } from "@/hooks/useConcordActions";
+import { useConcordActions } from "@/concord-v1/hooks/useConcordActions";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { readClipboardText } from "@/lib/clipboard";
-import { classifyAddInput, type ConcordCommunity } from "@/lib/concord";
+import { classifyAddInput, type ConcordCommunity } from "@/concord-v1/lib/concord";
 import { PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 

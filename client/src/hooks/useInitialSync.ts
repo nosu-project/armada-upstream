@@ -8,13 +8,13 @@ import {
   CONCORD_LIST_D_TAG,
   CONCORD_LIST_KIND,
   type ConcordList,
-} from "@/lib/concord";
-import { channelPseudonym } from "@/lib/concord/derive";
-import { openMemoizedBatch } from "@/lib/concord/decodeCache";
-import { type OpenedMessage } from "@/lib/concord/envelope";
-import { acceptInvite, type CommunityInvite } from "@/lib/concord/invite";
-import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/lib/concord/kinds";
-import type { Channel, Community } from "@/lib/concord/types";
+} from "@/concord-v1/lib/concord";
+import { channelPseudonym } from "@/concord-v1/lib/derive";
+import { openMemoizedBatch } from "@/concord-v1/lib/decodeCache";
+import { type OpenedMessage } from "@/concord-v1/lib/envelope";
+import { acceptInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
+import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
+import type { Channel, Community } from "@/concord-v1/lib/types";
 import {
   KIND_GROUP_CHAT,
   KIND_USER_GROUPS,
