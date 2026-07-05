@@ -20,10 +20,12 @@ import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 // a large cut on a mid-range Android WebView, where parsing the previously
 // monolithic bundle was a visible slice of every cold start.
 const AboutPage = lazy(() => import("@/pages/AboutPage").then((m) => ({ default: m.AboutPage })));
-const ConcordPage = lazy(() => import("@/pages/ConcordPage").then((m) => ({ default: m.ConcordPage })));
+const ConcordPage = lazy(() => import("@/concord-v1/pages/ConcordPage").then((m) => ({ default: m.ConcordPage })));
+const ConcordV2Page = lazy(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page })));
 const DMsPage = lazy(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage })));
 const GroupPage = lazy(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage })));
-const InvitePage = lazy(() => import("@/pages/InvitePage"));
+const InvitePage = lazy(() => import("@/concord-v1/pages/InvitePage"));
+const InviteV2Page = lazy(() => import("@/concord-v2/pages/InviteV2Page"));
 const MeshPage = lazy(() => import("@/pages/MeshPage"));
 const NotFound = lazy(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound })));
 const ServerPage = lazy(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage })));
@@ -134,7 +136,8 @@ function useWarmRouteChunks() {
     const timer = setTimeout(() => {
       for (const load of [
         () => import("@/pages/GroupPage"),
-        () => import("@/pages/ConcordPage"),
+        () => import("@/concord-v1/pages/ConcordPage"),
+        () => import("@/concord-v2/pages/ConcordV2Page"),
         () => import("@/pages/DMsPage"),
         () => import("@/pages/ServerPage"),
       ]) {
@@ -157,7 +160,7 @@ function NotificationNavigation() {
 export function AppRouter() {
   useWarmRouteChunks();
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <NotificationNavigation />
       {/* Lazy route chunks paint the branded splash while they load, never a
           blank frame. */}
@@ -168,9 +171,14 @@ export function AppRouter() {
             <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/s/:server" element={<ServerPage />} />
             <Route path="/s/:server/:groupId" element={<GroupPage />} />
-            <Route path="/c/:communityId" element={<ConcordPage />} />
-            <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
+            <Route path="/c1/:communityId" element={<ConcordPage />} />
+            <Route path="/c1/:communityId/:channelId" element={<ConcordPage />} />
+            <Route path="/c/:communityId" element={<ConcordV2Page />} />
+            <Route path="/c/:communityId/:channelId" element={<ConcordV2Page />} />
+            {/* V1 invite links carry the token at /invite#…; V2 links carry an
+                naddr path segment at /invite/<naddr>#… (CORD-05). */}
             <Route path="/invite" element={<InvitePage />} />
+            <Route path="/invite/:naddr" element={<InviteV2Page />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/share" element={<SharePage />} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />

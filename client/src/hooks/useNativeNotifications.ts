@@ -4,13 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { useConcordList } from "@/hooks/useConcordList";
+import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import {
   DEFAULT_PUSH_PREFS,
   type PushPrefs,
 } from "@/hooks/usePushNotifications";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
-import { buildConcordSubs, type ConcordSub } from "@/lib/concordNotifications";
+import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { normalizeRelayUrl } from "@/lib/platform";
 

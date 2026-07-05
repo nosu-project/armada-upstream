@@ -2,7 +2,7 @@ import { createContext } from "react";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
 
-import type { Channel, Community } from "@/lib/concord/types";
+import type { Channel, Community } from "@/concord-v1/lib/types";
 
 /**
  * Which chat surface an app is running in. NIP-29 groups are addressed by

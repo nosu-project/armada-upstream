@@ -13,7 +13,7 @@ import {
   type UserGroupList,
 } from "@/lib/nip29";
 import { normalizeRelayUrl } from "@/lib/platform";
-import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
@@ -222,7 +222,14 @@ function applyAction(list: UserGroupList, action: GroupListAction): UserGroupLis
     }
     case "remove-server": {
       const url = normalizeRelayUrl(action.url) ?? action.url;
-      return { ...list, servers: list.servers.filter((s) => s !== url) };
+      // Compare by normalized url so a stored `r` tag that differs only
+      // superficially (trailing slash / casing — `parseGroupListTags` keeps
+      // the raw tag) is still dropped, rather than surviving to re-hydrate the
+      // rail on the next boot.
+      return {
+        ...list,
+        servers: list.servers.filter((s) => (normalizeRelayUrl(s) ?? s) !== url),
+      };
     }
     case "reorder-servers": {
       // Reorder the existing servers to match `urls`. Normalize and dedupe the

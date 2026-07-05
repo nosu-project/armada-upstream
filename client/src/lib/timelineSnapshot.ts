@@ -32,7 +32,7 @@
  * the `armada:` prefix, so `purgeClientStorage` wipes them on logout.
  */
 
-import { decode, encode } from "@/lib/concord/foldedCache";
+import { decode, encode } from "@/lib/foldedCache";
 
 const PREFIX = "armada:snap:v1:";
 const INDEX_KEY = "armada:snap:index";

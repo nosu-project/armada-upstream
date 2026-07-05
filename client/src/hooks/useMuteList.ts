@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
-import { readFolded, writeFolded } from "@/lib/concord/foldedCache";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";

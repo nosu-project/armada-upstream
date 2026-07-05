@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { WebxdcApp } from "@/components/apps/WebxdcApp";
 import { YouTubeWatchalong } from "@/components/apps/YouTubeWatchalong";
 import { Button } from "@/components/ui/button";
-import { useConcordAppSync } from "@/hooks/useConcordAppSync";
+import { useConcordAppSync } from "@/concord-v1/hooks/useConcordAppSync";
 import { useGroupAppSync } from "@/hooks/useGroupAppSync";
 import {
   AppsContext,

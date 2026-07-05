@@ -1,6 +1,8 @@
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+
 import App from "./App.tsx";
 import "./index.css";
 
@@ -11,7 +13,11 @@ if (Capacitor.isNativePlatform()) {
   document.documentElement.classList.add("native");
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>,
+);
 
 // Register the service worker for offline app-shell caching and Web Push.
 // Best-effort: PWA install + push stays unavailable if registration fails or

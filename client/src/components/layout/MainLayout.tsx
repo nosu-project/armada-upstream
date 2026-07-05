@@ -2,8 +2,9 @@ import { Outlet } from "react-router-dom";
 
 import { AppsProvider } from "@/components/AppsProvider";
 import { CallProvider } from "@/components/CallProvider";
-import { ConcordInvitesPrompt } from "@/components/ConcordInvitesPrompt";
+import { ConcordInvitesPrompt } from "@/concord-v1/components/ConcordInvitesPrompt";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
+import { useRegisterAllStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
 
 /**
  * Application frame. Desktop renders the multi-pane Discord layout (server
@@ -17,6 +18,9 @@ import { QuickSwitcher } from "@/components/QuickSwitcher";
  * changes; they wrap the routed content and dock their UI below it.
  */
 export function MainLayout() {
+  // Concord V2 rides auth-gated kind-1059 streams: authenticate the connection
+  // as every live community's derived stream keys so its planes are readable.
+  useRegisterAllStreamKeys2();
   return (
     <CallProvider>
       <AppsProvider>
