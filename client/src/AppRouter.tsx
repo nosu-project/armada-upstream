@@ -171,10 +171,10 @@ export function AppRouter() {
             <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/s/:server" element={<ServerPage />} />
             <Route path="/s/:server/:groupId" element={<GroupPage />} />
-            <Route path="/c/:communityId" element={<ConcordPage />} />
-            <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
-            <Route path="/c2/:communityId" element={<ConcordV2Page />} />
-            <Route path="/c2/:communityId/:channelId" element={<ConcordV2Page />} />
+            <Route path="/c1/:communityId" element={<ConcordPage />} />
+            <Route path="/c1/:communityId/:channelId" element={<ConcordPage />} />
+            <Route path="/c/:communityId" element={<ConcordV2Page />} />
+            <Route path="/c/:communityId/:channelId" element={<ConcordV2Page />} />
             {/* V1 invite links carry the token at /invite#…; V2 links carry an
                 naddr path segment at /invite/<naddr>#… (CORD-05). */}
             <Route path="/invite" element={<InvitePage />} />

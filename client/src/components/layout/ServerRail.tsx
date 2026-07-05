@@ -284,7 +284,7 @@ function ConcordButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <NavLink
-          to={`/c/${encodeURIComponent(communityId)}`}
+          to={`/c1/${encodeURIComponent(communityId)}`}
           aria-label={name}
           onClick={onNavigate}
           className="group relative flex items-center justify-center shrink-0"
@@ -318,7 +318,7 @@ function ConcordButton({
 
 /**
  * A rail button for an end-to-end-encrypted Concord V2 community (CORD-02).
- * Same shield accent as V1 (same trust model); navigates to `/c2/…` and pulls
+ * Same shield accent as V1 (same trust model); navigates to `/c/…` and pulls
  * its authoritative icon from the folded Control Plane metadata.
  */
 function Concord2Button({
@@ -339,7 +339,7 @@ function Concord2Button({
     <Tooltip>
       <TooltipTrigger asChild>
         <NavLink
-          to={`/c2/${encodeURIComponent(communityId)}`}
+          to={`/c/${encodeURIComponent(communityId)}`}
           aria-label={displayName}
           onClick={onNavigate}
           className="group relative flex items-center justify-center shrink-0"

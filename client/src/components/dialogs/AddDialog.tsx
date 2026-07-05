@@ -72,7 +72,7 @@ function AddBody({ onDone }: { onDone: () => void }) {
       const { communityId, name: created } = await create({ name: name.trim() });
       onDone();
       toast({ title: "Encrypted community ready", description: created });
-      navigate(`/c2/${encodeURIComponent(communityId)}`);
+      navigate(`/c/${encodeURIComponent(communityId)}`);
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : "Couldn't create the community.");
     }
@@ -270,7 +270,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         const { communityId, name } = await v2.join({ invite: classified.invite });
         onDone();
         toast({ title: "Encrypted community joined", description: name });
-        navigate(`/c2/${encodeURIComponent(communityId)}`);
+        navigate(`/c/${encodeURIComponent(communityId)}`);
         return;
       }
       if (target.kind === "concord1") {
@@ -278,7 +278,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         const community = await v1.joinViaInvite({ invite: classified.invite });
         onDone();
         toast({ title: "Encrypted chat joined", description: community.name });
-        navigate(`/c/${encodeURIComponent(community.communityId)}`);
+        navigate(`/c1/${encodeURIComponent(community.communityId)}`);
         return;
       }
       // nip29: already validated in the preview; persist + sync.

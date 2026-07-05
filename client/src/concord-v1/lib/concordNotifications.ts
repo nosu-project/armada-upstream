@@ -36,7 +36,7 @@ export interface ConcordSub {
   zs: string[];
   /** Per-`z` decrypt material (key + binding) so the service can open messages. */
   keys: ConcordEpochKey[];
-  /** Community id (hex) for the notification deep-link (/c/:communityId). */
+  /** Community id (hex) for the notification deep-link (/c1/:communityId). */
   communityId: string;
   communityName: string;
   channelName: string;

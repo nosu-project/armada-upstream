@@ -274,7 +274,7 @@ function ConcordChannelRow({
 
 /**
  * A Concord (end-to-end-encrypted) community: its channels + sealed chat. Lives
- * at `/c/:communityId`, rehydrated from the encrypted membership list. No host
+ * at `/c1/:communityId`, rehydrated from the encrypted membership list. No host
  * reads these messages — they're decrypted client-side from opaque relay blobs.
  *
  * Renders through the SAME shared chat components as NIP-29 group chat
@@ -321,7 +321,7 @@ export function ConcordPage() {
   const [channelIdHex, setChannelIdHex] = useState<string | null>(routeChannelId ?? null);
 
   // A deep-link to a specific channel (e.g. tapping a notification, which routes
-  // to /c/<community>/<channel>) must open THAT channel, overriding the
+  // to /c1/<community>/<channel>) must open THAT channel, overriding the
   // last-opened-channel memory below — even if the page is already mounted on a
   // different channel of the same community. In-page channel clicks use local
   // state and don't touch the URL, so this only fires on a genuine route change.

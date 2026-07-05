@@ -42,7 +42,7 @@ export function ConcordInvitesPrompt() {
     try {
       const community = await accept({ invite: current.invite });
       toast({ title: "Joined encrypted chat", description: community.name });
-      navigate(`/c/${encodeURIComponent(community.communityId)}`);
+      navigate(`/c1/${encodeURIComponent(community.communityId)}`);
     } catch (e) {
       toast({
         title: "Couldn't join",

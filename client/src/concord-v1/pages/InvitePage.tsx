@@ -43,7 +43,7 @@ export function InvitePage() {
         // `token` carries the full fragment; `joinViaInvite` decodes it.
         const community = await joinViaInvite({ invite: { token: fragment, relays: [] } });
         toast({ title: "Encrypted chat joined", description: community.name });
-        navigate(`/c/${encodeURIComponent(community.communityId)}`, { replace: true });
+        navigate(`/c1/${encodeURIComponent(community.communityId)}`, { replace: true });
       } catch (e) {
         attempted.current = false; // allow a retry
         setError(e instanceof Error ? e.message : "Couldn't join with that invite link.");

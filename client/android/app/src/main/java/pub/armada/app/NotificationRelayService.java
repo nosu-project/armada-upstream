@@ -123,9 +123,9 @@ public class NotificationRelayService extends Service {
     private JSONObject prefs = new JSONObject();
     // Concord (E2E) channel subscriptions, keyed for fast lookup:
     //   zToName: #z pseudonym (hex) → "Community / #channel" display name
-    //   zToUrl:  #z pseudonym (hex) → in-app deep-link base (/c/<communityId>);
+    //   zToUrl:  #z pseudonym (hex) → in-app deep-link base (/c1/<communityId>);
     //            the channel id is appended per-event at notify time
-    //            (/c/<communityId>/<channelId>) so a tap opens the right channel
+    //            (/c1/<communityId>/<channelId>) so a tap opens the right channel
     //   zToKey:  #z pseudonym (hex) → decrypt material (raw key + channel/epoch
     //            binding) so the service can open the sealed message
     //   relayToZs: relay url → the #z values that live on that relay
@@ -368,7 +368,7 @@ public class NotificationRelayService extends Service {
                 String channel = sub.optString("channelName", "channel");
                 String communityId = sub.optString("communityId", "");
                 String name = community + " / #" + channel;
-                String url = communityId.isEmpty() ? "/" : "/c/" + uriEncode(communityId);
+                String url = communityId.isEmpty() ? "/" : "/c1/" + uriEncode(communityId);
                 JSONArray zs = sub.optJSONArray("zs");
                 JSONArray relays = sub.optJSONArray("relays");
                 if (zs == null || relays == null) continue;

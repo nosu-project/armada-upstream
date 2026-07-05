@@ -214,7 +214,7 @@ function ChannelRow2({
 /**
  * A Concord V2 community — CORD-01..06 Private Streams over interchangeable
  * relays, no host, no `#z` tags: every plane is kind-1059 traffic at derived
- * stream addresses. Lives at `/c2/:communityId`, rehydrated from the
+ * stream addresses. Lives at `/c/:communityId`, rehydrated from the
  * self-encrypted Community List. Renders through the SAME shared chat
  * components as NIP-29 / DMs / Concord V1; only the transport differs.
  */

@@ -56,7 +56,7 @@ export function InviteV2Page() {
       try {
         const { communityId, name } = await join({ invite });
         toast({ title: "Encrypted community joined", description: name });
-        navigate(`/c2/${encodeURIComponent(communityId)}`, { replace: true });
+        navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
       } catch (e) {
         attempted.current = false; // allow a retry
         setError(e instanceof Error ? e.message : "Couldn't join with that invite link.");
