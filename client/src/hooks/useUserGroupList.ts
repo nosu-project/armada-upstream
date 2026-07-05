@@ -222,7 +222,14 @@ function applyAction(list: UserGroupList, action: GroupListAction): UserGroupLis
     }
     case "remove-server": {
       const url = normalizeRelayUrl(action.url) ?? action.url;
-      return { ...list, servers: list.servers.filter((s) => s !== url) };
+      // Compare by normalized url so a stored `r` tag that differs only
+      // superficially (trailing slash / casing — `parseGroupListTags` keeps
+      // the raw tag) is still dropped, rather than surviving to re-hydrate the
+      // rail on the next boot.
+      return {
+        ...list,
+        servers: list.servers.filter((s) => (normalizeRelayUrl(s) ?? s) !== url),
+      };
     }
     case "reorder-servers": {
       // Reorder the existing servers to match `urls`. Normalize and dedupe the

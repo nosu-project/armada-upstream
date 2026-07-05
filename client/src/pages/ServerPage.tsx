@@ -21,7 +21,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
-import { PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { pickDefaultChannel } from "@/lib/utils";
 
 /**
@@ -67,12 +67,23 @@ export function ServerPage() {
   }
 
   const isPinned = PLATFORM_RELAYS.includes(relayUrl);
-  const isAdded = config.addedRelays.includes(relayUrl);
+  // A server is removable if it isn't a build-time pinned platform relay.
+  // We compare by NORMALIZED url, not raw string equality: the stored
+  // `addedRelays` entry may differ superficially from the route-derived url
+  // (e.g. a trailing slash or casing off a kind-10009 `r` tag), which used to
+  // hide "Remove server" for a server that's plainly in the rail. Any
+  // non-pinned server the user can navigate to should be removable — including
+  // one whose relay is now offline/shut down (removal is purely local).
+  const isRemovable = !isPinned;
 
   const handleRemove = () => {
     updateConfig((current) => ({
       ...current,
-      addedRelays: current.addedRelays.filter((url) => url !== relayUrl),
+      // Drop every stored entry that normalizes to this server, so a
+      // trailing-slash/casing variant can't linger and re-add the rail icon.
+      addedRelays: current.addedRelays.filter(
+        (url) => normalizeRelayUrl(url) !== relayUrl,
+      ),
     }));
     if (user && relayUrl) {
       updateList({ type: "remove-server", url: relayUrl }).catch((err) =>
@@ -144,7 +155,7 @@ export function ServerPage() {
                   <Link2 className="size-4" />
                   Copy link
                 </DropdownMenuItem>
-                {isAdded && (
+                {isRemovable && (
                   <DropdownMenuItem
                     className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
                     onClick={handleRemove}
