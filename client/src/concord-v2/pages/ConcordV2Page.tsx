@@ -39,6 +39,7 @@ import { useRoles2 } from "@/concord-v2/hooks/useRoles2";
 import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
 import { useTyping2, useTypingPublisher2 } from "@/concord-v2/hooks/useTyping2";
+import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
 import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import type { ChannelV2, CommunityV2, ImagePointer } from "@/concord-v2/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
@@ -232,6 +233,10 @@ export function ConcordV2Page() {
     return { ...baseCommunity, name: folded.metadata.name || baseCommunity.name };
   }, [baseCommunity, folded]);
   const channels = useChannels2(baseCommunity);
+
+  // Authenticate the connection as this community's per-channel stream keys
+  // (control/guestbook/dissolved keys are registered app-wide in MainLayout).
+  useRegisterChannelStreamKeys2(communityId);
 
   // React to base-rekey rotations (adopt the new epoch, or discover removal).
   useRekeyWatch2(baseCommunity);

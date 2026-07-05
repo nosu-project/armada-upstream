@@ -10,6 +10,7 @@ import { EventStoreContext } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
+import { onStreamKeysAdded, signStreamAuths } from "@/concord-v2/lib/streamAuth";
 
 interface NostrProviderProps {
   children: React.ReactNode;
@@ -121,6 +122,34 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // flood the bunker. Set after each successful sign.
   const authCooldownRef = useRef<Map<string, number>>(new Map());
 
+  // Open relay handles + the latest NIP-42 challenge each one issued. Concord
+  // V2 authenticates the connection as its DERIVED stream keys (not the user):
+  // a kind-1059 REQ at a stream address only passes an auth-gating relay
+  // (ditto-relay's default AUTH_KINDS=4,1059) once every `authors` entry — the
+  // stream pubkeys — is authenticated on THIS connection. We remember each
+  // relay's challenge so newly-registered stream keys (a fresh community join,
+  // an added channel, a rekey) can be authenticated on an ALREADY-open socket
+  // without waiting for the next auth-required round-trip.
+  const openRelaysRef = useRef<Map<string, { relay: NRelay1; challenge?: string }>>(new Map());
+
+  /** Send NIP-42 AUTH frames for the given stream pubkeys on one relay. */
+  const sendStreamAuths = (
+    entry: { relay: NRelay1; challenge?: string },
+    url: string,
+    pubkeys?: string[],
+  ) => {
+    if (!entry.challenge) return;
+    const events = signStreamAuths(entry.challenge, url, pubkeys);
+    for (const ev of events) {
+      try {
+        entry.relay.socket.send(JSON.stringify(["AUTH", ev]));
+      } catch {
+        // socket not open yet / closing — the next auth-required round re-sends.
+      }
+    }
+  };
+
+
   // The pool MUST be constructed before the signer memo: a bunker (NIP-46)
   // signer is built with `NUser.fromBunkerLogin(login, pool)`, so the pool has
   // to exist first. The `open()` callback only reads the refs lazily (when a
@@ -146,6 +175,15 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           // bunker can't service — they all time out, leaving every
           // auth-required relay stuck on CLOSED and the room empty).
           auth: async (challenge: string) => {
+            // Remember the challenge so newly-registered Concord V2 stream keys
+            // can be authenticated on this same connection later, and
+            // authenticate the streams we already hold right now (the stream
+            // signatures are local, so they don't wait on the user signer).
+            const entry = openRelaysRef.current.get(url) ?? { relay };
+            entry.challenge = challenge;
+            openRelaysRef.current.set(url, entry);
+            sendStreamAuths(entry, url);
+
             const signer = signerRef.current;
             if (!signer) {
               throw new Error("AUTH failed: no signer available (user not logged in)");
@@ -191,6 +229,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             return signing;
           },
         });
+        const existing = openRelaysRef.current.get(url);
+        openRelaysRef.current.set(url, { relay, challenge: existing?.challenge });
         return relay;
       },
       reqRouter(filters: NostrFilter[]): Map<string, NostrFilter[]> {
@@ -245,6 +285,19 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     return () => {
       pool.current?.close();
     };
+  }, []);
+
+  // When Concord V2 registers new stream keys (a community opens, a channel is
+  // added, an epoch rotates), authenticate them on every already-open socket
+  // that has a challenge, so an in-flight V2 REQ starts passing the relay's
+  // kind-1059 auth gate without waiting for another auth-required round-trip.
+  useEffect(() => {
+    return onStreamKeysAdded((added) => {
+      for (const [url, entry] of openRelaysRef.current) {
+        sendStreamAuths(entry, url, added);
+      }
+    });
+    // sendStreamAuths reads only refs; stable for the provider's lifetime.
   }, []);
 
   return (
