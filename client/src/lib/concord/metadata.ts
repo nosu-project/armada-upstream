@@ -23,10 +23,6 @@ export interface CommunityMetadata {
   banner?: CommunityImage;
   /** Owner attestation (signed event JSON) — lets members verify the owner via the GroupRoot too. */
   owner_attestation?: string;
-  /** CORD only: the owner's x-only pubkey (hex) — with `owner_salt`, reproduces the community id. */
-  owner?: string;
-  /** CORD only: the community-id commitment salt (hex). */
-  owner_salt?: string;
 }
 
 /** The GroupRoot descriptor for a Community — the content of its vsk=0 control edition. */
@@ -38,14 +34,10 @@ export function communityMetadataOf(c: Community): CommunityMetadata {
     ...(c.icon !== undefined ? { icon: c.icon } : {}),
     ...(c.banner !== undefined ? { banner: c.banner } : {}),
     ...(c.ownerAttestation !== undefined ? { owner_attestation: c.ownerAttestation } : {}),
-    ...(c.owner !== undefined ? { owner: c.owner } : {}),
-    ...(c.ownerSalt !== undefined ? { owner_salt: c.ownerSalt } : {}),
   };
 }
 
 /** Channel-level descriptor (vsk=2). */
 export interface ChannelMetadata {
   name: string;
-  /** CORD only (CORD-03): true = an independently-keyed Private Channel. */
-  private?: boolean;
 }

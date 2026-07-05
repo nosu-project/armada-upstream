@@ -407,8 +407,8 @@ export function foldMetadata(
   return { root, channelNames, heads };
 }
 
-/** Owner or a holder of `permission` may edit metadata. (Shared with the CORD fold.) */
-export function metadataAuthorized(
+/** Owner or a holder of `permission` may edit metadata. */
+function metadataAuthorized(
   roster: CommunityRoles,
   authorHex: string,
   ownerHex: string | undefined,
@@ -469,14 +469,14 @@ export function foldBanlist(
 }
 
 
-export function pushEdition(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdition) {
+function pushEdition(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdition) {
   const list = m.get(key);
   if (list) list.push(p);
   else m.set(key, [p]);
 }
 
-/** Fold every entity's chain; record heads; return the chosen head editions. (Shared with CORD.) */
-export function foldEntities(
+/** Fold every entity's chain; record heads; return the chosen head editions. */
+function foldEntities(
   byEntity: Map<string, ParsedEdition[]>,
   heads: Map<string, { version: bigint; hash: Uint8Array }>,
 ): ParsedEdition[] {
@@ -496,9 +496,9 @@ export function foldEntities(
  * The delegation fixpoint. Start with the owner authorized; admit role/grant
  * entries whose signer is authorized to make them, repeating until no new entry
  * is admitted. The owner can author anything; a non-owner needs MANAGE_ROLES +
- * a strict outrank of the position they're editing. (Shared with the CORD fold.)
+ * a strict outrank of the position they're editing.
  */
-export function authorizeDelegation(
+function authorizeDelegation(
   roleHeads: Array<{ role: Role; author: string }>,
   grantHeads: Array<{ grant: MemberGrant; author: string }>,
   ownerHex: string | undefined,

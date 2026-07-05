@@ -115,14 +115,11 @@ export function parseEditionInner(inner: NostrEvent): ParsedEdition {
 
 /**
  * Parse an edition's FIELDS from an event whose authorship was proven
- * elsewhere (CORD: the seal signature; the rumor itself is unsigned). `author`
- * is the proven actor; `hashLabel` selects the chain's domain label (v1 default
- * vs `concord/edition`). Shared by the v1 and CORD control planes.
+ * elsewhere. `author` is the proven actor.
  */
 export function parseEditionFields(
   inner: Pick<NostrEvent, "tags" | "content" | "created_at" | "id">,
   author: string,
-  hashLabel?: string,
 ): ParsedEdition {
 
   for (const name of [TAG_SUBKIND, TAG_ENTITY, TAG_EVERSION, TAG_EPREV, TAG_AUTHORITY_CITATION]) {
@@ -145,7 +142,7 @@ export function parseEditionFields(
   const prevHash = epStr !== undefined ? decodeHash(epStr, "ep") : undefined;
 
   const content = inner.content;
-  const selfHash = editionHash(entityId, version, prevHash, new TextEncoder().encode(content), hashLabel);
+  const selfHash = editionHash(entityId, version, prevHash, new TextEncoder().encode(content));
 
   return {
     author,

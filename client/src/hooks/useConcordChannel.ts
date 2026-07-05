@@ -148,7 +148,6 @@ function foldOpened(
  * first decode never freezes the UI); the surviving messages are then folded
  * (edits/deletes/bans applied) and returned sorted by time. Shared by the live
  * subscription, the network backfill, and the IndexedDB cache-first seed.
- * Protocol-agnostic: the wire opens v1 outers or CORD streams alike.
  */
 async function openMessages(
   wire: ChannelWire,
@@ -188,12 +187,10 @@ async function readAndFold(
   // deletes for an in-window message are themselves recent (published after it),
   // so they fall inside the same newest window.
   //
-  // The `kinds` constraint is REQUIRED for v1: a channel's `#z` also carries
+  // The `kinds` constraint is REQUIRED: a channel's `#z` also carries
   // reactions (3301), typing, presence, and control events, which are far more
   // frequent than messages. Without `kinds`, the newest-`limit` window fills
-  // with reactions and pushes actual messages out. (A CORD channel carries
-  // everything at one kind-1059 address, so its window is inherently mixed and
-  // the wire post-filters after decode.)
+  // with reactions and pushes actual messages out.
   const sealed = await store.query([wire.filter(MESSAGE_PLANE_KINDS, { limit })]);
   const hasMore = sealed.length >= limit;
   const folded = await openMessages(wire, sealed, moderation, signal);
@@ -372,8 +369,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   }, [banlist.data, roster.data]);
 
   /**
-   * The protocol wire for this channel: addresses + filters + open/seal for
-   * whichever format the community speaks (v1 z-pseudonyms or CORD streams).
+   * The wire for this channel: addresses + filters + open/seal.
    * Carries the full held-epoch set: bundle seed ∪ caught-up rekeys.
    */
   const wire = useMemo(
@@ -551,9 +547,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   // path forced a re-decode/refetch, which is the lag you'd see on cold launch).
   useEffect(() => {
     if (!isNativeRuntime()) return;
-    // The Android service speaks the v1 wire only (z pseudonyms + raw channel
-    // keys); CORD channels rely on the in-app subscription/poll.
-    if (!community || community.proto === "cord") return;
+    if (!community) return;
     if (!channel || !channelIdHex) return;
     const byEpoch = new Map<string, { epoch: bigint; key: Uint8Array }>();
     for (const ek of readEpochKeys(channel)) byEpoch.set(ek.epoch.toString(), ek);
@@ -899,8 +893,8 @@ export function useSendConcordMessage(community: Community | undefined, channel:
       const signer = user.signer;
       const isChatMessage = kind === KIND_COMMUNITY_MESSAGE || kind === 3302;
 
-      // The inner authorship proof is signed by the user's real identity (v1:
-      // the inner event; CORD: the kind-20013 seal), then sealed for the wire.
+      // The inner authorship proof is signed by the user's real identity,
+      // then sealed for the wire.
       // Signing is serialized per-identity (extension-safe). If this throws
       // (signer rejected / sealing failed) it propagates to the caller before
       // anything is rendered; the composer shows a toast and keeps the draft.

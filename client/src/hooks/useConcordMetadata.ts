@@ -14,13 +14,6 @@ import {
 } from "@/lib/concord/control";
 import { communityMetadataOf, type CommunityMetadata } from "@/lib/concord/metadata";
 import { hex32, type Community, type CommunityImage } from "@/lib/concord/types";
-import {
-  buildCordChannelMetadataRumor,
-  buildCordCommunityRootRumor,
-  cordControlGroups,
-  foldCordMetadata,
-} from "@/lib/cord/control";
-import { buildSealTemplate, finalizeRumor, wrapSeal } from "@/lib/cord/stream";
 
 /**
  * Fold the community's metadata control plane (GroupRoot vsk=0 +
@@ -43,9 +36,7 @@ export function useConcordMetadata(community: Community | undefined) {
     community ? `metadata:${bytesToHex(community.id)}` : null,
     () =>
       community && events && folded
-        ? community.proto === "cord"
-          ? foldCordMetadata(events, community, folded)
-          : foldMetadata(events, community.serverRootKey, community.id, folded.roster, folded.ownerHex)
+        ? foldMetadata(events, community.serverRootKey, community.id, folded.roster, folded.ownerHex)
         : undefined,
     [community, events, folded],
   );
@@ -73,16 +64,8 @@ export function useConcordMetadataActions(community: Community | undefined) {
 
   const publish = async (unsigned: { kind: number; content: string; tags: string[][]; created_at: number }) => {
     if (!user || !community) throw new Error("Not ready.");
-    let outer;
-    if (community.proto === "cord") {
-      const [group] = cordControlGroups(community);
-      const rumor = finalizeRumor(unsigned, user.pubkey);
-      const seal = await user.signer.signEvent(buildSealTemplate(rumor, group.group));
-      outer = wrapSeal(seal, group.group);
-    } else {
-      const inner = await user.signer.signEvent(unsigned);
-      outer = sealControlEdition(inner, community.serverRootKey, community.id, community.serverRootEpoch);
-    }
+    const inner = await user.signer.signEvent(unsigned);
+    const outer = sealControlEdition(inner, community.serverRootKey, community.id, community.serverRootEpoch);
     await Promise.all(
       community.relays.map((url) =>
         nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }).catch(() => {}),
@@ -113,17 +96,14 @@ export function useConcordMetadataActions(community: Community | undefined) {
 
       const key = bytesToHex(community.id);
       const head = metadata.data?.heads.get(key);
-      const editionOpts = {
-        communityId: community.id,
-        metadata: next,
-        version: head ? head.version + 1n : 1n,
-        prevHash: head?.hash,
-        createdAtSecs: now,
-      };
       await publish(
-        community.proto === "cord"
-          ? buildCordCommunityRootRumor(editionOpts)
-          : buildCommunityRootEditionUnsigned(editionOpts),
+        buildCommunityRootEditionUnsigned({
+          communityId: community.id,
+          metadata: next,
+          version: head ? head.version + 1n : 1n,
+          prevHash: head?.hash,
+          createdAtSecs: now,
+        }),
       );
     },
     onSuccess: invalidate,
@@ -136,24 +116,14 @@ export function useConcordMetadataActions(community: Community | undefined) {
       if (!trimmed) throw new Error("Channel name is required.");
       const now = Math.floor(Date.now() / 1000);
       const head = metadata.data?.heads.get(channelId);
-      // CORD: a rename must preserve the channel's public/private flag — a
-      // visibility change is a key rotation, not a rename side-effect.
-      const existing = community.channels.find((c) => bytesToHex(c.id) === channelId);
-      const meta =
-        community.proto === "cord" && existing && !existing.derived
-          ? { name: trimmed, private: true }
-          : { name: trimmed };
-      const editionOpts = {
-        channelId: hex32(channelId),
-        metadata: meta,
-        version: head ? head.version + 1n : 1n,
-        prevHash: head?.hash,
-        createdAtSecs: now,
-      };
       await publish(
-        community.proto === "cord"
-          ? buildCordChannelMetadataRumor(editionOpts)
-          : buildChannelMetadataEditionUnsigned(editionOpts),
+        buildChannelMetadataEditionUnsigned({
+          channelId: hex32(channelId),
+          metadata: { name: trimmed },
+          version: head ? head.version + 1n : 1n,
+          prevHash: head?.hash,
+          createdAtSecs: now,
+        }),
       );
     },
     onSuccess: invalidate,

@@ -24,7 +24,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { readClipboardText } from "@/lib/clipboard";
-import { classifyAddInput, CORD_CREATE_ENABLED, type ConcordCommunity } from "@/lib/concord";
+import { classifyAddInput, type ConcordCommunity } from "@/lib/concord";
 import { PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
@@ -65,7 +65,6 @@ function AddBody({ onDone }: { onDone: () => void }) {
   const { createCommunity, isWorking: isCreating } = useConcordActions();
 
   const [name, setName] = useState("");
-  const [experimental, setExperimental] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
   const finishConcord = (community: ConcordCommunity) => {
@@ -77,12 +76,7 @@ function AddBody({ onDone }: { onDone: () => void }) {
   const handleCreate = async () => {
     setCreateError(null);
     try {
-      // Defense in depth: the experimental flag can never leave a prod build
-      // even if state were somehow set (the checkbox isn't rendered there).
-      const community = await createCommunity({
-        name: name.trim(),
-        experimental: experimental && CORD_CREATE_ENABLED,
-      });
+      const community = await createCommunity({ name: name.trim() });
       finishConcord(community);
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : "Couldn't create the chat.");
@@ -119,33 +113,6 @@ function AddBody({ onDone }: { onDone: () => void }) {
           autoFocus
           className="h-12 text-base"
         />
-
-        {/* EXPLICIT OPT-IN for the experimental CORD wire format — dev builds
-            only (production keeps the create flow strictly Vector-parity).
-            Off by default so every ordinary community (and its invite links)
-            stays byte-compatible with Concord/Vector. The choice is per
-            community and permanent. */}
-        {CORD_CREATE_ENABLED && (
-          <label className="flex items-start gap-2.5 rounded-md bg-secondary/40 px-3 py-2.5 text-left cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={experimental}
-              onChange={(e) => setExperimental(e.target.checked)}
-              className="mt-0.5 size-4 shrink-0 accent-primary"
-              aria-label="Use the experimental CORD protocol"
-            />
-            <span className="min-w-0">
-              <span className="block text-sm font-medium">
-                Experimental protocol <span className="text-muted-foreground">(CORD)</span>
-              </span>
-              <span className="block text-xs text-muted-foreground">
-                Next-gen wire format: stream-camouflaged traffic, spam-proof
-                addressing, keyless public channels. Invites only open in CORD-aware
-                clients — leave off for Vector compatibility.
-              </span>
-            </span>
-          </label>
-        )}
 
         {createError && (
           <Alert variant="destructive">

@@ -37,8 +37,7 @@ export function useConcordTyping(community: Community | undefined, channel: Chan
 
   return useQuery<string[]>({
     queryKey: ["concord", "typing", channel ? bytesToHex(channel.id) : null],
-    // Typing is v1-only for now (outside the CORD core rollout's scope).
-    enabled: Boolean(community && channel) && community?.proto !== "cord",
+    enabled: Boolean(community && channel),
     refetchInterval: TYPING_WINDOW_MS / 2,
     staleTime: TYPING_WINDOW_MS / 2,
     queryFn: async ({ signal }) => {
@@ -81,7 +80,6 @@ export function useConcordTypingPublisher(community: Community | undefined, chan
 
   return useCallback(() => {
     if (!user || !community || !channel) return;
-    if (community.proto === "cord") return; // v1-only for now
     const now = Date.now();
     if (now - lastSent.current < TYPING_THROTTLE_MS) return;
     lastSent.current = now;

@@ -7,7 +7,6 @@ import { NostrLoginProvider } from "@nostrify/react/login";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AppProvider } from "@/components/AppProvider";
-import { CordStreamAuth } from "@/components/CordStreamAuth";
 import { DeepLinkWarmup } from "@/components/DeepLinkWarmup";
 import { DesktopBadge } from "@/components/DesktopBadge";
 import { MeshProvider } from "@/components/MeshProvider";
@@ -55,7 +54,6 @@ export function App() {
             <TooltipProvider>
               <ReadStateProvider>
                 <NostrSync />
-                <CordStreamAuth />
                 <PublishOutbox />
                 <SyncGate />
                 <DeepLinkWarmup />

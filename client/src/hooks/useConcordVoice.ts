@@ -45,9 +45,7 @@ export function useConcordVoicePresence(community: Community | undefined, channe
 
   return useQuery<VoicePresenceEntry[]>({
     queryKey: ["concord", "voice-presence", channel ? bytesToHex(channel.id) : null],
-    // Voice (and its presence plane) is v1-only for now — outside the CORD
-    // core rollout's scope. The page's voice UI hides when this stays empty.
-    enabled: Boolean(community && channel) && community?.proto !== "cord",
+    enabled: Boolean(community && channel),
     // Refetch a little faster than the stale window so departures clear promptly.
     refetchInterval: VOICE_PRESENCE_HEARTBEAT_MS,
     staleTime: VOICE_PRESENCE_HEARTBEAT_MS,
@@ -109,8 +107,7 @@ export function useConcordVoiceServer(community: Community | undefined, channel:
       }
       return null;
     },
-    // Voice is v1-only for now (CORD core rollout ships text first).
-    enabled: Boolean(candidate) && community?.proto !== "cord",
+    enabled: Boolean(candidate),
     staleTime: 60 * 1000,
   });
 }

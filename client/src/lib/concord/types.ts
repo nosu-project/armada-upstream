@@ -60,13 +60,6 @@ export interface Channel {
   name: string;
   /** Every epoch key the member retains for this channel (post-rekey catch-up). */
   epochKeys: Array<{ epoch: bigint; key: Uint8Array }>;
-  /**
-   * CORD only: a PUBLIC channel whose key derives from the CommunityRoot
-   * (CORD-03). `key` then holds the root secret feeding the derivation and
-   * `epoch` follows the root epoch; the channel adds nothing to an invite and
-   * rotates with the base. Absent/false = an independently-keyed channel.
-   */
-  derived?: boolean;
 }
 
 /**
@@ -104,22 +97,6 @@ export interface Community {
   channels: Channel[];
   /** Owner attestation (signed event JSON) binding this community's id to the owner. */
   ownerAttestation?: string;
-  /**
-   * Wire protocol. `undefined` = the v1 Vector-parity format (z pseudonyms);
-   * `"cord"` = the experimental CORD-01…06 stream format. Set at creation and
-   * immutable for the community's lifetime.
-   */
-  proto?: "cord";
-  /** CORD only: the owner's x-only pubkey (hex) the community id commits to. */
-  owner?: string;
-  /** CORD only: the 32-byte salt (hex) mixed into the community-id commitment. */
-  ownerSalt?: string;
-  /**
-   * CORD only: prior CommunityRoot epochs this member retains (post-refounding
-   * catch-up), so history across base rotations stays readable. Never travels
-   * in invite links — a new joiner starts at the current root by design.
-   */
-  priorRoots?: Array<{ epoch: bigint; key: Uint8Array }>;
 }
 
 /** Mint a brand-new community with one default channel. Keys are independently random. */
