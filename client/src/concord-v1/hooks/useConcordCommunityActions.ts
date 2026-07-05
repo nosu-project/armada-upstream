@@ -23,7 +23,10 @@ import type { Community } from "@/concord-v1/lib/types";
  * app relays. Invite generation is what makes the join flows reachable from
  * within armada (without it, links/invites can only come from outside).
  */
-export function useConcordCommunityActions(community: Community | undefined) {
+export function useConcordCommunityActions(
+  community: Community | undefined,
+  fallbackCommunityId?: string,
+) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { mutateAsync: updateList } = useUpdateConcordList();
@@ -95,11 +98,17 @@ export function useConcordCommunityActions(community: Community | undefined) {
     },
   });
 
-  /** Leave the community: tombstone it in the membership list (stops syncing/showing). */
+  /**
+   * Leave the community: tombstone it in the membership list (stops
+   * syncing/showing). Falls back to the raw community id (from the route/list
+   * entry) when the full community can't be rehydrated — otherwise a broken
+   * room (corrupt stored bundle) could never be removed.
+   */
   const leave = useMutation<void, Error, void>({
     mutationFn: async () => {
-      if (!community) throw new Error("No community.");
-      await updateList({ type: "remove", communityId: bytesToHex(community.id) });
+      const communityId = community ? bytesToHex(community.id) : fallbackCommunityId;
+      if (!communityId) throw new Error("No community.");
+      await updateList({ type: "remove", communityId });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });

@@ -381,7 +381,7 @@ export function ConcordPage() {
   const { transport, reactionsFor, allMessages } = useConcordTransport(community, channel, canWrite, iAmOwner);
   const { mutateAsync: send } = useSendConcordMessage(community, channel);
   const { createChannel, isAddingChannel } = useConcordActions();
-  const { leave, isLeaving, dissolve } = useConcordCommunityActions(community);
+  const { leave, isLeaving, dissolve } = useConcordCommunityActions(community, communityId);
   const { data: dissolved } = useConcordDissolved(community);
   const { joinConcordCall, activeCall } = useCall();
   const { data: voiceServer } = useConcordVoiceServer(community, channel);
@@ -517,8 +517,12 @@ export function ConcordPage() {
     try {
       await leave();
       navigateTo("/");
-    } catch {
-      // best-effort
+    } catch (e) {
+      toast({
+        title: "Couldn't leave",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
