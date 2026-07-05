@@ -338,6 +338,10 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   // the optimistic-delete overlay.
   const optimisticDeleted = useQuery<string[]>({
     queryKey: deletedKey(channelIdHex),
+    // This query is never fetched — the overlay is populated imperatively via
+    // setQueryData in deleteMessage. The no-op queryFn only exists to satisfy
+    // React Query's "no queryFn" dev warning; enabled:false keeps it from running.
+    queryFn: () => [],
     enabled: false,
     initialData: [],
   }).data;
