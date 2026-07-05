@@ -1,5 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { ChevronLeft, Hash, Headphones, Loader2, LogOut, MoreVertical, Phone, Plus, Settings, Shield, ShieldCheck, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { ChevronLeft, Hash, Headphones, Loader2, LogOut, MoreVertical, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -107,18 +107,13 @@ function ConcordTypingIndicator({ pubkeys }: { pubkeys: string[] }) {
   );
 }
 
-/** The community's decrypted GroupRoot logo for the channel-list title, with a
- *  shield fallback (and a shield accent overlay so the E2E trust model stays
- *  visually distinct from relay-hosted servers). */
+/** The community's decrypted GroupRoot logo for the channel-list title. Renders
+ *  nothing when the community has no icon (the header falls back to a
+ *  name-only layout). */
 function CommunityTitleIcon({ icon }: { icon: CommunityImage | undefined }) {
   const url = useDecryptedCommunityImage(icon);
-  if (!url) return <ShieldCheck className="size-4 text-success shrink-0" />;
-  return (
-    <span className="relative shrink-0">
-      <img src={url} alt="" className="size-5 rounded object-cover" />
-      <ShieldCheck className="absolute -bottom-1 -right-1 size-2.5 text-success" />
-    </span>
-  );
+  if (!url) return null;
+  return <img src={url} alt="" className="size-5 rounded object-cover shrink-0" />;
 }
 
 /** The community's decrypted GroupRoot banner above the channel-list header.

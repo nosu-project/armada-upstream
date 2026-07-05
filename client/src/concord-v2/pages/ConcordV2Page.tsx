@@ -1,4 +1,4 @@
-import { ChevronLeft, Hash, Loader2, Lock, LogOut, MoreVertical, Plus, Settings, Shield, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
+import { ChevronLeft, Hash, Loader2, Lock, LogOut, MoreVertical, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -91,16 +91,13 @@ function TypingIndicator2({ pubkeys }: { pubkeys: string[] }) {
   );
 }
 
-/** The community's decrypted icon for the channel-list title (shield accent = E2E trust). */
+/** The community's decrypted icon for the channel-list title. Renders nothing
+ *  when the community has no icon (the header falls back to a name-only
+ *  layout). */
 function TitleIcon2({ icon }: { icon: ImagePointer | undefined }) {
   const url = useDecryptedImage2(icon);
-  if (!url) return <ShieldCheck className="size-4 text-success shrink-0" />;
-  return (
-    <span className="relative shrink-0">
-      <img src={url} alt="" className="size-5 rounded object-cover" />
-      <ShieldCheck className="absolute -bottom-1 -right-1 size-2.5 text-success" />
-    </span>
-  );
+  if (!url) return null;
+  return <img src={url} alt="" className="size-5 rounded object-cover shrink-0" />;
 }
 
 function Banner2({ banner }: { banner: ImagePointer | undefined }) {
