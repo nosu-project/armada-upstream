@@ -288,6 +288,7 @@ Cloudflare (armada.* orange/proxied; turn.* grey/DNS-only)
 
 - Commit messages: concise, imperative, sentence case (see `git log`).
 - Don't commit `infra/.env`, certs, or any secret material.
-- Only commit/push when asked. Verify the relay builds (`go build ./...` in
-  `server/`) and the client builds (`npm run test` in `client/`) before
-  committing changes to those.
+- Always commit after finishing a set of changes (don't wait to be asked); do
+  not push unless asked. Verify the relay builds (`go build ./...` in `server/`)
+  and the client builds (`npm run test` in `client/`) before committing changes
+  to those.
