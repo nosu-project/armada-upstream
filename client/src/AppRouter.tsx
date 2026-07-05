@@ -160,7 +160,7 @@ function NotificationNavigation() {
 export function AppRouter() {
   useWarmRouteChunks();
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <NotificationNavigation />
       {/* Lazy route chunks paint the branded splash while they load, never a
           blank frame. */}
