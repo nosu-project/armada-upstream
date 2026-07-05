@@ -578,6 +578,154 @@ function isDTagFilter(filter: NostrFilter): boolean {
   );
 }
 
+/** A `req` stream message tuple (EVENT / EOSE / CLOSED). */
+type RelayMsg =
+  | import('@nostrify/types').NostrRelayEVENT
+  | import('@nostrify/types').NostrRelayEOSE
+  | import('@nostrify/types').NostrRelayCLOSED;
+
+/**
+ * Stable key for coalescing identical `relay()`/`group()` traffic: the scope
+ * (relay set) plus the filter set, order-insensitive. Two callers that produce
+ * the same key are asking the same relays the same question, so their upstream
+ * work can be shared. Filters are canonicalized by sorting their entries (and
+ * each entry's array values) so key order / array order can't split a genuine
+ * match into two.
+ */
+function coalesceKey(scopeRelays: string[], filters: NostrFilter[]): string {
+  const norm = filters.map((f) => {
+    const entries = Object.entries(f)
+      .map(([k, v]) => [k, Array.isArray(v) ? [...v].sort() : v] as const)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return JSON.stringify(entries);
+  });
+  return `${[...scopeRelays].sort().join(',')}|${norm.join('|')}`;
+}
+
+/**
+ * A single upstream `req()` stream fanned out to N subscribers. The first
+ * subscriber for a given key opens the upstream subscription; every later
+ * subscriber with the same key attaches to it instead of opening its own
+ * socket REQ. Each subscriber gets an independent async iterator that replays
+ * nothing (live tail semantics — subscribers see messages from the moment they
+ * attach) and drains only its own buffered messages. When the LAST subscriber
+ * detaches (its consumer aborts or stops iterating), the upstream is aborted.
+ *
+ * This is what collapses the pageload's `⟳xN DUPLICATE` live subscriptions
+ * (identical kind-1059 `since` REQs from the Concord/DM hooks) onto one socket.
+ */
+class SharedSubscription {
+  private subscribers = new Set<Subscriber>();
+  private controller = new AbortController();
+  private closed = false;
+
+  constructor(
+    source: AsyncIterable<RelayMsg>,
+    private onEmpty: () => void,
+    private onMessage: (msg: RelayMsg) => void,
+  ) {
+    void this.pump(source);
+  }
+
+  private async pump(source: AsyncIterable<RelayMsg>): Promise<void> {
+    try {
+      for await (const msg of source) {
+        if (this.controller.signal.aborted) break;
+        this.onMessage(msg);
+        for (const sub of this.subscribers) sub.push(msg);
+      }
+    } catch {
+      // Upstream ended/errored — fall through to close every subscriber.
+    } finally {
+      this.close();
+    }
+  }
+
+  /** Close the upstream and finish every attached subscriber's iterator. */
+  private close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.controller.abort();
+    for (const sub of this.subscribers) sub.finish();
+    this.subscribers.clear();
+  }
+
+  /** Whether new subscribers can still attach (false once the upstream ended). */
+  isOpen(): boolean {
+    return !this.closed;
+  }
+
+  /**
+   * Attach a subscriber. Returns an async iterable of the live message stream;
+   * aborting `signal` (or breaking out of the iteration) detaches it, and the
+   * upstream is torn down once the last subscriber leaves.
+   */
+  subscribe(signal?: AbortSignal): AsyncIterable<RelayMsg> {
+    const sub = new Subscriber();
+    this.subscribers.add(sub);
+
+    const detach = () => {
+      if (!this.subscribers.delete(sub)) return;
+      sub.finish();
+      if (this.subscribers.size === 0) {
+        this.controller.abort();
+        this.onEmpty();
+      }
+    };
+
+    if (signal) {
+      if (signal.aborted) detach();
+      else signal.addEventListener('abort', detach, { once: true });
+    }
+
+    const isClosed = () => this.closed;
+    return {
+      async *[Symbol.asyncIterator]() {
+        try {
+          if (isClosed()) return;
+          yield* sub.drain();
+        } finally {
+          detach();
+        }
+      },
+    };
+  }
+}
+
+/**
+ * A single fan-out subscriber: a bounded async queue an iterator drains. `push`
+ * enqueues (waking a waiting `drain`), `finish` signals end-of-stream.
+ */
+class Subscriber {
+  private queue: RelayMsg[] = [];
+  private wake?: () => void;
+  private done = false;
+
+  push(msg: RelayMsg): void {
+    if (this.done) return;
+    this.queue.push(msg);
+    this.wake?.();
+  }
+
+  finish(): void {
+    this.done = true;
+    this.wake?.();
+  }
+
+  async *drain(): AsyncGenerator<RelayMsg> {
+    for (;;) {
+      while (this.queue.length > 0) {
+        yield this.queue.shift()!;
+      }
+      if (this.done) return;
+      await new Promise<void>((resolve) => {
+        this.wake = resolve;
+      });
+      this.wake = undefined;
+    }
+  }
+}
+
 /**
  * Transparent batching proxy for NPool.
  *
@@ -587,8 +735,13 @@ function isDTagFilter(filter: NostrFilter): boolean {
  * If more queries with the same pattern arrive in the same frame, they're
  * combined into one REQ.
  *
- * All other methods (`.event()`, `.req()`, `.relay()`, `.group()`, `.close()`)
- * pass through directly to the underlying pool.
+ * The `relay()`/`group()` handles additionally COALESCE identical concurrent
+ * `.query()`/`.req()` calls onto one upstream (see `wrapCaching`): the
+ * high-volume Concord/DM paths fan out per-relay and re-fire the same filter
+ * from several hooks at once, so without this the pageload issues the same
+ * socket REQ many times over (the `⟳xN DUPLICATE` floods in the query log).
+ *
+ * All other methods (`.event()`, `.close()`) pass through directly.
  *
  * Client code doesn't need to know batching exists — it calls
  * `nostr.query([{ kinds: [0], authors: [pk], limit: 1 }])` as usual.
@@ -609,6 +762,20 @@ export class NostrBatcher {
   private eTagCollectors = new Map<string, BatchCollector<NostrEvent[]>>();
   /** Keyed by serialized filter shapes for multi-filter #e/#q batching. */
   private multiFilterCollectors = new Map<string, BatchCollector<NostrEvent[]>>();
+
+  /**
+   * In-flight `relay()`/`group()` `.query()` calls, keyed by scope+filters, so
+   * concurrent identical one-shot reads share one upstream request instead of
+   * each opening its own socket REQ. Cleared when the shared request settles.
+   */
+  private inflightQueries = new Map<string, Promise<NostrEvent[]>>();
+
+  /**
+   * Live `relay()`/`group()` `.req()` subscriptions, keyed by scope+filters, so
+   * concurrent identical live tails fan out from one upstream subscription (see
+   * {@link SharedSubscription}). Removed when the last subscriber detaches.
+   */
+  private sharedSubs = new Map<string, SharedSubscription>();
 
   /**
    * Optional local cache. Every event that flows out of `.query()` / `.req()`
@@ -852,41 +1019,123 @@ export class NostrBatcher {
    * real relay count instead of "0 relays".
    */
   private wrapCaching<R extends NRelayLike>(relay: R, sourceUrl?: string, groupUrls?: string[]): R {
-    const cacheEvents = this.cacheEvents.bind(this);
-    const recordProvenance = this.recordDirectoryProvenance.bind(this);
     // How this handle is scoped, for the query log ("relay(url)" vs "group(N)").
     const via = sourceUrl ? `relay(${sourceUrl})` : `group(${groupUrls?.length ?? 0})`;
     const scopeRelays = sourceUrl ? [sourceUrl] : (groupUrls ?? []);
+    const coalescedQuery = this.coalescedQuery.bind(this);
+    const coalescedReq = this.coalescedReq.bind(this);
     return new Proxy(relay, {
       get(target, prop, receiver) {
         if (prop === 'query') {
-          return async (filters: NostrFilter[], opts?: { signal?: AbortSignal }) => {
-            logNostrReq(scopeRelays, filters, via);
-            const events = await target.query(filters, opts);
-            cacheEvents(events);
-            recordProvenance(events, sourceUrl);
-            return events;
-          };
+          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) =>
+            coalescedQuery(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         if (prop === 'req') {
-          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) => {
-            logNostrReq(scopeRelays, filters, via);
-            const source = target.req(filters, opts);
-            return (async function* () {
-              for await (const msg of source) {
-                if (msg[0] === 'EVENT') {
-                  cacheEvents([msg[2]]);
-                  recordProvenance([msg[2]], sourceUrl);
-                }
-                yield msg;
-              }
-            })();
-          };
+          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) =>
+            coalescedReq(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         const value = Reflect.get(target, prop, receiver);
         return typeof value === 'function' ? value.bind(target) : value;
       },
     });
+  }
+
+  /**
+   * `relay()`/`group()` `.query()` with in-flight coalescing: concurrent
+   * identical reads (same scope + filters) share one upstream request. Only the
+   * FIRST caller logs a REQ and drives the network; the rest await the shared
+   * promise (so the query log — and the wire — sees one REQ, not N). Each caller
+   * still honours its own `signal`: aborting one rejects only that caller and
+   * never cancels the shared request the others are waiting on. Results are
+   * cached/provenance-tagged once, on the shared path.
+   */
+  private coalescedQuery(
+    target: NRelayLike,
+    via: string,
+    scopeRelays: string[],
+    sourceUrl: string | undefined,
+    filters: NostrFilter[],
+    opts?: { signal?: AbortSignal },
+  ): Promise<NostrEvent[]> {
+    const key = `${via}::${coalesceKey(scopeRelays, filters)}`;
+    let shared = this.inflightQueries.get(key);
+    if (!shared) {
+      logNostrReq(scopeRelays, filters, via);
+      // Drive the shared request WITHOUT any caller signal, so one caller
+      // aborting can't cancel it for the others. Per-caller abort is applied
+      // below by racing each caller against its own signal.
+      shared = target
+        .query(filters)
+        .then((events) => {
+          this.cacheEvents(events);
+          this.recordDirectoryProvenance(events, sourceUrl);
+          return events;
+        })
+        .finally(() => {
+          this.inflightQueries.delete(key);
+        });
+      this.inflightQueries.set(key, shared);
+    }
+
+    const signal = opts?.signal;
+    if (!signal) return shared;
+    if (signal.aborted) return Promise.reject(signal.reason);
+    // Race the shared result against this caller's own cancellation.
+    return new Promise<NostrEvent[]>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+      shared.then(
+        (events) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(events);
+        },
+        (err) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(err);
+        },
+      );
+    });
+  }
+
+  /**
+   * `relay()`/`group()` `.req()` with subscription multiplexing: concurrent
+   * identical live tails (same scope + filters) fan out from one upstream
+   * subscription instead of each opening its own socket REQ. Only the first
+   * subscriber logs a REQ and opens the upstream; the rest attach to it. Each
+   * EVENT is cached once (on the shared upstream) and delivered to every
+   * subscriber. The upstream is torn down when the last subscriber detaches.
+   */
+  private coalescedReq(
+    target: NRelayLike,
+    via: string,
+    scopeRelays: string[],
+    sourceUrl: string | undefined,
+    filters: NostrFilter[],
+    opts?: { signal?: AbortSignal },
+  ): AsyncIterable<RelayMsg> {
+    const key = `${via}::${coalesceKey(scopeRelays, filters)}`;
+    let shared = this.sharedSubs.get(key);
+    if (!shared || !shared.isOpen()) {
+      logNostrReq(scopeRelays, filters, via);
+      const source = target.req(filters) as AsyncIterable<RelayMsg>;
+      const sharedSubs = this.sharedSubs;
+      const sub: SharedSubscription = new SharedSubscription(
+        source,
+        () => {
+          // Last subscriber left — drop the entry so the next caller reopens.
+          if (sharedSubs.get(key) === sub) sharedSubs.delete(key);
+        },
+        (msg) => {
+          if (msg[0] === 'EVENT') {
+            this.cacheEvents([msg[2]]);
+            this.recordDirectoryProvenance([msg[2]], sourceUrl);
+          }
+        },
+      );
+      shared = sub;
+      this.sharedSubs.set(key, sub);
+    }
+    return shared.subscribe(opts?.signal);
   }
 
   close(): Promise<void> {
