@@ -93,11 +93,43 @@ export function useConcordControlEvents(community: Community | undefined, active
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cidHex, eventStore, queryClient]);
 
+  // Live subscription (open community only): stream new control editions as they
+  // land instead of waiting up to a poll interval, so a new role/metadata edit/
+  // ban/channel shows within seconds. Each EVENT is merged into the same query
+  // cache the fold reads; the poll below stays as a gap-filler for dropped subs.
+  useEffect(() => {
+    if (!community || !active) return;
+    const controller = new AbortController();
+    const since = Math.floor(Date.now() / 1000);
+    const { limit: _limit, ...base } = controlFilter(community);
+    const filter = { ...base, since };
+    for (const url of community.relays) {
+      void (async () => {
+        try {
+          for await (const msg of nostr.relay(url).req([filter], { signal: controller.signal })) {
+            if (msg[0] === "EVENT") {
+              const event = msg[2] as NostrEvent;
+              queryClient.setQueryData<NostrEvent[]>(queryKey, (old) =>
+                old?.some((e) => e.id === event.id) ? old : mergeById(old ?? [], [event]),
+              );
+            }
+          }
+        } catch {
+          // Subscription ended — the poll covers gaps.
+        }
+      })();
+    }
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nostr, cidHex, active, queryClient]);
+
   return useQuery<NostrEvent[]>({
     queryKey,
     enabled: Boolean(community) && active,
     staleTime: 15_000,
-    refetchInterval: active ? 30_000 : false,
+    // The live subscription above provides real-time freshness; the poll is a
+    // longer-interval safety net for a dropped/expired subscription.
+    refetchInterval: active ? 60_000 : false,
     queryFn: async ({ signal }) => {
       const results = await Promise.all(
         community!.relays.map((url) =>
