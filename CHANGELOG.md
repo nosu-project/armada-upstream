@@ -4,6 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.16.0] - 2026-07-05
+
+Introduces the next generation of Armada's private community protocol as the
+new standard for communities, built for stronger privacy and spam resistance.
+New communities now use it by default, and existing communities remain fully
+usable alongside it. This release also adds a safety net that keeps the app on
+its feet if a screen hits an error, and fixes a couple of stubborn glitches
+around leaving communities and removing servers.
+
+### Added
+- New private community protocol, now the default when creating communities,
+  with joins and invites that work everywhere
+- App-wide error screen that recovers gracefully instead of showing a blank
+  page when something goes wrong
+
+### Fixed
+- Leaving a community that failed to load now works and reports any problem
+  instead of doing nothing
+- The "Remove server" option no longer disappears for servers you added, and
+  removed servers no longer reappear in the sidebar
+
 ## [0.15.4] - 2026-07-03
 
 Cleans up the Concord interface by removing the "end-to-end encrypted" badges,
