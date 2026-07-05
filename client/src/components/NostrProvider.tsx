@@ -10,6 +10,7 @@ import { EventStoreContext } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
+import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
 import { onStreamKeysAdded, signStreamAuths } from "@/concord-v2/lib/streamAuth";
 
 interface NostrProviderProps {
@@ -240,12 +241,18 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           const targets = searchRelaysRef.current.length > 0
             ? searchRelaysRef.current
             : poolRelaysRef.current;
-          return new Map(targets.map((url) => [url, filters]));
+          const routed = new Map(targets.map((url) => [url, filters]));
+          logNostrReq([...routed.keys()], filters, "search");
+          return routed;
         }
-        return new Map(poolRelaysRef.current.map((url) => [url, filters]));
+        const routed = new Map(poolRelaysRef.current.map((url) => [url, filters]));
+        logNostrReq([...routed.keys()], filters, "pool");
+        return routed;
       },
-      eventRouter(_event: NostrEvent) {
-        return [...poolRelaysRef.current];
+      eventRouter(event: NostrEvent) {
+        const relays = [...poolRelaysRef.current];
+        logNostrEvent(relays, event);
+        return relays;
       },
       // Resolve queries quickly once any relay sends EOSE.
       eoseTimeout: 300,

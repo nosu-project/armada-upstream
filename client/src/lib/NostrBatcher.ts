@@ -2,6 +2,7 @@ import type { NostrEvent, NostrFilter } from '@nostrify/types';
 import type { NPool, NStore } from '@nostrify/nostrify';
 
 import { recordRelayProvenanceBatch } from '@/lib/relayProvenance';
+import { logNostrReq } from '@/lib/nostrQueryLog';
 
 /** kind 39000 — NIP-29 group metadata, the channel-directory event. */
 const KIND_GROUP_METADATA = 39000;
@@ -815,7 +816,7 @@ export class NostrBatcher {
   }
 
   group(urls: string[]) {
-    return this.wrapCaching(this.pool.group(urls));
+    return this.wrapCaching(this.pool.group(urls), undefined, urls);
   }
 
   /**
@@ -845,15 +846,22 @@ export class NostrBatcher {
    * and the same results; caching is fire-and-forget on the side.
    *
    * When `sourceUrl` is given (the single-relay `relay(url)` path), directory
-   * events are additionally tagged with that relay's provenance.
+   * events are additionally tagged with that relay's provenance. When
+   * `groupUrls` is given (the `group(urls)` path), it's the actual relay set the
+   * group fans out to — used only for the query log so `group` REQs report their
+   * real relay count instead of "0 relays".
    */
-  private wrapCaching<R extends NRelayLike>(relay: R, sourceUrl?: string): R {
+  private wrapCaching<R extends NRelayLike>(relay: R, sourceUrl?: string, groupUrls?: string[]): R {
     const cacheEvents = this.cacheEvents.bind(this);
     const recordProvenance = this.recordDirectoryProvenance.bind(this);
+    // How this handle is scoped, for the query log ("relay(url)" vs "group(N)").
+    const via = sourceUrl ? `relay(${sourceUrl})` : `group(${groupUrls?.length ?? 0})`;
+    const scopeRelays = sourceUrl ? [sourceUrl] : (groupUrls ?? []);
     return new Proxy(relay, {
       get(target, prop, receiver) {
         if (prop === 'query') {
           return async (filters: NostrFilter[], opts?: { signal?: AbortSignal }) => {
+            logNostrReq(scopeRelays, filters, via);
             const events = await target.query(filters, opts);
             cacheEvents(events);
             recordProvenance(events, sourceUrl);
@@ -862,6 +870,7 @@ export class NostrBatcher {
         }
         if (prop === 'req') {
           return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) => {
+            logNostrReq(scopeRelays, filters, via);
             const source = target.req(filters, opts);
             return (async function* () {
               for await (const msg of source) {
