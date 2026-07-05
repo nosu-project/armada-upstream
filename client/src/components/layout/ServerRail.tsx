@@ -14,6 +14,9 @@ import { useConcordList, useConcordCommunity } from "@/concord-v1/hooks/useConco
 import { useConcordMetadata } from "@/concord-v1/hooks/useConcordMetadata";
 import { useCommunityImageDescriptors } from "@/concord-v1/hooks/useCommunityImageDescriptors";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
+import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
+import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
@@ -314,6 +317,61 @@ function ConcordButton({
 }
 
 /**
+ * A rail button for an end-to-end-encrypted Concord V2 community (CORD-02).
+ * Same shield accent as V1 (same trust model); navigates to `/c2/…` and pulls
+ * its authoritative icon from the folded Control Plane metadata.
+ */
+function Concord2Button({
+  communityId,
+  name,
+  onNavigate,
+}: {
+  communityId: string;
+  name: string;
+  onNavigate?: () => void;
+}) {
+  const community = useCommunity2(communityId);
+  const { data: folded } = useControlFold2(community);
+  const displayName = folded?.metadata?.name || name;
+  const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
+  const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <NavLink
+          to={`/c2/${encodeURIComponent(communityId)}`}
+          aria-label={displayName}
+          onClick={onNavigate}
+          className="group relative flex items-center justify-center shrink-0"
+        >
+          {({ isActive }) => (
+            <span className="relative block size-12">
+              <span
+                className={cn(
+                  "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
+                  "bg-muted text-success opacity-60 saturate-75",
+                  "group-hover:opacity-100 group-hover:saturate-100",
+                  isActive && "opacity-100 saturate-100 is-active",
+                )}
+              >
+                {iconUrl ? (
+                  <img src={iconUrl} alt="" className="size-full object-cover" />
+                ) : (
+                  <span className="text-sm font-semibold">{initials}</span>
+                )}
+              </span>
+            </span>
+          )}
+        </NavLink>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="font-medium">
+        {displayName}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
  * Far-left vertical rail listing every server (relay): pinned platform
  * relays first, then user-added ones, then add-server and settings actions.
  */
@@ -338,6 +396,7 @@ export function ServerRail({
   const hasUnreadDMs = useHasUnreadDMs();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const { data: concord } = useConcordList();
+  const concord2 = useLiveCommunities2();
   const [addOpen, setAddOpen] = useState(false);
 
   // Build the full rail list (pinned platform relays + user-added ones),
@@ -661,13 +720,22 @@ export function ServerRail({
       <div className="w-7 h-px bg-chrome-divider shrink-0" />
 
       {/* End-to-end-encrypted Concord communities (distinct trust model from the
-          relay-hosted servers above; rendered from the encrypted membership list). */}
-      {user && concord && concord.list.entries.length > 0 && (
+          relay-hosted servers above; rendered from the encrypted membership
+          lists — V1 alongside V2, each from its own list). */}
+      {user && ((concord && concord.list.entries.length > 0) || concord2.length > 0) && (
         <>
-          {concord.list.entries.map((entry) => (
+          {concord?.list.entries.map((entry) => (
             <ConcordButton
               key={entry.communityId}
               communityId={entry.communityId}
+              name={entry.current.name}
+              onNavigate={onNavigate}
+            />
+          ))}
+          {concord2.map((entry) => (
+            <Concord2Button
+              key={entry.community_id}
+              communityId={entry.community_id}
               name={entry.current.name}
               onNavigate={onNavigate}
             />

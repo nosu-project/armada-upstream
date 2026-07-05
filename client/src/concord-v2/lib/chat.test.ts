@@ -1,0 +1,135 @@
+import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
+import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
+import { describe, expect, it } from "vitest";
+
+import { foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
+import { bytesToHex, channelGroupKey } from "@/concord-v2/lib/derive";
+import { KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
+import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import type { ChannelV2 } from "@/concord-v2/lib/types";
+
+const root = new Uint8Array(32).fill(3);
+const channelId = new Uint8Array(32).fill(5);
+const channelIdHex = bytesToHex(channelId);
+
+function makeChannel(): ChannelV2 {
+  const group = channelGroupKey(root, channelId, 0);
+  const stream = { epoch: 0n, group };
+  return { id: channelId, idHex: channelIdHex, name: "general", isPrivate: false, streams: [stream], current: stream };
+}
+
+function signer(sk = generateSecretKey()) {
+  return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
+}
+
+async function wrapChat(rumor: Rumor, channel: ChannelV2, s: ReturnType<typeof signer>): Promise<NostrEvent> {
+  return wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, s), channel.current.group);
+}
+
+function chatRumor(s: ReturnType<typeof signer>, kind: number, content: string, ms: number, extra: string[][] = []): Rumor {
+  return buildRumor({
+    kind,
+    content,
+    tags: [...channelBindingTags(channelIdHex, 0n), ...extra],
+    pubkey: s.pubkey,
+    ms,
+  });
+}
+
+describe("chat plane (CORD-03)", () => {
+  it("decodes, folds, and orders by ms", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    const m1 = chatRumor(alice, KIND_MESSAGE, "first", 1000);
+    const m2 = chatRumor(bob, KIND_MESSAGE, "second", 1500, [["q", m1.id, "", alice.pubkey]]);
+    const wraps = [await wrapChat(m2, channel, bob), await wrapChat(m1, channel, alice)];
+
+    const opened = await openChatBatch(wraps, channel);
+    const folded = foldTimeline(opened);
+    expect(folded.messages.map((m) => m.content)).toEqual(["first", "second"]);
+    expect(replyTargetOf(folded.messages[1])).toBe(m1.id);
+  });
+
+  it("applies author-only edits (latest wins) and self-deletes", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const mallory = signer();
+
+    const msg = chatRumor(alice, KIND_MESSAGE, "original", 1000);
+    const edit = chatRumor(alice, KIND_EDIT, "fixed", 2000, [["e", msg.id]]);
+    const forgedEdit = chatRumor(mallory, KIND_EDIT, "hacked", 3000, [["e", msg.id]]);
+    const other = chatRumor(alice, KIND_MESSAGE, "gone soon", 1200);
+    const del = chatRumor(alice, KIND_DELETE, "", 4000, [["e", other.id], ["k", "9"]]);
+
+    const wraps = await Promise.all([
+      wrapChat(msg, channel, alice),
+      wrapChat(edit, channel, alice),
+      wrapChat(forgedEdit, channel, mallory),
+      wrapChat(other, channel, alice),
+      wrapChat(del, channel, alice),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+    expect(folded.messages.length).toBe(1);
+    expect(folded.messages[0].content).toBe("fixed"); // Mallory's edit ignored
+  });
+
+  it("honors moderation: banned authors dropped, authorized hides applied", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const banned = signer();
+    const mod = signer();
+
+    const spam = chatRumor(banned, KIND_MESSAGE, "spam", 1000);
+    const msg = chatRumor(alice, KIND_MESSAGE, "rule-breaking", 1100);
+    const hide = chatRumor(mod, KIND_DELETE, "", 2000, [["e", msg.id]]);
+
+    const wraps = await Promise.all([
+      wrapChat(spam, channel, banned),
+      wrapChat(msg, channel, alice),
+      wrapChat(hide, channel, mod),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel), {
+      banned: new Set([banned.pubkey]),
+      canHide: (deleter) => deleter === mod.pubkey,
+    });
+    expect(folded.messages.length).toBe(0);
+  });
+
+  it("tallies reactions per target with custom-emoji URLs", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    const msg = chatRumor(alice, KIND_MESSAGE, "react to me", 1000);
+    const r1 = chatRumor(bob, KIND_REACTION, "🔥", 1100, [["e", msg.id], ["p", alice.pubkey], ["k", "9"]]);
+    const r2 = chatRumor(alice, KIND_REACTION, ":pepe:", 1200, [["e", msg.id], ["emoji", "pepe", "https://x/pepe.png"]]);
+
+    const wraps = await Promise.all([
+      wrapChat(msg, channel, alice),
+      wrapChat(r1, channel, bob),
+      wrapChat(r2, channel, alice),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+    const tally = folded.reactions.get(msg.id)!;
+    expect(tally.get("🔥")?.reactors.has(bob.pubkey)).toBe(true);
+    expect(tally.get(":pepe:")?.url).toBe("https://x/pepe.png");
+  });
+
+  it("silently skips wraps from epochs we don't hold", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const otherEpoch = channelGroupKey(root, channelId, 7);
+    const rumor = buildRumor({
+      kind: KIND_MESSAGE,
+      content: "future epoch",
+      tags: channelBindingTags(channelIdHex, 7n),
+      pubkey: alice.pubkey,
+      ms: 1000,
+    });
+    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, otherEpoch, alice), otherEpoch);
+    const opened = await openChatBatch([wrap], channel);
+    expect(opened.length).toBe(0);
+  });
+});

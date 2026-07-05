@@ -21,9 +21,11 @@ import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 // monolithic bundle was a visible slice of every cold start.
 const AboutPage = lazy(() => import("@/pages/AboutPage").then((m) => ({ default: m.AboutPage })));
 const ConcordPage = lazy(() => import("@/concord-v1/pages/ConcordPage").then((m) => ({ default: m.ConcordPage })));
+const ConcordV2Page = lazy(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page })));
 const DMsPage = lazy(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage })));
 const GroupPage = lazy(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage })));
 const InvitePage = lazy(() => import("@/concord-v1/pages/InvitePage"));
+const InviteV2Page = lazy(() => import("@/concord-v2/pages/InviteV2Page"));
 const MeshPage = lazy(() => import("@/pages/MeshPage"));
 const NotFound = lazy(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound })));
 const ServerPage = lazy(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage })));
@@ -135,6 +137,7 @@ function useWarmRouteChunks() {
       for (const load of [
         () => import("@/pages/GroupPage"),
         () => import("@/concord-v1/pages/ConcordPage"),
+        () => import("@/concord-v2/pages/ConcordV2Page"),
         () => import("@/pages/DMsPage"),
         () => import("@/pages/ServerPage"),
       ]) {
@@ -170,7 +173,12 @@ export function AppRouter() {
             <Route path="/s/:server/:groupId" element={<GroupPage />} />
             <Route path="/c/:communityId" element={<ConcordPage />} />
             <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
+            <Route path="/c2/:communityId" element={<ConcordV2Page />} />
+            <Route path="/c2/:communityId/:channelId" element={<ConcordV2Page />} />
+            {/* V1 invite links carry the token at /invite#…; V2 links carry an
+                naddr path segment at /invite/<naddr>#… (CORD-05). */}
             <Route path="/invite" element={<InvitePage />} />
+            <Route path="/invite/:naddr" element={<InviteV2Page />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/share" element={<SharePage />} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />

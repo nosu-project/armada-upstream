@@ -20,11 +20,13 @@ import {
 } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useConcordActions } from "@/concord-v1/hooks/useConcordActions";
+import { useCommunityActions2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { readClipboardText } from "@/lib/clipboard";
-import { classifyAddInput, type ConcordCommunity } from "@/concord-v1/lib/concord";
+import { classifyAddInput, type ConcordInvite } from "@/concord-v1/lib/concord";
+import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
 import { PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
@@ -36,16 +38,12 @@ interface AddDialogProps {
 /**
  * The "Add" wizard, restructured around Concord.
  *
- * The headline act is **starting an end-to-end-encrypted chat** — name it, hit
- * a button, you own a serverless community. Everything else (joining an existing
- * community, or connecting to a trust-the-host NIP-29 relay) folds into a single
- * smaller "escape hatch": one smart-paste field that figures out what you gave
- * it — a Concord invite link, a bare domain-agnostic invite token, or a relay
- * URL — and does the right thing.
- *
- * Styled to match the rest of the deck: a cut-corner chrome card (same shape as
- * the member roster / composer), the animated crest up top, the same easy-brain
- * polish as the login and welcome screens.
+ * The headline act is **starting an end-to-end-encrypted community** — every
+ * NEW community is Concord V2 (CORD-01..06); V1 creation is retired, though
+ * existing V1 communities keep working and V1 invites still join. Everything
+ * else (joining an existing community — V2 or V1 — or connecting to a
+ * trust-the-host NIP-29 relay) folds into a single smaller "escape hatch": one
+ * smart-paste field that figures out what you gave it and does the right thing.
  */
 export function AddDialog({ open, onOpenChange }: AddDialogProps) {
   const close = () => onOpenChange(false);
@@ -62,24 +60,21 @@ export function AddDialog({ open, onOpenChange }: AddDialogProps) {
 
 function AddBody({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate();
-  const { createCommunity, isWorking: isCreating } = useConcordActions();
+  const { create, isCreating } = useCommunityActions2();
 
   const [name, setName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const finishConcord = (community: ConcordCommunity) => {
-    onDone();
-    toast({ title: "Encrypted chat ready", description: community.name });
-    navigate(`/c/${encodeURIComponent(community.communityId)}`);
-  };
-
   const handleCreate = async () => {
     setCreateError(null);
     try {
-      const community = await createCommunity({ name: name.trim() });
-      finishConcord(community);
+      // New communities are always Concord V2.
+      const { communityId, name: created } = await create({ name: name.trim() });
+      onDone();
+      toast({ title: "Encrypted community ready", description: created });
+      navigate(`/c2/${encodeURIComponent(communityId)}`);
     } catch (e) {
-      setCreateError(e instanceof Error ? e.message : "Couldn't create the chat.");
+      setCreateError(e instanceof Error ? e.message : "Couldn't create the community.");
     }
   };
 
@@ -89,7 +84,7 @@ function AddBody({ onDone }: { onDone: () => void }) {
 
       <div className="space-y-1.5">
         <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-          start an encrypted chat
+          start an encrypted community
         </h2>
         <p className="text-sm text-muted-foreground">
           Serverless and end-to-end-encrypted. No host can read it; your key is
@@ -107,8 +102,8 @@ function AddBody({ onDone }: { onDone: () => void }) {
         <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Name your chat"
-          aria-label="Chat name"
+          placeholder="Name your community"
+          aria-label="Community name"
           autoComplete="off"
           autoFocus
           className="h-12 text-base"
@@ -129,42 +124,51 @@ function AddBody({ onDone }: { onDone: () => void }) {
           {isCreating ? (
             <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</>
           ) : (
-            <><ShieldCheck className="size-4 mr-2" /> Create encrypted chat</>
+            <><ShieldCheck className="size-4 mr-2" /> Create encrypted community</>
           )}
         </Button>
       </form>
 
-      <EscapeHatch onDone={onDone} onConcordJoined={finishConcord} />
+      <EscapeHatch onDone={onDone} />
     </div>
   );
 }
 
 /**
- * The "I already have something" path, kept deliberately small and secondary.
- * One field, one classifier: a Concord invite link, a bare (domain-agnostic)
- * invite token, or a NIP-29 relay URL all go here.
- *
- * Look before you leap: as soon as the input classifies, we *resolve* it —
- * fetch the Concord invite's sealed bundle, or the relay's NIP-11 document —
- * and show where you're being invited to. The Join / Add button only appears
- * once that resolution succeeds, so you commit to something you can see.
+ * The "I already have something" path. One field, one classifier — checked in
+ * order: a Concord V2 invite (`…/invite/<naddr>#…` or bare `naddr#fragment`),
+ * a Concord V1 invite (link or bare token), or a NIP-29 relay URL.
  */
+type Classified =
+  | { kind: "concord2"; invite: ParsedInviteLink; identity: string }
+  | { kind: "concord1"; invite: ConcordInvite; identity: string }
+  | { kind: "nip29"; relay: string; identity: string }
+  | { kind: "unknown"; identity: "" };
+
+function classify(input: string): Classified {
+  const trimmed = input.trim();
+  if (!trimmed) return { kind: "unknown", identity: "" };
+  const v2 = parseInviteLink(trimmed);
+  if (v2) return { kind: "concord2", invite: v2, identity: `c2:${v2.naddr}` };
+  const v1 = classifyAddInput(trimmed);
+  if (v1.kind === "concord") return { kind: "concord1", invite: v1.invite, identity: `c1:${v1.invite.token}` };
+  if (v1.kind === "nip29") return { kind: "nip29", relay: v1.relay, identity: `n:${v1.relay}` };
+  return { kind: "unknown", identity: "" };
+}
+
 /** What a resolved (validated + loaded) target looks like, for the preview card. */
 type Target =
-  | { kind: "concord"; name: string; about?: string; channelCount: number; relays: string[] }
+  | { kind: "concord2"; name: string; channelCount: number; relays: string[] }
+  | { kind: "concord1"; name: string; about?: string; channelCount: number; relays: string[] }
   | { kind: "nip29"; relay: string; name?: string; description?: string };
 
-function EscapeHatch({
-  onDone,
-  onConcordJoined,
-}: {
-  onDone: () => void;
-  onConcordJoined: (community: ConcordCommunity) => void;
-}) {
+function EscapeHatch({ onDone }: { onDone: () => void }) {
   const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
+  const navigate = useNavigate();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
-  const { previewInvite, joinViaInvite, isWorking: isJoining } = useConcordActions();
+  const v1 = useConcordActions();
+  const v2 = useCommunityActions2();
 
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
@@ -173,19 +177,9 @@ function EscapeHatch({
   const [target, setTarget] = useState<Target | null>(null);
   const [committing, setCommitting] = useState(false);
 
-  const classified = useMemo(() => classifyAddInput(value), [value]);
+  const classified = useMemo(() => classify(value), [value]);
+  const identity = classified.identity;
 
-  // A stable identity for the classified input, so the resolve effect only
-  // re-runs when the *target* changes — not on every keystroke that resolves
-  // to the same relay/invite token.
-  const identity =
-    classified.kind === "concord"
-      ? `c:${classified.invite.token}`
-      : classified.kind === "nip29"
-        ? `n:${classified.relay}`
-        : "";
-
-  /** Read the clipboard into the field (web + native), surfacing failures. */
   const handlePaste = async () => {
     try {
       const text = (await readClipboardText()).trim();
@@ -203,8 +197,6 @@ function EscapeHatch({
   };
 
   // Resolve (validate + load) the target whenever the classified input settles.
-  // Debounced so paste/typing doesn't fire a fetch per character, and guarded so
-  // a stale resolution can't overwrite a newer one.
   useEffect(() => {
     setTarget(null);
     setError(null);
@@ -217,11 +209,15 @@ function EscapeHatch({
     setResolving(true);
     const timer = setTimeout(async () => {
       try {
-        if (classified.kind === "concord") {
-          const { community, channelCount } = await previewInvite({ invite: classified.invite });
+        if (classified.kind === "concord2") {
+          const p = await v2.preview({ invite: classified.invite });
+          if (cancelled) return;
+          setTarget({ kind: "concord2", name: p.name, channelCount: p.channelCount, relays: p.relays });
+        } else if (classified.kind === "concord1") {
+          const { community, channelCount } = await v1.previewInvite({ invite: classified.invite });
           if (cancelled) return;
           setTarget({
-            kind: "concord",
+            kind: "concord1",
             name: community.name,
             about: community.about,
             channelCount,
@@ -246,9 +242,9 @@ function EscapeHatch({
         setError(
           e instanceof Error
             ? e.message
-            : classified.kind === "concord"
-              ? "Couldn't load that invite."
-              : "Could not reach that relay's NIP-11 endpoint. Check the URL and your network.",
+            : classified.kind === "nip29"
+              ? "Could not reach that relay's NIP-11 endpoint. Check the URL and your network."
+              : "Couldn't load that invite.",
         );
       } finally {
         if (!cancelled) setResolving(false);
@@ -260,7 +256,7 @@ function EscapeHatch({
       clearTimeout(timer);
     };
     // `classified` is derived from `value`; `identity` captures the parts that
-    // matter, so we key the effect on it (plus the lists that gate nip29 dupes).
+    // matter (plus the lists that gate nip29 dupes).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity, config.addedRelays]);
 
@@ -269,10 +265,20 @@ function EscapeHatch({
     setError(null);
     setCommitting(true);
     try {
-      if (target.kind === "concord") {
-        if (classified.kind !== "concord") return;
-        const community = await joinViaInvite({ invite: classified.invite });
-        onConcordJoined(community);
+      if (target.kind === "concord2") {
+        if (classified.kind !== "concord2") return;
+        const { communityId, name } = await v2.join({ invite: classified.invite });
+        onDone();
+        toast({ title: "Encrypted community joined", description: name });
+        navigate(`/c2/${encodeURIComponent(communityId)}`);
+        return;
+      }
+      if (target.kind === "concord1") {
+        if (classified.kind !== "concord1") return;
+        const community = await v1.joinViaInvite({ invite: classified.invite });
+        onDone();
+        toast({ title: "Encrypted chat joined", description: community.name });
+        navigate(`/c/${encodeURIComponent(community.communityId)}`);
         return;
       }
       // nip29: already validated in the preview; persist + sync.
@@ -293,7 +299,7 @@ function EscapeHatch({
     }
   };
 
-  const busy = isJoining || committing;
+  const busy = v1.isWorking || v2.isJoining || committing;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="w-full">
@@ -352,7 +358,7 @@ function EscapeHatch({
           {resolving && (
             <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
-              {classified.kind === "concord" ? "Loading invite..." : "Reaching server..."}
+              {classified.kind === "nip29" ? "Reaching server..." : "Loading invite..."}
             </div>
           )}
 
@@ -388,21 +394,21 @@ function EscapeHatch({
 
 /** The "here's where you're going" card shown once a target resolves. */
 function TargetPreview({ target }: { target: Target }) {
-  const Icon = target.kind === "concord" ? ShieldCheck : Server;
-  const accent = target.kind === "concord";
-  const title = target.kind === "concord" ? target.name : target.name || target.relay;
+  const isConcord = target.kind !== "nip29";
+  const Icon = isConcord ? ShieldCheck : Server;
+  const title = target.kind === "nip29" ? target.name || target.relay : target.name;
   const subtitle =
-    target.kind === "concord"
-      ? target.about ||
-        `Encrypted chat · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`
-      : target.description || target.relay;
+    target.kind === "nip29"
+      ? target.description || target.relay
+      : (target.kind === "concord1" && target.about) ||
+        `Encrypted community · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`;
 
   return (
     <div className="mt-3 flex items-start gap-3 rounded-lg bg-secondary/50 p-3 text-left">
-      <Icon className={cn("mt-0.5 size-5 shrink-0", accent ? "text-success" : "text-muted-foreground")} />
+      <Icon className={cn("mt-0.5 size-5 shrink-0", isConcord ? "text-success" : "text-muted-foreground")} />
       <div className="min-w-0">
         <div className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">
-          {target.kind === "concord" ? "You're joining" : "You're adding the server"}
+          {isConcord ? "You're joining" : "You're adding the server"}
         </div>
         <div className="truncate font-medium">{title || "Untitled"}</div>
         <div className="truncate text-xs text-muted-foreground">{subtitle}</div>
