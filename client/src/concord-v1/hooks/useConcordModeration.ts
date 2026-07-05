@@ -3,7 +3,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { useConcordControlEvents, useConcordRoster } from "@/concord-v1/hooks/useConcordRoster";
+import { useConcordRoster } from "@/concord-v1/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDeferredFold } from "@/concord-v1/hooks/useDeferredFold";
 import { useRotatorSecretKey } from "@/concord-v1/hooks/useRotatorSecretKey";
@@ -25,9 +25,10 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Read the community's folded banlist (vsk=4). Folds the SHARED control-plane fetch. */
 export function useConcordBanlist(community: Community | undefined) {
-  const control = useConcordControlEvents(community);
+  // Source events through the roster's single control instance (not a second
+  // useConcordControlEvents) so the per-relay 3308 fetch runs once, not twice.
   const roster = useConcordRoster(community);
-  const events = control.data;
+  const events = roster.events;
   const folded = roster.data;
 
   // Deferred fold (after paint) + persisted snapshot, so the banlist's
@@ -41,7 +42,7 @@ export function useConcordBanlist(community: Community | undefined) {
     [community, events, folded],
   );
 
-  return { ...control, data } as typeof control & {
+  return { ...roster, data } as typeof roster & {
     data: { banned: Set<string>; head?: { version: bigint; hash: Uint8Array } } | undefined;
   };
 }

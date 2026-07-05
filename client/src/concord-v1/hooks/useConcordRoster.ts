@@ -55,8 +55,18 @@ function controlFilter(community: Community, limit = 500): NostrFilter {
  * immediately — roster/metadata/icon/banner/banlist paint from cache without
  * waiting on the network (which still runs and reconciles). Mirrors the
  * channel-message seed in `useConcordChannelMessages`.
+ *
+ * `active` gates the NETWORK fan-out (and the 30s poll), not the IndexedDB seed
+ * or the persisted fold snapshot. The server rail renders one button per
+ * community on every page and only needs the icon/name — served from the
+ * persisted `metadata:` snapshot with no network. So the rail passes
+ * `active = false`, and the open community's page passes `active = true`:
+ * navigating INTO a community is what syncs its control plane, instead of
+ * fanning out a per-relay 3308 query for every community on pageload. All
+ * consumers share the `["concord","control",cid]` key, so the rail button for
+ * the open community reuses the page's live query.
  */
-export function useConcordControlEvents(community: Community | undefined) {
+export function useConcordControlEvents(community: Community | undefined, active = true) {
   const { nostr } = useNostr();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
@@ -85,9 +95,9 @@ export function useConcordControlEvents(community: Community | undefined) {
 
   return useQuery<NostrEvent[]>({
     queryKey,
-    enabled: Boolean(community),
+    enabled: Boolean(community) && active,
     staleTime: 15_000,
-    refetchInterval: 30_000,
+    refetchInterval: active ? 30_000 : false,
     queryFn: async ({ signal }) => {
       const results = await Promise.all(
         community!.relays.map((url) =>
@@ -115,8 +125,8 @@ export function useConcordControlEvents(community: Community | undefined) {
  * is the data behind the member list, the admin crown, and every moderation
  * permission check. Folded client-side — no host asserts it.
  */
-export function useConcordRoster(community: Community | undefined) {
-  const control = useConcordControlEvents(community);
+export function useConcordRoster(community: Community | undefined, active = true) {
+  const control = useConcordControlEvents(community, active);
   const events = control.data;
 
   // Fold OFF the render path (deferred to after paint) so a large control plane
@@ -131,7 +141,10 @@ export function useConcordRoster(community: Community | undefined) {
     [community, events],
   );
 
-  return { ...control, data } as typeof control & { data: FoldedRoster | undefined };
+  return { ...control, events, data } as typeof control & {
+    events: NostrEvent[] | undefined;
+    data: FoldedRoster | undefined;
+  };
 }
 
 /**
@@ -153,15 +166,15 @@ export function concordMembers(roster: FoldedRoster): Array<{ pubkey: string; is
  * epoch-free dissolved pseudonym and verifies an owner-signed vsk=10 tombstone.
  * Polled so a dissolution propagates to open clients.
  */
-export function useConcordDissolved(community: Community | undefined) {
+export function useConcordDissolved(community: Community | undefined, active = true) {
   const { nostr } = useNostr();
-  const roster = useConcordRoster(community);
+  const roster = useConcordRoster(community, active);
 
   return useQuery<boolean>({
     queryKey: ["concord", "dissolved", community ? bytesToHex(community.id) : null],
-    enabled: Boolean(community) && Boolean(roster.data?.ownerHex),
+    enabled: Boolean(community) && active && Boolean(roster.data?.ownerHex),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: active ? 60_000 : false,
     queryFn: async ({ signal }) => {
       const z = dissolvedAddress(community!.id);
       const results = await Promise.all(

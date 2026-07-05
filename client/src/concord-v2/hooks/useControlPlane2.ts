@@ -40,8 +40,18 @@ function controlFilter(community: CommunityV2, limit = 500): NostrFilter {
  * stream address(es). Roster, metadata, channels, banlist, and registries are
  * all folds of this SAME event set. Cache-first: wraps mirrored into IndexedDB
  * by the batcher seed the query before the network resolves.
+ *
+ * `active` gates the NETWORK fetch (and the 30s poll), not the IndexedDB seed or
+ * the persisted fold snapshot. The server rail renders one button per community
+ * on every page and only needs the community's icon/name — which it reads from
+ * the persisted `concord2-fold:` snapshot without any network. So rail buttons
+ * pass `active = false`: no per-relay control-plane fan-out on pageload for the
+ * N communities you AREN'T looking at. The open community's page passes
+ * `active = true`, so navigating INTO a community is what syncs its control
+ * plane. All consumers share one query key, so the rail button for the open
+ * community reuses the page's live query.
  */
-export function useControlEvents2(community: CommunityV2 | undefined) {
+export function useControlEvents2(community: CommunityV2 | undefined, active = true) {
   const { nostr } = useNostr();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
@@ -50,6 +60,8 @@ export function useControlEvents2(community: CommunityV2 | undefined) {
   const epochSig = community?.heldRoots.map((r) => r.epoch.toString()).join(",") ?? "";
   const queryKey = ["concord2", "control", cidHex, epochSig] as const;
 
+  // Seed from IndexedDB regardless of `active` — it's a local read that lets the
+  // fold (and thus the rail icon) paint from cache without hitting the network.
   useEffect(() => {
     if (!community) return;
     let cancelled = false;
@@ -68,9 +80,9 @@ export function useControlEvents2(community: CommunityV2 | undefined) {
 
   return useQuery<NostrEvent[]>({
     queryKey,
-    enabled: Boolean(community),
+    enabled: Boolean(community) && active,
     staleTime: 15_000,
-    refetchInterval: 30_000,
+    refetchInterval: active ? 30_000 : false,
     queryFn: async ({ signal }) => {
       const results = await Promise.all(
         community!.relays.map((url) =>
@@ -92,9 +104,13 @@ export function useControlEvents2(community: CommunityV2 | undefined) {
  * The Control Plane replayed into current state (roster, metadata, channels,
  * banlist, registries). Folded OFF the render path with a persisted snapshot,
  * so a large control plane never gates the first paint.
+ *
+ * `active` is forwarded to the network fetch (see {@link useControlEvents2});
+ * when false the fold still resolves from the persisted snapshot, so the rail
+ * icon/name paints without any control-plane REQ.
  */
-export function useControlFold2(community: CommunityV2 | undefined) {
-  const control = useControlEvents2(community);
+export function useControlFold2(community: CommunityV2 | undefined, active = true) {
+  const control = useControlEvents2(community, active);
   const events = control.data;
 
   const data = useDeferredFold<FoldedControl>(
@@ -111,8 +127,8 @@ export function useControlFold2(community: CommunityV2 | undefined) {
 }
 
 /** The channels the member can read, assembled from the fold + held keys. */
-export function useChannels2(community: CommunityV2 | undefined): ChannelV2[] {
-  const { data: folded } = useControlFold2(community);
+export function useChannels2(community: CommunityV2 | undefined, active = true): ChannelV2[] {
+  const { data: folded } = useControlFold2(community, active);
   return useMemo(() => (community ? channelsView(community, folded) : []), [community, folded]);
 }
 
@@ -120,15 +136,18 @@ export function useChannels2(community: CommunityV2 | undefined): ChannelV2[] {
  * Whether the community has been dissolved by its owner (terminal). Reads the
  * community-id-derived dissolved address — no key, no epoch — so every member
  * past or present resolves the same grave.
+ *
+ * `active` gates the network poll: the rail doesn't need each community's
+ * dissolution status up-front, so it's only checked once you open the community.
  */
-export function useDissolved2(community: CommunityV2 | undefined) {
+export function useDissolved2(community: CommunityV2 | undefined, active = true) {
   const { nostr } = useNostr();
 
   return useQuery<boolean>({
     queryKey: ["concord2", "dissolved", community?.idHex ?? null],
-    enabled: Boolean(community),
+    enabled: Boolean(community) && active,
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: active ? 60_000 : false,
     queryFn: async ({ signal }) => {
       const address = dissolvedGroupKey(community!.id).pk;
       const results = await Promise.all(

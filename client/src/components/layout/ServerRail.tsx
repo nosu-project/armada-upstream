@@ -274,7 +274,11 @@ function ConcordButton({
   // membership bundle, overlay the folded metadata (the owner-controlled icon),
   // then decrypt the encrypted Blossom blob for display. Falls back to initials.
   const community = useConcordCommunity(communityId);
-  const { data: folded } = useConcordMetadata(community);
+  // Rail buttons only need the icon/name, served by the fold's persisted
+  // snapshot. Pass active=false so pageload doesn't fan out a per-relay 3308
+  // control-plane query for every community — the community's page (active=true)
+  // syncs it on navigation, sharing this query key.
+  const { data: folded } = useConcordMetadata(community, false);
   // Resolve the icon descriptor with a synchronous, disk-backed fallback so it's
   // present on the first frame after reload (the folded metadata that normally
   // carries it lands asynchronously, which is what made the avatar flicker).
@@ -331,7 +335,11 @@ function Concord2Button({
   onNavigate?: () => void;
 }) {
   const community = useCommunity2(communityId);
-  const { data: folded } = useControlFold2(community);
+  // Rail buttons only need the icon/name, which the fold serves from its
+  // persisted snapshot. Pass active=false so we DON'T fan out a control-plane
+  // REQ per relay for every community on pageload — the community's page
+  // (active=true) syncs it on navigation, sharing this query key.
+  const { data: folded } = useControlFold2(community, false);
   const displayName = folded?.metadata?.name || name;
   const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
   const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
