@@ -82,21 +82,8 @@ function TypingIndicator2({ pubkeys }: { pubkeys: string[] }) {
  *  layout). */
 function TitleIcon2({ icon }: { icon: ImagePointer | undefined }) {
   const url = useDecryptedImage2(icon);
-  const [open, setOpen] = useState(false);
   if (!url) return null;
-  return (
-    <>
-      <button
-        type="button"
-        className="shrink-0 cursor-zoom-in rounded"
-        aria-label="View icon"
-        onClick={() => setOpen(true)}
-      >
-        <img src={url} alt="" className="size-5 rounded object-cover" />
-      </button>
-      {open && <ImageLightbox2 src={url} onClose={() => setOpen(false)} />}
-    </>
-  );
+  return <img src={url} alt="" className="size-5 rounded object-cover shrink-0" />;
 }
 
 function Banner2({ banner }: { banner: ImagePointer | undefined }) {
@@ -425,15 +412,15 @@ export function ConcordV2Page() {
       title={
         <button
           type="button"
-          className="text-left hover:underline underline-offset-2 decoration-muted-foreground/50 cursor-pointer"
+          className="flex items-center gap-2 min-w-0 text-left hover:underline underline-offset-2 decoration-muted-foreground/50 cursor-pointer"
           onClick={() => community && setInfoOpen(true)}
           disabled={!community}
           aria-label="Community info"
         >
-          {community?.name ?? "…"}
+          <TitleIcon2 icon={folded?.metadata?.icon} />
+          <span className="truncate">{community?.name ?? "…"}</span>
         </button>
       }
-      titleIcon={<TitleIcon2 icon={folded?.metadata?.icon} />}
       banner={<Banner2 banner={folded?.metadata?.banner} />}
       addChannelLabel={user && community && canManageChannels ? "Add channel" : undefined}
       onAddChannel={user && community && canManageChannels ? () => setCreatingChannel((v) => !v) : undefined}
