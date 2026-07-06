@@ -1,6 +1,6 @@
 import { CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useParams, useSearchParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { AppStageSlot } from "@/components/chat/AppStage";
@@ -27,10 +27,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
+import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
+import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useGroup } from "@/hooks/useGroup";
 import { useGroupMembership, useJoinGroup, useLeaveGroup } from "@/hooks/useGroupMembership";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
@@ -39,8 +41,9 @@ import { useRelayLivekitSupport } from "@/hooks/useLivekit";
 import { useCalendarEvents } from "@/hooks/useCalendarEvents";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
+import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
-import { PLATFORM_RELAYS, routeParamToRelay } from "@/lib/platform";
+import { PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { relayRejectionMessage } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
 
@@ -107,6 +110,7 @@ export function GroupPage() {
 
   const { user } = useCurrentUser();
   const { updateConfig } = useAppContext();
+  const navigate = useNavigate();
   const { data: details, isLoading } = useGroup(relayUrl, groupId);
   const { data: membership, isLoading: membershipLoading } = useGroupMembership(relayUrl, groupId);
   const { data: relayHasLivekit } = useRelayLivekitSupport(relayUrl);
@@ -134,6 +138,20 @@ export function GroupPage() {
     () => Boolean(user && details?.admins.some((a) => a.pubkey === user.pubkey)),
     [user, details?.admins],
   );
+
+  // Let `#channel-name` hashtags in chat jump to that channel on this server.
+  const { data: relayGroups } = useRelayGroups(relayUrl);
+  const navChannels = useMemo(
+    () =>
+      relayUrl
+        ? (relayGroups ?? []).map((g) => ({
+            name: g.name,
+            go: () => navigate(`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(g.id)}`),
+          }))
+        : [],
+    [relayGroups, relayUrl, navigate],
+  );
+  const channelNav = useChannelNavValue(navChannels);
 
   const { pinnedIds, unpin } = usePinnedMessages(relayUrl, groupId);
   const hasPins = pinnedIds.length > 0;
@@ -632,6 +650,7 @@ export function GroupPage() {
             animated-width on desktop, full-screen floating card overlay on
             mobile (no drawer/backdrop). */}
         <ChatScopeContext.Provider value={{ kind: "nip29", relayUrl, groupId }}>
+        <ChannelNavContext.Provider value={channelNav}>
         <div className="relative flex flex-1 min-h-0">
           <GroupChat
             relayUrl={relayUrl}
@@ -680,6 +699,7 @@ export function GroupPage() {
             </div>
           </div>
         </div>
+        </ChannelNavContext.Provider>
         </ChatScopeContext.Provider>
         </main>
       </SwipeReveal>

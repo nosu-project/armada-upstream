@@ -5,6 +5,7 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { AppStageSlot } from "@/components/chat/AppStage";
+import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
@@ -32,6 +33,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAuthor } from "@/hooks/useAuthor";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
+import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useConcordActions } from "@/concord-v1/hooks/useConcordActions";
 import { useConcordCommunity } from "@/concord-v1/hooks/useConcordList";
 import { useConcordCommunityActions } from "@/concord-v1/hooks/useConcordCommunityActions";
@@ -333,6 +335,17 @@ export function ConcordPage() {
     );
   }, [channel, lastChannelKey, updateConfig]);
 
+  // Let `#channel-name` hashtags in chat jump to that local channel.
+  const navChannels = useMemo(
+    () =>
+      (community?.channels ?? []).map((c) => ({
+        name: c.name,
+        go: () => setChannelIdHex(bytesToHex(c.id)),
+      })),
+    [community?.channels],
+  );
+  const channelNav = useChannelNavValue(navChannels);
+
   const { roster, setAdmin } = useConcordRosterActions(community);
   const ownerHex = roster?.ownerHex;
   const iAmOwner = Boolean(user && ownerHex && user.pubkey === ownerHex);
@@ -605,7 +618,7 @@ export function ConcordPage() {
   );
 
   return (
-    <>
+    <ChannelNavContext.Provider value={channelNav}>
       <SwipeReveal
         open={channelsOpen}
         onReveal={() => setChannelsOpen(true)}
@@ -888,6 +901,6 @@ export function ConcordPage() {
       <InviteConcordDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} />
       <ConcordSettingsDialog community={community} open={settingsOpen} onOpenChange={setSettingsOpen} />
       <ConcordRolesDialog community={community} open={rolesOpen} onOpenChange={setRolesOpen} />
-    </>
+    </ChannelNavContext.Provider>
   );
 }

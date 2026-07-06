@@ -25,8 +25,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
@@ -242,6 +244,13 @@ export function ConcordV2Page() {
   useEffect(() => {
     if (routeChannelId) setChannelIdHex(routeChannelId);
   }, [routeChannelId]);
+
+  // Let `#channel-name` hashtags in chat jump to that local channel.
+  const navChannels = useMemo(
+    () => channels.map((c) => ({ name: c.name, go: () => setChannelIdHex(c.idHex) })),
+    [channels],
+  );
+  const channelNav = useChannelNavValue(navChannels);
 
   const channel = useMemo(() => {
     if (channels.length === 0) return undefined;
@@ -488,7 +497,7 @@ export function ConcordV2Page() {
   );
 
   return (
-    <>
+    <ChannelNavContext.Provider value={channelNav}>
       <SwipeReveal
         open={channelsOpen}
         onReveal={() => setChannelsOpen(true)}
@@ -754,6 +763,6 @@ export function ConcordV2Page() {
         onOpenChange={setInfoOpen}
       />
       <RolesDialog2 community={community} open={rolesOpen} onOpenChange={setRolesOpen} />
-    </>
+    </ChannelNavContext.Provider>
   );
 }

@@ -11,6 +11,7 @@ import { CodeBlock, InlineCode, renderInlineMarkdown } from "@/components/chat/M
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { XdcAttachment } from "@/components/chat/XdcAttachment";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useChannelNav } from "@/hooks/useChannelNav";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { buildEmojiMap } from "@/lib/customEmoji";
@@ -473,6 +474,9 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
   // emoji tags with the viewer's collection so shortcodes still render when
   // the published event omitted the tag.
   const { emojis: viewerEmojis } = useCustomEmojis();
+  // Resolves `#channel` hashtags to local-channel navigation for the current
+  // server/community (falls back to a Ditto hashtag link when unmatched).
+  const channelNav = useChannelNav();
   const emojiMap = useMemo(() => {
     const map = buildEmojiMap(event.tags);
     for (const e of viewerEmojis) {
@@ -718,7 +722,26 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             {token.raw.slice(0, 16)}…
           </a>
         );
-      case "hashtag":
+      case "hashtag": {
+        // A hashtag that names a channel in the current server/community
+        // navigates to that local channel; otherwise it links out to Ditto's
+        // global hashtag feed.
+        const goToChannel = channelNav?.resolveChannelByName(token.tag) ?? null;
+        if (goToChannel) {
+          return (
+            <button
+              key={key}
+              type="button"
+              className="text-primary font-medium hover:underline"
+              onClick={(e) => {
+                e.stopPropagation();
+                goToChannel();
+              }}
+            >
+              {token.raw}
+            </button>
+          );
+        }
         return (
           <a
             key={key}
@@ -731,6 +754,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             {token.raw}
           </a>
         );
+      }
       case "relay-link":
         return (
           <Link
