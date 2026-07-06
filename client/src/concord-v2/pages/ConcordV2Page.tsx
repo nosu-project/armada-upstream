@@ -3,10 +3,11 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, ReplyContextLine, replyPreviewText } from "@/components/chat/ChatMessage";
+import { ChatMessage } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
+import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
 import { RolesDialog2 } from "@/concord-v2/components/RolesDialog2";
 import { SettingsDialog2 } from "@/concord-v2/components/SettingsDialog2";
@@ -45,27 +46,6 @@ import type { ChannelV2, CommunityV2, ImagePointer } from "@/concord-v2/lib/type
 import { cn, pickDefaultChannel } from "@/lib/utils";
 
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
-
-/** V2 replies quote their parent with a `q` tag (NIP-C7). */
-function getReplyToId2(msg: ChatMsg): string | undefined {
-  return msg.tags.find((t) => t[0] === "q")?.[1];
-}
-
-/** Reply context resolved from already-decoded history (relays can't serve sealed targets). */
-function ReplyContext2({
-  pubkey,
-  preview,
-  onClick,
-}: {
-  pubkey: string | undefined;
-  preview: string | undefined;
-  onClick: (() => void) | undefined;
-}) {
-  const author = useAuthor(pubkey);
-  const displayName = useScopedDisplayName(pubkey, author.data?.metadata);
-  if (!pubkey) return null;
-  return <ReplyContextLine name={displayName} preview={preview} onClick={onClick} />;
-}
 
 function TypingName({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
@@ -113,40 +93,36 @@ function Banner2({ banner }: { banner: ImagePointer | undefined }) {
 interface ChatMessage2Props {
   event: ChatMsg;
   reactions: MessageReactions;
-  replyPubkey: string | undefined;
-  replyPreview: string | undefined;
-  replyId: string | undefined;
+  /** Threaded-reply count for the inline "N replies" badge. */
+  replyCount: number;
   continuation: boolean;
   canWrite: boolean;
   canModerate: boolean;
   sendStatus: SendStatus | undefined;
   active: boolean;
   onToggleActive: (id: string) => void;
-  onReply: ((event: ChatMsg) => void) | undefined;
+  onOpenThread: ((event: ChatMsg) => void) | undefined;
   onDelete: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
-  onJumpToReply: (id: string) => void;
 }
 
-/** Memoized per-message binding (mirrors V1's ConcordChatMessage). */
+/** Memoized per-message binding (mirrors V1's ConcordChatMessage). Replies are
+ *  threaded (nested in the thread panel), so the reply action opens the thread. */
 const ChatMessage2 = memo(function ChatMessage2({
   event,
   reactions,
-  replyPubkey,
-  replyPreview,
-  replyId,
+  replyCount,
   continuation,
   canWrite,
   canModerate,
   sendStatus,
   active,
   onToggleActive,
-  onReply,
+  onOpenThread,
   onDelete,
   onRetry,
   onDiscard,
-  onJumpToReply,
 }: ChatMessage2Props) {
   return (
     <ChatMessage
@@ -158,14 +134,8 @@ const ChatMessage2 = memo(function ChatMessage2({
       continuation={continuation}
       active={active}
       onToggleActive={onToggleActive}
-      replyContext={
-        <ReplyContext2
-          pubkey={replyPubkey}
-          preview={replyPreview}
-          onClick={replyId ? () => onJumpToReply(replyId) : undefined}
-        />
-      }
-      onReply={onReply}
+      replyCount={replyCount}
+      onOpenThread={onOpenThread}
       onDelete={onDelete}
       onRetry={onRetry ? () => onRetry(event) : undefined}
       onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
@@ -275,7 +245,7 @@ export function ConcordV2Page() {
   const canModerateMessages = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_MESSAGES));
   const canWrite = Boolean(user && channel);
 
-  const { transport, reactionsFor, allMessages } = useTransport2(community, channel, canWrite, canModerateMessages);
+  const { transport: baseTransport, reactionsFor, allMessages } = useTransport2(community, channel, canWrite, canModerateMessages);
   const { mutateAsync: send } = useSendMessage2(community, channel);
   const { leave, isLeaving, dissolve, createChannel, isAddingChannel } = useCommunityManagement2(community);
   const { data: dissolved } = useDissolved2(community);
@@ -290,7 +260,9 @@ export function ConcordV2Page() {
   const [membersVisible, setMembersVisible] = useState(true);
   const [membersOpen, setMembersOpen] = useState(false);
   const [channelsOpen, setChannelsOpen] = useState(false);
-  const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
+  const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
+  const [threadAutoFocus, setThreadAutoFocus] = useState(false);
+  const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
   const toggleActive = useCallback((id: string) => setActiveId((cur) => (cur === id ? undefined : id)), []);
 
@@ -318,24 +290,30 @@ export function ConcordV2Page() {
     return [...set];
   }, [coalesced, allMessages, roster, ownerHex, user, folded]);
 
-  const pubkeyById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const m of allMessages) map.set(m.id, m.pubkey);
-    return map;
-  }, [allMessages]);
+  const openThread = useCallback((event: ChatMsg, focusReply = false) => {
+    setThreadAutoFocus(focusReply);
+    setThreadRoot(event);
+  }, []);
 
-  const previewById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const m of allMessages) map.set(m.id, replyPreviewText(m.content));
-    return map;
-  }, [allMessages]);
+  // Keep the thread panel content mounted through its slide-out animation.
+  useEffect(() => {
+    if (threadRoot) {
+      setLastThreadRoot(threadRoot);
+      return;
+    }
+    const t = setTimeout(() => setLastThreadRoot(undefined), 200);
+    return () => clearTimeout(t);
+  }, [threadRoot]);
 
-  const onReplyCb = useMemo(() => (canWrite ? setReplyTo : undefined), [canWrite]);
+  // Inject `openThread` (page-owned panel state) onto the data transport.
+  const transport = useMemo(() => ({ ...baseTransport, openThread }), [baseTransport, openThread]);
+
+  const onOpenThreadCb = useMemo(
+    () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),
+    [canWrite, openThread],
+  );
 
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
-  const jumpToReply = useCallback((id: string) => {
-    timelineRef.current?.scrollToMessage(id);
-  }, []);
 
   const moderation = useModeration2(community, memberPubkeys);
 
@@ -351,17 +329,12 @@ export function ConcordV2Page() {
   if (!communityId) return <Navigate to="/" replace />;
 
   const handleSend = async (content: string, tags: string[][]) => {
-    const parent = replyTo;
-    setReplyTo(undefined);
-    // The composer's content-derived tags (emoji, imeta, mentions) are sealed
-    // verbatim; NIP-29 `h` and NIP-10 `e` reply tags are dropped (the reply is
-    // the rumor's own `q`).
+    // Top-level message. The composer's content-derived tags (emoji, imeta,
+    // mentions) are sealed verbatim; NIP-29 `h` and any `e`/`q` tags are
+    // dropped. Replies are threaded (a nested reply carries its root via the
+    // rumor's own `q`, sent through the transport's `sendThreadReply`).
     const extraTags = tags.filter(([name]) => name !== "h" && name !== "e" && name !== "q");
-    await send({
-      content,
-      replyTo: parent ? { id: parent.id, author: parent.pubkey } : undefined,
-      extraTags,
-    });
+    await send({ content, extraTags });
   };
 
   const handleCreateChannel = async () => {
@@ -593,32 +566,24 @@ export function ConcordV2Page() {
                     No messages yet. Say something — only members can read it.
                   </p>
                 }
-                renderMessage={(msg, continuation) => {
-                  const replyId = getReplyToId2(msg);
-                  const replyPk = replyId ? pubkeyById.get(replyId) ?? msg.tags.find((t) => t[0] === "q")?.[3] : undefined;
-                  const replyPreview = replyId ? previewById.get(replyId) : undefined;
-                  return (
-                    <ChatMessage2
-                      key={msg.id}
-                      event={msg}
-                      reactions={reactionsFor(msg.id)}
-                      replyPubkey={replyPk}
-                      replyPreview={replyPreview}
-                      replyId={replyId}
-                      continuation={continuation}
-                      canWrite={transport.canWrite}
-                      canModerate={transport.canModerate}
-                      sendStatus={transport.sendStatusFor?.(msg.id)}
-                      active={activeId === msg.id}
-                      onToggleActive={toggleActive}
-                      onReply={onReplyCb}
-                      onDelete={transport.deleteMessage}
-                      onRetry={transport.retry}
-                      onDiscard={transport.discard}
-                      onJumpToReply={jumpToReply}
-                    />
-                  );
-                }}
+                renderMessage={(msg, continuation) => (
+                  <ChatMessage2
+                    key={msg.id}
+                    event={msg}
+                    reactions={reactionsFor(msg.id)}
+                    replyCount={transport.replyCountFor?.(msg.id) ?? 0}
+                    continuation={continuation}
+                    canWrite={transport.canWrite}
+                    canModerate={transport.canModerate}
+                    sendStatus={transport.sendStatusFor?.(msg.id)}
+                    active={activeId === msg.id}
+                    onToggleActive={toggleActive}
+                    onOpenThread={onOpenThreadCb}
+                    onDelete={transport.deleteMessage}
+                    onRetry={transport.retry}
+                    onDiscard={transport.discard}
+                  />
+                )}
               />
 
               {typingPubkeys.length > 0 && <TypingIndicator2 pubkeys={typingPubkeys} />}
@@ -628,14 +593,48 @@ export function ConcordV2Page() {
                   groupId={channel.idHex}
                   messages={[]}
                   mentionPubkeys={memberPubkeys}
-                  replyTo={replyTo}
-                  onCancelReply={() => setReplyTo(undefined)}
                   placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                   sendOverride={handleSend}
                   onTyping={publishTyping}
                   encryptAttachments
                 />
               )}
+            </div>
+
+            {/* Thread panel. Desktop: in-flow sibling whose width animates open.
+                Mobile: overlays the chat. Mirrors GroupChat. */}
+            <div
+              className={cn(
+                "overflow-hidden",
+                "absolute inset-0 z-20 sidebar:static sidebar:z-auto",
+                "sidebar:shrink-0 sidebar:w-0 sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
+                threadRoot ? "sidebar:w-[23rem]" : "pointer-events-none sidebar:pointer-events-auto",
+              )}
+            >
+              <div
+                className={cn(
+                  "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
+                  threadRoot ? "opacity-100" : "opacity-0",
+                )}
+              />
+              <div
+                className={cn(
+                  "relative h-full flex w-full sidebar:w-[23rem] transition-transform duration-200 ease-out",
+                  threadRoot ? "translate-x-0" : "translate-x-full",
+                )}
+              >
+                {lastThreadRoot && channel && (
+                  <ThreadPanel
+                    root={lastThreadRoot}
+                    transport={transport}
+                    relayUrl="dm"
+                    groupId={channel.idHex}
+                    canWrite={canWrite}
+                    autoFocus={threadAutoFocus}
+                    onClose={() => setThreadRoot(undefined)}
+                  />
+                )}
+              </div>
             </div>
 
             {/* Member panel: width-animated on desktop, slide overlay on mobile. */}

@@ -18,7 +18,7 @@ import { useGroupSearch } from "@/hooks/useGroupSearch";
 import { useDeleteOwnMessage, useEditMessage } from "@/hooks/useEditMessage";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useGroupReactions } from "@/hooks/useReactions";
-import { useGroupReplyCounts } from "@/hooks/useThread";
+import { useGroupThreads, useSendThreadReply } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
@@ -59,7 +59,6 @@ interface Nip29ChatMessageProps {
   active?: boolean;
   onToggleActive?: (id: string) => void;
   continuation: boolean;
-  onReply: (event: ChatMsg) => void;
   onEdit: (event: ChatMsg) => void;
   onEditSubmit: (event: ChatMsg, content: string) => void;
   onEditCancel: () => void;
@@ -82,7 +81,6 @@ function Nip29ChatMessage({
   active,
   onToggleActive,
   continuation,
-  onReply,
   onEdit,
   onEditSubmit,
   onEditCancel,
@@ -105,8 +103,7 @@ function Nip29ChatMessage({
       onDiscard={() => transport.discard?.(event.id)}
       onTogglePin={transport.togglePin}
       onDelete={transport.deleteMessage}
-      onReply={onReply}
-      onOpenThread={transport.openThread ? (e) => transport.openThread!(e) : undefined}
+      onOpenThread={transport.openThread ? (e) => transport.openThread!(e, true) : undefined}
       onEdit={onEdit}
       onEditSubmit={onEditSubmit}
       onEditCancel={onEditCancel}
@@ -220,10 +217,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     return [...set];
   }, [messages, searchResults]);
   const { reactionsFor } = useGroupReactions(relayUrl, groupId, visibleIds);
-  const { replyCountFor } = useGroupReplyCounts(relayUrl, groupId, visibleIds);
+  const { replyCountFor, threadRepliesFor } = useGroupThreads(relayUrl, groupId, visibleIds);
+  const sendThreadReply = useSendThreadReply(relayUrl, groupId);
 
-  const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
-  // The single message whose tap-to-reveal toolbar is open (mobile only).
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
   const toggleActive = useCallback(
     (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
@@ -298,7 +294,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   }, [canWrite, membershipPending, searching]);
 
   const handleSent = useCallback(() => {
-    setReplyTo(undefined);
     timelineRef.current?.pinToBottom();
   }, []);
 
@@ -423,6 +418,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       replyCountFor,
       reactionsFor,
       openThread,
+      threadRepliesFor,
+      sendThreadReply: async (root, content) => {
+        await sendThreadReply(root, content);
+      },
     }),
     [
       messages,
@@ -443,6 +442,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       replyCountFor,
       reactionsFor,
       openThread,
+      threadRepliesFor,
+      sendThreadReply,
     ],
   );
 
@@ -478,7 +479,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                       isEditing={false}
                       highlight={searchQuery}
                       continuation={false}
-                      onReply={setReplyTo}
                       onEdit={(e) => setEditingId(e.id)}
                       onEditSubmit={handleEditSubmit}
                       onEditCancel={() => setEditingId(undefined)}
@@ -512,7 +512,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                 active={activeId === msg.id}
                 onToggleActive={toggleActive}
                 continuation={continuation}
-                onReply={setReplyTo}
                 onEdit={(e) => setEditingId(e.id)}
                 onEditSubmit={handleEditSubmit}
                 onEditCancel={() => setEditingId(undefined)}
@@ -528,8 +527,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             relayUrl={relayUrl}
             groupId={groupId}
             messages={messages}
-            replyTo={replyTo}
-            onCancelReply={() => setReplyTo(undefined)}
             onSent={handleSent}
             onOptimisticInsert={insertOptimistic}
             onOptimisticSent={markSent}
@@ -603,6 +600,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           {lastThreadRoot && (
             <ThreadPanel
               root={lastThreadRoot}
+              transport={transport}
               relayUrl={relayUrl}
               groupId={groupId}
               canWrite={Boolean(user && canWrite)}

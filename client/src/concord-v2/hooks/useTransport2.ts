@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import {
   useChannelTimeline2,
@@ -17,6 +17,14 @@ import type { ChatMsg, ChatTransport, MessageReactions, ReactInput, ReactionTall
 
 /** Shared empty tally array, so messages with no reactions keep a stable prop. */
 const EMPTY_TALLIES: ReactionTally[] = [];
+
+/** Shared empty reply array, so a thread with no replies keeps a stable reference. */
+const EMPTY_REPLIES: ChatMsg[] = [];
+
+/** The root id a message replies to (NIP-C7 `q` tag), if any. */
+function replyRootOf(m: ChatMsg): string | undefined {
+  return m.tags.find((t) => t[0] === "q")?.[1];
+}
 
 /** Adapt a decrypted V2 chat event to the shared `ChatMsg` shape. */
 export function openedToChatMsg(m: OpenedChat): ChatMsg {
@@ -70,6 +78,44 @@ export function useTransport2(
     return out;
   }, [folded.messages]);
 
+  // Threading: a reply is an ordinary sealed chat message carrying a
+  // `["q", root, "", author]` tag (NIP-C7). Slack-style, replies are NOT shown
+  // top-level — they're nested under their root in the thread panel. Split the
+  // decoded list into top-level messages (the timeline) and replies bucketed by
+  // root id (the threads).
+  const { topLevel, repliesByRoot } = useMemo(() => {
+    const topLevel: ChatMsg[] = [];
+    const repliesByRoot = new Map<string, ChatMsg[]>();
+    for (const m of messages) {
+      const root = replyRootOf(m);
+      if (root) {
+        const list = repliesByRoot.get(root) ?? [];
+        list.push(m);
+        repliesByRoot.set(root, list);
+      } else {
+        topLevel.push(m);
+      }
+    }
+    for (const list of repliesByRoot.values()) list.sort((a, b) => a.created_at - b.created_at);
+    return { topLevel, repliesByRoot };
+  }, [messages]);
+
+  const replyCountFor = useCallback((id: string) => repliesByRoot.get(id)?.length ?? 0, [repliesByRoot]);
+  const threadRepliesFor = useCallback(
+    (rootId: string): ChatMsg[] => repliesByRoot.get(rootId) ?? EMPTY_REPLIES,
+    [repliesByRoot],
+  );
+  const sendThreadReply = useCallback(
+    async (root: ChatMsg, content: string, tags: string[][]) => {
+      // Seal the reply as a normal chat message; drop the composer's NIP-29 `h`
+      // and any `e`/`q` tags (the reply target rides the rumor's own `q`),
+      // mirroring the page's `handleSend`.
+      const extraTags = tags.filter(([name]) => name !== "h" && name !== "e" && name !== "q");
+      await send({ content, replyTo: { id: root.id, author: root.pubkey }, extraTags });
+    },
+    [send],
+  );
+
   // Reaction tallies adapted to the shared shape.
   const talliesById = useMemo(() => {
     const out = new Map<string, ReactionTally[]>();
@@ -120,7 +166,7 @@ export function useTransport2(
 
   const transport = useMemo<ChatTransport>(
     () => ({
-      messages,
+      messages: topLevel,
       isLoading,
       canWrite,
       canModerate,
@@ -131,8 +177,12 @@ export function useTransport2(
       retry: (event: ChatMsg) => retry(event.id),
       discard,
       deleteMessage: (event: ChatMsg) => deleteMessage(event.id),
+      replyCountFor,
+      reactionsFor,
+      threadRepliesFor,
+      sendThreadReply,
     }),
-    [messages, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage],
+    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage, replyCountFor, reactionsFor, threadRepliesFor, sendThreadReply],
   );
 
   return { transport, reactionsFor, allMessages: messages };

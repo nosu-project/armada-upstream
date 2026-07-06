@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import {
   useConcordChannelMessages,
@@ -19,6 +19,17 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Shared empty tally array, so messages with no reactions keep a stable prop. */
 const EMPTY_TALLIES: ReactionTally[] = [];
+
+/** Shared empty reply array, so a thread with no replies keeps a stable reference. */
+const EMPTY_REPLIES: ChatMsg[] = [];
+
+/** The root id a message replies to (NIP-10 marked `reply`/`root` `e` tag), if any. */
+function replyRootOf(m: ChatMsg): string | undefined {
+  const reply = m.tags.find(([name, , , marker]) => name === "e" && marker === "reply");
+  if (reply) return reply[1];
+  const root = m.tags.find(([name, , , marker]) => name === "e" && marker === "root");
+  return root?.[1];
+}
 
 /**
  * Adapt a decrypted Concord message to the shared `ChatMsg` (NostrEvent) shape
@@ -94,6 +105,44 @@ export function useConcordTransport(
     return out;
   }, [opened]);
 
+  // Threading: a reply is an ordinary sealed chat message carrying a
+  // `["e", root, "", "reply"]` tag (see envelope.ts). Slack-style, replies are
+  // NOT shown top-level — they're nested under their root in the thread panel.
+  // Split the decoded list into top-level messages (the timeline) and replies
+  // bucketed by root id (the threads).
+  const { topLevel, repliesByRoot } = useMemo(() => {
+    const topLevel: ChatMsg[] = [];
+    const repliesByRoot = new Map<string, ChatMsg[]>();
+    for (const m of messages) {
+      const root = replyRootOf(m);
+      if (root) {
+        const list = repliesByRoot.get(root) ?? [];
+        list.push(m);
+        repliesByRoot.set(root, list);
+      } else {
+        topLevel.push(m);
+      }
+    }
+    for (const list of repliesByRoot.values()) list.sort((a, b) => a.created_at - b.created_at);
+    return { topLevel, repliesByRoot };
+  }, [messages]);
+
+  const replyCountFor = useCallback((id: string) => repliesByRoot.get(id)?.length ?? 0, [repliesByRoot]);
+  const threadRepliesFor = useCallback(
+    (rootId: string): ChatMsg[] => repliesByRoot.get(rootId) ?? EMPTY_REPLIES,
+    [repliesByRoot],
+  );
+  const sendThreadReply = useCallback(
+    async (root: ChatMsg, content: string, tags: string[][]) => {
+      // Seal the reply as a normal chat message with the root as its `e`
+      // reference; drop the composer's NIP-29 `h` and its own NIP-10 `e` tags
+      // (the reply target is carried by `reference`), mirroring `handleSend`.
+      const extraTags = tags.filter(([name]) => name !== "h" && name !== "e");
+      await send({ content, reference: root.id, extraTags });
+    },
+    [send],
+  );
+
 
   // Adapt Concord's per-channel tally (target id → emoji → reactor set) into the
   // shared `ReactionTally[]` shape per message, so `ReactionBar`/`ReactionPicker`
@@ -153,7 +202,7 @@ export function useConcordTransport(
 
   const transport = useMemo<ChatTransport>(
     () => ({
-      messages,
+      messages: topLevel,
       isLoading,
       canWrite,
       canModerate,
@@ -164,8 +213,12 @@ export function useConcordTransport(
       retry: (event: ChatMsg) => retry(event.id),
       discard,
       deleteMessage: (event: NostrEvent) => deleteMessage(event.id),
+      replyCountFor,
+      reactionsFor,
+      threadRepliesFor,
+      sendThreadReply,
     }),
-    [messages, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage],
+    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage, replyCountFor, reactionsFor, threadRepliesFor, sendThreadReply],
   );
 
   return { transport, reactionsFor, allMessages: messages };

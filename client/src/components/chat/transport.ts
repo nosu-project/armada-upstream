@@ -111,4 +111,18 @@ export interface ChatTransport {
   reactionsFor?: (id: string) => MessageReactions;
   /** Open the threaded-replies panel for a message. */
   openThread?: (event: ChatMsg, focusReply?: boolean) => void;
+
+  // ── Threading (Slack-style; shared ThreadPanel reads these) ──────────────
+  //
+  // A reply is NOT a top-level timeline message: it's nested under its root and
+  // only shown in the thread panel. Every protocol implements these three the
+  // same way — NIP-29 via kind-1111 comments, Concord V1/V2 via a parent-tagged
+  // sealed chat message — so the shared {@link ThreadPanel} is transport-driven.
+
+  /** Ascending (oldest-first) replies to a root message id. */
+  threadRepliesFor?: (rootId: string) => ChatMsg[];
+  /** Whether a root's replies are still loading (drives the panel spinner). */
+  threadLoading?: (rootId: string) => boolean;
+  /** Post a reply into a root's thread (content is the composer's final text). */
+  sendThreadReply?: (root: ChatMsg, content: string, tags: string[][]) => Promise<void>;
 }

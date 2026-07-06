@@ -130,9 +130,7 @@ export interface ChatMessageProps {
   onTogglePin?: (event: ChatMsg) => void;
   /** Delete this message (hidden when absent). */
   onDelete?: (event: ChatMsg) => void;
-  /** Begin a reply to this message (hidden when absent). */
-  onReply?: (event: ChatMsg) => void;
-  /** Open the threaded-replies side panel (hidden when absent). */
+  /** Open the threaded-replies side panel — the reply action (hidden when absent). */
   onOpenThread?: (event: ChatMsg) => void;
   /** Begin editing this message (own, non-poll messages only; hidden when absent). */
   onEdit?: (event: ChatMsg) => void;
@@ -187,7 +185,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
   onDiscard,
   onTogglePin,
   onDelete,
-  onReply,
   onOpenThread,
   onEdit,
   onEditSubmit,
@@ -265,22 +262,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const toolbar = (
     <>
       {canWrite && !isEditing && reactions && <ReactionPicker onReact={reactions.react} />}
-      {canWrite && !isEditing && onReply && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Reply"
-              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
-              onClick={() => onReply(event)}
-            >
-              <Reply className="size-[18px] md:size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Reply</TooltipContent>
-        </Tooltip>
-      )}
       {canWrite && !isEditing && onOpenThread && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -291,7 +272,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
               className="size-9 md:size-7 text-muted-foreground hover:text-primary"
               onClick={() => onOpenThread(event)}
             >
-              <MessagesSquare className="size-[18px] md:size-3.5" />
+              <Reply className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Reply in thread</TooltipContent>
@@ -494,14 +475,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
       {/* Discord-style right-click menu, mirroring the hover toolbar's
           capability gating. */}
       <ContextMenuContent className="w-52">
-        {canWrite && !isEditing && onReply && (
-          <ContextMenuItem onSelect={() => onReply(event)}>
-            <Reply className="mr-2 size-4" /> Reply
-          </ContextMenuItem>
-        )}
         {canWrite && !isEditing && onOpenThread && (
           <ContextMenuItem onSelect={() => onOpenThread(event)}>
-            <MessagesSquare className="mr-2 size-4" /> Reply in thread
+            <Reply className="mr-2 size-4" /> Reply in thread
           </ContextMenuItem>
         )}
         {canEdit && !isEditing && (

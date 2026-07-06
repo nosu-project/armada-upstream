@@ -7,10 +7,11 @@ import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, getReplyToId, ReplyContextLine, replyPreviewText } from "@/components/chat/ChatMessage";
+import { ChatMessage } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
+import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { VoicePresence } from "@/components/VoicePresence";
 import { InviteConcordDialog } from "@/concord-v1/components/InviteConcordDialog";
 import { ConcordSettingsDialog } from "@/concord-v1/components/ConcordSettingsDialog";
@@ -53,24 +54,6 @@ import { type Channel, type Community, type CommunityImage } from "@/concord-v1/
 import { cn, pickDefaultChannel } from "@/lib/utils";
 
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
-
-/** Concord reply context: the relay can't be asked for the sealed target, so
- *  the page resolves the author + a content preview from already-decoded
- *  history and we render the shared chrome. Clicking jumps to the original. */
-function ConcordReplyContext({
-  pubkey,
-  preview,
-  onClick,
-}: {
-  pubkey: string | undefined;
-  preview: string | undefined;
-  onClick: (() => void) | undefined;
-}) {
-  const author = useAuthor(pubkey);
-  const displayName = useScopedDisplayName(pubkey, author.data?.metadata);
-  if (!pubkey) return null;
-  return <ReplyContextLine name={displayName} preview={preview} onClick={onClick} />;
-}
 
 /** One typer's scoped display name, resolved like the rest of the channel. */
 function TypingName({ pubkey }: { pubkey: string }) {
@@ -131,11 +114,8 @@ function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
 interface ConcordChatMessageProps {
   event: ChatMsg;
   reactions: MessageReactions;
-  replyPubkey: string | undefined;
-  /** A short preview of the replied-to message (from decoded history). */
-  replyPreview: string | undefined;
-  /** Id of the replied-to message, for jump-to-original on click. */
-  replyId: string | undefined;
+  /** Threaded-reply count for the inline "N replies" badge. */
+  replyCount: number;
   continuation: boolean;
   canWrite: boolean;
   canModerate: boolean;
@@ -144,40 +124,36 @@ interface ConcordChatMessageProps {
   active: boolean;
   /** Toggle this row's tap-to-reveal toolbar (touch only). */
   onToggleActive: (id: string) => void;
-  onReply: ((event: ChatMsg) => void) | undefined;
+  onOpenThread: ((event: ChatMsg) => void) | undefined;
   onDelete: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
-  onJumpToReply: (id: string) => void;
 }
 
 /**
  * Memoized per-message binding for Concord, mirroring NIP-29's
  * `Nip29ChatMessage`. It takes only individually-stable props (never the whole
- * `transport`, whose identity changes every poll), and constructs the inline
- * `replyContext` element + `onRetry`/`onDiscard` closures here rather than in
- * the timeline's `renderMessage` map. So when the page re-renders (e.g. a
- * reaction lands on another message, or the channel polls), `React.memo` skips
- * every row whose inputs are unchanged — the expensive content tokenization,
- * emoji maps and author queries don't re-run across the whole room.
+ * `transport`, whose identity changes every poll), so when the page re-renders
+ * (e.g. a reaction lands on another message, or the channel polls),
+ * `React.memo` skips every row whose inputs are unchanged — the expensive
+ * content tokenization, emoji maps and author queries don't re-run across the
+ * whole room. Replies are threaded (nested in the thread panel), so the reply
+ * action opens the thread rather than inserting a top-level quote.
  */
 const ConcordChatMessage = memo(function ConcordChatMessage({
   event,
   reactions,
-  replyPubkey,
-  replyPreview,
-  replyId,
+  replyCount,
   continuation,
   canWrite,
   canModerate,
   sendStatus,
   active,
   onToggleActive,
-  onReply,
+  onOpenThread,
   onDelete,
   onRetry,
   onDiscard,
-  onJumpToReply,
 }: ConcordChatMessageProps) {
   return (
     <ChatMessage
@@ -189,14 +165,8 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       continuation={continuation}
       active={active}
       onToggleActive={onToggleActive}
-      replyContext={
-        <ConcordReplyContext
-          pubkey={replyPubkey}
-          preview={replyPreview}
-          onClick={replyId ? () => onJumpToReply(replyId) : undefined}
-        />
-      }
-      onReply={onReply}
+      replyCount={replyCount}
+      onOpenThread={onOpenThread}
       onDelete={onDelete}
       onRetry={onRetry ? () => onRetry(event) : undefined}
       onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
@@ -373,7 +343,7 @@ export function ConcordPage() {
   );
   const canWrite = Boolean(user && channel);
 
-  const { transport, reactionsFor, allMessages } = useConcordTransport(community, channel, canWrite, iAmOwner);
+  const { transport: baseTransport, reactionsFor, allMessages } = useConcordTransport(community, channel, canWrite, iAmOwner);
   const { mutateAsync: send } = useSendConcordMessage(community, channel);
   const { createChannel, isAddingChannel } = useConcordActions();
   const { leave, isLeaving, dissolve } = useConcordCommunityActions(community, communityId);
@@ -398,7 +368,11 @@ export function ConcordPage() {
   const [membersOpen, setMembersOpen] = useState(false);
   /** Mobile: whether the channel-list drawer is open. */
   const [channelsOpen, setChannelsOpen] = useState(false);
-  const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
+  // Slack-style threads: the root message whose thread panel is open (and
+  // whether to focus its reply composer on open).
+  const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
+  const [threadAutoFocus, setThreadAutoFocus] = useState(false);
+  const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
   // The single message whose tap-to-reveal toolbar is open (touch only). Mirrors
   // GroupChat: without this, the action toolbar stays `touch:pointer-events-none`
   // and the react/reply/delete buttons never become tappable on the APK.
@@ -407,6 +381,25 @@ export function ConcordPage() {
     (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
     [],
   );
+
+  const openThread = useCallback((event: ChatMsg, focusReply = false) => {
+    setThreadAutoFocus(focusReply);
+    setThreadRoot(event);
+  }, []);
+
+  // Keep the thread panel content mounted through its slide-out animation.
+  useEffect(() => {
+    if (threadRoot) {
+      setLastThreadRoot(threadRoot);
+      return;
+    }
+    const t = setTimeout(() => setLastThreadRoot(undefined), 200);
+    return () => clearTimeout(t);
+  }, [threadRoot]);
+
+  // Inject `openThread` (page-owned panel state) onto the data transport, so the
+  // shared ChatMessage's reply action opens the thread.
+  const transport = useMemo(() => ({ ...baseTransport, openThread }), [baseTransport, openThread]);
 
   // Adapt the folded Concord roster to the shared MemberList's props. The
   // control-plane roster only enumerates the owner + members granted a role —
@@ -435,33 +428,14 @@ export function ConcordPage() {
     return [...set];
   }, [roster, allMessages, user]);
 
-  // id → author pubkey, so resolving a reply's target author is O(1) per row
-  // instead of an O(N) `.find()` scan inside the per-row render closure (which
-  // made a reply-heavy room O(N²) to render).
-  const pubkeyById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const m of allMessages) map.set(m.id, m.pubkey);
-    return map;
-  }, [allMessages]);
+  // Stable open-thread callback so a per-message `ConcordChatMessage` doesn't
+  // re-render just because the page did.
+  const onOpenThreadCb = useMemo(
+    () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),
+    [canWrite, openThread],
+  );
 
-  // Body previews for the reply-context line, resolved from already-decoded
-  // history (the relay can't serve the sealed target). Same one-pass + O(1)
-  // lookup as pubkeyById, so a reply-heavy room doesn't go O(N²) per render.
-  const previewById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const m of allMessages) map.set(m.id, replyPreviewText(m.content));
-    return map;
-  }, [allMessages]);
-
-  // Stable reply callback so a per-message `ConcordChatMessage` doesn't re-render
-  // just because the page did. `setReplyTo` is a stable state setter.
-  const onReplyCb = useMemo(() => (canWrite ? setReplyTo : undefined), [canWrite]);
-
-  // Stable: clicking a reply-context line jumps the timeline to the original.
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
-  const jumpToReply = useCallback((id: string) => {
-    timelineRef.current?.scrollToMessage(id);
-  }, []);
 
   // Moderation: ban (read-cut), kick (cooperative), unban. The recipient set for
   // a ban's read-cut is everyone we know about minus the banned member.
@@ -479,19 +453,16 @@ export function ConcordPage() {
 
   if (!communityId) return <Navigate to="/" replace />;
 
-  // Send via the rich composer: the whole content is sealed; the reply target
-  // (if any) rides along as an `e` reference on the inner event. The composer's
-  // content-derived tags (NIP-30 emoji, NIP-92 imeta, NIP-27 mentions, NIP-18
-  // quotes) are sealed verbatim so custom emoji, media and mentions render —
-  // but the NIP-29 group `h` tag and the composer's NIP-10 reply `e` tags are
-  // dropped: Concord isn't a NIP-29 group, and the reply is bound by the inner
-  // event's own `reference` (a single `["e", ref, "", "reply"]`), so passing the
-  // composer's `e` tags too would duplicate/conflict with it.
+  // Send a top-level message via the rich composer: the whole content is
+  // sealed. The composer's content-derived tags (NIP-30 emoji, NIP-92 imeta,
+  // NIP-27 mentions, NIP-18 quotes) are sealed verbatim so custom emoji, media
+  // and mentions render — but the NIP-29 group `h` tag and any NIP-10 reply `e`
+  // tags are dropped: Concord isn't a NIP-29 group, and replies are threaded
+  // (a nested reply carries its root via the inner event's `reference`, sent
+  // through the transport's `sendThreadReply`, not from the main composer).
   const handleSend = async (content: string, tags: string[][]) => {
-    const reference = replyTo?.id;
-    setReplyTo(undefined);
     const extraTags = tags.filter(([name]) => name !== "h" && name !== "e");
-    await send({ content, reference, extraTags });
+    await send({ content, extraTags });
   };
 
   const handleCreateChannel = async () => {
@@ -788,32 +759,24 @@ export function ConcordPage() {
                   No messages yet. Say something — only members can read it.
                 </p>
               }
-              renderMessage={(msg, continuation) => {
-                const replyTo = getReplyToId(msg);
-                const replyPk = replyTo ? pubkeyById.get(replyTo) : undefined;
-                const replyPreview = replyTo ? previewById.get(replyTo) : undefined;
-                return (
-                  <ConcordChatMessage
-                    key={msg.id}
-                    event={msg}
-                    reactions={reactionsFor(msg.id)}
-                    replyPubkey={replyPk}
-                    replyPreview={replyPreview}
-                    replyId={replyTo}
-                    continuation={continuation}
-                    canWrite={transport.canWrite}
-                    canModerate={transport.canModerate}
-                    sendStatus={transport.sendStatusFor?.(msg.id)}
-                    active={activeId === msg.id}
-                    onToggleActive={toggleActive}
-                    onReply={onReplyCb}
-                    onDelete={transport.deleteMessage}
-                    onRetry={transport.retry}
-                    onDiscard={transport.discard}
-                    onJumpToReply={jumpToReply}
-                  />
-                );
-              }}
+              renderMessage={(msg, continuation) => (
+                <ConcordChatMessage
+                  key={msg.id}
+                  event={msg}
+                  reactions={reactionsFor(msg.id)}
+                  replyCount={transport.replyCountFor?.(msg.id) ?? 0}
+                  continuation={continuation}
+                  canWrite={transport.canWrite}
+                  canModerate={transport.canModerate}
+                  sendStatus={transport.sendStatusFor?.(msg.id)}
+                  active={activeId === msg.id}
+                  onToggleActive={toggleActive}
+                  onOpenThread={onOpenThreadCb}
+                  onDelete={transport.deleteMessage}
+                  onRetry={transport.retry}
+                  onDiscard={transport.discard}
+                />
+              )}
             />
 
             {(typingPubkeys?.length ?? 0) > 0 && (
@@ -825,14 +788,48 @@ export function ConcordPage() {
                 groupId={channel ? bytesToHex(channel.id) : "concord"}
                 messages={[]}
                 mentionPubkeys={memberPubkeys}
-                replyTo={replyTo}
-                onCancelReply={() => setReplyTo(undefined)}
                 placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                 sendOverride={handleSend}
                 onTyping={publishTyping}
                 encryptAttachments
               />
             )}
+          </div>
+
+          {/* Thread panel. Desktop: in-flow sibling whose width animates open.
+              Mobile: overlays the chat (absolute). Mirrors GroupChat. */}
+          <div
+            className={cn(
+              "overflow-hidden",
+              "absolute inset-0 z-20 sidebar:static sidebar:z-auto",
+              "sidebar:shrink-0 sidebar:w-0 sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
+              threadRoot ? "sidebar:w-[23rem]" : "pointer-events-none sidebar:pointer-events-auto",
+            )}
+          >
+            <div
+              className={cn(
+                "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
+                threadRoot ? "opacity-100" : "opacity-0",
+              )}
+            />
+            <div
+              className={cn(
+                "relative h-full flex w-full sidebar:w-[23rem] transition-transform duration-200 ease-out",
+                threadRoot ? "translate-x-0" : "translate-x-full",
+              )}
+            >
+              {lastThreadRoot && (
+                <ThreadPanel
+                  root={lastThreadRoot}
+                  transport={transport}
+                  relayUrl="dm"
+                  groupId={channel ? bytesToHex(channel.id) : "concord"}
+                  canWrite={canWrite}
+                  autoFocus={threadAutoFocus}
+                  onClose={() => setThreadRoot(undefined)}
+                />
+              )}
+            </div>
           </div>
 
           {/* Member panel: width-animated on desktop, slide overlay on mobile.
