@@ -1,4 +1,4 @@
-import { AlertCircle, Copy, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
+import { AlertCircle, ChevronRight, Copy, Link2, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
@@ -7,6 +7,7 @@ import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
 import { PollCard } from "@/components/chat/PollCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import { DittoIcon } from "@/components/brand/DittoIcon";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -20,9 +21,11 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { getAvatarShape } from "@/lib/avatarShape";
 import { dittoEventUrl } from "@/lib/dittoUrl";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { isMeAction, meActionText } from "@/lib/slashCommands";
+import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
@@ -90,6 +93,68 @@ export function ReplyContextLine({
   );
 }
 
+/** One reply participant's avatar in the thread badge's overlapping stack. */
+function ThreadParticipantAvatar({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata;
+  const name = useScopedDisplayName(pubkey, metadata);
+  return (
+    <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-background">
+      <AvatarImage src={metadata?.picture} alt={name} />
+      <AvatarFallback className="bg-primary/25 text-primary text-[9px] font-semibold">
+        {name[0]?.toUpperCase()}
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
+/**
+ * The prominent, Slack-style "thread" affordance shown under a message that has
+ * replies: an overlapping avatar stack of the (distinct) repliers, the reply
+ * count, "Last reply …" recency, and a chevron. Clicking opens the thread.
+ */
+function ThreadBadge({
+  count,
+  participants,
+  lastReplyAt,
+  onClick,
+}: {
+  count: number;
+  participants: string[];
+  lastReplyAt?: number;
+  onClick: () => void;
+}) {
+  const shown = participants.slice(0, 4);
+  const overflow = participants.length - shown.length;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group/thread mt-1 inline-flex max-w-full items-center gap-2 rounded-lg border border-transparent bg-primary/[0.07] py-1 pl-1 pr-2.5 text-left transition-colors hover:border-primary/30 hover:bg-primary/[0.12]"
+    >
+      <span className="flex shrink-0 -space-x-1.5">
+        {shown.map((pk) => (
+          <ThreadParticipantAvatar key={pk} pubkey={pk} />
+        ))}
+        {overflow > 0 && (
+          <span className="flex size-5 items-center justify-center rounded-full ring-2 ring-background bg-primary/25 text-primary text-[9px] font-semibold tabular-nums">
+            +{overflow}
+          </span>
+        )}
+      </span>
+      <span className="text-[13px] font-semibold text-primary">
+        {count} {count === 1 ? "reply" : "replies"}
+      </span>
+      {lastReplyAt ? (
+        <span className="truncate text-[11px] text-muted-foreground">
+          Last reply {shortTimeAgo(lastReplyAt)}
+        </span>
+      ) : null}
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/thread:opacity-100" />
+    </button>
+  );
+}
+
 export interface ChatMessageProps {
   event: ChatMsg;
   canWrite: boolean;
@@ -116,8 +181,15 @@ export interface ChatMessageProps {
   isEditing?: boolean;
   /** Whether this message is currently pinned (moderators only see the control). */
   isPinned?: boolean;
-  /** Threaded-reply count, for the inline "N replies" badge. */
+  /** Threaded-reply count, for the inline "N replies" thread badge. */
   replyCount?: number;
+  /**
+   * Distinct pubkeys that have replied in this message's thread (newest-first),
+   * for the thread badge's avatar stack. Deduped by the transport.
+   */
+  threadParticipants?: string[];
+  /** Timestamp (epoch seconds) of the latest reply, shown as "Last reply …". */
+  lastReplyAt?: number;
   /**
    * A rendered "replying to …" context line, shown above the body. The
    * transport owns resolving the referenced message (different per protocol),
@@ -180,6 +252,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
   isEditing,
   isPinned,
   replyCount = 0,
+  threadParticipants,
+  lastReplyAt,
   replyContext,
   onRetry,
   onDiscard,
@@ -410,14 +484,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
         <ReactionBar tallies={reactions.tallies} canReact={canWrite} onReact={reactions.react} />
       )}
       {!isEditing && replyCount > 0 && onOpenThread && (
-        <button
-          type="button"
+        <ThreadBadge
+          count={replyCount}
+          participants={threadParticipants ?? []}
+          lastReplyAt={lastReplyAt}
           onClick={() => onOpenThread(event)}
-          className="mt-0.5 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10 transition-colors"
-        >
-          <MessagesSquare className="size-3.5" />
-          {replyCount} {replyCount === 1 ? "reply" : "replies"}
-        </button>
+        />
       )}
       {isFailed && (
         <div className="flex items-center gap-2 mt-1 text-[11px] text-destructive">

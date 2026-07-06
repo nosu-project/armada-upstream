@@ -53,7 +53,11 @@ import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/concord-v
 import { type Channel, type Community, type CommunityImage } from "@/concord-v1/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 
+import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
+
+/** Stable empty replies array so a thread-less row keeps a constant prop. */
+const EMPTY_REPLIES: ChatMsg[] = [];
 
 /** One typer's scoped display name, resolved like the rest of the channel. */
 function TypingName({ pubkey }: { pubkey: string }) {
@@ -114,8 +118,8 @@ function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
 interface ConcordChatMessageProps {
   event: ChatMsg;
   reactions: MessageReactions;
-  /** Threaded-reply count for the inline "N replies" badge. */
-  replyCount: number;
+  /** This message's thread replies (stable ref from the transport), for the badge. */
+  replies: ChatMsg[];
   continuation: boolean;
   canWrite: boolean;
   canModerate: boolean;
@@ -143,7 +147,7 @@ interface ConcordChatMessageProps {
 const ConcordChatMessage = memo(function ConcordChatMessage({
   event,
   reactions,
-  replyCount,
+  replies,
   continuation,
   canWrite,
   canModerate,
@@ -155,6 +159,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   onRetry,
   onDiscard,
 }: ConcordChatMessageProps) {
+  const threadInfo = threadSummary(replies);
   return (
     <ChatMessage
       event={event}
@@ -165,7 +170,9 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       continuation={continuation}
       active={active}
       onToggleActive={onToggleActive}
-      replyCount={replyCount}
+      replyCount={replies.length}
+      threadParticipants={threadInfo.participants}
+      lastReplyAt={threadInfo.lastReplyAt}
       onOpenThread={onOpenThread}
       onDelete={onDelete}
       onRetry={onRetry ? () => onRetry(event) : undefined}
@@ -764,7 +771,7 @@ export function ConcordPage() {
                   key={msg.id}
                   event={msg}
                   reactions={reactionsFor(msg.id)}
-                  replyCount={transport.replyCountFor?.(msg.id) ?? 0}
+                  replies={transport.threadRepliesFor?.(msg.id) ?? EMPTY_REPLIES}
                   continuation={continuation}
                   canWrite={transport.canWrite}
                   canModerate={transport.canModerate}

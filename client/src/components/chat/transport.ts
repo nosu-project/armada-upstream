@@ -126,3 +126,28 @@ export interface ChatTransport {
   /** Post a reply into a root's thread (content is the composer's final text). */
   sendThreadReply?: (root: ChatMsg, content: string, tags: string[][]) => Promise<void>;
 }
+
+/**
+ * Derive the thread badge's summary from a root's replies: the distinct
+ * repliers (newest-first, so the freshest voices lead the avatar stack) and the
+ * most recent reply time. Shared by every per-message binding so the badge
+ * reads identically across protocols.
+ */
+export function threadSummary(replies: ChatMsg[]): {
+  participants: string[];
+  lastReplyAt: number | undefined;
+} {
+  const seen = new Set<string>();
+  const participants: string[] = [];
+  let lastReplyAt: number | undefined;
+  // Replies arrive oldest-first; walk newest-first for the stack order.
+  for (let i = replies.length - 1; i >= 0; i--) {
+    const r = replies[i];
+    if (lastReplyAt === undefined) lastReplyAt = r.created_at;
+    if (!seen.has(r.pubkey)) {
+      seen.add(r.pubkey);
+      participants.push(r.pubkey);
+    }
+  }
+  return { participants, lastReplyAt };
+}

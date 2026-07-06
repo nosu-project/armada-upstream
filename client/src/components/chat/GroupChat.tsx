@@ -27,6 +27,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
+import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -86,6 +87,7 @@ function Nip29ChatMessage({
   onEditCancel,
   onJumpToReply,
 }: Nip29ChatMessageProps) {
+  const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
   return (
     <ChatMessage
       event={event}
@@ -98,6 +100,8 @@ function Nip29ChatMessage({
       isEditing={isEditing}
       isPinned={transport.isPinned?.(event.id)}
       replyCount={transport.replyCountFor?.(event.id) ?? 0}
+      threadParticipants={threadInfo.participants}
+      lastReplyAt={threadInfo.lastReplyAt}
       replyContext={<ReplyContext eventId={getReplyToId(event) ?? ""} relayUrl={relayUrl} onJump={onJumpToReply} />}
       onRetry={() => transport.retry?.(event)}
       onDiscard={() => transport.discard?.(event.id)}

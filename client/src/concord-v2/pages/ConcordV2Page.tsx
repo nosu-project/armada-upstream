@@ -45,7 +45,11 @@ import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/concord-v
 import type { ChannelV2, CommunityV2, ImagePointer } from "@/concord-v2/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 
+import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
+
+/** Stable empty replies array so a thread-less row keeps a constant prop. */
+const EMPTY_REPLIES: ChatMsg[] = [];
 
 function TypingName({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
@@ -93,8 +97,8 @@ function Banner2({ banner }: { banner: ImagePointer | undefined }) {
 interface ChatMessage2Props {
   event: ChatMsg;
   reactions: MessageReactions;
-  /** Threaded-reply count for the inline "N replies" badge. */
-  replyCount: number;
+  /** This message's thread replies (stable ref from the transport), for the badge. */
+  replies: ChatMsg[];
   continuation: boolean;
   canWrite: boolean;
   canModerate: boolean;
@@ -112,7 +116,7 @@ interface ChatMessage2Props {
 const ChatMessage2 = memo(function ChatMessage2({
   event,
   reactions,
-  replyCount,
+  replies,
   continuation,
   canWrite,
   canModerate,
@@ -124,6 +128,7 @@ const ChatMessage2 = memo(function ChatMessage2({
   onRetry,
   onDiscard,
 }: ChatMessage2Props) {
+  const threadInfo = threadSummary(replies);
   return (
     <ChatMessage
       event={event}
@@ -134,7 +139,9 @@ const ChatMessage2 = memo(function ChatMessage2({
       continuation={continuation}
       active={active}
       onToggleActive={onToggleActive}
-      replyCount={replyCount}
+      replyCount={replies.length}
+      threadParticipants={threadInfo.participants}
+      lastReplyAt={threadInfo.lastReplyAt}
       onOpenThread={onOpenThread}
       onDelete={onDelete}
       onRetry={onRetry ? () => onRetry(event) : undefined}
@@ -571,7 +578,7 @@ export function ConcordV2Page() {
                     key={msg.id}
                     event={msg}
                     reactions={reactionsFor(msg.id)}
-                    replyCount={transport.replyCountFor?.(msg.id) ?? 0}
+                    replies={transport.threadRepliesFor?.(msg.id) ?? EMPTY_REPLIES}
                     continuation={continuation}
                     canWrite={transport.canWrite}
                     canModerate={transport.canModerate}
