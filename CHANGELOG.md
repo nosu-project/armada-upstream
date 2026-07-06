@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.17.3] - 2026-07-06
+
+Polishes invites and a few everyday interactions. Inviting someone is now
+simpler: the invite dialog leads with a single action and tucks the extra
+options away, and direct invites to a known contact are delivered more
+reliably. Copying an invite link now works everywhere, including in the mobile
+and desktop apps, with clear per-link feedback. Logging in is a cleaner
+single-step dialog, and typing indicators get a friendlier Signal-style look.
+
+### Changed
+- The invite dialog now leads with a single primary action and keeps advanced
+  options behind a disclosure, with an info popover explaining the choices
+- Logging in is now a streamlined single-input dialog
+- Typing indicators now show a Signal-style avatar stack with a pulsing-dot pill
+
+### Fixed
+- Copying invite links now works in the mobile and desktop apps (not just the
+  browser), with clear feedback on the link you copied
+- Direct invites to a known contact are delivered more reliably
+
 ## [0.17.2] - 2026-07-06
 
 Focuses on making communities load and feel faster: chat history, invites, and
