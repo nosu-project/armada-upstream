@@ -82,8 +82,21 @@ function TypingIndicator2({ pubkeys }: { pubkeys: string[] }) {
  *  layout). */
 function TitleIcon2({ icon }: { icon: ImagePointer | undefined }) {
   const url = useDecryptedImage2(icon);
+  const [open, setOpen] = useState(false);
   if (!url) return null;
-  return <img src={url} alt="" className="size-5 rounded object-cover shrink-0" />;
+  return (
+    <>
+      <button
+        type="button"
+        className="shrink-0 cursor-zoom-in rounded"
+        aria-label="View icon"
+        onClick={() => setOpen(true)}
+      >
+        <img src={url} alt="" className="size-5 rounded object-cover" />
+      </button>
+      {open && <ImageLightbox2 src={url} onClose={() => setOpen(false)} />}
+    </>
+  );
 }
 
 function Banner2({ banner }: { banner: ImagePointer | undefined }) {
