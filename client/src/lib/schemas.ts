@@ -33,6 +33,7 @@ export const AppConfigSchema = z.object({
   themes: ThemesConfigSchema.optional().catch(undefined),
   addedRelays: z.array(z.string()).catch([]),
   serverOrder: z.array(z.string()).catch([]),
+  railOrder: z.array(z.string()).catch([]),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
   useOwnDmRelays: z.boolean().catch(defaultConfig.useOwnDmRelays),

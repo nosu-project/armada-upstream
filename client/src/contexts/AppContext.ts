@@ -40,8 +40,21 @@ export interface AppConfig {
    * pinned platform relays and user-added ones (the relay list itself does not
    * carry a rail order). Any server not listed here falls back to the default
    * order (pinned first, then added). Stored locally in app config.
+   *
+   * Legacy: superseded by `railOrder` (which orders NIP-29 servers *and*
+   * Concord communities as one unified list). Still written alongside
+   * `railOrder` for backward compatibility.
    */
   serverOrder: string[];
+  /**
+   * User-defined display order for the *entire* community rail as one list —
+   * NIP-29 servers and Concord (V1/V2) communities intermixed in any order.
+   * Entries are stable rail keys: a relay URL for NIP-29 servers,
+   * `c1:${communityId}` for Concord V1, `c2:${communityId}` for Concord V2.
+   * Any item not listed falls back to its default position (appended in
+   * discovery order). Stored locally in app config.
+   */
+  railOrder: string[];
   /**
    * App relays for non-NIP-29 traffic (kind 0 profiles, kind 10009 lists,
    * etc.) — Ditto's "app relays" concept. Seeded from VITE_APP_RELAYS
@@ -101,6 +114,7 @@ export const defaultConfig: AppConfig = {
   theme: "dark",
   addedRelays: [],
   serverOrder: [],
+  railOrder: [],
   appRelays: [...APP_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
   useOwnDmRelays: false,

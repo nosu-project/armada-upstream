@@ -38,29 +38,89 @@ function relayHost(url: string): string {
 }
 
 /**
- * The floating "ghost" icon that follows the pointer while dragging a server.
- * Rendered in a portal-free fixed layer; mirrors the server avatar so the drag
- * feels like you're physically carrying the icon.
+ * A single entry in the unified community rail. NIP-29 servers and both
+ * flavours of Concord community live in one flat, user-reorderable list; each
+ * carries a stable `key` used for drag/reorder and persisted order.
  */
-function DragGhost({ url, x, y }: { url: string; x: number; y: number }) {
+type RailItem =
+  | { kind: "server"; key: string; url: string }
+  | { kind: "concord1"; key: string; communityId: string; name: string }
+  | { kind: "concord2"; key: string; communityId: string; name: string };
+
+/** Stable rail key for a Concord V1 community. */
+const concord1Key = (communityId: string) => `c1:${communityId}`;
+/** Stable rail key for a Concord V2 community. */
+const concord2Key = (communityId: string) => `c2:${communityId}`;
+
+/**
+ * The floating "ghost" icon that follows the pointer while dragging a rail
+ * item. Rendered in a portal-free fixed layer; mirrors the item's avatar so
+ * the drag feels like you're physically carrying the icon.
+ */
+function ServerDragGhost({ url }: { url: string }) {
   const { data: info } = useRelayInfo(url);
   const host = relayHost(url);
   const name = info?.name || host;
   const initial = name.trim().charAt(0).toUpperCase() || "?";
+  return (
+    <span className="block size-12 rotate-[-6deg] scale-110 [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
+      <Avatar className="size-12 clip-corner-lg ring-2 ring-primary">
+        <AvatarImage src={info?.icon} alt={name} />
+        <AvatarFallback className="bg-secondary font-semibold text-primary">
+          {initial}
+        </AvatarFallback>
+      </Avatar>
+    </span>
+  );
+}
 
+function Concord1DragGhost({ communityId, name }: { communityId: string; name: string }) {
+  const initials = name.trim().slice(0, 2).toUpperCase() || "··";
+  const community = useConcordCommunity(communityId);
+  const { data: folded } = useConcordMetadata(community, false);
+  const { icon } = useCommunityImageDescriptors(community, folded);
+  const iconUrl = useDecryptedCommunityImage(icon);
+  return (
+    <span className="flex items-center justify-center size-12 rotate-[-6deg] scale-110 clip-corner-lg overflow-hidden bg-muted text-success ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
+      {iconUrl ? (
+        <img src={iconUrl} alt="" className="size-full object-cover" />
+      ) : (
+        <span className="text-sm font-semibold">{initials}</span>
+      )}
+    </span>
+  );
+}
+
+function Concord2DragGhost({ communityId, name }: { communityId: string; name: string }) {
+  const community = useCommunity2(communityId);
+  const { data: folded } = useControlFold2(community, false);
+  const displayName = folded?.metadata?.name || name;
+  const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
+  const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
+  return (
+    <span className="flex items-center justify-center size-12 rotate-[-6deg] scale-110 clip-corner-lg overflow-hidden bg-muted text-success ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
+      {iconUrl ? (
+        <img src={iconUrl} alt="" className="size-full object-cover" />
+      ) : (
+        <span className="text-sm font-semibold">{initials}</span>
+      )}
+    </span>
+  );
+}
+
+function DragGhost({ item, x, y }: { item: RailItem; x: number; y: number }) {
   return (
     <div
       className="pointer-events-none fixed z-[300] -translate-x-1/2 -translate-y-1/2 animate-in zoom-in-75 duration-150"
       style={{ left: x, top: y }}
     >
-      <span className="block size-12 rotate-[-6deg] scale-110 [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
-        <Avatar className="size-12 clip-corner-lg ring-2 ring-primary">
-          <AvatarImage src={info?.icon} alt={name} />
-          <AvatarFallback className="bg-secondary font-semibold text-primary">
-            {initial}
-          </AvatarFallback>
-        </Avatar>
-      </span>
+      {item.kind === "server" ? (
+        <ServerDragGhost url={item.url} />
+      ) : item.kind === "concord1" ? (
+        <Concord1DragGhost communityId={item.communityId} name={item.name} />
+      ) : (
+        <Concord2DragGhost communityId={item.communityId} name={item.name} />
+      )}
     </div>
   );
 }
@@ -201,7 +261,7 @@ function ServerButton({
 
   // Identify the draggable node for hit-testing; the pointerdown listener is
   // attached natively via `triggerRef` (see effect above).
-  const interactionProps = draggable ? { "data-server-url": url } : {};
+  const interactionProps = draggable ? { "data-rail-key": url } : {};
 
   // Shift this icon (smoothly) to open a gap for the dragged item. The dragged
   // item itself is not shifted (its placeholder stays put; the ghost moves).
@@ -264,11 +324,34 @@ function ConcordButton({
   communityId,
   name,
   onNavigate,
+  draggable,
+  dragging,
+  shiftY,
+  reordering,
+  onDragPointerDown,
+  shouldSuppressClick,
 }: {
   communityId: string;
   name: string;
   onNavigate?: () => void;
+  draggable?: boolean;
+  dragging?: boolean;
+  shiftY?: number;
+  reordering?: boolean;
+  onDragPointerDown?: (e: PointerEvent) => void;
+  shouldSuppressClick?: () => boolean;
 }) {
+  const triggerRef = useRef<HTMLAnchorElement | null>(null);
+  const dragHandlerRef = useRef(onDragPointerDown);
+  dragHandlerRef.current = onDragPointerDown;
+  useEffect(() => {
+    const el = triggerRef.current;
+    if (!el || !draggable) return;
+    const handler = (e: PointerEvent) => dragHandlerRef.current?.(e);
+    el.addEventListener("pointerdown", handler);
+    return () => el.removeEventListener("pointerdown", handler);
+  }, [draggable]);
+
   const initials = name.trim().slice(0, 2).toUpperCase() || "··";
   // Resolve the community's authoritative GroupRoot icon: rehydrate from the
   // membership bundle, overlay the folded metadata (the owner-controlled icon),
@@ -284,33 +367,62 @@ function ConcordButton({
   // carries it lands asynchronously, which is what made the avatar flicker).
   const { icon } = useCommunityImageDescriptors(community, folded);
   const iconUrl = useDecryptedCommunityImage(icon);
+
+  const shiftStyle: React.CSSProperties =
+    !dragging && shiftY
+      ? { transform: `translateY(${shiftY}px)`, transition: "transform 180ms ease" }
+      : { transform: "translateY(0)", transition: reordering ? "transform 180ms ease" : undefined };
+
+  const placeholder = (
+    <span className="relative block size-12">
+      <span className="absolute inset-0 rounded-xl border-2 border-dashed border-primary/50 bg-primary/5" />
+    </span>
+  );
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <NavLink
+          ref={triggerRef}
           to={`/c1/${encodeURIComponent(communityId)}`}
           aria-label={name}
-          onClick={onNavigate}
-          className="group relative flex items-center justify-center shrink-0"
-        >
-          {({ isActive }) => (
-            <span className="relative block size-12">
-              <span
-                className={cn(
-                  "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
-                  "bg-muted text-success opacity-60 saturate-75",
-                  "group-hover:opacity-100 group-hover:saturate-100",
-                  isActive && "opacity-100 saturate-100 is-active",
-                )}
-              >
-                {iconUrl ? (
-                  <img src={iconUrl} alt="" className="size-full object-cover" />
-                ) : (
-                  <span className="text-sm font-semibold">{initials}</span>
-                )}
-              </span>
-            </span>
+          style={shiftStyle}
+          onClick={(e) => {
+            if (shouldSuppressClick?.()) {
+              e.preventDefault();
+              return;
+            }
+            onNavigate?.();
+          }}
+          className={cn(
+            "group relative flex items-center justify-center shrink-0 touch-none",
+            draggable && "cursor-grab",
+            dragging && "cursor-grabbing",
           )}
+          {...(draggable ? { "data-rail-key": concord1Key(communityId) } : {})}
+        >
+          {({ isActive }) =>
+            dragging ? (
+              placeholder
+            ) : (
+              <span className="relative block size-12">
+                <span
+                  className={cn(
+                    "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
+                    "bg-muted text-success opacity-60 saturate-75",
+                    "group-hover:opacity-100 group-hover:saturate-100",
+                    isActive && "opacity-100 saturate-100 is-active",
+                  )}
+                >
+                  {iconUrl ? (
+                    <img src={iconUrl} alt="" className="size-full object-cover" />
+                  ) : (
+                    <span className="text-sm font-semibold">{initials}</span>
+                  )}
+                </span>
+              </span>
+            )
+          }
         </NavLink>
       </TooltipTrigger>
       <TooltipContent side="right" className="font-medium">
@@ -329,11 +441,34 @@ function Concord2Button({
   communityId,
   name,
   onNavigate,
+  draggable,
+  dragging,
+  shiftY,
+  reordering,
+  onDragPointerDown,
+  shouldSuppressClick,
 }: {
   communityId: string;
   name: string;
   onNavigate?: () => void;
+  draggable?: boolean;
+  dragging?: boolean;
+  shiftY?: number;
+  reordering?: boolean;
+  onDragPointerDown?: (e: PointerEvent) => void;
+  shouldSuppressClick?: () => boolean;
 }) {
+  const triggerRef = useRef<HTMLAnchorElement | null>(null);
+  const dragHandlerRef = useRef(onDragPointerDown);
+  dragHandlerRef.current = onDragPointerDown;
+  useEffect(() => {
+    const el = triggerRef.current;
+    if (!el || !draggable) return;
+    const handler = (e: PointerEvent) => dragHandlerRef.current?.(e);
+    el.addEventListener("pointerdown", handler);
+    return () => el.removeEventListener("pointerdown", handler);
+  }, [draggable]);
+
   const community = useCommunity2(communityId);
   // Rail buttons only need the icon/name, which the fold serves from its
   // persisted snapshot. Pass active=false so we DON'T fan out a control-plane
@@ -343,33 +478,62 @@ function Concord2Button({
   const displayName = folded?.metadata?.name || name;
   const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
   const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
+
+  const shiftStyle: React.CSSProperties =
+    !dragging && shiftY
+      ? { transform: `translateY(${shiftY}px)`, transition: "transform 180ms ease" }
+      : { transform: "translateY(0)", transition: reordering ? "transform 180ms ease" : undefined };
+
+  const placeholder = (
+    <span className="relative block size-12">
+      <span className="absolute inset-0 rounded-xl border-2 border-dashed border-primary/50 bg-primary/5" />
+    </span>
+  );
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <NavLink
+          ref={triggerRef}
           to={`/c/${encodeURIComponent(communityId)}`}
           aria-label={displayName}
-          onClick={onNavigate}
-          className="group relative flex items-center justify-center shrink-0"
-        >
-          {({ isActive }) => (
-            <span className="relative block size-12">
-              <span
-                className={cn(
-                  "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
-                  "bg-muted text-success opacity-60 saturate-75",
-                  "group-hover:opacity-100 group-hover:saturate-100",
-                  isActive && "opacity-100 saturate-100 is-active",
-                )}
-              >
-                {iconUrl ? (
-                  <img src={iconUrl} alt="" className="size-full object-cover" />
-                ) : (
-                  <span className="text-sm font-semibold">{initials}</span>
-                )}
-              </span>
-            </span>
+          style={shiftStyle}
+          onClick={(e) => {
+            if (shouldSuppressClick?.()) {
+              e.preventDefault();
+              return;
+            }
+            onNavigate?.();
+          }}
+          className={cn(
+            "group relative flex items-center justify-center shrink-0 touch-none",
+            draggable && "cursor-grab",
+            dragging && "cursor-grabbing",
           )}
+          {...(draggable ? { "data-rail-key": concord2Key(communityId) } : {})}
+        >
+          {({ isActive }) =>
+            dragging ? (
+              placeholder
+            ) : (
+              <span className="relative block size-12">
+                <span
+                  className={cn(
+                    "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
+                    "bg-muted text-success opacity-60 saturate-75",
+                    "group-hover:opacity-100 group-hover:saturate-100",
+                    isActive && "opacity-100 saturate-100 is-active",
+                  )}
+                >
+                  {iconUrl ? (
+                    <img src={iconUrl} alt="" className="size-full object-cover" />
+                  ) : (
+                    <span className="text-sm font-semibold">{initials}</span>
+                  )}
+                </span>
+              </span>
+            )
+          }
         </NavLink>
       </TooltipTrigger>
       <TooltipContent side="right" className="font-medium">
@@ -408,9 +572,7 @@ export function ServerRail({
   const [addOpen, setAddOpen] = useState(false);
 
   // Build the full rail list (pinned platform relays + user-added ones),
-  // de-duplicated, then apply the user's saved rail order (`config.serverOrder`)
-  // on top. Any server missing from the saved order keeps its default position
-  // (pinned first, then added); unknown saved entries are ignored.
+  // de-duplicated. Order is applied at the unified-list level below.
   const servers = useMemo(() => {
     const base: string[] = [];
     const seen = new Set<string>();
@@ -421,26 +583,63 @@ export function ServerRail({
         base.push(normalized);
       }
     }
-    const order = config.serverOrder.filter((u) => seen.has(u));
+    return base;
+  }, [config.addedRelays]);
+
+  // Unify NIP-29 servers and Concord (V1/V2) communities into one flat list,
+  // then apply the user's saved rail order (`config.railOrder`) on top. Any
+  // item missing from the saved order keeps its default position (servers
+  // first, then Concord V1, then V2, in discovery order); unknown saved entries
+  // are ignored. This is the single reorderable list shown in the rail.
+  const items = useMemo<RailItem[]>(() => {
+    const base: RailItem[] = [];
+    base.push(...servers.map((url) => ({ kind: "server" as const, key: url, url })));
+    if (user) {
+      for (const entry of concord?.list.entries ?? []) {
+        base.push({
+          kind: "concord1",
+          key: concord1Key(entry.communityId),
+          communityId: entry.communityId,
+          name: entry.current.name,
+        });
+      }
+      for (const entry of concord2) {
+        base.push({
+          kind: "concord2",
+          key: concord2Key(entry.community_id),
+          communityId: entry.community_id,
+          name: entry.current.name,
+        });
+      }
+    }
+
+    const byKey = new Map(base.map((it) => [it.key, it]));
+    const order = config.railOrder.filter((k) => byKey.has(k));
     if (order.length === 0) return base;
-    const ordered = [...order];
-    for (const url of base) {
-      if (!order.includes(url)) ordered.push(url);
+    const ordered: RailItem[] = [];
+    const placed = new Set<string>();
+    for (const key of order) {
+      const it = byKey.get(key)!;
+      ordered.push(it);
+      placed.add(key);
+    }
+    for (const it of base) {
+      if (!placed.has(it.key)) ordered.push(it);
     }
     return ordered;
-  }, [config.addedRelays, config.serverOrder]);
+  }, [servers, concord, concord2, user, config.railOrder]);
 
-  // Long-press drag-to-reorder for the servers. Works for both touch and mouse
-  // via pointer events: press and hold (~300ms) to pick a server up, then drag
-  // to slide it into a new spot — the other icons shift to open a gap and a
-  // floating ghost follows the pointer. A short press/tap still navigates.
+  // Long-press drag-to-reorder for the whole community rail. Works for both
+  // touch and mouse via pointer events: press and hold (~300ms) to pick an item
+  // up, then drag to slide it into a new spot — the other icons shift to open a
+  // gap and a floating ghost follows the pointer. A short press/tap navigates.
   //
-  // The rendered DOM order never changes during a drag (it stays `servers`);
+  // The rendered DOM order never changes during a drag (it stays `items`);
   // instead each icon gets a vertical `shiftY` to open the drop gap. This
   // avoids reading the DOM mid-animation, which previously caused flicker.
-  const [dragUrl, setDragUrl] = useState<string | null>(null);
+  const [dragKey, setDragKey] = useState<string | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
-  // Target slot index (in the original `servers` list) the dragged item lands.
+  // Target slot index (in the original `items` list) the dragged item lands.
   const [targetIndex, setTargetIndex] = useState<number | null>(null);
   const navRef = useRef<HTMLElement | null>(null);
   const longPressTimer = useRef<number | null>(null);
@@ -450,8 +649,10 @@ export function ServerRail({
   // Set briefly after a drag so the ensuing click doesn't navigate/select.
   const didDragRef = useRef(false);
   // Snapshot of the order at drag start, so the math is stable mid-gesture.
-  const serversRef = useRef(servers);
-  serversRef.current = servers;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const orderKeysRef = useRef<string[]>([]);
+  orderKeysRef.current = items.map((it) => it.key);
   // Frozen slot centers (viewport Y) + pitch, captured once at pickup from
   // clean DOM. Drives the arithmetic, never re-measured during the drag.
   const slotCentersRef = useRef<number[]>([]);
@@ -460,14 +661,19 @@ export function ServerRail({
   targetIndexRef.current = targetIndex;
 
   const persistOrder = useCallback(
-    (list: string[]) => {
-      // Persist the rail order in app config (covers pinned + added servers).
-      updateConfig((current) => ({ ...current, serverOrder: list }));
+    (keys: string[]) => {
+      // Persist the unified rail order in app config (servers + communities).
+      updateConfig((current) => ({
+        ...current,
+        railOrder: keys,
+        // Keep the legacy server-only order in sync for backward compat.
+        serverOrder: keys.filter((k) => !k.startsWith("c1:") && !k.startsWith("c2:")),
+      }));
 
       // Also sync the relative order of user-added relays to the kind 10009
       // list (the cross-device source of truth for the added-server set).
       const pinnedSet = new Set(PLATFORM_RELAYS);
-      const addedOrder = list.filter((u) => !pinnedSet.has(u));
+      const addedOrder = keys.filter((k) => !k.startsWith("c1:") && !k.startsWith("c2:") && !pinnedSet.has(k));
       if (user && addedOrder.length > 0) {
         updateList({ type: "reorder-servers", urls: addedOrder }).catch((err) =>
           console.warn("Failed to persist server order:", err),
@@ -493,17 +699,17 @@ export function ServerRail({
     return idx;
   }, []);
 
-  /** Build the reordered url list from a target index. */
-  const orderForTarget = useCallback((draggedUrl: string, target: number): string[] => {
-    const without = serversRef.current.filter((u) => u !== draggedUrl);
+  /** Build the reordered key list from a target index. */
+  const orderForTarget = useCallback((draggedKey: string, target: number): string[] => {
+    const without = orderKeysRef.current.filter((k) => k !== draggedKey);
     const clamped = Math.max(0, Math.min(target, without.length));
     const next = [...without];
-    next.splice(clamped, 0, draggedUrl);
+    next.splice(clamped, 0, draggedKey);
     return next;
   }, []);
 
-  const handleServerPointerDown = useCallback(
-    (url: string, e: PointerEvent) => {
+  const handleItemPointerDown = useCallback(
+    (key: string, e: PointerEvent) => {
       // Only left mouse / touch / pen; ignore right-click etc.
       if (e.button !== 0 && e.pointerType === "mouse") return;
       startPos.current = { x: e.clientX, y: e.clientY };
@@ -539,7 +745,7 @@ export function ServerRail({
         if (dragActive.current !== null) {
           const ti = targetIndexRef.current;
           const finalOrder =
-            ti === null ? serversRef.current : orderForTarget(dragActive.current, ti);
+            ti === null ? orderKeysRef.current : orderForTarget(dragActive.current, ti);
           persistOrder(finalOrder);
           didDragRef.current = true;
           // Keep the guard up long enough to swallow the click that the
@@ -549,7 +755,7 @@ export function ServerRail({
           }, 300);
         }
         dragActive.current = null;
-        setDragUrl(null);
+        setDragKey(null);
         setDragPos(null);
         setTargetIndex(null);
         clear();
@@ -564,7 +770,7 @@ export function ServerRail({
         const nav = navRef.current;
         const centers: number[] = [];
         if (nav) {
-          const els = nav.querySelectorAll<HTMLElement>("[data-server-url]");
+          const els = nav.querySelectorAll<HTMLElement>("[data-rail-key]");
           els.forEach((el) => {
             const r = el.getBoundingClientRect();
             centers.push(r.top + r.height / 2);
@@ -573,10 +779,10 @@ export function ServerRail({
         slotCentersRef.current = centers;
         if (centers.length >= 2) pitchRef.current = centers[1] - centers[0];
 
-        dragActive.current = url;
-        setDragUrl(url);
+        dragActive.current = key;
+        setDragKey(key);
         setDragPos({ x: e.clientX, y: e.clientY });
-        setTargetIndex(serversRef.current.indexOf(url));
+        setTargetIndex(orderKeysRef.current.indexOf(key));
         // Haptic nudge on supported devices.
         impact("medium");
       }, 300);
@@ -587,18 +793,25 @@ export function ServerRail({
   // Per-item vertical shift while dragging: each icon translates from its
   // original slot to the slot it would occupy in the previewed order. Pure
   // arithmetic off frozen state — no DOM reads — so it can't feedback/flicker.
-  const reordering = dragUrl !== null;
+  const reordering = dragKey !== null;
   const shiftFor = useCallback(
-    (url: string): number => {
-      if (!dragUrl || targetIndex === null || url === dragUrl) return 0;
-      const previewOrder = orderForTarget(dragUrl, targetIndex);
-      const fromIdx = servers.indexOf(url);
-      const toIdx = previewOrder.indexOf(url);
+    (key: string): number => {
+      if (!dragKey || targetIndex === null || key === dragKey) return 0;
+      const previewOrder = orderForTarget(dragKey, targetIndex);
+      const fromIdx = items.findIndex((it) => it.key === key);
+      const toIdx = previewOrder.indexOf(key);
       if (fromIdx === -1 || toIdx === -1) return 0;
       return (toIdx - fromIdx) * pitchRef.current;
     },
-    [dragUrl, targetIndex, servers, orderForTarget],
+    [dragKey, targetIndex, items, orderForTarget],
   );
+
+  // The item currently being dragged (drives the floating ghost).
+  const draggedItem = useMemo(
+    () => (dragKey ? (items.find((it) => it.key === dragKey) ?? null) : null),
+    [dragKey, items],
+  );
+  const draggable = items.length > 1;
 
   return (
     <nav
@@ -616,7 +829,7 @@ export function ServerRail({
         "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
         "pb-[calc(0.75rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]",
         // Lock scrolling while dragging so the rail doesn't fight the gesture.
-        dragUrl && "overflow-hidden",
+        dragKey && "overflow-hidden",
         className,
       )}
     >
@@ -708,49 +921,56 @@ export function ServerRail({
         </Tooltip>
       )}
 
-      {servers.map((url) => (
-        <ServerButton
-          key={url}
-          url={url}
-          onNavigate={onNavigate}
-          onSelect={onServerSelect}
-          selected={onServerSelect ? selectedServer === url : undefined}
-          inCall={!activeCall?.dmPeer && activeCall?.relayUrl === url}
-          draggable={servers.length > 1}
-          dragging={dragUrl === url}
-          shiftY={shiftFor(url)}
-          reordering={reordering}
-          onDragPointerDown={(e) => handleServerPointerDown(url, e)}
-          shouldSuppressClick={() => didDragRef.current}
-        />
-      ))}
-
-      <div className="w-7 h-px bg-chrome-divider shrink-0" />
-
-      {/* End-to-end-encrypted Concord communities (distinct trust model from the
-          relay-hosted servers above; rendered from the encrypted membership
-          lists — V1 alongside V2, each from its own list). */}
-      {user && ((concord && concord.list.entries.length > 0) || concord2.length > 0) && (
-        <>
-          {concord?.list.entries.map((entry) => (
-            <ConcordButton
-              key={entry.communityId}
-              communityId={entry.communityId}
-              name={entry.current.name}
-              onNavigate={onNavigate}
-            />
-          ))}
-          {concord2.map((entry) => (
-            <Concord2Button
-              key={entry.community_id}
-              communityId={entry.community_id}
-              name={entry.current.name}
-              onNavigate={onNavigate}
-            />
-          ))}
-          <div className="w-7 h-px bg-chrome-divider shrink-0" />
-        </>
+      {/* One unified, reorderable community list: NIP-29 servers and Concord
+          (V1/V2) communities intermixed. There is no divider between the two
+          trust models — they're a single drag-to-rearrange list. */}
+      {items.map((item) =>
+        item.kind === "server" ? (
+          <ServerButton
+            key={item.key}
+            url={item.url}
+            onNavigate={onNavigate}
+            onSelect={onServerSelect}
+            selected={onServerSelect ? selectedServer === item.url : undefined}
+            inCall={!activeCall?.dmPeer && activeCall?.relayUrl === item.url}
+            draggable={draggable}
+            dragging={dragKey === item.key}
+            shiftY={shiftFor(item.key)}
+            reordering={reordering}
+            onDragPointerDown={(e) => handleItemPointerDown(item.key, e)}
+            shouldSuppressClick={() => didDragRef.current}
+          />
+        ) : item.kind === "concord1" ? (
+          <ConcordButton
+            key={item.key}
+            communityId={item.communityId}
+            name={item.name}
+            onNavigate={onNavigate}
+            draggable={draggable}
+            dragging={dragKey === item.key}
+            shiftY={shiftFor(item.key)}
+            reordering={reordering}
+            onDragPointerDown={(e) => handleItemPointerDown(item.key, e)}
+            shouldSuppressClick={() => didDragRef.current}
+          />
+        ) : (
+          <Concord2Button
+            key={item.key}
+            communityId={item.communityId}
+            name={item.name}
+            onNavigate={onNavigate}
+            draggable={draggable}
+            dragging={dragKey === item.key}
+            shiftY={shiftFor(item.key)}
+            reordering={reordering}
+            onDragPointerDown={(e) => handleItemPointerDown(item.key, e)}
+            shouldSuppressClick={() => didDragRef.current}
+          />
+        ),
       )}
+
+      {/* Separates the community list from the add/settings actions below. */}
+      {items.length > 0 && <div className="w-7 h-px bg-chrome-divider shrink-0" />}
 
       <Tooltip>
         <TooltipTrigger asChild>
@@ -790,7 +1010,7 @@ export function ServerRail({
       <AddDialog open={addOpen} onOpenChange={setAddOpen} />
 
       {/* Floating ghost that follows the pointer during a drag. */}
-      {dragUrl && dragPos && <DragGhost url={dragUrl} x={dragPos.x} y={dragPos.y} />}
+      {draggedItem && dragPos && <DragGhost item={draggedItem} x={dragPos.x} y={dragPos.y} />}
     </nav>
   );
 }
