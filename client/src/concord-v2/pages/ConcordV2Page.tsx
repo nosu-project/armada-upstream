@@ -5,6 +5,7 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
+import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
@@ -152,9 +153,16 @@ const ChatMessage2 = memo(function ChatMessage2({
 
 /** The pinned footer for the V2 channel sidebar (account area). */
 function SidebarFooter2() {
+  const { user } = useCurrentUser();
   return (
     <div className="px-3 pb-safe shrink-0">
-      <LoginArea className="w-full flex" />
+      {user ? (
+        <LoginArea className="w-full flex" />
+      ) : (
+        <div className="p-2 flex justify-center">
+          <JoinButton className="w-full max-w-xs clip-corner-lg font-medium" />
+        </div>
+      )}
     </div>
   );
 }

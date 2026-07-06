@@ -10,6 +10,7 @@ import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
+import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
@@ -154,6 +155,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
  * (desktop pane + mobile drawer) registers its own call-bar slot.
  */
 function ConcordSidebarFooter() {
+  const { user } = useCurrentUser();
   const { registerCallBarSlot } = useCall();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -167,7 +169,13 @@ function ConcordSidebarFooter() {
       <div ref={ref} className="empty:hidden shrink-0 px-2 pb-2" />
       {/* Account area / account switcher. */}
       <div className="px-3 pb-safe shrink-0">
-        <LoginArea className="w-full flex" />
+        {user ? (
+          <LoginArea className="w-full flex" />
+        ) : (
+          <div className="p-2 flex justify-center">
+            <JoinButton className="w-full max-w-xs clip-corner-lg font-medium" />
+          </div>
+        )}
       </div>
     </>
   );
