@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 
 import { unwrapGiftWrap, type Nip44Decryptor } from "@/concord-v1/lib/giftwrap";
 import {
-  WRAP_BACKDATE_WINDOW_SECS,
   advanceInviteCursor,
   inviteSince,
   queryInvites,
@@ -87,17 +86,16 @@ describe("concord-v1 invite store", () => {
     expect(mine.sender).toBe(getPublicKey(senderSk));
   });
 
-  it("cursor resumes from the newest wrap, offset by the NIP-59 backdate window", async () => {
+  it("cursor resumes from exactly the newest wrap already scanned", async () => {
     const pubkey = "cursor-test-" + getPublicKey(generateSecretKey());
     expect(await inviteSince(pubkey)).toBe(0); // cold cache → full scan
 
     const newest = 1_000_000;
     await advanceInviteCursor(pubkey, newest);
-    // since is offset back by the backdate window so backdated wraps aren't missed.
-    expect(await inviteSince(pubkey)).toBe(newest - WRAP_BACKDATE_WINDOW_SECS);
+    expect(await inviteSince(pubkey)).toBe(newest);
 
     // Monotonic: an older value never regresses the cursor.
     await advanceInviteCursor(pubkey, newest - 500);
-    expect(await inviteSince(pubkey)).toBe(newest - WRAP_BACKDATE_WINDOW_SECS);
+    expect(await inviteSince(pubkey)).toBe(newest);
   });
 });

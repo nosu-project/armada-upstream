@@ -15,11 +15,11 @@
  * dedup key), carry the seal author (sender) and the wrap's `created_at`, and
  * are sig-less.
  *
- * NIP-59 backdate gotcha: `nip59.wrapEvent` randomizes the outer `created_at`
- * up to two days into the PAST. A naive `since = lastSeen` filter would miss a
- * freshly-published-but-backdated wrap, so the cursor's `since` is offset back
- * by {@link WRAP_BACKDATE_WINDOW_SECS}; the store's dedup-by-id absorbs the
- * resulting overlap.
+ * The `since` cursor resumes from the newest wrap already scanned. NIP-59
+ * permits backdating the outer `created_at` up to two days, which a strict
+ * cursor could skip — but invite gift wraps in practice do NOT backdate, so we
+ * accept resuming from exactly where we left off and tolerate losing a rare
+ * backdated invite rather than rescanning two days of wraps on every launch.
  *
  * Trust note: this persists decrypted invite metadata at rest — the same
  * device-trust level as the folded caches already in use. Wiped on logout.
@@ -32,9 +32,6 @@ import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { UnwrappedRumor } from "@/concord-v1/lib/giftwrap";
 
 const DB_NAME = "armada-concord-invites";
-
-/** NIP-59 wraps may be backdated up to 2 days; scan a hair beyond that. */
-export const WRAP_BACKDATE_WINDOW_SECS = 2 * 24 * 60 * 60 + 60 * 60;
 
 /** Synthetic provenance tags on the stored record (not part of the rumor). */
 const TAG_WRAP = "wrap";
@@ -133,16 +130,14 @@ export function writeInvites(records: { wrap: NostrEvent; unwrapped: UnwrappedRu
 // ── Sync cursor ───────────────────────────────────────────────────────────────
 //
 // Per-user resume state: the newest wrap `created_at` ingested. Persisted in the
-// folded cache. The `since` filter subtracts the backdate window so a newly
-// published but backdated wrap is still caught.
+// folded cache. Resumes from exactly the newest wrap already scanned (invite
+// gift wraps don't backdate in practice — see the module note).
 
 const cursorKey = (pubkey: string) => `concord-invites-cursor:${pubkey}`;
 
 /** The `since` floor to fetch invite wraps from (0 on a cold cache). */
 export async function inviteSince(pubkey: string): Promise<number> {
-  const newest = (await readFolded<number>(cursorKey(pubkey))) ?? 0;
-  if (newest === 0) return 0;
-  return Math.max(0, newest - WRAP_BACKDATE_WINDOW_SECS);
+  return (await readFolded<number>(cursorKey(pubkey))) ?? 0;
 }
 
 /** Advance the cursor to the newest wrap `created_at` seen (monotonic). */

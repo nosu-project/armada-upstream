@@ -38,8 +38,8 @@ export interface ParkedInvite {
  *
  * Sync: decrypted invite rumors are persisted in a dedicated IndexedDB store
  * (inviteStore) and read back from there, so the inbox no longer re-decrypts the
- * whole 1059 backlog on every poll. A persisted `since` cursor (offset by the
- * NIP-59 backdate window) means only wraps newer than the last sync are fetched.
+ * whole 1059 backlog on every poll. A persisted `since` cursor means only wraps
+ * newer than the last sync are fetched.
  */
 export function useConcordInvites() {
   const { nostr } = useNostr();
@@ -74,9 +74,9 @@ export function useConcordInvites() {
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
 
-      // Fetch only wraps newer than the last sync (offset by the NIP-59 backdate
-      // window so a freshly-published-but-backdated wrap isn't skipped). Decrypt
-      // just the ones we don't already have stored, persist them, advance cursor.
+      // Fetch only wraps newer than the last sync. Decrypt just the ones we
+      // don't already have stored, persist them, advance the cursor. (Invite
+      // gift wraps don't backdate, so resuming from the exact cursor is safe.)
       const since = await inviteSince(pubkey);
       const filter: { kinds: number[]; "#p": string[]; limit: number; since?: number } = {
         kinds: [KIND_GIFT_WRAP],
