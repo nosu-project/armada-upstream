@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.17.5] - 2026-07-06
+
+Armada links now open straight into the Android app: tapping an
+https://armada.buzz invite or shared channel link lands you in the right room
+instead of the browser. Also fixes a background notification bug that could
+quietly drain the battery overnight on flaky connections.
+
+### Added
+- armada.buzz links (invites, shared channels) now open directly in the
+  Android app
+
+### Fixed
+- Background notifications no longer drain the battery by reconnecting in a
+  tight loop when a relay or network keeps dropping the connection
+
 ## [0.17.4] - 2026-07-06
 
 Fixes member promotion in newer communities: "Make moderator" was silently
