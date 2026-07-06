@@ -5,21 +5,21 @@ name: Armada
 summary: Encrypted communities with text and voice. No host required. Your keys, your fleet.
 
 description: |
-  Armada is a community chat app — servers, channels, and voice — where your
+  Armada is a community chat app with servers, channels, and voice, where your
   keys are your identity and no one has to run anything.
 
   Spin up a Concord: a serverless, end-to-end encrypted community. Nothing to
   set up, nobody in the middle, and only members can read it. Text channels,
-  live voice rooms, invites — all without a host.
+  live voice rooms, and invites, all without a host.
 
   Prefer full control? Self-host an Armada server on your own infrastructure
   and own the whole stack: membership, moderation, and data.
 
   Features:
-  - End-to-end encrypted communities (Concord) — no server to run
-  - Voice rooms — encrypted group calls and DM calls
+  - End-to-end encrypted communities (Concord), no server to run
+  - Voice rooms with encrypted group calls and DM calls
   - Discord-style servers and channels, self-hostable
-  - Portable identity — sign in with your key on any device
+  - Portable identity: sign in with your key on any device
 
 tags:
   - nostr
@@ -31,7 +31,7 @@ tags:
 
 license: AGPL-3.0
 
-website: https://armada.dreamith.to
+website: https://armada.buzz
 
 icon: ./client/public/logo-512.png
 
@@ -41,7 +41,7 @@ metadata_sources:
   - gitlab
 
 supported_nips:
-  - "01"  # Basic protocol — events, filters, subscriptions
+  - "01"  # Basic protocol: events, filters, subscriptions
   - "05"  # DNS-based identifiers
   - "07"  # Browser extension signing (window.nostr)
   - "09"  # Event deletion
