@@ -4,6 +4,25 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.17.1] - 2026-07-05
+
+Your settings now follow you across devices more completely, and a few rough
+edges are smoothed out: opening a community on mobile is a single clean slide
+instead of a jumpy double transition, the community sidebar scrolls properly by
+touch again, and links at the end of a message no longer swallow the space
+before them.
+
+### Changed
+- More of your setup now syncs across devices, including your community and
+  sidebar order, added relays, and the last channel you had open in each
+  community
+
+### Fixed
+- Opening a community on mobile now transitions smoothly in one step instead of
+  visibly jumping through the channel list first
+- The community sidebar can be scrolled by touch again on mobile
+- A link at the end of a message no longer glues itself to the preceding word
+
 ## [0.17.0] - 2026-07-05
 
 Brings Slack-style threads to every conversation: reply to any message and the
