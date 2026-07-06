@@ -20,6 +20,7 @@ import {
   readChannelCursor,
   updateChannelCursor,
   writeRumors,
+  drainPendingWraps,
 } from "@/concord-v2/lib/rumorStore";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
@@ -316,6 +317,13 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const cursorKeyId = channelIdHex ?? "";
+
+      // Drain any wraps the native service parked (it can't decrypt) into the
+      // rumor store first, so a notification's message is present on cold read.
+      const parked = await drainPendingWraps(channel!.streams.map((s) => s.group.pk));
+      if (parked.length > 0) {
+        writeRumors(await openChatBatch(parked, channel!, { signal }));
+      }
 
       // hasMore is true if the local rumor window is full OR relays may have more.
       const refreshHasMore = (localFull: boolean) => {

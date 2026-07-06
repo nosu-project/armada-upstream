@@ -137,6 +137,16 @@ export function openGuestbookWraps(wraps: NostrEvent[], groups: GroupKey[]): Ope
 }
 
 /**
+ * The Guestbook fold input when events are ALREADY opened (from the decrypted
+ * opened-event cache). The wrap decrypt happened at ingest; nothing to do but
+ * pass them through — kept as a named seam so the read path reads symmetrically
+ * with the control plane's `openControlEditions`.
+ */
+export function openGuestbookOpened(opened: OpenedEvent[]): OpenedEvent[] {
+  return opened;
+}
+
+/**
  * Coalesce opened guestbook events flat: one final state per npub.
  *
  *   - entries dated > 1h ahead of the local clock are dropped outright;

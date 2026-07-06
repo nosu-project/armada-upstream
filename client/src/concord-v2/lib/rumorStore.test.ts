@@ -5,13 +5,17 @@ import { describe, expect, it } from "vitest";
 
 import { bytesToHex, channelGroupKey } from "@/concord-v2/lib/derive";
 import { openChatBatch, type OpenedChat } from "@/concord-v2/lib/chat";
-import { KIND_DELETE, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
-import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { KIND_DELETE, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
+import { buildRumor, channelBindingTags, openWrap, rewrapSeal, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import {
+  drainPendingWraps,
   openedToStored,
+  parkPendingWraps,
+  queryByStreams,
   queryChannelRumors,
-  storedToOpened,
+  storedToOpenedChat,
+  writeOpened,
   writeRumors,
 } from "@/concord-v2/lib/rumorStore";
 
@@ -95,7 +99,7 @@ describe("concord-v2 rumor store", () => {
     expect(stored.kind).toBe(KIND_MESSAGE);
     expect(stored.pubkey).toBe(s.pubkey);
 
-    const back = storedToOpened(stored, idHex);
+    const back = storedToOpenedChat(stored, idHex);
     expect(back.rumorId).toBe(rumor.id);
     expect(back.content).toBe("hello");
     expect(back.ms).toBe(1234500);
@@ -147,5 +151,46 @@ describe("concord-v2 rumor store", () => {
       (r) => !r.some((m) => m.rumorId === msg.id),
     );
     expect(after.some((m) => m.rumorId === msg.id)).toBe(false);
+  });
+
+  it("preserves the full signed seal through the opened-event store (control compaction)", async () => {
+    const alice = signer();
+    const control = channelGroupKey(new Uint8Array(32).fill(9), new Uint8Array(32).fill(1), 0);
+    // A plaintext-sealed control-style edition.
+    const rumor = buildRumor({
+      kind: 3308,
+      content: "{}",
+      tags: [["vsk", "0"], ["eid", "ab".repeat(32)], ["ev", "1"]],
+      pubkey: alice.pubkey,
+      ms: null,
+    });
+    const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice);
+    const wrap = wrapSeal(seal, control);
+    const opened = openWrap(wrap, control);
+
+    writeOpened([opened]);
+    const [back] = await eventually(() => queryByStreams([control.pk]), (r) => r.length === 1);
+    expect(back.rumorId).toBe(opened.rumorId);
+    expect(back.author).toBe(alice.pubkey);
+    expect(back.sealKind).toBe(KIND_SEAL_PLAINTEXT);
+    // The reconstructed seal is byte-identical and re-wrappable (compaction).
+    expect(back.seal.id).toBe(seal.id);
+    expect(back.seal.sig).toBe(seal.sig);
+    const rewrapped = rewrapSeal(back.seal, control);
+    expect(openWrap(rewrapped, control).rumorId).toBe(opened.rumorId);
+  });
+
+  it("parks and drains raw wraps without decrypting", async () => {
+    const alice = signer();
+    const control = channelGroupKey(new Uint8Array(32).fill(7), new Uint8Array(32).fill(2), 0);
+    const rumor = buildRumor({ kind: 3308, content: "{}", tags: [["vsk", "0"], ["eid", "cd".repeat(32)], ["ev", "1"]], pubkey: alice.pubkey, ms: null });
+    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control);
+
+    parkPendingWraps([wrap]);
+    const drained = await eventually(() => drainPendingWraps([control.pk]), (r) => r.length === 1);
+    expect(drained.map((w) => w.id)).toEqual([wrap.id]);
+    // Draining removes them — a second drain is empty.
+    const second = await drainPendingWraps([control.pk]);
+    expect(second.length).toBe(0);
   });
 });

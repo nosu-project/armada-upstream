@@ -121,6 +121,31 @@ export function openControlWraps(wraps: NostrEvent[], groups: GroupKey[]): Parse
   return out;
 }
 
+/**
+ * Parse already-OPENED control events (from the decrypted opened-event cache)
+ * into editions. The wrap decrypt + seal verify happened at ingest; this only
+ * extracts the edition machinery. Memoized per rumor id, so re-folds are cheap.
+ */
+export function openControlEditions(opened: OpenedEvent[]): ParsedEdition[] {
+  const out: ParsedEdition[] = [];
+  for (const ev of opened) {
+    const cached = parsedEditionMemo.get(ev.rumorId);
+    if (cached !== undefined) {
+      if (cached) out.push(cached);
+      continue;
+    }
+    let parsed: ParsedEdition | null = null;
+    try {
+      parsed = parseEdition(ev);
+    } catch {
+      parsed = null;
+    }
+    parsedEditionMemo.set(ev.rumorId, parsed);
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
 // ── Edition builders ─────────────────────────────────────────────────────────
 
 interface BuildCommon {
@@ -551,10 +576,15 @@ export function isDissolved(wraps: NostrEvent[], communityId: Uint8Array, ownerH
     } catch {
       continue;
     }
-    if (opened.author !== ownerHex) continue;
-    const vsk = opened.tags.find((t) => t[0] === "vsk")?.[1];
-    const eid = opened.tags.find((t) => t[0] === "eid")?.[1];
-    if (opened.kind === 3308 && vsk === VSK_DISSOLVED && eid === ZERO32_HEX) return true;
+    if (isDissolvedOpened(opened, ownerHex)) return true;
   }
   return false;
+}
+
+/** Whether an already-opened dissolved-address event is a valid owner tombstone. */
+export function isDissolvedOpened(opened: OpenedEvent, ownerHex: string): boolean {
+  if (opened.author !== ownerHex) return false;
+  const vsk = opened.tags.find((t) => t[0] === "vsk")?.[1];
+  const eid = opened.tags.find((t) => t[0] === "eid")?.[1];
+  return opened.kind === 3308 && vsk === VSK_DISSOLVED && eid === ZERO32_HEX;
 }

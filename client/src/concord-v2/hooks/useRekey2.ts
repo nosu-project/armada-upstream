@@ -32,10 +32,14 @@ import {
   type RekeyBlob,
 } from "@/concord-v2/lib/rekey";
 import { hasPermission, Permissions } from "@/concord-v2/lib/roles";
-import { openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
+import { queryByStreams, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
+import { openWrap, rewrapSeal, sealRumor, wrapSeal, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { CommunityV2, HeldRoot } from "@/concord-v2/lib/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+
+/** Read options, incl. the NostrBatcher `cache` opt-out (see rumorStore.ts). */
+type ReadOpts = { signal?: AbortSignal; cache?: boolean };
 
 const ZERO_SCOPE = new Uint8Array(32);
 
@@ -61,25 +65,48 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
   const handled = useRef(new Set<string>());
 
   const nextEpoch = community ? community.rootEpoch + 1n : 0n;
-  const query = useQuery<NostrEvent[]>({
+  const query = useQuery<OpenedEvent[]>({
     queryKey: ["concord2", "rekey", community?.idHex ?? null, nextEpoch.toString()],
     enabled: Boolean(community),
     staleTime: 30_000,
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const address = baseRekeyGroupKey(community!.root, community!.id, nextEpoch);
+      const scope = `rekey:${community!.idHex}:${nextEpoch}`;
+      const cursor = await readStreamCursor(scope);
+      const filter: { kinds: number[]; authors: string[]; limit: number; since?: number } = {
+        kinds: [KIND_WRAP],
+        authors: [address.pk],
+        limit: 50,
+      };
+      if (cursor?.newest) filter.since = cursor.newest;
+
       const results = await Promise.all(
         community!.relays.map((url) =>
           nostr
             .relay(url)
-            .query([{ kinds: [KIND_WRAP], authors: [address.pk], limit: 50 }], {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-            })
+            .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]), cache: false } as ReadOpts)
             .catch(() => [] as NostrEvent[]),
         ),
       );
-      const byId = new Map<string, NostrEvent>();
-      for (const ev of results.flat()) byId.set(ev.id, ev);
+      // Decrypt the stream layer once (the inner blob stays pairwise-encrypted);
+      // persist the opened events so a seen rekey round is never refetched.
+      const fresh: OpenedEvent[] = [];
+      for (const wrap of results.flat()) {
+        try {
+          fresh.push(openWrap(wrap, address));
+        } catch {
+          // not this address / malformed
+        }
+      }
+      if (fresh.length > 0) {
+        writeOpened(fresh);
+        await updateStreamCursor(scope, { newest: Math.max(...fresh.map((e) => e.createdAt)) });
+      }
+      const stored = await queryByStreams([address.pk]);
+      const byId = new Map<string, OpenedEvent>();
+      for (const e of stored) byId.set(e.rumorId, e);
+      for (const e of fresh) byId.set(e.rumorId, e);
       return [...byId.values()];
     },
   });
@@ -93,11 +120,10 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
 
     let cancelled = false;
     void (async () => {
-      const address = baseRekeyGroupKey(community.root, community.id, nextEpoch);
       const parsed: ParsedRekey[] = [];
-      for (const wrap of query.data!) {
+      for (const opened of query.data!) {
         try {
-          parsed.push(parseRekey(openWrap(wrap, address)));
+          parsed.push(parseRekey(opened));
         } catch {
           // not a rekey / not ours
         }

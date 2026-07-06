@@ -4,6 +4,7 @@ import { useEffect } from "react";
 
 import { useEventStore } from "@/hooks/useEventStore";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { parkPendingWraps } from "@/concord-v2/lib/rumorStore";
 import { recordNativeEvent } from "@/lib/nativeEventInbox";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 
@@ -139,9 +140,17 @@ export function useNativeEventFeed(): void {
       }
 
       // PERSIST AFTER — write every event to the shared store so a later cold
-      // read (channel switch / refetch) still finds it.
+      // read (channel switch / refetch) still finds it. EXCEPT Concord V2 wraps
+      // (kind 1059/21059): those never touch `armada-events` — the service can't
+      // decrypt them, so they're parked in the pending store for the WebView's
+      // plane hooks (which hold the keys) to drain, decrypt, and move into the
+      // opened-event store.
+      const v2Wraps = events.filter((ev) => ev.kind === 1059 || ev.kind === 21059);
+      if (v2Wraps.length > 0) parkPendingWraps(v2Wraps);
+
       const store = await eventStore;
       for (const ev of events) {
+        if (ev.kind === 1059 || ev.kind === 21059) continue;
         try {
           await store.event(ev);
         } catch {
