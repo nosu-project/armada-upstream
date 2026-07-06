@@ -1,0 +1,61 @@
+repository: https://gitlab.com/soapbox-pub/armada
+
+name: Armada
+
+summary: Encrypted communities with text and voice. No host required. Your keys, your fleet.
+
+description: |
+  Armada is a community chat app — servers, channels, and voice — where your
+  keys are your identity and no one has to run anything.
+
+  Spin up a Concord: a serverless, end-to-end encrypted community. Nothing to
+  set up, nobody in the middle, and only members can read it. Text channels,
+  live voice rooms, invites — all without a host.
+
+  Prefer full control? Self-host an Armada server on your own infrastructure
+  and own the whole stack: membership, moderation, and data.
+
+  Features:
+  - End-to-end encrypted communities (Concord) — no server to run
+  - Voice rooms — encrypted group calls and DM calls
+  - Discord-style servers and channels, self-hostable
+  - Portable identity — sign in with your key on any device
+
+tags:
+  - nostr
+  - chat
+  - messaging
+  - voice
+  - encrypted
+  - decentralized
+
+license: AGPL-3.0
+
+website: https://armada.dreamith.to
+
+icon: ./client/public/logo-512.png
+
+release_notes: ./CHANGELOG.md
+
+metadata_sources:
+  - gitlab
+
+supported_nips:
+  - "01"  # Basic protocol — events, filters, subscriptions
+  - "05"  # DNS-based identifiers
+  - "07"  # Browser extension signing (window.nostr)
+  - "09"  # Event deletion
+  - "10"  # Text note threading
+  - "11"  # Relay information document
+  - "19"  # Bech32 identifiers (npub, nevent, naddr, nprofile)
+  - "25"  # Reactions
+  - "27"  # Text note references (nostr: URI mentions)
+  - "29"  # Relay-based groups (self-hosted servers)
+  - "42"  # Relay authentication
+  - "44"  # Versioned encryption
+  - "46"  # Nostr remote signing / bunker
+  - "51"  # Lists (personal group list, mutes)
+  - "59"  # Gift wrap (Concord sealed events)
+  - "65"  # Relay list metadata
+  - "92"  # Inline file metadata (imeta tag)
+  - "98"  # HTTP authentication (voice token endpoints)

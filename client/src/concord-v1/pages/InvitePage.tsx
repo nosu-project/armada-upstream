@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { ServerRail } from "@/components/layout/ServerRail";
-import { LoginArea } from "@/components/auth/LoginArea";
+import { JoinButton } from "@/components/auth/JoinButton";
 import { Button } from "@/components/ui/button";
 import { useConcordActions } from "@/concord-v1/hooks/useConcordActions";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -66,12 +66,11 @@ export function InvitePage() {
           </>
         ) : !user ? (
           <>
-            <h1 className="text-2xl font-bold">You’re invited to an encrypted chat</h1>
+            <h1 className="text-2xl font-bold">You’re invited to a private chat</h1>
             <p className="max-w-md text-muted-foreground">
-              Sign in to join. The invite’s secret stays in your browser and never
-              reaches the relay.
+              Create an account or sign in to accept the invite.
             </p>
-            <LoginArea />
+            <JoinButton size="lg" className="h-12 w-full max-w-xs clip-corner-lg text-base font-medium" />
           </>
         ) : (
           <>

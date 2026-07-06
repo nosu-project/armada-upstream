@@ -3,10 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { CreateGroupDialog } from "@/components/dialogs/CreateGroupDialog";
+import { JoinButton } from "@/components/auth/JoinButton";
 import { LoginArea } from "@/components/auth/LoginArea";
-import LoginDialog from "@/components/auth/LoginDialog";
 import { VoiceParticipantList } from "@/components/VoicePresence";
-import SignupDialog from "@/components/auth/SignupDialog";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +25,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
 import { relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
+import { writeClipboardText } from "@/lib/clipboard";
 
 import type { Nip29Group } from "@/lib/nip29";
 
@@ -124,7 +124,7 @@ function ChannelLink({
         <ContextMenuItem
           onSelect={() => {
             const url = `${window.location.origin}/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`;
-            navigator.clipboard?.writeText(url);
+            writeClipboardText(url).catch(() => undefined);
           }}
         >
           <LinkIcon className="mr-2 size-4" /> Copy channel link
@@ -150,8 +150,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const { registerCallBarSlot } = useCall();
   const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [joinOpen, setJoinOpen] = useState(false);
-  const [signupOpen, setSignupOpen] = useState(false);
 
   // Don't let skeletons run for the full connect/timeout window (which can be
   // 8–16s on a slow or AUTH-gated relay) — that reads as a hang. Show skeletons
@@ -198,26 +196,10 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
               <LoginArea className="w-full flex" />
             ) : (
               <div className="p-2 flex justify-center">
-                <Button
-                  onClick={() => setJoinOpen(true)}
-                  className="w-full max-w-xs clip-corner-lg font-medium"
-                >
-                  Join
-                </Button>
+                <JoinButton className="w-full max-w-xs clip-corner-lg font-medium" />
               </div>
             )}
           </div>
-
-          <LoginDialog
-            isOpen={joinOpen}
-            onClose={() => setJoinOpen(false)}
-            onLogin={() => setJoinOpen(false)}
-            onSignupClick={() => {
-              setJoinOpen(false);
-              setSignupOpen(true);
-            }}
-          />
-          <SignupDialog isOpen={signupOpen} onClose={() => setSignupOpen(false)} />
 
           <CreateGroupDialog relayUrl={relayUrl} open={createOpen} onOpenChange={setCreateOpen} />
         </>

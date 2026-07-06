@@ -1,13 +1,18 @@
-import { Check, Copy, Link as LinkIcon, Loader2 } from "lucide-react";
+import { Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2 } from "lucide-react";
 import { useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useConcordCommunityActions } from "@/concord-v1/hooks/useConcordCommunityActions";
 import { toast } from "@/hooks/useToast";
+import { writeClipboardText } from "@/lib/clipboard";
+import { cn } from "@/lib/utils";
 import type { Community } from "@/concord-v1/lib/types";
 
 /**
@@ -41,6 +46,7 @@ function InviteBody({ community }: { community: Community | undefined }) {
   const [copied, setCopied] = useState(false);
   const [expiryDays, setExpiryDays] = useState<number>(0); // 0 = never
   const [label, setLabel] = useState("");
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,15 +76,15 @@ function InviteBody({ community }: { community: Community | undefined }) {
     }
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (!link) return;
-    navigator.clipboard?.writeText(link).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      },
-      () => toast({ title: "Copy failed", variant: "destructive" }),
-    );
+    try {
+      await writeClipboardText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast({ title: "Copy failed", variant: "destructive" });
+    }
   };
 
   return (
@@ -91,9 +97,9 @@ function InviteBody({ community }: { community: Community | undefined }) {
           </h2>
           <p className="text-sm text-muted-foreground">
             {community?.name ? (
-              <>Bring people into <span className="text-foreground">{community.name}</span>. The keys never touch a relay in the clear.</>
+              <>Bring people into <span className="text-foreground">{community.name}</span>.</>
             ) : (
-              <>The community keys never touch a relay in the clear.</>
+              <>Bring people into your community.</>
             )}
           </p>
         </div>
@@ -104,6 +110,16 @@ function InviteBody({ community }: { community: Community | undefined }) {
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <LinkIcon className="size-3.5" />
           Share a link
+          <Popover>
+            <PopoverTrigger asChild>
+              <button type="button" className="ml-auto text-muted-foreground/70 hover:text-foreground" aria-label="About invite links">
+                <Info className="size-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="top" className="w-64 p-3 text-xs normal-case tracking-normal font-normal text-muted-foreground">
+              Anyone with the link can join. The secret lives in the # fragment, never sent to a server.
+            </PopoverContent>
+          </Popover>
         </div>
         {link ? (
           <>
@@ -126,26 +142,6 @@ function InviteBody({ community }: { community: Community | undefined }) {
           </>
         ) : (
           <>
-            <div className="flex gap-2">
-              <select
-                value={expiryDays}
-                onChange={(e) => setExpiryDays(Number(e.target.value))}
-                className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
-                aria-label="Link expiry"
-              >
-                <option value={0}>Never expires</option>
-                <option value={1}>1 day</option>
-                <option value={7}>7 days</option>
-                <option value={30}>30 days</option>
-              </select>
-              <Input
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                placeholder="Label (optional)"
-                className="min-w-0 text-sm"
-                aria-label="Invite label"
-              />
-            </div>
             <Button
               type="button"
               variant="secondary"
@@ -155,11 +151,44 @@ function InviteBody({ community }: { community: Community | undefined }) {
             >
               {isCreatingLink ? <><Loader2 className="size-4 mr-2 animate-spin" /> Generating...</> : "Generate invite link"}
             </Button>
+            <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
+              <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
+                <ChevronRight className={cn("size-3.5 transition-transform", optionsOpen && "rotate-90")} />
+                Link options
+                {!optionsOpen && (expiryDays > 0 || label.trim()) && (
+                  <span className="text-foreground/70">
+                    {" · "}
+                    {[expiryDays > 0 ? `expires in ${expiryDays} day${expiryDays > 1 ? "s" : ""}` : null, label.trim() ? `"${label.trim()}"` : null]
+                      .filter(Boolean)
+                      .join(", ")}
+                  </span>
+                )}
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-2">
+                <div className="flex gap-2">
+                  <Select value={String(expiryDays)} onValueChange={(v) => setExpiryDays(Number(v))}>
+                    <SelectTrigger className="w-40 shrink-0" aria-label="Link expiry">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">Never expires</SelectItem>
+                      <SelectItem value="1">Expires in 1 day</SelectItem>
+                      <SelectItem value="7">Expires in 7 days</SelectItem>
+                      <SelectItem value="30">Expires in 30 days</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
+                    placeholder="Label (optional)"
+                    className="min-w-0 text-sm"
+                    aria-label="Invite label"
+                  />
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           </>
         )}
-        <p className="text-xs text-muted-foreground">
-          Anyone with the link can join. The secret lives in the # fragment, never sent to a server.
-        </p>
       </div>
 
       {error && (

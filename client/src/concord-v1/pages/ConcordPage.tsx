@@ -10,9 +10,11 @@ import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
+import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
+import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { VoicePresence } from "@/components/VoicePresence";
 import { InviteConcordDialog } from "@/concord-v1/components/InviteConcordDialog";
 import { ConcordSettingsDialog } from "@/concord-v1/components/ConcordSettingsDialog";
@@ -30,7 +32,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useAuthor } from "@/hooks/useAuthor";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
@@ -50,7 +51,6 @@ import { useSendConcordMessage } from "@/concord-v1/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
 import { toast } from "@/hooks/useToast";
-import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/concord-v1/lib/roles";
 import { type Channel, type Community, type CommunityImage } from "@/concord-v1/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
@@ -60,41 +60,6 @@ import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/tr
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
-
-/** One typer's scoped display name, resolved like the rest of the channel. */
-function TypingName({ pubkey }: { pubkey: string }) {
-  const author = useAuthor(pubkey);
-  return <span className="font-medium not-italic">{useScopedDisplayName(pubkey, author.data?.metadata)}</span>;
-}
-
-/**
- * Discord-style "who is typing" line. Names up to three typers inline (resolved
- * to their scoped display names, like message authors); beyond that it collapses
- * to "Several people are typing…" to keep the line short and avoid resolving an
- * unbounded list of profiles.
- */
-function ConcordTypingIndicator({ pubkeys }: { pubkeys: string[] }) {
-  if (pubkeys.length === 0) return null;
-  if (pubkeys.length > 3) {
-    return (
-      <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
-        Several people are typing…
-      </div>
-    );
-  }
-  const names = pubkeys.map((pk) => <TypingName key={pk} pubkey={pk} />);
-  return (
-    <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
-      {names.map((name, i) => (
-        <span key={pubkeys[i]}>
-          {name}
-          {i < names.length - 2 ? ", " : i === names.length - 2 ? (names.length > 2 ? ", and " : " and ") : ""}
-        </span>
-      ))}
-      {names.length === 1 ? " is typing…" : " are typing…"}
-    </div>
-  );
-}
 
 /** The community's decrypted GroupRoot logo for the channel-list title. Renders
  *  nothing when the community has no icon (the header falls back to a
@@ -190,6 +155,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
  * (desktop pane + mobile drawer) registers its own call-bar slot.
  */
 function ConcordSidebarFooter() {
+  const { user } = useCurrentUser();
   const { registerCallBarSlot } = useCall();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -203,7 +169,13 @@ function ConcordSidebarFooter() {
       <div ref={ref} className="empty:hidden shrink-0 px-2 pb-2" />
       {/* Account area / account switcher. */}
       <div className="px-3 pb-safe shrink-0">
-        <LoginArea className="w-full flex" />
+        {user ? (
+          <LoginArea className="w-full flex" />
+        ) : (
+          <div className="p-2 flex justify-center">
+            <JoinButton className="w-full max-w-xs clip-corner-lg font-medium" />
+          </div>
+        )}
       </div>
     </>
   );
@@ -800,7 +772,7 @@ export function ConcordPage() {
             />
 
             {(typingPubkeys?.length ?? 0) > 0 && (
-              <ConcordTypingIndicator pubkeys={typingPubkeys!} />
+              <TypingIndicator pubkeys={typingPubkeys!} />
             )}
             {channel && (
               <ChatComposer

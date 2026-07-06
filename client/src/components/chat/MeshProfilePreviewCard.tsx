@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { writeClipboardText } from "@/lib/clipboard";
 
 import type { MessageIdentity } from "@/components/chat/MessageRow";
 
@@ -37,10 +38,10 @@ function MeshProfilePreviewBody({
   const suffix = identity.suffix;
 
   const copyPeerID = () => {
-    navigator.clipboard?.writeText(peerID).then(() => {
+    writeClipboardText(peerID).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    });
+    }, () => undefined);
   };
 
   const message = () => {

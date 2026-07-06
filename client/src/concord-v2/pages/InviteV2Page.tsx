@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { ServerRail } from "@/components/layout/ServerRail";
-import { LoginArea } from "@/components/auth/LoginArea";
+import { JoinButton } from "@/components/auth/JoinButton";
 import { Button } from "@/components/ui/button";
 import { useCommunityActions2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -84,13 +84,13 @@ export function InviteV2Page() {
               {previewName ? (
                 <>You’re invited to {previewName}</>
               ) : (
-                <>You’re invited to an encrypted community</>
+                <>You’re invited to a private community</>
               )}
             </h1>
             <p className="max-w-md text-muted-foreground">
-              Sign in to join. The invite’s secret stays in your browser and never reaches any server.
+              Create an account or sign in to accept the invite.
             </p>
-            <LoginArea />
+            <JoinButton size="lg" className="h-12 w-full max-w-xs clip-corner-lg text-base font-medium" />
           </>
         ) : (
           <>

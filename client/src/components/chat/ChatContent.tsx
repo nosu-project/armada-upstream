@@ -15,6 +15,7 @@ import { useChannelNav } from "@/hooks/useChannelNav";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { buildEmojiMap } from "@/lib/customEmoji";
+import { writeClipboardText } from "@/lib/clipboard";
 import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
@@ -963,10 +964,10 @@ function LightningInvoice({ invoice }: { invoice: string }) {
       className="inline-flex items-center gap-1.5 max-w-full my-1 px-2.5 py-1 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs hover:bg-amber-500/20 transition-colors"
       onClick={(e) => {
         e.stopPropagation();
-        navigator.clipboard?.writeText(invoice).then(() => {
+        writeClipboardText(invoice).then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
-        });
+        }, () => undefined);
       }}
       title="Copy lightning invoice"
     >

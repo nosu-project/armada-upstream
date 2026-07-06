@@ -152,6 +152,13 @@ export default {
 				'0%': { transform: 'translate(0, 0) scale(0.4)', opacity: '0' },
 				'20%': { opacity: '1' },
 				'100%': { transform: 'translate(var(--spark-x, 0), var(--spark-y, 0)) scale(1)', opacity: '0' }
+			},
+			'typing-dot': {
+				// Signal-style typing pill: each dot swells + brightens in
+				// sequence (staggered via animationDelay), resting dim for
+				// the back half of the cycle.
+				'0%, 44%, 100%': { transform: 'scale(1)', opacity: '0.35' },
+				'22%': { transform: 'scale(1.3)', opacity: '1' }
 			}
 			},
 			animation: {
@@ -166,7 +173,8 @@ export default {
 				'success-pop': 'success-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both',
 				'success-halo': 'success-halo 0.9s ease-out both',
 				'success-fade-up': 'success-fade-up 0.45s ease-out both',
-				'success-spark': 'success-spark 1.1s ease-out both'
+				'success-spark': 'success-spark 1.1s ease-out both',
+				'typing-dot': 'typing-dot 1.2s ease-in-out infinite'
 			}
 		}
 	},

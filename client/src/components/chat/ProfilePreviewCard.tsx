@@ -17,6 +17,7 @@ import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
+import { writeClipboardText } from "@/lib/clipboard";
 
 interface ProfilePreviewCardProps {
   pubkey: string;
@@ -39,10 +40,10 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
 
   const copyNpub = () => {
     if (!npub) return;
-    navigator.clipboard?.writeText(npub).then(() => {
+    writeClipboardText(npub).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    });
+    }, () => undefined);
   };
 
   const message = () => {

@@ -10,6 +10,8 @@
 #   ANDROID_KEYSTORE_BASE64  base64 of the JKS upload keystore (alias: upload)
 #   KEYSTORE_PASSWORD        keystore store password
 #   KEY_PASSWORD             upload key password (== store password; PKCS12 needs them equal)
+#   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer used to sign Zapstore releases
+#   ZAPSTORE_CLIENT_KEY      persistent zsp NIP-46 client key (hex) for that bunker
 # These live ONLY in CI/CD variables — never commit the keystore, the passwords,
 # or any generated secrets file to the repo.
 
@@ -17,6 +19,7 @@ stages:
   - test
   - build
   - release
+  - publish
 
 default:
   interruptible: true
@@ -363,3 +366,35 @@ release:
         - name: Armada-${CI_COMMIT_TAG}-windows-portable.exe
           url: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/armada/${CI_COMMIT_TAG}/Armada-${CI_COMMIT_TAG}-windows-portable.exe
           link_type: package
+
+# ── Zapstore publish (Android APK → Nostr app store) ────────────────────────
+# Signs the release with a NIP-46 bunker (ZAPSTORE_BUNKER_URL) and uploads the
+# APK to Blossom, mirroring ../ditto. zapstore.yaml at the repo root holds the
+# app metadata; version + release_source are stamped in from the tag/artifact.
+publish-zapstore:
+  stage: publish
+  image: golang:1.24
+  timeout: 15 minutes
+  needs:
+    - build-apk
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  variables:
+    SIGN_WITH: $ZAPSTORE_BUNKER_URL
+    RELAY_URLS: "wss://relay.zapstore.dev,wss://relay.ditto.pub,wss://relay.dreamith.to,wss://relay.primal.net"
+    BLOSSOM_URL: "https://blossom.ditto.pub"
+  script:
+    - go install github.com/zapstore/zsp@latest
+
+    # Restore the persistent NIP-46 client key so the bunker recognizes us
+    # across CI runs. zsp stores client keys at
+    # ~/.config/zsp/bunker-keys/<bunker-pubkey>.key
+    - BUNKER_PUBKEY=$(echo "$ZAPSTORE_BUNKER_URL" | sed 's|bunker://||;s|?.*||')
+    - mkdir -p ~/.config/zsp/bunker-keys
+    - echo "$ZAPSTORE_CLIENT_KEY" > ~/.config/zsp/bunker-keys/${BUNKER_PUBKEY}.key
+
+    - APK_PATH="artifacts/Armada.apk"
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - sed -i "2i release_source:\ ./${APK_PATH}" zapstore.yaml
+    - sed -i "2i version:\ ${VERSION}" zapstore.yaml
+    - zsp publish --quiet --skip-metadata --skip-preview zapstore.yaml
