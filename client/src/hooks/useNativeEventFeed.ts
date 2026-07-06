@@ -53,10 +53,10 @@ function sortDedupe(events: NostrEvent[]): NostrEvent[] {
  *     are also persisted so a re-read honors them; applying a live delete is
  *     left to the channel hook's own subscription to keep this hook simple.)
  *
- *   - Concord sealed (kind 3300): the WebView can't decode without the epoch
- *     keys the channel hook holds, so it's written to the store and the affected
- *     Concord channel queries are invalidated (undebounced) to recompose under
- *     those keys — same as any blob the relay backfill would have delivered.
+ *   - Concord sealed (kind 3300 V1 outers, kind 1059 V2 wraps): the WebView
+ *     can't decode without the epoch/stream keys the channel hooks hold, so
+ *     they're written to the store (below); the V2 channel's store-first read
+ *     and the V1 `concordMessage` feed surface them when the room opens.
  *
  * Everything is also written to the shared IndexedDB store so a later cold read
  * (channel switch / refetch) still finds it.

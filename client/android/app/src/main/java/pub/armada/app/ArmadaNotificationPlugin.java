@@ -95,12 +95,12 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     /**
      * Rolling per-room cache of raw outer events, keyed by room
-     * ("h:<groupId>" / "z:<pseudonym>" / "dm"), newest last. Unlike
-     * {@link #eventBuffer} (a one-shot drain of what arrived while the WebView
-     * was down, shared across ALL rooms), this survives drains and retains the
-     * last screenful per room for the service's lifetime — so opening a room
-     * from a notification can paint natively-received history even when the
-     * global buffer overflowed or was already drained. LRU-bounded.
+     * ("h:<groupId>" / "z:<pseudonym>" / "c2:<channelId>" / "dm"), newest last.
+     * Unlike {@link #eventBuffer} (a one-shot drain of what arrived while the
+     * WebView was down, shared across ALL rooms), this survives drains and
+     * retains the last screenful per room for the service's lifetime — so
+     * opening a room from a notification can paint natively-received history
+     * even when the global buffer overflowed or was already drained. LRU-bounded.
      */
     private static final int ROOM_CACHE_MAX_ROOMS = 24;
     private static final int ROOM_CACHE_MAX_EVENTS = 30;
@@ -208,8 +208,8 @@ public class ArmadaNotificationPlugin extends Plugin {
     /**
      * Return (without consuming) the rolling per-room cache for one room —
      * the newest raw outer events the service received for it this service
-     * lifetime. Keys: "h:<groupId>", "z:<pseudonym>", "dm". The JS layer merges
-     * them by event id, so re-reads are idempotent.
+     * lifetime. Keys: "h:<groupId>", "z:<pseudonym>", "c2:<channelId>", "dm".
+     * The JS layer merges them by event id, so re-reads are idempotent.
      */
     @PluginMethod
     public void getRoomEvents(PluginCall call) {
@@ -358,6 +358,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         String groupIdsRaw = arrayToString(call.getArray("groupIds"));
         String dmRelaysRaw = arrayToString(call.getArray("dmRelays"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
+        String concord2SubsRaw = arrayToString(call.getArray("concord2Subs"));
         // prefs is a flat object of booleans; store its JSON verbatim.
         String prefsRaw = null;
         try {
@@ -369,7 +370,8 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
 
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        boolean hasWatch = relayUrlsRaw != null || concordSubsRaw != null || dmRelaysRaw != null;
+        boolean hasWatch = relayUrlsRaw != null || concordSubsRaw != null || concord2SubsRaw != null
+                || dmRelaysRaw != null;
         boolean hasConfig = enabled && userPubkey != null && hasWatch;
 
         if (hasConfig) {
@@ -383,6 +385,8 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("dmRelays");
             if (concordSubsRaw != null) editor.putString("concordSubs", concordSubsRaw);
             else editor.remove("concordSubs");
+            if (concord2SubsRaw != null) editor.putString("concord2Subs", concord2SubsRaw);
+            else editor.remove("concord2Subs");
             if (prefsRaw != null) editor.putString("prefs", prefsRaw);
             // Bump a revision so the running service's SharedPreferences
             // listener always fires even if the values look unchanged.
@@ -390,7 +394,8 @@ public class ArmadaNotificationPlugin extends Plugin {
             editor.apply();
             if (BuildConfig.DEBUG) Log.d(TAG, "Configured: relays=" + relayUrlsRaw + " groups=" + groupIdsRaw
                     + " dmRelays=" + dmRelaysRaw
-                    + " concordSubs=" + (concordSubsRaw != null ? "yes" : "none"));
+                    + " concordSubs=" + (concordSubsRaw != null ? "yes" : "none")
+                    + " concord2Subs=" + (concord2SubsRaw != null ? "yes" : "none"));
         } else {
             prefs.edit().clear().apply();
             Log.d(TAG, "Config cleared (disabled or logged out)");

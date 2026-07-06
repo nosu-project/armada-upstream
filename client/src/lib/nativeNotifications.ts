@@ -47,7 +47,8 @@ export interface ArmadaNotificationPlugin {
    * arrived while the WebView was down — this retains the last screenful PER
    * ROOM for the whole service lifetime, so opening a room from a notification
    * can paint natively-received history even if the global buffer overflowed.
-   * Room keys: `h:<groupId>` (NIP-29), `z:<pseudonym>` (Concord), `dm` (kind 4).
+   * Room keys: `h:<groupId>` (NIP-29), `z:<pseudonym>` (Concord V1),
+   * `c2:<channelId>` (Concord V2), `dm` (kind 4).
    */
   getRoomEvents(options: { room: string }): Promise<{ events: string[] }>;
   /**
@@ -61,10 +62,10 @@ export interface ArmadaNotificationPlugin {
   ): Promise<PluginListenerHandle>;
   /**
    * Fired when the background service receives a raw outer event (NIP-29 kind
-   * 9/1068/7/1111/5, a kind-4 DM, or a Concord sealed kind 3300) while the
-   * WebView is up. The JS layer writes it straight into its event store, so the
-   * live timeline shows it with zero relay latency — the same message the
-   * notification was about.
+   * 9/1068/7/1111/5, a kind-4 DM, a Concord V1 sealed kind 3300, or a Concord
+   * V2 kind-1059 wrap) while the WebView is up. The JS layer writes it
+   * straight into its event store, so the live timeline shows it with zero
+   * relay latency — the same message the notification was about.
    */
   addListener(
     eventName: "relayEvent",
@@ -110,6 +111,22 @@ export interface ArmadaNotificationPlugin {
       communityId: string;
       communityName: string;
       channelName: string;
+    }>;
+    /**
+     * Concord V2 (CORD-02) channel subscriptions. The service subscribes
+     * `{kinds:[1059], authors:[…stream pk]}` per relay and uses the supplied
+     * per-stream NIP-44 conversation key to open wrap → seal → rumor for a
+     * rich "<sender>: <preview>" notification deep-linking to
+     * /c/<communityId>/<channelId>. Stream SECRET keys never cross this
+     * bridge — NIP-42 stream auth is signed in the WebView (authChallenge).
+     */
+    concord2Subs?: Array<{
+      relays: string[];
+      communityId: string;
+      communityName: string;
+      channelId: string;
+      channelName: string;
+      streams: Array<{ pk: string; convKey: string; epoch: string }>;
     }>;
   }): Promise<void>;
 }

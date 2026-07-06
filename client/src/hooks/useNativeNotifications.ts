@@ -11,6 +11,8 @@ import {
 } from "@/hooks/usePushNotifications";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
+import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
+import { signStreamAuths } from "@/concord-v2/lib/streamAuth";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { normalizeRelayUrl } from "@/lib/platform";
 
@@ -155,6 +157,10 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     [concordData],
   );
 
+  // Concord V2 channel subscriptions: kind-1059 stream addresses + the
+  // conversation keys that open their wraps (see useConcord2Subs).
+  const concord2Subs = useConcord2Subs();
+
   // Push the current config to the native service whenever the relevant inputs
   // change. Three cases:
   //   - turned off / logged out  → tear the service down ({enabled:false}).
@@ -169,7 +175,10 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     const loggedOut = !user;
     const turnedOff = !enabled;
     const nothingToWatch =
-      relayUrls.length === 0 && concordSubs.length === 0 && dmRelays.length === 0;
+      relayUrls.length === 0 &&
+      concordSubs.length === 0 &&
+      concord2Subs.length === 0 &&
+      dmRelays.length === 0;
 
     let payload: Parameters<typeof ArmadaNotification.configure>[0];
     if (turnedOff || loggedOut) {
@@ -185,6 +194,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         groupIds,
         prefs: prefsRecord,
         concordSubs,
+        concord2Subs,
         dmRelays,
       };
     }
@@ -197,7 +207,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord, concordSubs, dmRelays]);
+  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord, concordSubs, concord2Subs, dmRelays]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off, start the background service. Android lets us request the OS
@@ -243,8 +253,14 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         if (n) set.add(n);
       }
     }
+    for (const sub of concord2Subs) {
+      for (const url of sub.relays) {
+        const n = normalizeRelayUrl(url);
+        if (n) set.add(n);
+      }
+    }
     return set;
-  }, [relayUrls, dmRelays, concordSubs]);
+  }, [relayUrls, dmRelays, concordSubs, concord2Subs]);
 
   // NIP-42: the service can't sign, so it bridges each relay's AUTH challenge
   // here. We sign a kind-22242 with the user's signer (nsec / bunker /
@@ -262,6 +278,17 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       if (!normalized || !knownRelays.has(normalized)) {
         console.warn("[native-notif] ignoring AUTH for unknown relay:", relayUrl);
         return;
+      }
+      // Concord V2 stream auth first: an auth-gating relay requires every
+      // `authors` entry of the service's kind-1059 REQ to be authenticated on
+      // that connection. These signatures are local (derived stream secret
+      // keys, see streamAuth.ts), so they never wait on the user's signer.
+      try {
+        for (const event of signStreamAuths(challenge, relayUrl)) {
+          await ArmadaNotification.submitAuth({ relayUrl, event });
+        }
+      } catch (err) {
+        console.warn("[native-notif] stream AUTH signing failed:", err);
       }
       try {
         const event = await signer.signEvent({

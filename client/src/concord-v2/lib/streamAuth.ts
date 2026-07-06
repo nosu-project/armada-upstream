@@ -15,8 +15,10 @@
  * per registered key on the same challenge, so the connection ends up
  * authenticated as the user AND every stream it will query.
  *
- * Kept out of `concord-v1` and imported by exactly one shared file
- * (NostrProvider) so the V2 tree stays independently deletable.
+ * Kept out of `concord-v1` and imported by only two shared files
+ * (NostrProvider for the WebView's own sockets, useNativeNotifications for
+ * the Android service's bridged AUTH challenges) so the V2 tree stays
+ * independently deletable.
  */
 
 import { finalizeEvent } from "nostr-tools/pure";

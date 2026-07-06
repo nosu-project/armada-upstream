@@ -22,6 +22,13 @@ import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
+/**
+ * The persisted control-fold snapshot key for a community (see
+ * {@link useDeferredFold}). Shared with the notification-subscription builder,
+ * which reads the cached fold without mounting a per-community hook.
+ */
+export const controlFoldKey = (idHex: string) => `concord2-fold:${idHex}`;
+
 /** Merge two wrap sets by id (a partial network round must not drop editions). */
 function mergeById(a: NostrEvent[], b: NostrEvent[]): NostrEvent[] {
   const byId = new Map<string, NostrEvent>();
@@ -146,7 +153,7 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
   const events = control.data;
 
   const data = useDeferredFold<FoldedControl>(
-    community ? `concord2-fold:${community.idHex}` : null,
+    community ? controlFoldKey(community.idHex) : null,
     () => {
       if (!community || !events) return undefined;
       const editions = openControlWraps(events, controlGroups(community));
