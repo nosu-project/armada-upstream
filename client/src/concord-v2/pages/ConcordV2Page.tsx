@@ -8,6 +8,7 @@ import { LoginArea } from "@/components/auth/LoginArea";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
+import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { CommunityInfoDialog2 } from "@/concord-v2/components/CommunityInfoDialog2";
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
@@ -27,10 +28,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { useAppContext } from "@/hooks/useAppContext";
-import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
@@ -53,30 +52,6 @@ import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/tr
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
-
-function TypingName({ pubkey }: { pubkey: string }) {
-  const author = useAuthor(pubkey);
-  return <span className="font-medium not-italic">{useScopedDisplayName(pubkey, author.data?.metadata)}</span>;
-}
-
-function TypingIndicator2({ pubkeys }: { pubkeys: string[] }) {
-  if (pubkeys.length === 0) return null;
-  if (pubkeys.length > 3) {
-    return <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">Several people are typing…</div>;
-  }
-  const names = pubkeys.map((pk) => <TypingName key={pk} pubkey={pk} />);
-  return (
-    <div className="px-4 pb-0.5 text-xs italic text-muted-foreground">
-      {names.map((name, i) => (
-        <span key={pubkeys[i]}>
-          {name}
-          {i < names.length - 2 ? ", " : i === names.length - 2 ? (names.length > 2 ? ", and " : " and ") : ""}
-        </span>
-      ))}
-      {names.length === 1 ? " is typing…" : " are typing…"}
-    </div>
-  );
-}
 
 /** The community's decrypted icon for the channel-list title. Renders nothing
  *  when the community has no icon (the header falls back to a name-only
@@ -658,7 +633,7 @@ export function ConcordV2Page() {
                 )}
               />
 
-              {typingPubkeys.length > 0 && <TypingIndicator2 pubkeys={typingPubkeys} />}
+              {typingPubkeys.length > 0 && <TypingIndicator pubkeys={typingPubkeys} />}
               {channel && (
                 <ChatComposer
                   relayUrl="dm"
