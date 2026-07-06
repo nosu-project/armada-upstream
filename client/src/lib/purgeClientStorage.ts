@@ -15,7 +15,13 @@ async function purgeIndexedDB(): Promise<void> {
   try {
     // `indexedDB.databases()` is unsupported on Firefox; fall back to the
     // known Armada database names so we still wipe the bulk of the data.
-    const known = ["armada-events", "armada-concord-cache", "armada-relay-provenance", DECRYPT_CACHE_DB_NAME];
+    const known = [
+      "armada-events",
+      "armada-concord-cache",
+      "armada-concord-rumors",
+      "armada-relay-provenance",
+      DECRYPT_CACHE_DB_NAME,
+    ];
     const dbs =
       typeof indexedDB.databases === "function"
         ? (await indexedDB.databases()).map((d) => d.name).filter((n): n is string => Boolean(n))

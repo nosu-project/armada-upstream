@@ -1027,11 +1027,11 @@ export class NostrBatcher {
     return new Proxy(relay, {
       get(target, prop, receiver) {
         if (prop === 'query') {
-          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) =>
+          return (filters: NostrFilter[], opts?: { signal?: AbortSignal; cache?: boolean }) =>
             coalescedQuery(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         if (prop === 'req') {
-          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) =>
+          return (filters: NostrFilter[], opts?: { signal?: AbortSignal; cache?: boolean }) =>
             coalescedReq(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         const value = Reflect.get(target, prop, receiver);
@@ -1055,9 +1055,14 @@ export class NostrBatcher {
     scopeRelays: string[],
     sourceUrl: string | undefined,
     filters: NostrFilter[],
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; cache?: boolean },
   ): Promise<NostrEvent[]> {
-    const key = `${via}::${coalesceKey(scopeRelays, filters)}`;
+    // Callers may opt out of the fire-and-forget cache mirror (e.g. the Concord
+    // V2 chat path, which persists DECRYPTED rumors in its own store and would
+    // only waste space caching the opaque kind-1059 wraps here). Keyed into the
+    // coalesce key so a `cache:false` read never shares with a caching one.
+    const doCache = opts?.cache !== false;
+    const key = `${via}::${doCache ? '' : 'nc:'}${coalesceKey(scopeRelays, filters)}`;
     let shared = this.inflightQueries.get(key);
     if (!shared) {
       logNostrReq(scopeRelays, filters, via);
@@ -1067,7 +1072,7 @@ export class NostrBatcher {
       shared = target
         .query(filters)
         .then((events) => {
-          this.cacheEvents(events);
+          if (doCache) this.cacheEvents(events);
           this.recordDirectoryProvenance(events, sourceUrl);
           return events;
         })
@@ -1111,9 +1116,10 @@ export class NostrBatcher {
     scopeRelays: string[],
     sourceUrl: string | undefined,
     filters: NostrFilter[],
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; cache?: boolean },
   ): AsyncIterable<RelayMsg> {
-    const key = `${via}::${coalesceKey(scopeRelays, filters)}`;
+    const doCache = opts?.cache !== false;
+    const key = `${via}::${doCache ? '' : 'nc:'}${coalesceKey(scopeRelays, filters)}`;
     let shared = this.sharedSubs.get(key);
     if (!shared || !shared.isOpen()) {
       logNostrReq(scopeRelays, filters, via);
@@ -1127,7 +1133,7 @@ export class NostrBatcher {
         },
         (msg) => {
           if (msg[0] === 'EVENT') {
-            this.cacheEvents([msg[2]]);
+            if (doCache) this.cacheEvents([msg[2]]);
             this.recordDirectoryProvenance([msg[2]], sourceUrl);
           }
         },

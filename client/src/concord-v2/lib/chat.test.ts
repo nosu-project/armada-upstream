@@ -75,7 +75,7 @@ describe("chat plane (CORD-03)", () => {
     expect(folded.messages[0].content).toBe("fixed"); // Mallory's edit ignored
   });
 
-  it("honors moderation: banned authors dropped, authorized hides applied", async () => {
+  it("honors moderation: banned authors dropped, authorized in-batch deletes applied", async () => {
     const channel = makeChannel();
     const alice = signer();
     const banned = signer();
@@ -83,16 +83,16 @@ describe("chat plane (CORD-03)", () => {
 
     const spam = chatRumor(banned, KIND_MESSAGE, "spam", 1000);
     const msg = chatRumor(alice, KIND_MESSAGE, "rule-breaking", 1100);
-    const hide = chatRumor(mod, KIND_DELETE, "", 2000, [["e", msg.id]]);
+    const del = chatRumor(mod, KIND_DELETE, "", 2000, [["e", msg.id]]);
 
     const wraps = await Promise.all([
       wrapChat(spam, channel, banned),
       wrapChat(msg, channel, alice),
-      wrapChat(hide, channel, mod),
+      wrapChat(del, channel, mod),
     ]);
     const folded = foldTimeline(await openChatBatch(wraps, channel), {
       banned: new Set([banned.pubkey]),
-      canHide: (deleter) => deleter === mod.pubkey,
+      canDelete: (deleter) => deleter === mod.pubkey,
     });
     expect(folded.messages.length).toBe(0);
   });

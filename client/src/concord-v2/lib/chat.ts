@@ -107,8 +107,8 @@ export function eTargetOf(ev: { tags: string[][] }): string | undefined {
 export interface ChatModeration {
   /** Banned author pubkeys — every event from them is dropped (CORD-04 §4). */
   banned: Set<string>;
-  /** Whether `deleter` may moderation-hide a message by `author` (MANAGE_MESSAGES). */
-  canHide: (deleter: string, author: string) => boolean;
+  /** Whether `deleter` may delete a message by `author` (MANAGE_MESSAGES). */
+  canDelete: (deleter: string, author: string) => boolean;
 }
 
 /** A tallied reaction: reactors plus the NIP-30 custom-emoji URL (if any). */
@@ -122,15 +122,21 @@ export interface FoldedTimeline {
   messages: OpenedChat[];
   /** target rumor id → emoji → tally. */
   reactions: Map<string, Map<string, ReactionEntry>>;
-  /** target rumor id → deleter pubkeys (for pruning across merges). */
-  deletes: Map<string, Set<string>>;
 }
 
 /**
  * Fold a batch of opened chat events into the channel timeline: drop banned
- * authors, apply edits (author-only, latest by ms), deletes (self-delete
- * always — even post-Dissolution — or authorized moderation-hide), and tally
- * reactions per target.
+ * authors, apply edits (author-only, latest by ms), and tally reactions per
+ * target.
+ *
+ * Deletes are DELETES, not hides: a kind-5 rumor physically removes its target
+ * from the rumor cache on write (self-delete via the store's NIP-09; a
+ * moderator delete is authorized against the roster at the write site before it
+ * reaches the store). So a folded set read back from the cache never contains a
+ * deleted message. The delete pass here is only a belt-and-suspenders for
+ * IN-BATCH deletes — an optimistic or just-arrived kind-5 folded alongside its
+ * target before the store's async removal has committed — and applies the same
+ * authorization (self, or a `canDelete` moderator) so the two paths agree.
  */
 export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration): FoldedTimeline {
   const byId = new Map<string, OpenedChat>();
@@ -191,18 +197,18 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
     if (best) byId.set(id, { ...msg, content: best.content });
   }
 
-  // Deletes: self-delete, or an authorized moderation-hide.
+  // In-batch deletes: self-delete, or an authorized moderator delete.
   for (const [id, msg] of byId) {
     const deleters = deletes.get(id);
     if (!deleters) continue;
-    const hidden =
-      deleters.has(msg.author) || (moderation && [...deleters].some((d) => moderation.canHide(d, msg.author)));
-    if (hidden) byId.delete(id);
+    const deleted =
+      deleters.has(msg.author) ||
+      (moderation && [...deleters].some((d) => moderation.canDelete(d, msg.author)));
+    if (deleted) byId.delete(id);
   }
 
   return {
     messages: [...byId.values()].sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1)),
     reactions,
-    deletes,
   };
 }

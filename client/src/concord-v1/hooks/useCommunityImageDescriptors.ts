@@ -1,13 +1,14 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { Community, CommunityImage } from "@/concord-v1/lib/types";
 import type { FoldedMetadata } from "@/concord-v1/lib/control";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 
 /**
- * Synchronous, disk-backed last-known-good for a Concord community's icon/banner
- * DESCRIPTOR (the encrypted-blob ref: url/key/nonce/hash/ext — NOT the decrypted
- * image bytes, which live in Cache Storage).
+ * Disk-backed last-known-good for a Concord community's icon/banner DESCRIPTOR
+ * (the encrypted-blob ref: url/key/nonce/hash/ext — NOT the decrypted image
+ * bytes, which live in Cache Storage).
  *
  * Why this exists: the authoritative icon descriptor comes from the folded
  * GroupRoot metadata (`useConcordMetadata`), which on reload is `undefined` for
@@ -16,44 +17,22 @@ import type { FoldedMetadata } from "@/concord-v1/lib/control";
  * so `folded?.root?.icon ?? community?.icon` is `undefined` on first render and
  * the avatar collapses to its initials/shield fallback until the fold lands.
  *
- * Persisting just the small descriptor JSON to localStorage — and seeding it
- * SYNCHRONOUSLY on mount, mirroring `useRelayInfo`'s `initialData` — closes that
- * window: the descriptor is available on the first frame, so the decrypted-image
- * hook (which is itself seeded from a warm object-URL cache) can paint the icon
- * immediately on reload instead of flickering.
+ * Persisting the small descriptor JSON — and reading it back on mount — closes
+ * that window: the descriptor is available once the async read lands (well
+ * before the full fold), so the decrypted-image hook (itself seeded from a warm
+ * object-URL cache) can paint the icon without waiting for the fold.
+ *
+ * The descriptors are stored in the shared Concord folded IndexedDB cache
+ * (`foldedCache`) rather than localStorage: the count grows with the number of
+ * communities, and unbounded caches belong in IndexedDB, not localStorage.
  */
 
-const ICON_PREFIX = "armada:concord-icon:";
-const BANNER_PREFIX = "armada:concord-banner:";
-
-function read(prefix: string, communityId: string | undefined): CommunityImage | undefined {
-  if (!communityId) return undefined;
-  try {
-    const raw = localStorage.getItem(prefix + communityId);
-    return raw ? (JSON.parse(raw) as CommunityImage) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function write(prefix: string, communityId: string, image: CommunityImage | undefined): void {
-  try {
-    const cur = localStorage.getItem(prefix + communityId);
-    if (image) {
-      const next = JSON.stringify(image);
-      if (cur !== next) localStorage.setItem(prefix + communityId, next);
-    } else if (cur !== null) {
-      // The owner cleared the icon/banner — drop the stale seed.
-      localStorage.removeItem(prefix + communityId);
-    }
-  } catch {
-    // localStorage full / unavailable — non-fatal, we just lose the seed.
-  }
-}
+const ICON_KEY = (communityId: string) => `concord-icon:${communityId}`;
+const BANNER_KEY = (communityId: string) => `concord-banner:${communityId}`;
 
 /**
- * Resolve a community's icon + banner descriptors with a synchronous, disk-backed
- * fallback so they're present on the first frame after reload (no flicker).
+ * Resolve a community's icon + banner descriptors with a disk-backed fallback so
+ * they appear shortly after reload (no lasting flicker).
  *
  * Preference: the live folded GroupRoot metadata (authoritative, owner-controlled)
  * → the invite-bundle descriptor → the persisted last-known-good. Whenever the
@@ -70,23 +49,42 @@ export function useCommunityImageDescriptors(
   const liveIcon = folded?.root?.icon ?? community?.icon;
   const liveBanner = folded?.root?.banner ?? community?.banner;
 
+  // The persisted last-known-good, read asynchronously from IndexedDB on mount.
+  const [cached, setCached] = useState<{ icon?: CommunityImage; banner?: CommunityImage }>({});
+  useEffect(() => {
+    let cancelled = false;
+    if (!communityId) {
+      setCached({});
+      return;
+    }
+    void Promise.all([
+      readFolded<CommunityImage>(ICON_KEY(communityId)),
+      readFolded<CommunityImage>(BANNER_KEY(communityId)),
+    ]).then(([icon, banner]) => {
+      if (!cancelled) setCached({ icon, banner });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [communityId]);
+
   // Persist the authoritative descriptor as last-known-good once the fold lands.
   // We only write when the FOLD has resolved (`folded` defined), so a not-yet-
   // folded render can't clobber a good cached descriptor with the (usually empty)
   // invite-bundle value.
   useEffect(() => {
     if (!communityId || !folded) return;
-    write(ICON_PREFIX, communityId, folded.root?.icon ?? community?.icon);
-    write(BANNER_PREFIX, communityId, folded.root?.banner ?? community?.banner);
+    const icon = folded.root?.icon ?? community?.icon;
+    const banner = folded.root?.banner ?? community?.banner;
+    void writeFolded(ICON_KEY(communityId), icon ?? null);
+    void writeFolded(BANNER_KEY(communityId), banner ?? null);
   }, [communityId, folded, community?.icon, community?.banner]);
 
   return useMemo(
     () => ({
-      icon: liveIcon ?? read(ICON_PREFIX, communityId),
-      banner: liveBanner ?? read(BANNER_PREFIX, communityId),
+      icon: liveIcon ?? cached.icon,
+      banner: liveBanner ?? cached.banner,
     }),
-    // `liveIcon`/`liveBanner` identity drives recompute; read() is a cheap sync
-    // localStorage hit used only as the fallback when the live value is absent.
-    [communityId, liveIcon, liveBanner],
+    [liveIcon, liveBanner, cached],
   );
 }

@@ -4,10 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useEventStore } from "@/hooks/useEventStore";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatusMap } from "@/hooks/useSendStatusMap";
-import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
-import { readTimelineSnapshot } from "@/lib/timelineSnapshot";
 import {
   foldTimeline,
   forgetChatSkips,
@@ -17,6 +14,13 @@ import {
   type OpenedChat,
 } from "@/concord-v2/lib/chat";
 import { KIND_DELETE, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
+import {
+  clearChannelExhausted,
+  queryChannelRumors,
+  readChannelCursor,
+  updateChannelCursor,
+  writeRumors,
+} from "@/concord-v2/lib/rumorStore";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
@@ -28,13 +32,10 @@ const channelKey = (channelIdHex: string | null) => ["concord2", "channel", chan
 const statusKey = (channelIdHex: string | null) => ["concord2", "msg-status", channelIdHex] as const;
 const deletedKey = (channelIdHex: string | null) => ["concord2", "msg-deleted", channelIdHex] as const;
 
-/** Snapshot scope for a V2 channel (see timelineSnapshot.ts). */
-const snapshotScopeOf = (channelIdHex: string) => `concord2:${channelIdHex}`;
-
 /**
  * Every chat-plane kind rides an identical kind-1059 wrap, so the relay can't
  * pre-filter messages from reactions — the decode window must absorb both.
- * Sized above V1's 30 accordingly; decode is memoized so re-reads are cheap.
+ * Sized above V1's 30 accordingly; the rumor cache serves re-reads with no decrypt.
  */
 const WINDOW_SIZE = 100;
 /** Relay backfill page size. */
@@ -56,6 +57,14 @@ function channelFilter(channel: ChannelV2, extra?: Partial<NostrFilter>): NostrF
   return { kinds: [KIND_WRAP], authors: channel.streams.map((s) => s.group.pk), ...extra };
 }
 
+/**
+ * Read options, including the NostrBatcher-specific `cache` opt-out. The
+ * injected `nostr` is typed as the vanilla NRelay, but the runtime value is our
+ * batcher, whose `relay(url).query/req` honour `cache: false` to skip mirroring
+ * the opaque kind-1059 wraps into the shared event store.
+ */
+type ReadOpts = { signal?: AbortSignal; cache?: boolean };
+
 /** Upsert opened events into the raw set, deduped by rumor id, sorted by ms. */
 function upsert(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedChat[] {
   const byId = new Map<string, OpenedChat>();
@@ -72,12 +81,15 @@ function upsert(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedCh
 }
 
 /**
- * Backfill the local store from the relays with `until` pagination and
- * per-relay cursors (a relay ignoring `until` is culled after one
- * non-progressing page). Returns the oldest `created_at` seen, every raw wrap
- * collected across the passes (so the caller can fold them directly instead of
- * racing the fire-and-forget store mirror), and whether history is exhausted
- * (no relay had a full page left to page past).
+ * Backfill wraps from the relays with `until` pagination and per-relay cursors
+ * (a relay ignoring `until` is culled after one non-progressing page). Returns
+ * the oldest and newest `created_at` seen, every raw wrap collected across the
+ * passes (so the caller can decrypt them into the rumor cache directly), and
+ * whether history is exhausted (no relay had a full page left to page past).
+ *
+ * These reads pass `cache: false`: the opaque kind-1059 wraps must NOT be
+ * mirrored into the shared `armada-events` store — the decrypted rumors are
+ * persisted in the Concord rumor store instead (see rumorStore.ts).
  */
 async function backfillStore(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -86,8 +98,9 @@ async function backfillStore(
   signal: AbortSignal,
   until?: number,
   maxPages: number = BACKFILL_MAX_PAGES,
-): Promise<{ oldest?: number; events: NostrEvent[]; exhausted: boolean }> {
+): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; exhausted: boolean }> {
   let oldest: number | undefined;
+  let newest: number | undefined;
   let active = relays.map((url) => ({ url, cursor: until }));
   const collected: NostrEvent[] = [];
 
@@ -107,7 +120,10 @@ async function backfillStore(
         try {
           const events = await nostr
             .relay(relay.url)
-            .query([filter], { signal: AbortSignal.any([pageSignal, AbortSignal.timeout(8000)]) });
+            .query([filter], {
+              signal: AbortSignal.any([pageSignal, AbortSignal.timeout(8000)]),
+              cache: false,
+            } as ReadOpts);
           armGrace();
           return { relay, events };
         } catch {
@@ -123,6 +139,7 @@ async function backfillStore(
       let relayOldest = Infinity;
       let progressed = 0;
       for (const ev of events) {
+        if (newest === undefined || ev.created_at > newest) newest = ev.created_at;
         if (relay.cursor === undefined || ev.created_at < relay.cursor) {
           progressed += 1;
           if (ev.created_at < relayOldest) relayOldest = ev.created_at;
@@ -137,7 +154,7 @@ async function backfillStore(
     }
     active = next;
   }
-  return { oldest, events: collected, exhausted: active.length === 0 };
+  return { oldest, newest, events: collected, exhausted: active.length === 0 };
 }
 
 /** The moderation context resolved from the community's control fold. */
@@ -146,7 +163,7 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
   return useMemo(
     () => ({
       banned: folded?.banned ?? new Set<string>(),
-      canHide: (deleter: string, author: string) =>
+      canDelete: (deleter: string, author: string) =>
         Boolean(
           folded &&
             canActOnMember(folded.roster, deleter, folded.ownerHex, author, Permissions.MANAGE_MESSAGES),
@@ -159,28 +176,30 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
 /**
  * One channel's timeline: the RAW opened-event set (messages, reactions,
  * edits, deletes — all sharing the wrap kind) read local-first from the
- * append-only event store, refreshed by a live subscription plus a resumable
+ * decrypted rumor cache, refreshed by a live subscription plus a resumable
  * relay backfill, then folded (with moderation) in memory.
+ *
+ * Wraps are never persisted: incoming kind-1059 wraps are decrypted once and
+ * the recovered rumors are written to the rumor store, which the timeline reads
+ * back with an ordinary `{ kinds, "#channel" }` query and no decrypt. A
+ * per-channel sync cursor (persisted in the folded cache) lets a cold launch
+ * resume where it left off instead of re-paging the newest window.
  */
 export function useChannelTimeline2(community: CommunityV2 | undefined, channel: ChannelV2 | undefined) {
   const { nostr } = useNostr();
-  const eventStore = useEventStore();
   const queryClient = useQueryClient();
   const moderation = useChatModeration2(community);
 
   const channelIdHex = channel?.idHex ?? null;
   const epochSig = channel?.streams.map((s) => s.epoch.toString()).join(",") ?? "";
   const queryKey = channelKey(channelIdHex);
-  const snapshotScope = channelIdHex ? snapshotScopeOf(channelIdHex) : undefined;
 
   const windowLimitRef = useRef(WINDOW_SIZE);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
-  const backfillCursor = useRef<Map<string, number | undefined>>(new Map());
-  // Per-channel: relays have no deeper history past the saved cursor. Once set,
-  // `loadOlder` stops issuing relay backfills and `hasMore` follows the local
-  // store window alone.
-  const relayExhausted = useRef<Map<string, boolean>>(new Map());
+  // In-memory mirror of the persisted per-channel cursor (created_at bounds +
+  // exhausted flag), loaded on channel change and written through on progress.
+  const cursor = useRef<Map<string, { oldest?: number; exhausted: boolean }>>(new Map());
   const initialLoadedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -188,6 +207,12 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     setHasMore(true);
     setIsLoadingOlder(false);
     initialLoadedRef.current = null;
+    // Hydrate the in-memory cursor from the persisted one for this channel.
+    if (channelIdHex) {
+      void readChannelCursor(channelIdHex).then((c) => {
+        if (c) cursor.current.set(channelIdHex, { oldest: c.oldest, exhausted: c.exhausted });
+      });
+    }
   }, [channelIdHex]);
 
   // A caught-up rekey changes the held stream set: forget remembered decode
@@ -196,12 +221,16 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   useEffect(() => {
     if (!channelIdHex) return;
     forgetChatSkips();
-    relayExhausted.current.delete(channelIdHex);
+    const c = cursor.current.get(channelIdHex);
+    if (c) c.exhausted = false;
+    void clearChannelExhausted(channelIdHex);
     queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epochSig]);
 
-  // Live subscription: new wraps land the moment a relay forwards them.
+  // Live subscription: new wraps land the moment a relay forwards them. The
+  // decrypted rumors are written to the rumor cache and the newest cursor
+  // advances so a later cold launch resumes from here.
   useEffect(() => {
     if (!community || !channel || !channelIdHex) return;
     const controller = new AbortController();
@@ -217,6 +246,9 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       if (events.length === 0) return;
       const opened = await openChatBatch(events, channel);
       if (opened.length === 0) return;
+      writeRumors(opened);
+      const newest = Math.max(...events.map((e) => e.created_at));
+      void updateChannelCursor(channelIdHex, { newest });
       queryClient.setQueryData<OpenedChat[]>(queryKey, (old) => upsert(old, opened));
       // Clear optimistic pending/failed for anything echoed back.
       queryClient.setQueryData<SendStatusMap>(statusKey(channelIdHex), (s = {}) => {
@@ -235,7 +267,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     const apply = async (events: NostrEvent[]) => {
       if (events.length === 0) return;
       if (!isReady()) {
-        // Buffer until the initial store decode resolves, so a live message
+        // Buffer until the initial store read resolves, so a live message
         // can't paint a lonely single row over the loading skeleton.
         pending.push(...events);
         readyTimer ??= setInterval(() => {
@@ -260,7 +292,8 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         try {
           for await (const msg of nostr.relay(url).req([channelFilter(channel, { since })], {
             signal: controller.signal,
-          })) {
+            cache: false,
+          } as ReadOpts)) {
             if (msg[0] === "EVENT") await apply([msg[2] as NostrEvent]);
           }
         } catch {
@@ -279,57 +312,61 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
-    // First-frame paint from the localStorage snapshot (already-decrypted).
-    initialData: () => {
-      const snap = readTimelineSnapshot<OpenedChat>(snapshotScope);
-      if (!snap || !channelIdHex) return undefined;
-      const own = snap.filter((m) => m.channelIdHex === channelIdHex);
-      return own.length > 0 ? own : undefined;
-    },
-    initialDataUpdatedAt: 0,
     placeholderData: keepPreviousData,
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
-      const store = await eventStore;
       const cursorKeyId = channelIdHex ?? "";
 
-      // hasMore is true if the local store window has more OR the relays might.
+      // hasMore is true if the local rumor window is full OR relays may have more.
       const refreshHasMore = (localFull: boolean) => {
-        setHasMore(localFull || !relayExhausted.current.get(cursorKeyId));
+        setHasMore(localFull || !cursor.current.get(cursorKeyId)?.exhausted);
       };
 
       const composeFromStore = async (extra?: OpenedChat[]): Promise<OpenedChat[]> => {
-        const wraps = await store.query([channelFilter(channel!, { limit: windowLimitRef.current })]);
-        refreshHasMore(wraps.length >= windowLimitRef.current);
-        const opened = await openChatBatch(wraps, channel!, { signal });
+        const rumors = await queryChannelRumors(channelIdHex!, {
+          limit: windowLimitRef.current,
+          signal,
+        });
+        refreshHasMore(rumors.length >= windowLimitRef.current);
         const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
           (m) => m.channelIdHex === channelIdHex,
         );
-        // Fold in freshly-backfilled events directly rather than racing the
-        // fire-and-forget store mirror (openChatBatch is memoized, so any
-        // overlap with the store read is cheap).
-        return upsert(prev, extra ? upsert(opened, extra) : opened);
+        // Fold in freshly-decrypted events directly rather than racing the
+        // fire-and-forget rumor write.
+        return upsert(prev, extra ? upsert(rumors, extra) : rumors);
       };
 
       const backfillAndRefresh = async () => {
         if (signal.aborted) return;
         // Pass 1: pull the newest page (no `until`) so live-adjacent history
-        // lands first. Returns the oldest `created_at` it saw on that page.
+        // lands first.
         const newest = await backfillStore(nostr, community!.relays, channel!, signal, undefined, 1);
         if (signal.aborted) return;
         // Pass 2: page OLDER history back-to-back. Resume from the saved cursor
         // if we have one; otherwise (cold channel) resume from just below pass
         // 1's newest page rather than re-fetching that identical page.
-        const resumeFrom =
-          backfillCursor.current.get(cursorKeyId) ??
-          (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
+        const saved = cursor.current.get(cursorKeyId)?.oldest;
+        const resumeFrom = saved ?? (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
         const older = await backfillStore(nostr, community!.relays, channel!, signal, resumeFrom);
-        if (older.oldest !== undefined && (resumeFrom === undefined || older.oldest < resumeFrom)) {
-          backfillCursor.current.set(cursorKeyId, older.oldest);
-        }
-        if (older.exhausted) relayExhausted.current.set(cursorKeyId, true);
         if (signal.aborted) return;
+
+        // Decrypt every wrap collected across the passes into the rumor cache.
         const opened = await openChatBatch([...newest.events, ...older.events], channel!, { signal });
+        writeRumors(opened);
+
+        // Advance the persisted cursor: newest forward, oldest back, exhausted sticky.
+        const c = cursor.current.get(cursorKeyId) ?? { exhausted: false };
+        if (older.oldest !== undefined && (c.oldest === undefined || older.oldest < c.oldest)) {
+          c.oldest = older.oldest;
+        }
+        if (older.exhausted) c.exhausted = true;
+        cursor.current.set(cursorKeyId, c);
+        void updateChannelCursor(cursorKeyId, {
+          newest: Math.max(newest.newest ?? 0, older.newest ?? 0),
+          oldest: c.oldest,
+          exhausted: c.exhausted,
+        });
+
         queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore(opened));
       };
 
@@ -358,18 +395,17 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     const cursorKeyId = channelIdHex ?? "";
     setIsLoadingOlder(true);
     try {
-      // If the local store still has more than the current window, just widen
-      // the window (a re-read + decode, no network). Otherwise the store is
+      // If the rumor cache still has more than the current window, just widen
+      // the window (a re-read, no network, no decrypt). Otherwise the cache is
       // exhausted, so page deeper history from the relays directly.
-      const store = await eventStore;
-      const inStore = await store.query([channelFilter(channel!, { limit: windowLimitRef.current + 1 })]);
-      const localHasMore = inStore.length > windowLimitRef.current;
+      const inCache = await queryChannelRumors(channelIdHex!, { limit: windowLimitRef.current + 1 });
+      const localHasMore = inCache.length > windowLimitRef.current;
 
       windowLimitRef.current += WINDOW_SIZE;
 
-      if (!localHasMore && !relayExhausted.current.get(cursorKeyId)) {
+      if (!localHasMore && !cursor.current.get(cursorKeyId)?.exhausted) {
         const controller = new AbortController();
-        const resumeFrom = backfillCursor.current.get(cursorKeyId);
+        const resumeFrom = cursor.current.get(cursorKeyId)?.oldest;
         const older = await backfillStore(
           nostr,
           community!.relays,
@@ -378,11 +414,21 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
           resumeFrom,
           LOAD_OLDER_MAX_PAGES,
         );
-        if (older.oldest !== undefined && (resumeFrom === undefined || older.oldest < resumeFrom)) {
-          backfillCursor.current.set(cursorKeyId, older.oldest);
-        }
-        if (older.exhausted) relayExhausted.current.set(cursorKeyId, true);
         const opened = await openChatBatch(older.events, channel!);
+        writeRumors(opened);
+
+        const c = cursor.current.get(cursorKeyId) ?? { exhausted: false };
+        if (older.oldest !== undefined && (c.oldest === undefined || older.oldest < c.oldest)) {
+          c.oldest = older.oldest;
+        }
+        if (older.exhausted) c.exhausted = true;
+        cursor.current.set(cursorKeyId, c);
+        void updateChannelCursor(cursorKeyId, {
+          newest: older.newest ?? 0,
+          oldest: c.oldest,
+          exhausted: c.exhausted,
+        });
+
         const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
           (m) => m.channelIdHex === channelIdHex,
         );
@@ -395,14 +441,10 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     } finally {
       setIsLoadingOlder(false);
     }
-  }, [hasMore, isLoadingOlder, query, nostr, community, channel, channelIdHex, eventStore, queryClient, queryKey]);
+  }, [hasMore, isLoadingOlder, query, nostr, community, channel, channelIdHex, queryClient, queryKey]);
 
-  // Keep the cold-launch snapshot fresh (skip while showing a previous
-  // channel's data through keepPreviousData).
-  useTimelineSnapshotWriter(snapshotScope, query.data, !query.isPlaceholderData);
-
-  // The folded view (moderation + edits + deletes + reaction tallies), plus
-  // the optimistic-delete overlay.
+  // The folded view (moderation + edits + reaction tallies), plus the
+  // optimistic-delete overlay.
   const optimisticDeleted = useQuery<string[]>({
     queryKey: deletedKey(channelIdHex),
     // This query is never fetched — the overlay is populated imperatively via
@@ -506,6 +548,9 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
         epoch: channel.current.epoch,
       };
       queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [opened]));
+      // Persist to the rumor cache so a refresh mid-flight keeps the message
+      // (and a self-delete removes its target via the store's NIP-09).
+      writeRumors([opened]);
 
       void broadcast(wrap).catch(() => {
         if (kind === KIND_MESSAGE) setStatus(rumor.id, "failed");

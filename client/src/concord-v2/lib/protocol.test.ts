@@ -244,7 +244,7 @@ describe("Concord V2 end to end", () => {
     const allChat = wire.filter((e) => aliceChannels[0].streams.some((s) => s.group.pk === e.pubkey));
     const aliceTimeline = foldTimeline(await openChatBatch(allChat, aliceChannels[0]), {
       banned: aliceFold1.banned,
-      canHide: () => false,
+      canDelete: () => false,
     });
     expect(aliceTimeline.messages.map((m) => m.content)).toEqual(["hello fleet"]);
 
