@@ -13,6 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
 import { toast } from "@/hooks/useToast";
 import type { SearchProfile } from "@/hooks/useSearchProfiles";
+import { writeClipboardText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -47,7 +48,7 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
   const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite } =
     useInviteActions2(community);
   const [link, setLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
   const [expiryDays, setExpiryDays] = useState<number>(0); // 0 = never
   const [label, setLabel] = useState("");
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -97,14 +98,14 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     }
   };
 
-  const handleCopy = (url: string) => {
-    navigator.clipboard?.writeText(url).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      },
-      () => toast({ title: "Copy failed", variant: "destructive" }),
-    );
+  const handleCopy = async (url: string) => {
+    try {
+      await writeClipboardText(url);
+      setCopied(url);
+      setTimeout(() => setCopied((c) => (c === url ? null : c)), 1500);
+    } catch {
+      toast({ title: "Copy failed", variant: "destructive" });
+    }
   };
 
   const existing = myLinks.filter((e) => e.url !== link);
@@ -166,7 +167,7 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
             <div className="flex items-center gap-2">
               <Input readOnly value={link} className="min-w-0 font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
               <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={() => handleCopy(link)} aria-label="Copy link">
-                {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+                {copied === link ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
               </Button>
             </div>
             <Button
@@ -238,7 +239,7 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
             <div key={e.token} className="flex items-center gap-2">
               <Input readOnly value={e.url} className="min-w-0 font-mono text-[0.65rem]" onFocus={(ev) => ev.currentTarget.select()} />
               <Button type="button" size="icon" variant="outline" className="shrink-0" aria-label="Copy link" onClick={() => handleCopy(e.url)}>
-                <Copy className="size-3.5" />
+                {copied === e.url ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
               </Button>
               <Button
                 type="button"

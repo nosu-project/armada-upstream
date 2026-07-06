@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useConcordCommunityActions } from "@/concord-v1/hooks/useConcordCommunityActions";
 import { toast } from "@/hooks/useToast";
+import { writeClipboardText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import type { Community } from "@/concord-v1/lib/types";
 
@@ -75,15 +76,15 @@ function InviteBody({ community }: { community: Community | undefined }) {
     }
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (!link) return;
-    navigator.clipboard?.writeText(link).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      },
-      () => toast({ title: "Copy failed", variant: "destructive" }),
-    );
+    try {
+      await writeClipboardText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast({ title: "Copy failed", variant: "destructive" });
+    }
   };
 
   return (
