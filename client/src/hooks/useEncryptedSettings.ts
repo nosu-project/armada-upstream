@@ -2,7 +2,10 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 
+import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
+
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { APP_NAME } from "@/lib/platform";
 import { EncryptedSettingsSchema, type EncryptedSettings } from "@/lib/schemas";
 
@@ -10,6 +13,30 @@ import { EncryptedSettingsSchema, type EncryptedSettings } from "@/lib/schemas";
 const SETTINGS_KIND = 30078;
 /** `d` tag identifying Armada's settings event. */
 const SETTINGS_D = "armada/metadata";
+/** Poll the app relays this often (ms) so other devices' changes flow in. */
+const REFETCH_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Filter matching the current user's settings event. */
+function settingsFilter(pubkey: string): NostrFilter {
+  return { kinds: [SETTINGS_KIND], authors: [pubkey], "#d": [SETTINGS_D], limit: 1 };
+}
+
+/** Decrypt + validate a settings event into EncryptedSettings, or null. */
+async function decodeSettings(
+  signer: NostrSigner,
+  pubkey: string,
+  event: NostrEvent | undefined,
+): Promise<EncryptedSettings | null> {
+  if (!event?.content || !signer.nip44) return null;
+  try {
+    const decrypted = await signer.nip44.decrypt(pubkey, event.content);
+    const parsed = EncryptedSettingsSchema.safeParse(JSON.parse(decrypted));
+    return parsed.success ? parsed.data : null;
+  } catch (err) {
+    console.warn("Failed to decrypt settings:", err);
+    return null;
+  }
+}
 
 /**
  * ms timestamp of the last local encrypted-settings write this session. Lets
@@ -44,6 +71,7 @@ export function setLocalSettingsSync(pubkey: string, lastSync: number): void {
 export function useEncryptedSettings() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const eventStore = useEventStore();
   const queryClient = useQueryClient();
   const pendingSettings = useRef<EncryptedSettings | null>(null);
 
@@ -56,23 +84,32 @@ export function useEncryptedSettings() {
       if (!user?.signer.nip44) return null;
 
       const events = await nostr.query(
-        [{ kinds: [SETTINGS_KIND], authors: [user.pubkey], "#d": [SETTINGS_D], limit: 1 }],
+        [settingsFilter(user.pubkey)],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) },
       );
 
       const event = events.sort((a, b) => b.created_at - a.created_at)[0];
-      if (!event?.content) return null;
 
-      try {
-        const decrypted = await user.signer.nip44.decrypt(user.pubkey, event.content);
-        const parsed = EncryptedSettingsSchema.safeParse(JSON.parse(decrypted));
-        return parsed.success ? parsed.data : null;
-      } catch (err) {
-        console.warn("Failed to decrypt settings:", err);
-        return null;
+      // Relay miss (offline, slow, or first load): fall back to the locally
+      // cached copy in NIndexedDB so the last-known config still applies.
+      if (!event) {
+        const store = await eventStore;
+        const cached = await store.query([settingsFilter(user.pubkey)]);
+        const newest = cached.sort((a, b) => b.created_at - a.created_at)[0];
+        return decodeSettings(user.signer, user.pubkey, newest);
       }
+
+      // Mirror the fresh event into the local store (fire-and-forget) so it is
+      // available offline on the next load.
+      void eventStore.then((store) => store.event(event)).catch(() => undefined);
+      return decodeSettings(user.signer, user.pubkey, event);
     },
     staleTime: 60_000,
+    // Keep the local copy in sync with other devices: poll periodically and
+    // whenever the window regains focus / the query remounts.
+    refetchInterval: REFETCH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
   });
 
   const updateSettings = useMutation({
@@ -104,6 +141,8 @@ export function useEncryptedSettings() {
       // Optimistically update the cache, then publish in the background.
       queryClient.setQueryData(queryKey, next);
       setLocalSettingsSync(user.pubkey, next.lastSync ?? Date.now());
+      // Persist locally first (offline durability), then publish.
+      void eventStore.then((store) => store.event(event)).catch(() => undefined);
       nostr.event(event, { signal: AbortSignal.timeout(8000) }).catch((err) => {
         console.warn("Failed to publish encrypted settings:", err);
       });
@@ -115,6 +154,8 @@ export function useEncryptedSettings() {
   return {
     settings: settings.data ?? null,
     isLoading: settings.isLoading,
+    /** True once the query has resolved at least once (event or cache miss). */
+    isFetched: settings.isFetched,
     refetch: settings.refetch,
     updateSettings: updateSettings.mutateAsync,
     hasNip44Support: !!user?.signer.nip44,

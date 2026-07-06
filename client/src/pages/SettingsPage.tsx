@@ -31,7 +31,6 @@ import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
-import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
@@ -43,7 +42,6 @@ import {
 } from "@/lib/voiceDevices";
 import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 
-import type { EncryptedSettings } from "@/lib/schemas";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -88,7 +86,6 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
-  const { updateSettings, hasNip44Support } = useEncryptedSettings();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const dmRelayList = useDmRelayList();
 
@@ -110,17 +107,14 @@ export function SettingsPage() {
   };
 
   /**
-   * Update a relay field locally and sync to encrypted settings when logged in.
-   * The added-server list (`addedRelays`) is handled separately by
-   * `setAddedRelays` (NIP-29 kind 10009), and the DM relays by `setDmRelays`
-   * (also republishes the NIP-17 kind 10050 list).
+   * Update a relay field locally. The added-server list (`addedRelays`) is
+   * handled separately by `setAddedRelays` (NIP-29 kind 10009), and the DM
+   * relays by `setDmRelays` (also republishes the NIP-17 kind 10050 list).
+   * The change is pushed to the encrypted NIP-78 settings centrally by
+   * NostrSync, which watches every synced AppConfig field.
    */
   const setRelays = (key: "appRelays" | "searchRelays") => (relays: string[]) => {
     updateConfig((current) => ({ ...current, [key]: relays }));
-    if (hasNip44Support) {
-      updateSettings({ [key]: relays } as Partial<EncryptedSettings>).catch((err) =>
-        console.warn("Relay sync failed:", err));
-    }
   };
 
   /**
@@ -147,31 +141,24 @@ export function SettingsPage() {
   };
 
   /**
-   * Persist the user's DM relays. Updates local config + encrypted settings
-   * (cross-device), and — since kind 10050 is the canonical, discoverable
-   * "where to send me DMs" list — republishes it so other clients stay in
-   * sync. `publish: false` skips the republish when we just seeded the editor
-   * from an already-published 10050 (no edit to write back).
+   * Persist the user's DM relays. Updates local config (the encrypted-settings
+   * push is handled centrally by NostrSync) and — since kind 10050 is the
+   * canonical, discoverable "where to send me DMs" list — republishes it so
+   * other clients stay in sync. `publish: false` skips the republish when we
+   * just seeded the editor from an already-published 10050 (no edit to write
+   * back).
    */
   const setDmRelays = (relays: string[], opts: { publish?: boolean } = {}) => {
     updateConfig((current) => ({ ...current, dmRelays: relays }));
-    if (hasNip44Support) {
-      updateSettings({ dmRelays: relays }).catch((err) =>
-        console.warn("Relay sync failed:", err));
-    }
     if (opts.publish !== false && user) {
       dmRelayList.publish(relays).catch((err) =>
         console.warn("DM relay list (kind 10050) publish failed:", err));
     }
   };
 
-  /** Toggle whether DMs use the user's own relays; sync to encrypted settings. */
+  /** Toggle whether DMs use the user's own relays. */
   const setUseOwnDmRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useOwnDmRelays: value }));
-    if (hasNip44Support) {
-      updateSettings({ useOwnDmRelays: value }).catch((err) =>
-        console.warn("DM relay setting sync failed:", err));
-    }
     // On opt-in, seed from the user's published NIP-17 DM relay list (kind
     // 10050) if they have one, so the editor — and the relays DMs actually use
     // (effectiveDmRelays) — reflect their canonical, discoverable list rather

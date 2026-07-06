@@ -110,6 +110,28 @@ export interface AppContextType {
   updateConfig: (updater: (current: AppConfig) => AppConfig) => void;
 }
 
+/**
+ * AppConfig fields that sync across devices via the encrypted NIP-78 settings
+ * event. Everything here is cross-device meaningful; `meshEnabled` and
+ * `meshIncognito` are deliberately excluded — they gate a per-device Bluetooth
+ * foreground service and must never be flipped on remotely.
+ */
+export const SYNCED_CONFIG_KEYS = [
+  "theme",
+  "customTheme",
+  "themes",
+  "addedRelays",
+  "serverOrder",
+  "railOrder",
+  "appRelays",
+  "searchRelays",
+  "useOwnDmRelays",
+  "dmRelays",
+  "lastChannelByServer",
+] as const satisfies ReadonlyArray<keyof AppConfig>;
+
+export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
+
 export const defaultConfig: AppConfig = {
   theme: "dark",
   addedRelays: [],

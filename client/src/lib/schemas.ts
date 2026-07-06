@@ -52,6 +52,16 @@ export const EncryptedSettingsSchema = z.looseObject({
   theme: z.enum(["light", "dark", "system", "custom"]).optional(),
   customTheme: ThemeConfigSchema.optional(),
   themes: ThemesConfigSchema.optional(),
+  /**
+   * Cache of the user's NIP-29 server list. Canonically lives in the kind
+   * 10009 list; synced here too so a fresh device paints the rail before the
+   * 10009 read resolves. Merged (union) on the way in, never used to remove.
+   */
+  addedRelays: z.array(z.string()).optional(),
+  /** Legacy per-server rail order (relay URLs). */
+  serverOrder: z.array(z.string()).optional(),
+  /** Unified community-rail order (relay URLs + `c1:`/`c2:` community keys). */
+  railOrder: z.array(z.string()).optional(),
   /** General-purpose app relays. */
   appRelays: z.array(z.string()).optional(),
   /** NIP-50 search relays. */
@@ -60,6 +70,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   useOwnDmRelays: z.boolean().optional(),
   /** The user's custom DM relays. */
   dmRelays: z.array(z.string()).optional(),
+  /** Last channel/room opened per server/community (see AppConfig). */
+  lastChannelByServer: z.record(z.string(), z.string()).optional(),
   /**
    * Per-conversation last-read timestamps (unix seconds), keyed by a stable
    * conversation id (e.g. `${relayUrl}::${groupId}` for channels, `dm:${pubkey}`
