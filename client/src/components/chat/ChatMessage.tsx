@@ -1,4 +1,4 @@
-import { AlertCircle, ChevronRight, Copy, Link2, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
+import { AlertCircle, Copy, Link2, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
@@ -130,7 +130,7 @@ function ThreadBadge({
     <button
       type="button"
       onClick={onClick}
-      className="group/thread mt-1 inline-flex max-w-full items-center gap-2 rounded-lg border border-transparent bg-primary/[0.07] py-1 pl-1 pr-2.5 text-left transition-colors hover:border-primary/30 hover:bg-primary/[0.12]"
+      className="mt-1 inline-flex max-w-full items-center gap-2 rounded-lg border border-transparent bg-primary/[0.07] py-1 pl-1 pr-2.5 text-left transition-colors hover:border-primary/30 hover:bg-primary/[0.12]"
     >
       <span className="flex shrink-0 -space-x-1.5">
         {shown.map((pk) => (
@@ -147,10 +147,9 @@ function ThreadBadge({
       </span>
       {lastReplyAt ? (
         <span className="truncate text-[11px] text-muted-foreground">
-          Last reply {shortTimeAgo(lastReplyAt)}
+          {shortTimeAgo(lastReplyAt)}
         </span>
       ) : null}
-      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/thread:opacity-100" />
     </button>
   );
 }
