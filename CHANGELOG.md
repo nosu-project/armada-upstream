@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.17.0] - 2026-07-05
+
+Brings Slack-style threads to every conversation: reply to any message and the
+whole exchange folds into a tidy thread you can open on the side, with a badge
+showing who's taken part. Communities gain an info dialog with a click-to-zoom
+banner and icon, the sidebar rail is now one list you can drag to reorder however
+you like, and mobile chat headers show the community's avatar and name. You'll
+also get native notifications for the newest generation of communities, typing
+`#channel` jumps straight to that channel, and chat history loads faster and
+deeper.
+
+### Added
+- Slack-style threads: nested replies fold into a side panel across all
+  conversations, with a badge showing the participants who've replied
+- Community info dialog with a click-to-zoom banner and icon, merged with
+  community settings into one view
+- Native notifications for the newest generation of communities
+- Community avatar and name in the mobile chat header
+
+### Changed
+- The sidebar community rail is now a single list you can drag to reorder freely
+- Typing `#channel` now jumps to that channel in the current community
+- Chat history loads faster and backfills deeper when opening a conversation
+
 ## [0.16.0] - 2026-07-05
 
 Introduces the next generation of Armada's private community protocol as the
