@@ -71,7 +71,8 @@ import okhttp3.WebSocketListener;
  * notification (see {@code enqueueRoomMessage}).
  *
  * Resilience:
- *   - Exponential reconnect backoff per relay (1s → 5min cap), reset on open.
+ *   - Exponential reconnect backoff per relay (1s → 5min cap), reset only
+ *     after a connection survives long enough to be considered stable.
  *   - Network-aware: reconnects immediately when connectivity returns.
  *   - Re-reads config (login/logout/relay/group changes) via a SharedPreferences
  *     listener and rebuilds subscriptions live.
@@ -107,6 +108,12 @@ public class NotificationRelayService extends Service {
 
     private static final long INITIAL_BACKOFF_MS = 1_000;
     private static final long MAX_BACKOFF_MS = 5 * 60 * 1_000;
+    // A connection must survive this long before a subsequent failure resets
+    // the backoff. Resetting in onOpen instead (the old behavior) meant a
+    // relay that accepts the handshake but drops the socket right after
+    // (auth-walled, overloaded, misbehaving proxy) reconnected every 1s
+    // forever — a battery-melting hot loop while the phone sleeps.
+    private static final long STABLE_CONNECTION_MS = 60_000;
 
     private OkHttpClient httpClient;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -505,6 +512,16 @@ public class NotificationRelayService extends Service {
         WebSocket ws;
         long backoffMs = INITIAL_BACKOFF_MS;
         boolean closed = false;
+
+        // When the current connection attempt started (main thread only).
+        // Used by scheduleReconnect to distinguish "stable connection finally
+        // died" (reset backoff) from "relay drops us right away" (keep growing).
+        long connectAttemptAt = 0;
+
+        // Single pending reconnect, cancellable — prevents a queued reconnect
+        // and the network callback from racing to open duplicate sockets.
+        final Runnable reconnectRunnable = this::connect;
+
         final String subGroups = "ag-" + Long.toHexString(System.nanoTime());
         final String subDirect = "ad-" + Long.toHexString(System.nanoTime() + 1);
         final String subConcord = "ac-" + Long.toHexString(System.nanoTime() + 2);
@@ -525,12 +542,16 @@ public class NotificationRelayService extends Service {
         }
 
         void connect() {
-            if (closed || !isNetworkAvailable()) return;
+            // ws != null guard: a socket is already open (or opening). Without
+            // it, a stale queued reconnect firing after the network callback
+            // already reconnected would open a second socket and orphan the
+            // first — leaked sockets keep pinging and re-failing forever.
+            if (closed || ws != null || !isNetworkAvailable()) return;
+            connectAttemptAt = System.currentTimeMillis();
             Request request = new Request.Builder().url(relayUrl).build();
             ws = httpClient.newWebSocket(request, new WebSocketListener() {
                 @Override
                 public void onOpen(WebSocket webSocket, Response response) {
-                    backoffMs = INITIAL_BACKOFF_MS;
                     if (BuildConfig.DEBUG) Log.d(TAG, "WS open: " + relayUrl);
                     sendReqs(webSocket);
                 }
@@ -543,12 +564,14 @@ public class NotificationRelayService extends Service {
                 @Override
                 public void onFailure(WebSocket webSocket, Throwable t, Response response) {
                     Log.w(TAG, "WS failure (" + relayUrl + "): " + t.getMessage());
-                    scheduleReconnect();
+                    handler.post(RelayConnection.this::scheduleReconnect);
                 }
 
                 @Override
                 public void onClosed(WebSocket webSocket, int code, String reason) {
-                    if (!closed) scheduleReconnect();
+                    handler.post(() -> {
+                        if (!closed) scheduleReconnect();
+                    });
                 }
             });
         }
@@ -678,16 +701,22 @@ public class NotificationRelayService extends Service {
 
         void scheduleReconnect() {
             if (closed) return;
-            if (ws != null) {
-                ws = null;
+            ws = null;
+            // Only a connection that stayed up for a while earns a backoff
+            // reset; instant drops keep doubling toward the 5-minute cap.
+            if (connectAttemptAt > 0
+                    && System.currentTimeMillis() - connectAttemptAt >= STABLE_CONNECTION_MS) {
+                backoffMs = INITIAL_BACKOFF_MS;
             }
             long delay = backoffMs;
             backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
-            handler.postDelayed(this::connect, delay);
+            handler.removeCallbacks(reconnectRunnable);
+            handler.postDelayed(reconnectRunnable, delay);
         }
 
         void close() {
             closed = true;
+            handler.removeCallbacks(reconnectRunnable);
             if (ws != null) {
                 try { ws.close(1000, "service reconfigured"); } catch (Exception ignored) {}
                 ws = null;
@@ -696,6 +725,7 @@ public class NotificationRelayService extends Service {
 
         void resetAndConnectNow() {
             backoffMs = INITIAL_BACKOFF_MS;
+            handler.removeCallbacks(reconnectRunnable);
             if (ws == null) connect();
         }
     }
