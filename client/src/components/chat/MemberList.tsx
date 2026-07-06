@@ -31,6 +31,7 @@ import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
+import { writeClipboardText } from "@/lib/clipboard";
 
 import type { Nip29Admin } from "@/lib/nip29";
 import type { ComponentType, ReactNode } from "react";
@@ -107,7 +108,7 @@ function MemberRow({
   const copyNpub = () => {
     const npub = tryNpubEncode(pubkey);
     if (!npub) return;
-    navigator.clipboard?.writeText(npub).then(
+    writeClipboardText(npub).then(
       () => toast({ title: "Copied npub" }),
       () => toast({ title: "Copy failed", variant: "destructive" }),
     );

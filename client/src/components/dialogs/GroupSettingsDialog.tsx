@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { toast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
+import { writeClipboardText } from "@/lib/clipboard";
 
 import type { Nip29Group } from "@/lib/nip29";
 
@@ -95,7 +96,7 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
 
   const copyInvite = () => {
     if (!inviteCode) return;
-    navigator.clipboard.writeText(inviteCode).then(
+    writeClipboardText(inviteCode).then(
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);

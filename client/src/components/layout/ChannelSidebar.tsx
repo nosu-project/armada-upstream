@@ -25,6 +25,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
 import { relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
+import { writeClipboardText } from "@/lib/clipboard";
 
 import type { Nip29Group } from "@/lib/nip29";
 
@@ -123,7 +124,7 @@ function ChannelLink({
         <ContextMenuItem
           onSelect={() => {
             const url = `${window.location.origin}/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`;
-            navigator.clipboard?.writeText(url);
+            writeClipboardText(url).catch(() => undefined);
           }}
         >
           <LinkIcon className="mr-2 size-4" /> Copy channel link

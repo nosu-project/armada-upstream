@@ -4,6 +4,7 @@ import { Copy, MessageSquareLock, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/useToast";
+import { writeClipboardText } from "@/lib/clipboard";
 
 /**
  * Landing route for content shared into Armada via the Web Share Target API
@@ -35,7 +36,7 @@ export function SharePage() {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
       toast({ description: "Copied to clipboard" });
     } catch {
       toast({ description: "Could not copy — try selecting the text manually", variant: "destructive" });

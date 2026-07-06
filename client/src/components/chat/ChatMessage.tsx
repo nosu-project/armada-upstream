@@ -22,6 +22,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { writeClipboardText } from "@/lib/clipboard";
 import { dittoEventUrl } from "@/lib/dittoUrl";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { isMeAction, meActionText } from "@/lib/slashCommands";
@@ -564,18 +565,18 @@ const ChatMessageInner = memo(function ChatMessageInner({
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => navigator.clipboard?.writeText(event.content)}>
+        <ContextMenuItem onSelect={() => writeClipboardText(event.content).catch(() => undefined)}>
           <Copy className="mr-2 size-4" /> Copy text
         </ContextMenuItem>
         {!identityOverride && (
           <ContextMenuItem
             onSelect={() => {
               try {
-                navigator.clipboard?.writeText(
+                writeClipboardText(
                   `nostr:${nip19.neventEncode({ id: event.id, author: event.pubkey })}`,
-                );
+                ).catch(() => undefined);
               } catch {
-                navigator.clipboard?.writeText(event.id);
+                writeClipboardText(event.id).catch(() => undefined);
               }
             }}
           >
