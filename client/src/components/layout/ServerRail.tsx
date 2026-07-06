@@ -166,7 +166,9 @@ function ServerButton({
   // Attach the long-press pointerdown listener natively on the rendered DOM
   // node. Going through a React prop on a Radix `asChild` trigger proved
   // unreliable (the Slot did not always forward it); a direct listener always
-  // fires. `touch-action: none` is set in the class so touch long-press works.
+  // fires. `touch-action: pan-y` is set in the class so the rail can still be
+  // scrolled vertically by touch-dragging an item, while the long-press
+  // drag-to-reorder gesture (which holds still, then moves) still works.
   useEffect(() => {
     const el = triggerRef.current;
     if (!el || !draggable) return;
@@ -244,11 +246,14 @@ function ServerButton({
     </>
   );
 
-  const triggerClass = "group relative flex items-center justify-center shrink-0 touch-none";
+  const triggerClass = "group relative flex items-center justify-center shrink-0 touch-pan-y";
 
   const dragClass = cn(
     draggable && "cursor-grab",
     dragging && "cursor-grabbing",
+    // While a reorder is in flight, lock touch-action so the browser can't
+    // steal the (mostly vertical) gesture as a pan and stop delivering moves.
+    reordering && "touch-none",
   );
 
   // While this item is the one being dragged, its slot becomes a dashed
@@ -395,9 +400,10 @@ function ConcordButton({
             onNavigate?.();
           }}
           className={cn(
-            "group relative flex items-center justify-center shrink-0 touch-none",
+            "group relative flex items-center justify-center shrink-0 touch-pan-y",
             draggable && "cursor-grab",
             dragging && "cursor-grabbing",
+            reordering && "touch-none",
           )}
           {...(draggable ? { "data-rail-key": concord1Key(communityId) } : {})}
         >
@@ -506,9 +512,10 @@ function Concord2Button({
             onNavigate?.();
           }}
           className={cn(
-            "group relative flex items-center justify-center shrink-0 touch-none",
+            "group relative flex items-center justify-center shrink-0 touch-pan-y",
             draggable && "cursor-grab",
             dragging && "cursor-grabbing",
+            reordering && "touch-none",
           )}
           {...(draggable ? { "data-rail-key": concord2Key(communityId) } : {})}
         >
