@@ -23,6 +23,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Verified App Links: open https://armada.buzz links (invites,
+                 shared channels) directly in the app. Verified against
+                 https://armada.buzz/.well-known/assetlinks.json (shipped in
+                 client/public/), which must list the APK signing cert's
+                 SHA-256 fingerprint. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="armada.buzz" />
+            </intent-filter>
+
         </activity>
 
         <provider

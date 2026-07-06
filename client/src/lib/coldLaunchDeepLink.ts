@@ -1,11 +1,13 @@
 import { App as CapacitorApp } from "@capacitor/app";
 
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
 
 /**
  * Cold-launch deep-link resolution, resolved ONCE at startup.
  *
- * A notification tap launches the process with an `armada://open<path>` URL, but
+ * A notification tap launches the process with an `armada://open<path>` URL
+ * (and an App Link tap with an `https://armada.buzz/<path>` URL), but
  * Capacitor still loads the SPA at its root (`/`), and `App.getLaunchUrl()` is
  * async — it resolves a beat AFTER React mounts. By then the router's
  * `HomeRedirect` has already sent `/` to the default server, `ServerPage` has
@@ -21,15 +23,6 @@ import { isNativeRuntime } from "@/hooks/useNativeNotifications";
  * exactly once (and consuming the path exactly once) also prevents it from
  * re-navigating on later effect runs (which would trap the user in the room).
  */
-
-/** Extract the in-app path from an `armada://open<path>` URL, or null. */
-function pathFromOpenUrl(url: string | undefined | null): string | null {
-  if (!url) return null;
-  const marker = "armada://open";
-  if (!url.startsWith(marker)) return null;
-  const path = url.slice(marker.length);
-  return path.startsWith("/") ? path : null;
-}
 
 let resolved = !isNativeRuntime(); // web: nothing to wait for
 let deepLinkPath: string | null = null;
@@ -52,7 +45,7 @@ if (isNativeRuntime()) {
   CapacitorApp.getLaunchUrl()
     .then((res) => {
       clearTimeout(timeout);
-      settle(pathFromOpenUrl(res?.url));
+      settle(pathFromDeepLinkUrl(res?.url));
     })
     .catch(() => {
       clearTimeout(timeout);

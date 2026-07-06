@@ -3,17 +3,19 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
 
 /**
- * Route WARM notification taps (app already running) to the in-app chat via
+ * Route WARM deep links (app already running) to the in-app chat via
  * React Router — never a full document reload.
  *
- * The Android notification's PendingIntent carries the target as an
- * `armada://open<path>` data URI. While the app is running, Capacitor's
- * @capacitor/app plugin fires `appUrlOpen` with that URL; we parse the path and
- * `navigate(path)` — a soft navigation that reuses the warm IndexedDB, query
- * cache, and live subscriptions (vs. `window.location.href`, which reloads the
- * document and cold-boots the whole app).
+ * Two sources land here while the app is running: notification taps (the
+ * Android PendingIntent carries an `armada://open<path>` data URI) and
+ * verified App Links (`https://armada.buzz/<path>`, e.g. a tapped invite
+ * link). Capacitor's @capacitor/app plugin fires `appUrlOpen` with the URL; we
+ * parse the path and `navigate(path)` — a soft navigation that reuses the warm
+ * IndexedDB, query cache, and live subscriptions (vs. `window.location.href`,
+ * which reloads the document and cold-boots the whole app).
  *
  * COLD launches (process swiped out) are handled separately by
  * {@link coldLaunchDeepLink} + `HomeRedirect`: the launch URL resolves async and
@@ -24,15 +26,6 @@ import { isNativeRuntime } from "@/hooks/useNativeNotifications";
  * Must be rendered inside the router so `useNavigate` resolves.
  */
 
-/** Extract the in-app path from an `armada://open<path>` URL, or null. */
-function pathFromOpenUrl(url: string | undefined | null): string | null {
-  if (!url) return null;
-  const marker = "armada://open";
-  if (!url.startsWith(marker)) return null;
-  const path = url.slice(marker.length);
-  return path.startsWith("/") ? path : null;
-}
-
 export function useNotificationNavigation(): void {
   const navigate = useNavigate();
 
@@ -42,7 +35,7 @@ export function useNotificationNavigation(): void {
 
     let handle: { remove: () => void } | undefined;
     CapacitorApp.addListener("appUrlOpen", ({ url }) => {
-      const path = pathFromOpenUrl(url);
+      const path = pathFromDeepLinkUrl(url);
       if (!cancelled && path) navigate(path);
     })
       .then((h) => {

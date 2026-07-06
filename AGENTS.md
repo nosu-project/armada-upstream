@@ -97,6 +97,20 @@ Caddy per-site `log { output file ... }` blocks fail to **create** a new log
 file under some sandbox configs; if a reload errors with `permission denied` on
 the log path, `touch` the file and `chown` it to the caddy user first.
 
+### Android App Links (deep linking)
+
+The Android app registers a verified `https` intent filter for **armada.buzz**
+(`client/android/app/src/main/AndroidManifest.xml`), so invite/share links open
+in the app. Verification requires
+`https://armada.buzz/.well-known/assetlinks.json` to be served by the **client**
+container (the file lives in `client/public/.well-known/` and ships in the
+static build; the Caddy split above only routes `/.well-known/nip29/*` and
+`/.well-known/concord/*` to the relay, so assetlinks falls through to the SPA
+container correctly). The file lists the APK signing cert's SHA-256 fingerprint
+(get it with `apksigner verify --print-certs Armada.apk`). If the signing key
+rotates, or the app is ever published through a store that re-signs (e.g. Play
+App Signing), add the new cert fingerprint to the array.
+
 ### LiveKit URL gotcha (the #1 voice-breaker)
 
 The LiveKit JS SDK **always appends `/rtc`** to the server URL it's given

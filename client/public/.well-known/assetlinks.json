@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "pub.armada.app",
+      "sha256_cert_fingerprints": [
+        "5C:2A:6E:F4:D3:EA:3F:CD:98:B9:C7:0D:04:3B:16:BD:93:FB:22:22:19:8D:2F:AE:7C:3A:E4:F9:AA:BE:12:47"
+      ]
+    }
+  }
+]
