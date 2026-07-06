@@ -86,6 +86,19 @@ function TitleIcon2({ icon }: { icon: ImagePointer | undefined }) {
   return <img src={url} alt="" className="size-5 rounded object-cover shrink-0" />;
 }
 
+/** Larger community avatar for the mobile chat header, with an initial fallback. */
+function TitleAvatar2({ icon, name }: { icon: ImagePointer | undefined; name: string | undefined }) {
+  const url = useDecryptedImage2(icon);
+  if (url) {
+    return <img src={url} alt="" className="size-8 rounded object-cover shrink-0" />;
+  }
+  return (
+    <div className="size-8 rounded shrink-0 bg-muted text-muted-foreground flex items-center justify-center text-sm font-semibold uppercase">
+      {name?.trim()?.[0] ?? "#"}
+    </div>
+  );
+}
+
 function Banner2({ banner }: { banner: ImagePointer | undefined }) {
   const url = useDecryptedImage2(banner);
   const [open, setOpen] = useState(false);
@@ -490,7 +503,7 @@ export function ConcordV2Page() {
         }
       >
         <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
-          <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+          <header className="relative h-12 touch:h-14 max-sidebar:h-auto max-sidebar:py-2 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
             <Button
               variant="ghost"
               size="icon"
@@ -501,12 +514,37 @@ export function ConcordV2Page() {
               <ChevronLeft className="size-5" />
             </Button>
 
-            {channel?.isPrivate ? (
-              <Lock className="size-5 text-muted-foreground shrink-0" />
-            ) : (
-              <Hash className="size-5 text-muted-foreground shrink-0" />
-            )}
-            <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
+            {/* Desktop / wide: "# channel-name" */}
+            <div className="hidden sidebar:flex items-center gap-1.5 min-w-0">
+              {channel?.isPrivate ? (
+                <Lock className="size-5 text-muted-foreground shrink-0" />
+              ) : (
+                <Hash className="size-5 text-muted-foreground shrink-0" />
+              )}
+              <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
+            </div>
+
+            {/* Mobile: community avatar + name large, channel muted below */}
+            <button
+              type="button"
+              className="flex sidebar:hidden items-center gap-2.5 min-w-0 text-left"
+              onClick={() => community && setInfoOpen(true)}
+              disabled={!community}
+              aria-label="Community info"
+            >
+              <TitleAvatar2 icon={folded?.metadata?.icon} name={community?.name} />
+              <div className="min-w-0 flex flex-col">
+                <span className="font-semibold text-base leading-tight truncate">{community?.name ?? "…"}</span>
+                <span className="text-xs text-muted-foreground leading-tight truncate flex items-center gap-0.5">
+                  {channel?.isPrivate ? (
+                    <Lock className="size-3 shrink-0" />
+                  ) : (
+                    <Hash className="size-3 shrink-0" />
+                  )}
+                  {channel?.name ?? "…"}
+                </span>
+              </div>
+            </button>
             <div className="ml-auto flex items-center gap-0.5">
               {user && (
                 <Tooltip>
