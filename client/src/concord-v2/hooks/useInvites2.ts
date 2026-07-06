@@ -3,8 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { KIND_DM_RELAYS, parseDmRelays } from "@/hooks/useDmRelayList";
 import { buildRegistryEdition } from "@/concord-v2/lib/control";
 import { bytesToHex, hexToBytes, inviteLinksLocator, hex32 } from "@/concord-v2/lib/derive";
+import {
+  buildDirectInviteRumor,
+  sealDirectInvite,
+  wrapDirectInvite,
+} from "@/concord-v2/lib/directInvite";
 import {
   buildBundleEvent,
   buildInviteUrl,
@@ -19,6 +25,7 @@ import {
 } from "@/concord-v2/lib/invite";
 import { KIND_INVITE_LIST } from "@/concord-v2/lib/kinds";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { capRelays } from "@/concord-v2/lib/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
@@ -98,7 +105,40 @@ function useUpdateInviteList2() {
 }
 
 /**
- * Mint / revoke public invite links for one community (CORD-05):
+ * Where a Direct Invite delivers (CORD-05 §6): the recipient's giftwrap inbox —
+ * the relays in their kind-10050 DM-relay list (NIP-17) when one exists, their
+ * NIP-65 read relays otherwise. Returns [] when neither is published (the
+ * caller then falls back to the app relays).
+ */
+async function recipientInboxRelays(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  recipient: string,
+): Promise<string[]> {
+  const KIND_RELAY_LIST = 10002;
+  const events = await nostr
+    .query([{ kinds: [KIND_DM_RELAYS, KIND_RELAY_LIST], authors: [recipient], limit: 4 }], {
+      signal: AbortSignal.timeout(6000),
+    })
+    .catch(() => [] as NostrEvent[]);
+
+  const latestOf = (kind: number) =>
+    events.filter((e) => e.kind === kind).sort((a, b) => b.created_at - a.created_at)[0];
+
+  const dm = parseDmRelays(latestOf(KIND_DM_RELAYS));
+  if (dm.length > 0) return capRelays(dm);
+
+  // NIP-65 read relays: tags with no marker are read+write.
+  const nip65 = latestOf(KIND_RELAY_LIST);
+  const reads: string[] = [];
+  for (const [name, url, marker] of nip65?.tags ?? []) {
+    if (name !== "r" || marker === "write" || !url) continue;
+    reads.push(url);
+  }
+  return capRelays(reads);
+}
+
+/**
+ * Invite actions for one community (CORD-05) — public links + direct handoffs:
  *
  *   - MINT: fresh 16-byte token + fresh link-signer keypair; the encrypted
  *     bundle posts at `(33301, link_signer, d="")` on the community's relays;
@@ -108,6 +148,8 @@ function useUpdateInviteList2() {
  *     the link-signer secret), the Registry drops it, the Invite List
  *     tombstones it. Retiring the last live link is what flips the Community
  *     back to Private.
+ *   - DIRECT: the bundle giftwraps straight to a known npub (CORD-05 §6) —
+ *     no link, no Registry entry, nothing revocable, never flips Public.
  */
 export function useInviteActions2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
@@ -116,6 +158,30 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   const { data: folded } = useControlFold2(community);
   const inviteList = useInviteList2();
   const { mutateAsync: updateInviteList } = useUpdateInviteList2();
+
+  /** The §1 CommunityInvite bundle: everything membership is (link + direct alike). */
+  const buildBundle = (opts?: { expiresAtMs?: number; label?: string }): InviteBundle => {
+    if (!user || !community) throw new Error("Not ready.");
+    return {
+      community_id: community.idHex,
+      owner: community.owner,
+      owner_salt: bytesToHex(community.ownerSalt),
+      community_root: bytesToHex(community.root),
+      root_epoch: Number(community.rootEpoch),
+      channels: community.privateChannels.map((ch) => ({
+        id: bytesToHex(ch.id),
+        key: bytesToHex(ch.key),
+        epoch: Number(ch.epoch),
+        name: ch.name,
+      })),
+      relays: community.relays,
+      name: folded?.metadata?.name ?? community.name,
+      ...(folded?.metadata?.icon ? { icon: folded.metadata.icon } : {}),
+      ...(opts?.expiresAtMs ? { expires_at: opts.expiresAtMs } : {}),
+      creator_npub: user.pubkey,
+      ...(opts?.label ? { label: opts.label } : {}),
+    };
+  };
 
   /** Publish this creator's registry (vsk 8) with the given live link set. */
   const publishRegistry = async (linkSigners: string[]) => {
@@ -143,26 +209,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
 
       const token = mintToken();
       const link = mintLinkSigner();
-
-      const bundle: InviteBundle = {
-        community_id: community.idHex,
-        owner: community.owner,
-        owner_salt: bytesToHex(community.ownerSalt),
-        community_root: bytesToHex(community.root),
-        root_epoch: Number(community.rootEpoch),
-        channels: community.privateChannels.map((ch) => ({
-          id: bytesToHex(ch.id),
-          key: bytesToHex(ch.key),
-          epoch: Number(ch.epoch),
-          name: ch.name,
-        })),
-        relays: community.relays,
-        name: folded?.metadata?.name ?? community.name,
-        ...(folded?.metadata?.icon ? { icon: folded.metadata.icon } : {}),
-        ...(expiresAtMs ? { expires_at: expiresAtMs } : {}),
-        creator_npub: user.pubkey,
-        ...(label ? { label } : {}),
-      };
+      const bundle = buildBundle({ expiresAtMs, label });
 
       const bundleEvent = buildBundleEvent(bundle, token, link.sk);
       const results = await Promise.allSettled(
@@ -230,6 +277,38 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     },
   });
 
+  /**
+   * Hand the keys straight to an npub (CORD-05 §6): the same §1 bundle, sealed
+   * by the sender's REAL key (the seal's verified npub is what proves who
+   * invited them) inside an ephemeral, `k`-tagged giftwrap the recipient can
+   * look up indexed. No coordinate, no token, no Registry entry — a Direct
+   * Invite never flips the community Public, which is what lets a Private
+   * community grow one npub at a time. Unrevocable once landed.
+   */
+  const sendDirectInvite = useMutation<void, Error, { recipientPubkey: string; expiresAtMs?: number }>({
+    mutationFn: async ({ recipientPubkey, expiresAtMs }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      if (!user.signer.nip44) throw new Error("This signer can't send direct invites (NIP-44 unsupported).");
+
+      const bundle = buildBundle({ expiresAtMs });
+      const rumor = buildDirectInviteRumor(bundle, user.pubkey);
+      const seal = await sealDirectInvite(rumor, recipientPubkey, user.signer);
+      const wrap = wrapDirectInvite(seal, recipientPubkey, { expiresAtMs });
+
+      // Deliver to the recipient's giftwrap inbox — their 10050 DM relays,
+      // else NIP-65 read relays — plus the app relays as the shared floor
+      // (every Armada client's invite scan reads them).
+      const inbox = await recipientInboxRelays(nostr, recipientPubkey);
+      const results = await Promise.allSettled([
+        nostr.event(wrap, { signal: AbortSignal.timeout(8000) }),
+        ...inbox.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+      ]);
+      if (!results.some((r) => r.status === "fulfilled")) {
+        throw new Error("No relay accepted the invite.");
+      }
+    },
+  });
+
   /** This creator's live links for THIS community (from the private list). */
   const myLinks = (inviteList.data?.entries ?? []).filter((e) => e.community_id === community?.idHex);
 
@@ -238,6 +317,8 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     isCreatingLink: createLink.isPending,
     revokeLink: revokeLink.mutateAsync,
     isRevoking: revokeLink.isPending,
+    sendDirectInvite: sendDirectInvite.mutateAsync,
+    isSendingInvite: sendDirectInvite.isPending,
     myLinks,
     /** Whether ANY live public link exists — the community's Public/Private flag. */
     isPublic: (folded?.liveInviteLinks.size ?? 0) > 0,

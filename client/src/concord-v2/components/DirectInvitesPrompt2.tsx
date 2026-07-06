@@ -1,6 +1,7 @@
 import { Loader2, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import * as nip19 from "nostr-tools/nip19";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { Button } from "@/components/ui/button";
@@ -9,30 +10,40 @@ import {
   ChromeDialogContent,
 } from "@/components/ui/dialog";
 import {
-  useAcceptConcordInvite,
-  useConcordInvites,
-  useDeclineConcordInvite,
-  type ParkedInvite,
-} from "@/concord-v1/hooks/useConcordInvites";
+  useAcceptDirectInvite2,
+  useDeclineDirectInvite2,
+  useDirectInvites2,
+  type ParkedInvite2,
+} from "@/concord-v2/hooks/useDirectInvites2";
 import { toast } from "@/hooks/useToast";
 
+/** The seal-verified sender, rendered without any network reaction (npub). */
+function senderLabel(pubkeyHex: string): string {
+  try {
+    return `${nip19.npubEncode(pubkeyHex).slice(0, 16)}…`;
+  } catch {
+    return `${pubkeyHex.slice(0, 16)}…`;
+  }
+}
+
 /**
- * Consent-gated prompt for direct (gift-wrapped) Concord invites. A received
- * invite is parked — it never auto-joins — and surfaced here for the user to
- * accept or decline. Accepting reconstructs the community + records it in the
- * encrypted membership list; declining tombstones it so it stops re-nagging.
+ * Consent-gated prompt for direct (gift-wrapped) Concord invites (CORD-05 §6).
+ * A received invite is parked — it never auto-joins, and nothing beyond its
+ * seal-verified sender and claimed name renders before the user decides.
+ * Accepting keeps the keys (records the entry in the Community List vault) and
+ * announces a Guestbook Join; declining tombstones it so it stops re-nagging.
  *
  * Mounted globally (MainLayout) so an invite that arrives on any screen prompts.
  */
-export function ConcordInvitesPrompt() {
-  const { data: invites } = useConcordInvites();
-  const { mutateAsync: accept, isPending: accepting } = useAcceptConcordInvite();
-  const { mutateAsync: decline, isPending: declining } = useDeclineConcordInvite();
+export function DirectInvitesPrompt2() {
+  const { data: invites } = useDirectInvites2();
+  const { mutateAsync: accept, isPending: accepting } = useAcceptDirectInvite2();
+  const { mutateAsync: decline, isPending: declining } = useDeclineDirectInvite2();
   const navigate = useNavigate();
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   const pending = (invites ?? []).filter((i) => !dismissed.has(i.wrapId));
-  const current: ParkedInvite | undefined = pending[0];
+  const current: ParkedInvite2 | undefined = pending[0];
   const open = Boolean(current);
   const busy = accepting || declining;
 
@@ -40,9 +51,9 @@ export function ConcordInvitesPrompt() {
 
   const handleAccept = async () => {
     try {
-      const community = await accept({ invite: current.invite });
-      toast({ title: "Joined encrypted chat", description: community.name });
-      navigate(`/c1/${encodeURIComponent(community.communityId)}`);
+      const { communityId, name } = await accept({ invite: current });
+      toast({ title: "Joined encrypted community", description: name });
+      navigate(`/c/${encodeURIComponent(communityId)}`);
     } catch (e) {
       toast({
         title: "Couldn't join",
@@ -63,17 +74,17 @@ export function ConcordInvitesPrompt() {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleDecline()}>
-      <ChromeDialogContent title="Encrypted chat invite">
+      <ChromeDialogContent title="Encrypted community invite">
         <div className="flex flex-col items-center gap-6">
           <div className="flex flex-col items-center gap-3 text-center">
             <ArmadaCrest size={72} />
             <div className="space-y-1">
               <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-                encrypted chat invite
+                encrypted community invite
               </h2>
               <p className="text-sm text-muted-foreground">
-                You've been invited to an end-to-end-encrypted community. Accepting gives you the
-                keys to read and post; no host can see its messages.
+                You've been handed the keys to an end-to-end-encrypted community. Accepting lets you
+                read and post; no host can see its messages.
               </p>
             </div>
           </div>
@@ -84,7 +95,7 @@ export function ConcordInvitesPrompt() {
               <span className="min-w-0 truncate">{current.name}</span>
             </div>
             <div className="mt-1 break-all text-xs text-muted-foreground">
-              from {current.sender.slice(0, 16)}…
+              from {senderLabel(current.sender)}
             </div>
             {pending.length > 1 && (
               <div className="mt-2 text-xs text-muted-foreground">

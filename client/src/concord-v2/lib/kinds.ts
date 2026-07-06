@@ -43,6 +43,18 @@ export const KIND_KICK = 3309;
 /** Guestbook snapshot: refounder-signed, chunked at 400 members. */
 export const KIND_SNAPSHOT = 3312;
 
+// ── Person-addressed rumor kinds (standard NIP-59, not stream traffic) ──────
+
+/**
+ * Direct invite (CORD-05 §6): the invite bundle giftwrapped straight to an
+ * npub — a kind-13 seal signed by the inviter's REAL key inside an
+ * ephemeral-author, recipient-`p`-tagged 1059 wrap (classic NIP-59, NOT the
+ * reversed stream wrap). The wrap carries an outer `["k", "3313"]` tag so a
+ * recipient can index exactly their invites without decrypting their whole
+ * giftwrap inbox.
+ */
+export const KIND_DIRECT_INVITE = 3313;
+
 // ── Control / rekey rumor kinds ──────────────────────────────────────────────
 
 /** Control edition (sub-kinded by the `vsk` tag). */

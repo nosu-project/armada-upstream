@@ -5,13 +5,15 @@
  * server-root key, the granted channels' keys/ids/epochs/names, the relay set,
  * the owner attestation, and the community id/name. `acceptInvite` reconstructs
  * a member-view Community (keyless — authority is the owner-rooted roster).
+ *
+ * V1's gift-wrapped delivery (kind-3304 rumors over kind-1059 wraps) is gone:
+ * direct invites are V2-only now, and V1 never queries the giftwrap inbox.
+ * What remains here is the bundle codec, still used by the membership list
+ * (each entry stores its keys as a full invite) and the public-link path.
  */
 
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { finalizeEvent } from "nostr-tools/pure";
-import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 
-import { KIND_COMMUNITY_INVITE_BUNDLE } from "@/concord-v1/lib/kinds";
 import { verifyOwnerAttestation } from "@/concord-v1/lib/owner";
 import { capRelays, hex32, type Channel, type Community } from "@/concord-v1/lib/types";
 
@@ -97,27 +99,3 @@ export function acceptInvite(invite: CommunityInvite): Community {
   };
 }
 
-/** Build the gift-wrap rumor (unsigned kind-3304) that carries an invite to an invitee. */
-export function buildInviteRumorTemplate(community: Community): EventTemplate {
-  return {
-    kind: KIND_COMMUNITY_INVITE_BUNDLE,
-    content: inviteToJson(buildInvite(community)),
-    tags: [],
-    created_at: Math.floor(Date.now() / 1000),
-  };
-}
-
-/** Parse an inbound rumor as a community invite. Returns undefined unless kind 3304 + well-formed. */
-export function parseInviteRumor(kind: number, content: string): CommunityInvite | undefined {
-  if (kind !== KIND_COMMUNITY_INVITE_BUNDLE) return undefined;
-  try {
-    return inviteFromJson(content);
-  } catch {
-    return undefined;
-  }
-}
-
-/** Sign an invite rumor template into an inner event (the gift-wrap layer is the caller's job). */
-export function signInviteRumor(template: EventTemplate, sk: Uint8Array): NostrEvent {
-  return finalizeEvent(template, sk);
-}

@@ -1,20 +1,24 @@
-import { Check, Copy, Link as LinkIcon, Loader2 } from "lucide-react";
+import { Check, Copy, Link as LinkIcon, Loader2, UserPlus } from "lucide-react";
 import { useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
+import { ProfileSearchSelect } from "@/components/chat/ProfileSearchSelect";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
 import { toast } from "@/hooks/useToast";
+import type { SearchProfile } from "@/hooks/useSearchProfiles";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
 /**
- * Invite people to a Concord V2 community via a shareable public link
- * (CORD-05): the path carries the bundle's naddr locator, the `#fragment`
- * carries the unlock token — never sent to any server. V2 has no direct
- * (gift-wrapped) invites; links revoke without re-keying.
+ * Invite people to a Concord V2 community two ways (CORD-05): a direct
+ * gift-wrapped key handoff to someone found by name (NIP-50 search, follows
+ * first), or a shareable public link — the path carries the bundle's naddr
+ * locator, the `#fragment` carries the unlock token, never sent to any server.
+ * Links revoke without re-keying; a direct invite is unrevocable and keeps the
+ * community Private.
  */
 export function InviteDialog2({
   community,
@@ -36,13 +40,33 @@ export function InviteDialog2({
 }
 
 function InviteBody({ community }: { community: CommunityV2 | undefined }) {
-  const { createLink, isCreatingLink, revokeLink, myLinks } = useInviteActions2(community);
+  const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite } =
+    useInviteActions2(community);
   const [link, setLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [expiryDays, setExpiryDays] = useState<number>(0); // 0 = never
   const [label, setLabel] = useState("");
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [sentPubkey, setSentPubkey] = useState<string | null>(null);
+  const [pendingPubkey, setPendingPubkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const handleSelect = async (profile: SearchProfile) => {
+    setError(null);
+    setPendingPubkey(profile.pubkey);
+    try {
+      await sendDirectInvite({ recipientPubkey: profile.pubkey });
+      setSentPubkey(profile.pubkey);
+      toast({
+        title: "Invite sent",
+        description: `${profile.metadata.name || profile.metadata.display_name || "They"} will be asked to accept.`,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't send the invite.");
+    } finally {
+      setPendingPubkey(null);
+    }
+  };
 
   const handleGenerate = async () => {
     setError(null);
@@ -101,10 +125,26 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
         </div>
       </div>
 
+      {/* Direct invite — search by name, follows first. A key handoff: the
+          bundle giftwraps straight to them, and the community stays Private. */}
       <div className="w-full space-y-2">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <UserPlus className="size-3.5" />
+          Invite someone directly
+        </div>
+        <ProfileSearchSelect onSelect={handleSelect} busyPubkey={pendingPubkey} autoFocus />
+        {sentPubkey && !isSendingInvite && (
+          <p className="flex items-center gap-1.5 text-xs text-success">
+            <Check className="size-3.5" /> Invite sent. Search again to invite more.
+          </p>
+        )}
+      </div>
+
+      {/* Public link — the escape hatch / share-anywhere path. */}
+      <div className="w-full space-y-2 border-t border-chrome pt-5">
+        <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <LinkIcon className="size-3.5" />
-          Share a link
+          Or share a link
         </div>
         {link ? (
           <>

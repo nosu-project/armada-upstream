@@ -2,7 +2,7 @@ import { Outlet } from "react-router-dom";
 
 import { AppsProvider } from "@/components/AppsProvider";
 import { CallProvider } from "@/components/CallProvider";
-import { ConcordInvitesPrompt } from "@/concord-v1/components/ConcordInvitesPrompt";
+import { DirectInvitesPrompt2 } from "@/concord-v2/components/DirectInvitesPrompt2";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import { useRegisterAllStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
 
@@ -25,7 +25,7 @@ export function MainLayout() {
     <CallProvider>
       <AppsProvider>
         <Outlet />
-        <ConcordInvitesPrompt />
+        <DirectInvitesPrompt2 />
         <QuickSwitcher />
       </AppsProvider>
     </CallProvider>

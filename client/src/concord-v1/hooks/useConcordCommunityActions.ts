@@ -1,13 +1,10 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { generateSecretKey } from "nostr-tools/pure";
-import { wrapEvent } from "nostr-tools/nip59";
 
 import { useUpdateConcordList } from "@/concord-v1/hooks/useConcordList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { buildDissolvedEditionUnsigned, sealDissolvedEdition } from "@/concord-v1/lib/control";
-import { buildInviteRumorTemplate } from "@/concord-v1/lib/invite";
 import {
   buildPublicInviteEvent,
   buildPublicInviteTombstone,
@@ -18,10 +15,10 @@ import {
 import type { Community } from "@/concord-v1/lib/types";
 
 /**
- * Per-community actions for a Concord owner/member: generate invites (public
- * link + direct gift-wrap), leave, and ban (rekey). These ride the community's
- * app relays. Invite generation is what makes the join flows reachable from
- * within armada (without it, links/invites can only come from outside).
+ * Per-community actions for a Concord owner/member: generate public invite
+ * links, leave, and dissolve. These ride the community's app relays. Direct
+ * (gift-wrapped) invites are a V2-only feature now — V1 is being phased out
+ * and no longer touches the giftwrap inbox at all.
  */
 export function useConcordCommunityActions(
   community: Community | undefined,
@@ -71,34 +68,6 @@ export function useConcordCommunityActions(
   });
 
   /**
-   * Send a direct invite to a specific npub over a NIP-17 gift wrap. The 3304
-   * bundle is wrapped with an EPHEMERAL sender key (the invite's authority is
-   * the owner attestation inside, not the wrap sender), so this works with any
-   * signer type. The recipient's client parks it for consent.
-   */
-  const sendDirectInvite = useMutation<void, Error, { recipientPubkey: string }>({
-    mutationFn: async ({ recipientPubkey }) => {
-      if (!community) throw new Error("No community.");
-      const rumorTemplate = buildInviteRumorTemplate(community);
-      const ephemeralSk = generateSecretKey();
-      // wrapEvent builds seal+wrap to the recipient; the rumor stays unsigned.
-      const wrap = wrapEvent(
-        { kind: rumorTemplate.kind, content: rumorTemplate.content, tags: rumorTemplate.tags, created_at: rumorTemplate.created_at },
-        ephemeralSk,
-        recipientPubkey,
-      );
-      // Publish on the community's relays + the recipient's perspective is the
-      // app-relay pool (Concord rides app relays). nostr.event routes to app relays.
-      await nostr.event(wrap, { signal: AbortSignal.timeout(8000) }).catch(() => {});
-      await Promise.all(
-        community.relays.map((url) =>
-          nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) }).catch(() => {}),
-        ),
-      );
-    },
-  });
-
-  /**
    * Leave the community: tombstone it in the membership list (stops
    * syncing/showing). Falls back to the raw community id (from the route/list
    * entry) when the full community can't be rehydrated — otherwise a broken
@@ -143,8 +112,6 @@ export function useConcordCommunityActions(
     createInviteLink: createInviteLink.mutateAsync,
     isCreatingLink: createInviteLink.isPending,
     revokeInviteLink: revokeInviteLink.mutateAsync,
-    sendDirectInvite: sendDirectInvite.mutateAsync,
-    isSendingInvite: sendDirectInvite.isPending,
     leave: leave.mutateAsync,
     isLeaving: leave.isPending,
     dissolve: dissolve.mutateAsync,

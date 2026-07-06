@@ -56,7 +56,7 @@ async function resolveBundle(
 }
 
 /** Turn a verified bundle into the membership-list join material + entry. */
-function bundleToEntry(bundle: InviteBundle): CommunityListEntry {
+export function bundleToEntry(bundle: InviteBundle): CommunityListEntry {
   const jm: JoinMaterial = {
     community_id: bundle.community_id,
     owner: bundle.owner,

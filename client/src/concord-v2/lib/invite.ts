@@ -75,6 +75,22 @@ function boundBundle(bundle: InviteBundle): InviteBundle {
   return bundle;
 }
 
+/**
+ * Validate a decrypted bundle regardless of how it arrived — fetched from a
+ * link's coordinate or handed over whole in a Direct Invite (CORD-05 §6): the
+ * §1 bounds apply, and the self-certifying `community_id` must reproduce from
+ * (owner, salt), so even a compromised creator can't smuggle a false owner.
+ * Throws `bounds` / `owner-mismatch`; expiry is the caller's concern (a parked
+ * invite still renders past `expires_at` — joining refuses).
+ */
+export function validateBundle(bundle: InviteBundle): InviteBundle {
+  boundBundle(bundle);
+  if (!verifyCommunityId(bundle.community_id, bundle.owner, bundle.owner_salt)) {
+    throw new InviteError("owner-mismatch", "bundle's owner does not reproduce its community_id");
+  }
+  return bundle;
+}
+
 /** Build the addressable bundle event: `(33301, link_signer, d="")`, marked live. */
 export function buildBundleEvent(bundle: InviteBundle, token: Uint8Array, linkSignerSk: Uint8Array): NostrEvent {
   const content = nip44Encrypt(JSON.stringify(bundle), inviteBundleKey(token));
@@ -138,13 +154,10 @@ export function parseBundleEvent(
   } catch (e) {
     throw new InviteError("bad-bundle", `bundle decrypt: ${e instanceof Error ? e.message : e}`);
   }
-  boundBundle(bundle);
 
   // The community_id self-certifies the owner: a mismatching bundle is refused,
   // so even a compromised creator can't smuggle a false owner (CORD-05 §1).
-  if (!verifyCommunityId(bundle.community_id, bundle.owner, bundle.owner_salt)) {
-    throw new InviteError("owner-mismatch", "bundle's owner does not reproduce its community_id");
-  }
+  validateBundle(bundle);
   if (typeof bundle.expires_at === "number" && nowMs > bundle.expires_at) {
     throw new InviteError("expired", "this invite link has expired");
   }

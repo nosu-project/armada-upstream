@@ -1,4 +1,3 @@
-import { bytesToHex } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
@@ -18,14 +17,7 @@ import {
   type ConcordList,
   type ConcordListEntry,
 } from "@/concord-v1/lib/concord";
-import { unwrapGiftWrap } from "@/concord-v1/lib/giftwrap";
-import {
-  acceptInvite,
-  buildInvite,
-  parseInviteRumor,
-  type CommunityInvite,
-} from "@/concord-v1/lib/invite";
-import { KIND_GIFT_WRAP } from "@/concord-v1/lib/kinds";
+import { acceptInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
 import { capRelays, type Community } from "@/concord-v1/lib/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 
@@ -135,10 +127,9 @@ export function useConcordList() {
       //    signer: on reopen with a slow remote/bunker (NIP-46) signer, `nip44`
       //    can be unavailable for seconds, and gating this read on it would leave
       //    the membership list empty for that whole window — the Concord rail
-      //    would show zero communities AND `useConcordInvites` would see an empty
-      //    "already joined" set and re-park invites for rooms you're already in
-      //    (a spam of invite modals on launch). The plaintext cache holds the
-      //    same secrets as the device's keys, so reading it needs no signer.
+      //    would show zero communities for rooms you're already in. The
+      //    plaintext cache holds the same secrets as the device's keys, so
+      //    reading it needs no signer.
       const persisted = await readFolded<PersistedList>(foldKey);
       if (cancelled) return;
       if (persisted) {
@@ -197,9 +188,8 @@ export function useConcordList() {
       // couldn't decrypt the event (signer not ready, transient error), keep
       // whatever we already have — the community keys live here and a wrongful
       // empty would make the rooms (and their keys) vanish from the UI. The
-      // `decryptFailed` flag rides along on the result so consumers (e.g.
-      // useConcordInvites) can tell an UNTRUSTED empty from a genuine empty and
-      // avoid acting (like re-parking already-joined invites) on a bad read.
+      // `decryptFailed` flag rides along on the result so consumers can tell an
+      // UNTRUSTED empty from a genuine empty and avoid acting on a bad read.
       if (decryptFailed) {
         return prev ?? { event: latest, list: EMPTY_CONCORD_LIST, decryptFailed: true };
       }
@@ -324,14 +314,14 @@ export function useUpdateConcordList() {
 }
 
 /** Where a recovered community was found, so the UI can explain provenance. */
-export type ConcordRecoverySource = "list-history" | "invite";
+export type ConcordRecoverySource = "list-history";
 
 /**
  * One community surfaced by a read-only resync scan, classified so the user can
  * decide what to restore. `status`:
  *   - "current": already in your active list (shown for context, not restorable);
- *   - "recovered": found in an old list version or an invite, NOT currently in
- *     your list and NOT deliberately left — a candidate to restore;
+ *   - "recovered": found in an old list version, NOT currently in your list and
+ *     NOT deliberately left — a candidate to restore;
  *   - "left": you have a newer tombstone for it (you left/declined). Restoring
  *     it would override that leave, so it's opt-in and called out separately.
  */
@@ -372,31 +362,6 @@ async function decodeListBlob(
 }
 
 /**
- * Turn a recovered {@link CommunityInvite} into a list entry. Stamped with the
- * EARLIEST possible `addedAt` (epoch second 1) so the deterministic merge treats
- * it as the oldest possible join: a community the user genuinely LEFT (which has
- * a real, newer tombstone) stays buried, while a community merely dropped by a
- * bad overwrite (no tombstone) is restored. We never resurrect an intentional
- * leave — only undo data loss.
- */
-function inviteToEntry(invite: CommunityInvite): ConcordListEntry | null {
-  let community: Community;
-  try {
-    community = acceptInvite(invite);
-  } catch {
-    return null;
-  }
-  const bundle: ConcordKeyBundle = {
-    communityId: bytesToHex(community.id),
-    epoch: Number(community.serverRootEpoch),
-    name: community.name,
-    relays: community.relays,
-    keys: { invite: buildInvite(community) },
-  };
-  return { communityId: bundle.communityId, seed: bundle, current: bundle, addedAt: 1 };
-}
-
-/**
  * Read-only scan to recover Concord communities lost to a bad kind-30078
  * overwrite — WITHOUT publishing anything. The list is a single replaceable
  * event, so an older/out-of-sync client could replace it with a shorter list
@@ -407,10 +372,11 @@ function inviteToEntry(invite: CommunityInvite): ConcordListEntry | null {
  *   1. the local plaintext folded cache (survives a remote overwrite locally);
  *   2. EVERY 30078 `d=armada/concord` blob the local event store still holds;
  *   3. EVERY 30078 blob the relays return — queried WITHOUT `limit:1`, so a
- *      relay that retained a prior version contributes it;
- *   4. the gift-wrap invite inbox (kind 1059 addressed to me): each direct
- *      invite carries the FULL key bundle for a room you're allowed into, so
- *      this surfaces communities that aren't in the list at all.
+ *      relay that retained a prior version contributes it.
+ *
+ * (The gift-wrap invite inbox is no longer a source: V1 never queries kind
+ * 1059 anymore — direct invites are V2-only, and the bandwidth of scanning
+ * the wrap backlog is what killed it.)
  *
  * Each found community is classified as already-current, recoverable, or a
  * deliberate leave (it has a newer tombstone) so the UI can present them
@@ -431,10 +397,9 @@ export function useScanConcordList() {
       }
       const pubkey = user.pubkey;
 
-      // Sources that may contain entries. Track which provided each community so
-      // we can show provenance (an old list version vs. a received invite).
+      // Sources that may contain entries. Track which provided each community
+      // so the UI can show provenance.
       const listSources: ConcordList[] = [];
-      const inviteEntries: ConcordListEntry[] = [];
 
       // 1. Local plaintext cache.
       const persisted = await readFolded<PersistedList>(`concord-list:${pubkey}`);
@@ -470,24 +435,6 @@ export function useScanConcordList() {
         // Best-effort.
       }
 
-      // 4. Gift-wrap invite inbox: each direct invite carries a full key bundle.
-      try {
-        const wraps = await nostr.query(
-          [{ kinds: [KIND_GIFT_WRAP], "#p": [pubkey], limit: 500 }],
-          { signal: AbortSignal.timeout(10_000) },
-        );
-        for (const wrap of wraps) {
-          const unwrapped = await unwrapGiftWrap(wrap, signer).catch(() => null);
-          if (!unwrapped) continue;
-          const invite = parseInviteRumor(unwrapped.rumor.kind, unwrapped.rumor.content);
-          if (!invite) continue;
-          const entry = inviteToEntry(invite);
-          if (entry) inviteEntries.push(entry);
-        }
-      } catch {
-        // Best-effort.
-      }
-
       // The authoritative basis: the active in-memory list, falling back to the
       // freshest decrypted relay blob. This is what "current"/"left" are judged
       // against and what the apply step merges chosen recoveries onto.
@@ -500,8 +447,6 @@ export function useScanConcordList() {
       const tombstones = new Map(active.tombstones.map((t) => [t.communityId, t.removedAt]));
 
       // Fold every recovered entry per community, keeping the freshest bundle.
-      // Track provenance: invite-sourced entries are the strongest signal that a
-      // room is genuinely joinable, so prefer "invite" when both apply.
       const found = new Map<string, { entry: ConcordListEntry; source: ConcordRecoverySource }>();
       const absorb = (entries: ConcordListEntry[], source: ConcordRecoverySource) => {
         for (const e of entries) {
@@ -513,15 +458,11 @@ export function useScanConcordList() {
               { entries: [prevFound.entry], tombstones: [] },
               { entries: [e], tombstones: [] },
             ).entries[0];
-            found.set(e.communityId, {
-              entry: merged,
-              source: source === "invite" ? "invite" : prevFound.source,
-            });
+            found.set(e.communityId, { entry: merged, source: prevFound.source });
           }
         }
       };
       for (const list of listSources) absorb(list.entries, "list-history");
-      absorb(inviteEntries, "invite");
 
       const items: ConcordScanItem[] = [];
       for (const [communityId, { entry, source }] of found) {

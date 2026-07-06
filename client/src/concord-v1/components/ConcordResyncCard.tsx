@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CheckCircle2, Loader2, Mail, PackageOpen, RefreshCw, RotateCcw, Search } from "lucide-react";
+import { CheckCircle2, Loader2, PackageOpen, RefreshCw, RotateCcw, Search } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,14 +14,7 @@ import {
 import { toast } from "@/hooks/useToast";
 
 /** Human label + icon for where a recovered community was found. */
-function SourceTag({ item }: { item: ConcordScanItem }) {
-  if (item.source === "invite") {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-        <Mail className="size-3" /> from an invite
-      </span>
-    );
-  }
+function SourceTag(_props: { item: ConcordScanItem }) {
   return (
     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
       <PackageOpen className="size-3" /> from an older list
@@ -85,8 +78,8 @@ function ScanRow({
  * Advanced recovery flow for Concord communities lost to a bad kind-30078
  * overwrite. Instead of a blind "republish my list" button, this:
  *
- *   1. SCANS read-only across every key-bearing source (local cache, all relay
- *      copies of the list, and received invites) — publishing nothing;
+ *   1. SCANS read-only across every key-bearing source (local cache and all
+ *      relay copies of the list) — publishing nothing;
  *   2. SHOWS the user exactly what was found, classified as already-in-your-list,
  *      lost (recoverable), or deliberately-left, with provenance;
  *   3. lets the user CHOOSE what to restore and only then republishes the list.
@@ -159,7 +152,7 @@ export function ConcordResyncCard() {
     return (
       <div className="space-y-3">
         <p className="text-sm text-muted-foreground leading-snug">
-          Scans your cache, relays, and received invites for rooms dropped from
+          Scans your cache and relays for rooms dropped from
           your list. Nothing changes until you choose what to restore.
         </p>
         <Button variant="outline" size="sm" className="clip-corner-lg" onClick={onScan} disabled={scanning}>

@@ -1,25 +1,23 @@
 /**
- * Concord V1 gift-wrap invite cache — the decrypted invite-inbox store.
+ * Concord V2 direct-invite inbox — the decrypted giftwrap-invite cache.
  *
- * The invite inbox is a NIP-59 gift-wrap scan: `{ kinds: [1059], "#p": [me] }`.
- * Opening each wrap is two NIP-44 decrypts (costly with a bunker signer), and
- * the old inbox refetched all 200 wraps and re-decrypted them on every 60s poll.
+ * The invite inbox is the indexed lookup CORD-05 §6 defines:
+ * `{ kinds: [1059], "#p": [me], "#k": ["3313"] }` — exactly the user's
+ * invites, never the whole giftwrap backlog. Opening each wrap is still two
+ * NIP-44 decrypts (costly with a bunker signer), so the DECRYPTED rumor is
+ * persisted once and read back from IndexedDB with no re-decrypt, and a
+ * persisted cursor means only wraps newer than the last sync are fetched.
  *
- * This persists the DECRYPTED invite rumor once, so the inbox reads back from
- * IndexedDB with no decrypt, and a persisted cursor means only wraps newer than
- * the last sync are fetched.
- *
- * Backed by `@nostrify/indexeddb` (the strfry-port NStore), a SEPARATE database
- * from `armada-events` (which never stores gift wraps at all — see
- * NostrBatcher.cacheEvents). Stored records are keyed by the WRAP id (the inbox
- * dedup key), carry the seal author (sender) and the wrap's `created_at`, and
- * are sig-less.
+ * Backed by `@nostrify/indexeddb` (the strfry-port NStore), a SEPARATE
+ * database from `armada-events` (which never stores gift wraps at all — see
+ * NostrBatcher.cacheEvents). Stored records are keyed by the WRAP id (the
+ * inbox dedup key), carry the seal author (sender) and the wrap's
+ * `created_at`, and are sig-less.
  *
  * The `since` cursor resumes from the newest wrap already scanned. NIP-59
- * permits backdating the outer `created_at` up to two days, which a strict
- * cursor could skip — but invite gift wraps in practice do NOT backdate, so we
- * accept resuming from exactly where we left off and tolerate losing a rare
- * backdated invite rather than rescanning two days of wraps on every launch.
+ * backdates the outer `created_at` up to two days, so the cursor rewinds that
+ * window on every resume — cheap, because the `#k` filter keeps the overlap to
+ * invites alone and the store dedups re-fetched wraps before decrypting.
  *
  * Trust note: this persists decrypted invite metadata at rest — the same
  * device-trust level as the folded caches already in use. Wiped on logout.
@@ -29,9 +27,13 @@ import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
-import type { UnwrappedRumor } from "@/concord-v1/lib/giftwrap";
+import type { UnwrappedInvite } from "@/concord-v2/lib/directInvite";
+import { KIND_DIRECT_INVITE } from "@/concord-v2/lib/kinds";
 
 const DB_NAME = "armada-concord-invites";
+
+/** NIP-59's outer-timestamp backdate window (the cursor rewinds this much). */
+export const WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
 
 /** Synthetic provenance tags on the stored record (not part of the rumor). */
 const TAG_WRAP = "wrap";
@@ -41,16 +43,16 @@ const TAG_WRAP_CREATED = "wrapts";
 let store: NIndexedDB | undefined;
 
 /** The singleton invite store (opens the DB in the background on first use). */
-export function inviteStore(): NIndexedDB {
+export function inviteInbox(): NIndexedDB {
   if (!store) store = new NIndexedDB(DB_NAME);
   return store;
 }
 
 /** Warm the IndexedDB connection so the first inbox read hits a hot store. */
-export function warmInviteStore(): void {
+export function warmInviteInbox(): void {
   try {
-    void inviteStore()
-      .query([{ kinds: [3304], limit: 1 }])
+    void inviteInbox()
+      .query([{ kinds: [KIND_DIRECT_INVITE], limit: 1 }])
       .catch(() => undefined);
   } catch {
     // IndexedDB unavailable — the store degrades to a no-op.
@@ -60,22 +62,22 @@ export function warmInviteStore(): void {
 // ── Codec ─────────────────────────────────────────────────────────────────────
 
 /** A decrypted invite record read back from the store. */
-export interface StoredInvite {
+export interface StoredDirectInvite {
   /** Gift-wrap event id (stable key + dedup). */
   wrapId: string;
-  /** The seal author — the real sender of the gift wrap. */
+  /** The seal author — the verified sender of the gift wrap. */
   sender: string;
   /** The decrypted inner rumor. */
-  rumor: UnwrappedRumor["rumor"];
+  rumor: UnwrappedInvite["rumor"];
 }
 
 /**
  * Build the stored record for an unwrapped invite. The record `id` is the WRAP
  * id (the inbox dedup key), `pubkey` the sender, `kind`/`content`/`tags` the
- * inner rumor, `sig: ""`. The wrap's own `created_at` is stashed in a tag so the
- * cursor can advance by it.
+ * inner rumor, `sig: ""`. The wrap's own `created_at` is stashed in a tag so
+ * the cursor can advance by it.
  */
-export function unwrappedToStored(wrap: NostrEvent, unwrapped: UnwrappedRumor): NostrEvent {
+export function unwrappedToStored(wrap: NostrEvent, unwrapped: UnwrappedInvite): NostrEvent {
   return {
     id: wrap.id,
     kind: unwrapped.rumor.kind,
@@ -94,8 +96,8 @@ export function unwrappedToStored(wrap: NostrEvent, unwrapped: UnwrappedRumor): 
 
 const PROVENANCE = new Set([TAG_WRAP, TAG_SENDER, TAG_WRAP_CREATED]);
 
-/** Reconstruct a StoredInvite from a stored record. */
-export function storedToInvite(ev: NostrEvent): StoredInvite {
+/** Reconstruct a StoredDirectInvite from a stored record. */
+export function storedToInvite(ev: NostrEvent): StoredDirectInvite {
   const tags = ev.tags.filter((t) => !PROVENANCE.has(t[0]));
   return {
     wrapId: ev.id,
@@ -112,16 +114,16 @@ export function storedToInvite(ev: NostrEvent): StoredInvite {
 
 // ── Reads / writes ──────────────────────────────────────────────────────────
 
-/** All cached invite rumors for the current user (kind 3304), newest first. */
-export async function queryInvites(opts?: { signal?: AbortSignal }): Promise<StoredInvite[]> {
-  const events = await inviteStore().query([{ kinds: [3304] }], { signal: opts?.signal });
+/** All cached direct-invite rumors (kind 3313), newest first. */
+export async function queryStoredInvites(opts?: { signal?: AbortSignal }): Promise<StoredDirectInvite[]> {
+  const events = await inviteInbox().query([{ kinds: [KIND_DIRECT_INVITE] }], { signal: opts?.signal });
   return events.map(storedToInvite);
 }
 
 /** Persist decrypted invites (fire-and-forget). Failures are swallowed. */
-export function writeInvites(records: { wrap: NostrEvent; unwrapped: UnwrappedRumor }[]): void {
+export function writeStoredInvites(records: { wrap: NostrEvent; unwrapped: UnwrappedInvite }[]): void {
   if (records.length === 0) return;
-  const s = inviteStore();
+  const s = inviteInbox();
   void Promise.all(records.map(({ wrap, unwrapped }) => s.event(unwrappedToStored(wrap, unwrapped)))).catch(
     () => undefined,
   );
@@ -129,19 +131,20 @@ export function writeInvites(records: { wrap: NostrEvent; unwrapped: UnwrappedRu
 
 // ── Sync cursor ───────────────────────────────────────────────────────────────
 //
-// Per-user resume state: the newest wrap `created_at` ingested. Persisted in the
-// folded cache. Resumes from exactly the newest wrap already scanned (invite
-// gift wraps don't backdate in practice — see the module note).
+// Per-user resume state: the newest wrap `created_at` ingested. Persisted in
+// the folded cache. Resumes {@link WRAP_BACKDATE_SECS} behind the newest wrap
+// already scanned, covering NIP-59's backdate window.
 
-const cursorKey = (pubkey: string) => `concord-invites-cursor:${pubkey}`;
+const cursorKey = (pubkey: string) => `concord2-invites-cursor:${pubkey}`;
 
 /** The `since` floor to fetch invite wraps from (0 on a cold cache). */
-export async function inviteSince(pubkey: string): Promise<number> {
-  return (await readFolded<number>(cursorKey(pubkey))) ?? 0;
+export async function inviteInboxSince(pubkey: string): Promise<number> {
+  const newest = (await readFolded<number>(cursorKey(pubkey))) ?? 0;
+  return newest > WRAP_BACKDATE_SECS ? newest - WRAP_BACKDATE_SECS : 0;
 }
 
 /** Advance the cursor to the newest wrap `created_at` seen (monotonic). */
-export async function advanceInviteCursor(pubkey: string, newestWrapCreatedAt: number): Promise<void> {
+export async function advanceInviteInboxCursor(pubkey: string, newestWrapCreatedAt: number): Promise<void> {
   const prev = (await readFolded<number>(cursorKey(pubkey))) ?? 0;
   if (newestWrapCreatedAt > prev) await writeFolded(cursorKey(pubkey), newestWrapCreatedAt);
 }
