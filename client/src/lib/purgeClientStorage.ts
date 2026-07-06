@@ -20,6 +20,7 @@ async function purgeIndexedDB(): Promise<void> {
       "armada-concord-cache",
       "armada-concord-rumors",
       "armada-concord-pending",
+      "armada-concord-invites",
       "armada-relay-provenance",
       DECRYPT_CACHE_DB_NAME,
     ];

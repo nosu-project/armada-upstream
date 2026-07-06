@@ -6,6 +6,12 @@ import { useConcordList, useUpdateConcordList } from "@/concord-v1/hooks/useConc
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import type { ConcordCommunity, ConcordKeyBundle } from "@/concord-v1/lib/concord";
 import { unwrapGiftWrap } from "@/concord-v1/lib/giftwrap";
+import {
+  advanceInviteCursor,
+  inviteSince,
+  queryInvites,
+  writeInvites,
+} from "@/concord-v1/lib/inviteStore";
 import { acceptInvite, buildInvite, parseInviteRumor, type CommunityInvite } from "@/concord-v1/lib/invite";
 import { KIND_GIFT_WRAP } from "@/concord-v1/lib/kinds";
 
@@ -29,6 +35,11 @@ export interface ParkedInvite {
  * **parks** it — consent comes first, exactly as Vector does: a received invite
  * never auto-joins, it waits here until the user accepts. Already-joined or
  * tombstoned communities are filtered out so the prompt doesn't re-nag.
+ *
+ * Sync: decrypted invite rumors are persisted in a dedicated IndexedDB store
+ * (inviteStore) and read back from there, so the inbox no longer re-decrypts the
+ * whole 1059 backlog on every poll. A persisted `since` cursor (offset by the
+ * NIP-59 backdate window) means only wraps newer than the last sync are fetched.
  */
 export function useConcordInvites() {
   const { nostr } = useNostr();
@@ -61,16 +72,42 @@ export function useConcordInvites() {
     staleTime: 30_000,
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
-      const events = await nostr.query(
-        [{ kinds: [KIND_GIFT_WRAP], "#p": [user!.pubkey], limit: 200 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-      );
+      const pubkey = user!.pubkey;
 
+      // Fetch only wraps newer than the last sync (offset by the NIP-59 backdate
+      // window so a freshly-published-but-backdated wrap isn't skipped). Decrypt
+      // just the ones we don't already have stored, persist them, advance cursor.
+      const since = await inviteSince(pubkey);
+      const filter: { kinds: number[]; "#p": string[]; limit: number; since?: number } = {
+        kinds: [KIND_GIFT_WRAP],
+        "#p": [pubkey],
+        limit: 200,
+      };
+      if (since > 0) filter.since = since;
+      const wraps = (await nostr.query([filter], {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+      })) as NostrEvent[];
+
+      if (wraps.length > 0) {
+        const stored = new Set((await queryInvites({ signal })).map((i) => i.wrapId));
+        const fresh: { wrap: NostrEvent; unwrapped: NonNullable<Awaited<ReturnType<typeof unwrapGiftWrap>>> }[] = [];
+        let newestWrap = 0;
+        for (const wrap of wraps) {
+          if (wrap.created_at > newestWrap) newestWrap = wrap.created_at;
+          if (stored.has(wrap.id)) continue;
+          const unwrapped = await unwrapGiftWrap(wrap, user!.signer);
+          if (!unwrapped) continue;
+          fresh.push({ wrap, unwrapped });
+        }
+        writeInvites(fresh);
+        if (newestWrap > 0) await advanceInviteCursor(pubkey, newestWrap);
+      }
+
+      // Read the parked set back from the store (decrypted, no re-decrypt), then
+      // apply the consent filters against the current membership list.
       const parked = new Map<string, ParkedInvite>();
-      for (const wrap of events as NostrEvent[]) {
-        const unwrapped = await unwrapGiftWrap(wrap, user!.signer);
-        if (!unwrapped) continue;
-        const invite = parseInviteRumor(unwrapped.rumor.kind, unwrapped.rumor.content);
+      for (const record of await queryInvites({ signal })) {
+        const invite = parseInviteRumor(record.rumor.kind, record.rumor.content);
         if (!invite) continue;
         // Consent gate: skip communities we've already joined or left.
         if (known.has(invite.community_id) || tombstoned.has(invite.community_id)) continue;
@@ -80,9 +117,9 @@ export function useConcordInvites() {
         } catch {
           continue;
         }
-        parked.set(wrap.id, {
-          wrapId: wrap.id,
-          sender: unwrapped.sender,
+        parked.set(record.wrapId, {
+          wrapId: record.wrapId,
+          sender: record.sender,
           invite,
           communityId: invite.community_id,
           name: invite.name,
