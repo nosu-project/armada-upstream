@@ -8,6 +8,8 @@ import { LoginArea } from "@/components/auth/LoginArea";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
+import { CommunityInfoDialog2 } from "@/concord-v2/components/CommunityInfoDialog2";
+import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
 import { RolesDialog2 } from "@/concord-v2/components/RolesDialog2";
 import { SettingsDialog2 } from "@/concord-v2/components/SettingsDialog2";
@@ -86,11 +88,20 @@ function TitleIcon2({ icon }: { icon: ImagePointer | undefined }) {
 
 function Banner2({ banner }: { banner: ImagePointer | undefined }) {
   const url = useDecryptedImage2(banner);
+  const [open, setOpen] = useState(false);
   if (!url) return null;
   return (
-    <div className="h-20 w-full shrink-0 overflow-hidden">
-      <img src={url} alt="" className="size-full object-cover" />
-    </div>
+    <>
+      <button
+        type="button"
+        className="h-20 w-full shrink-0 overflow-hidden cursor-zoom-in"
+        aria-label="View banner"
+        onClick={() => setOpen(true)}
+      >
+        <img src={url} alt="" className="size-full object-cover" />
+      </button>
+      {open && <ImageLightbox2 src={url} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
@@ -263,6 +274,7 @@ export function ConcordV2Page() {
   const [newChannelName, setNewChannelName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [membersVisible, setMembersVisible] = useState(true);
   const [membersOpen, setMembersOpen] = useState(false);
@@ -397,7 +409,17 @@ export function ConcordV2Page() {
   const channelList = (onNavigate?: () => void, className?: string) => (
     <ChannelSidebarView
       className={className ?? (onNavigate ? "flex-1" : "hidden sidebar:flex")}
-      title={community?.name ?? "…"}
+      title={
+        <button
+          type="button"
+          className="text-left hover:underline underline-offset-2 decoration-muted-foreground/50 cursor-pointer"
+          onClick={() => community && setInfoOpen(true)}
+          disabled={!community}
+          aria-label="Community info"
+        >
+          {community?.name ?? "…"}
+        </button>
+      }
       titleIcon={<TitleIcon2 icon={folded?.metadata?.icon} />}
       banner={<Banner2 banner={folded?.metadata?.banner} />}
       addChannelLabel={user && community && canManageChannels ? "Add channel" : undefined}
@@ -687,6 +709,14 @@ export function ConcordV2Page() {
       </SwipeReveal>
 
       <InviteDialog2 community={community} open={inviteOpen} onOpenChange={setInviteOpen} />
+      <CommunityInfoDialog2
+        community={community}
+        metadata={folded?.metadata}
+        ownerHex={ownerHex}
+        memberCount={memberPubkeys.length}
+        open={infoOpen}
+        onOpenChange={setInfoOpen}
+      />
       <SettingsDialog2 community={community} open={settingsOpen} onOpenChange={setSettingsOpen} />
       <RolesDialog2 community={community} open={rolesOpen} onOpenChange={setRolesOpen} />
     </>
