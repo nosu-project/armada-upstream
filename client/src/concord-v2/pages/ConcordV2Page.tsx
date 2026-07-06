@@ -12,7 +12,6 @@ import { CommunityInfoDialog2 } from "@/concord-v2/components/CommunityInfoDialo
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
 import { RolesDialog2 } from "@/concord-v2/components/RolesDialog2";
-import { SettingsDialog2 } from "@/concord-v2/components/SettingsDialog2";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
@@ -286,7 +285,6 @@ export function ConcordV2Page() {
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [membersVisible, setMembersVisible] = useState(true);
@@ -595,12 +593,10 @@ export function ConcordV2Page() {
                         Manage roles
                       </DropdownMenuItem>
                     )}
-                    {canManageMetadata && (
-                      <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setSettingsOpen(true)}>
-                        <Settings className="size-4" />
-                        Community settings
-                      </DropdownMenuItem>
-                    )}
+                    <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setInfoOpen(true)}>
+                      <Settings className="size-4" />
+                      Community settings
+                    </DropdownMenuItem>
                     <DropdownMenuItem
                       className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
                       disabled={isLeaving}
@@ -752,10 +748,11 @@ export function ConcordV2Page() {
         metadata={folded?.metadata}
         ownerHex={ownerHex}
         memberCount={memberPubkeys.length}
+        canManageMetadata={canManageMetadata}
+        canManageChannels={canManageChannels}
         open={infoOpen}
         onOpenChange={setInfoOpen}
       />
-      <SettingsDialog2 community={community} open={settingsOpen} onOpenChange={setSettingsOpen} />
       <RolesDialog2 community={community} open={rolesOpen} onOpenChange={setRolesOpen} />
     </>
   );
