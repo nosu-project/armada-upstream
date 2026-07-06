@@ -4,6 +4,25 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.17.2] - 2026-07-06
+
+Focuses on making communities load and feel faster: chat history, invites, and
+community details are now cached locally after they're first decrypted, so
+reopening a community is quicker and puts less strain on remote signers. Also
+fixes a bug where switching communities could briefly show the previous
+community's messages while the new one was still loading.
+
+### Changed
+- Chat history, invites, and community details are now cached locally after
+  decrypting, so reopening a community loads faster and is easier on remote
+  signers
+- Community details (members, channels, banned users) now sync in the
+  background for all your communities, not just the one you have open
+
+### Fixed
+- Switching communities no longer briefly shows the previous community's
+  messages while the new one is still loading
+
 ## [0.17.1] - 2026-07-05
 
 Your settings now follow you across devices more completely, and a few rough
