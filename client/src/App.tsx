@@ -7,6 +7,7 @@ import { NostrLoginProvider } from "@nostrify/react/login";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AppProvider } from "@/components/AppProvider";
+import { ControlPlaneSync } from "@/components/ControlPlaneSync";
 import { DeepLinkWarmup } from "@/components/DeepLinkWarmup";
 import { DesktopBadge } from "@/components/DesktopBadge";
 import { MeshProvider } from "@/components/MeshProvider";
@@ -59,6 +60,7 @@ export function App() {
                 <DeepLinkWarmup />
                 <DesktopBadge />
                 <NativeNotifications />
+                <ControlPlaneSync />
                 <ScreenSharePicker />
                 <Toaster />
                 <MeshProvider>
