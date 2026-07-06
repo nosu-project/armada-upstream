@@ -1,6 +1,6 @@
 import { Hash, IdCard, Link2, MoreVertical, Trash2, Volume2 } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
@@ -22,7 +22,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
-import { pickDefaultChannel } from "@/lib/utils";
+import { cn, pickDefaultChannel } from "@/lib/utils";
 
 /**
  * Server home (drill-down level 1). On mobile the server rail + channel list
@@ -40,30 +40,38 @@ export function ServerPage() {
 
   const { data: groups, isLoading, isError, relayInfo } = useRelayGroups(relayUrl);
 
-  // Discord-style: landing on a server opens the room you last had open there
-  // (or a "general"/first channel), rather than dumping you on a channel list.
-  // Replace-navigate so the bare server URL doesn't pile up in history. Guarded
-  // to fire once per server so it never fights the user navigating back here.
-  const autoOpened = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (!relayUrl || !groups || groups.length === 0) return;
-    if (autoOpened.current === relayUrl) return;
-    const target = pickDefaultChannel(
-      groups,
-      config.lastChannelByServer[relayUrl],
-      (g) => g.id,
-      (g) => g.name,
-    );
-    if (!target) return;
-    autoOpened.current = relayUrl;
-    navigate(
-      `/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(target.id)}`,
-      { replace: true },
-    );
-  }, [relayUrl, groups, config.lastChannelByServer, navigate]);
-
   if (!relayUrl) {
     return <Navigate to="/" replace />;
+  }
+
+  // Discord-style: landing on a server opens the room you last had open there
+  // (or a "general"/first channel), rather than dumping you on a channel list.
+  //
+  // Redirect SYNCHRONOUSLY (render a <Navigate replace>) the instant a default
+  // channel is known — including on the very first render when `groups` is
+  // already seeded from the IndexedDB cache. Doing this in render instead of a
+  // post-paint `useEffect` avoids painting ServerPage's channel list first and
+  // then swapping it for GroupPage: on mobile that showed as the channel list
+  // sliding in, immediately followed by the chat sliding in on top of it (two
+  // transitions + a double ChannelSidebar mount). Now there's a single
+  // transition — GroupPage's chat slide-in. `replace` keeps the bare server URL
+  // out of history.
+  const defaultChannel =
+    groups && groups.length > 0
+      ? pickDefaultChannel(
+          groups,
+          config.lastChannelByServer[relayUrl],
+          (g) => g.id,
+          (g) => g.name,
+        )
+      : undefined;
+  if (defaultChannel) {
+    return (
+      <Navigate
+        to={`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(defaultChannel.id)}`}
+        replace
+      />
+    );
   }
 
   const isPinned = PLATFORM_RELAYS.includes(relayUrl);
@@ -105,8 +113,25 @@ export function ServerPage() {
   return (
     <ServerScopeProvider relayUrl={relayUrl}>
       <ServerRail />
-      {/* Mobile: channel list fills the screen. Desktop: fixed-width sidebar. */}
-      <ChannelSidebar relayUrl={relayUrl} className="flex-1 sidebar:flex-none" />
+      {/*
+        Channel list. Desktop: always a fixed-width sidebar next to the welcome
+        pane. Mobile: it fills the screen — but ONLY once we know this server has
+        no default channel to redirect into (loading finished with zero groups).
+        While groups are still loading we're about to redirect into a channel, so
+        painting the full-screen channel list here would flash it in and then
+        immediately swap it for the chat (the jumpy double-slide). Hide it on
+        mobile during load and show a plain background matching GroupPage so the
+        redirect is seamless.
+      */}
+      <ChannelSidebar
+        relayUrl={relayUrl}
+        className={cn(
+          "flex-1 sidebar:flex-none",
+          isLoading && "hidden sidebar:flex",
+        )}
+      />
+      {/* Mobile loading placeholder: neutral background, no channel-list flash. */}
+      {isLoading && <div className="flex-1 sidebar:hidden bg-background" />}
 
       {/* Welcome / server info pane — desktop only. */}
       <main className="hidden sidebar:block flex-1 min-w-0 overflow-y-auto">
