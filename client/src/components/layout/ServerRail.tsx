@@ -83,7 +83,7 @@ function Concord1DragGhost({ communityId, name }: { communityId: string; name: s
   return (
     <span className="flex items-center justify-center size-12 rotate-[-6deg] scale-110 clip-corner-lg overflow-hidden bg-muted text-success ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
       {iconUrl ? (
-        <img src={iconUrl} alt="" className="size-full object-cover" />
+        <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
       ) : (
         <span className="text-sm font-semibold">{initials}</span>
       )}
@@ -100,7 +100,7 @@ function Concord2DragGhost({ communityId, name }: { communityId: string; name: s
   return (
     <span className="flex items-center justify-center size-12 rotate-[-6deg] scale-110 clip-corner-lg overflow-hidden bg-muted text-success ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
       {iconUrl ? (
-        <img src={iconUrl} alt="" className="size-full object-cover" />
+        <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
       ) : (
         <span className="text-sm font-semibold">{initials}</span>
       )}
@@ -415,7 +415,7 @@ function ConcordButton({
                   )}
                 >
                   {iconUrl ? (
-                    <img src={iconUrl} alt="" className="size-full object-cover" />
+                    <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
                   ) : (
                     <span className="text-sm font-semibold">{initials}</span>
                   )}
@@ -526,7 +526,7 @@ function Concord2Button({
                   )}
                 >
                   {iconUrl ? (
-                    <img src={iconUrl} alt="" className="size-full object-cover" />
+                    <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
                   ) : (
                     <span className="text-sm font-semibold">{initials}</span>
                   )}
@@ -817,6 +817,11 @@ export function ServerRail({
     <nav
       ref={navRef}
       aria-label="Servers"
+      // Suppress the browser's native HTML5 drag (images and <a>/NavLink are
+      // draggable by default). Without this, a press-and-drag on a community
+      // icon starts a native image/link drag that hijacks our custom
+      // long-press reorder gesture.
+      onDragStart={(e) => e.preventDefault()}
       className={cn(
         // Chrome plane — deepest part of the recessed frame. The rail reaches
         // both screen edges on mobile, so it owns the top/bottom safe-area
