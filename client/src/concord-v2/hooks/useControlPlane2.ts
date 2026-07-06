@@ -266,6 +266,16 @@ export async function publishEdition2(
   if (!results.some((r) => r.status === "fulfilled")) {
     throw new Error("No relay accepted the change.");
   }
+  // Write our own edition to the local opened-event store immediately: the
+  // refetch after invalidation unions the store, so the publisher's fold picks
+  // the change up even if no relay echoes the wrap back (or the persisted
+  // `since` cursor would skip it). Without this, a promote can "succeed" with
+  // no visible effect until a full resync.
+  try {
+    writeOpened([openWrap(wrap, control)]);
+  } catch {
+    // best-effort — the relay echo remains the fallback
+  }
 }
 
 /**

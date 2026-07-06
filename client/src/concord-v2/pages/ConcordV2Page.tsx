@@ -44,7 +44,7 @@ import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
 import { useTyping2, useTypingPublisher2 } from "@/concord-v2/hooks/useTyping2";
 import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
-import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
+import { badgeOf, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import type { ChannelV2, CommunityV2, ImagePointer } from "@/concord-v2/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 
@@ -255,7 +255,7 @@ export function ConcordV2Page() {
     );
   }, [channel, lastChannelKey, updateConfig]);
 
-  const { setAdmin } = useRoles2(community);
+  const { setTier } = useRoles2(community);
   const ownerHex = folded?.ownerHex ?? community?.owner;
   const iAmOwner = Boolean(user && ownerHex && user.pubkey === ownerHex);
   const roster = folded?.roster;
@@ -295,7 +295,9 @@ export function ConcordV2Page() {
     if (ownerHex) out.push({ pubkey: ownerHex, roles: ["owner"] });
     if (roster) {
       for (const g of roster.grants) {
-        if (g.member !== ownerHex && rosterIsAdmin(roster, g.member)) out.push({ pubkey: g.member, roles: ["admin"] });
+        if (g.member === ownerHex) continue;
+        const badge = badgeOf(roster, g.member);
+        if (badge) out.push({ pubkey: g.member, roles: [badge] });
       }
     }
     return out;
@@ -392,8 +394,14 @@ export function ConcordV2Page() {
     }
   };
 
-  const handleSetRole = (pubkey: string, roles: string[]) => {
-    setAdmin({ member: pubkey, admin: roles.includes("admin") }).catch(() => {});
+  const handleSetRole = async (pubkey: string, roles: string[]) => {
+    const tier = roles.includes("admin") ? ("admin" as const) : roles.includes("moderator") ? ("moderator" as const) : null;
+    try {
+      await setTier({ member: pubkey, tier });
+      toast({ title: tier === "admin" ? "Made admin" : tier === "moderator" ? "Made moderator" : "Role removed" });
+    } catch (e) {
+      toast({ title: "Couldn't change role", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+    }
   };
 
   const handleBan = async (pubkey: string) => {

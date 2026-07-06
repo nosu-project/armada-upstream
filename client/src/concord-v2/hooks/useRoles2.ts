@@ -5,7 +5,7 @@ import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } fro
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { buildGrantEdition, buildMetadataEdition, buildRoleEdition } from "@/concord-v2/lib/control";
 import { bytesToHex, grantLocator, hex32, random32 } from "@/concord-v2/lib/derive";
-import { adminRole, type MemberGrant, type Role } from "@/concord-v2/lib/roles";
+import { adminRole, canActOnMember, canActOnPosition, emptyRoles, moderatorRole, Permissions, type MemberGrant, type Role } from "@/concord-v2/lib/roles";
 import type { CommunityMetadata, CommunityV2, ImagePointer } from "@/concord-v2/lib/types";
 
 /**
@@ -79,6 +79,8 @@ export function useRoles2(community: CommunityV2 | undefined) {
 
   /** The stock Admin role id in the current roster, if one exists. */
   const adminRoleId = folded?.roster.roles.find((r) => r.name === "Admin")?.roleId;
+  /** The stock Moderator role id in the current roster, if one exists. */
+  const moderatorRoleId = folded?.roster.roles.find((r) => r.name === "Moderator")?.roleId;
 
   const saveRole = useMutation<string, Error, { role: Role }>({
     mutationFn: async ({ role }) => {
@@ -120,29 +122,52 @@ export function useRoles2(community: CommunityV2 | undefined) {
     onSuccess: invalidate,
   });
 
-  const setAdmin = useMutation<void, Error, { member: string; admin: boolean }>({
-    mutationFn: async ({ member, admin }) => {
+  /**
+   * Promote/demote a member to a stock tier: "admin" (position 1, owner-grantable
+   * only), "moderator" (position 2, grantable by any strict outranker holding
+   * MANAGE_ROLES), or null (revoke — an empty grant). Pre-checks the same
+   * authority rules every fold enforces (CORD-04 §3), so an action a verifier
+   * would drop fails HERE with a readable error instead of publishing a grant
+   * the whole network silently discards.
+   */
+  const setTier = useMutation<void, Error, { member: string; tier: "admin" | "moderator" | null }>({
+    mutationFn: async ({ member, tier }) => {
       if (!user || !community) throw new Error("Not ready.");
+      const ownerHex = folded?.ownerHex ?? community.owner;
+      const roster = folded?.roster ?? emptyRoles();
 
-      // Ensure the stock Admin role exists (mint + publish if absent).
-      let roleId = adminRoleId;
-      if (!roleId && admin) {
-        const role = adminRole(bytesToHex(random32()));
-        roleId = role.roleId;
-        await publishEdition2(
-          nostr,
-          community,
-          user.signer,
-          buildRoleEdition(role, {
-            actorPubkey: user.pubkey,
-            version: 1n,
-            authority: citationFor(community, folded, user.pubkey),
-          }),
-        );
+      // The fold's gate, applied up-front: changing someone's roles means
+      // acting on them (strict outrank), and granting a role means outranking
+      // the position it sits at.
+      if (!canActOnMember(roster, user.pubkey, ownerHex, member, Permissions.MANAGE_ROLES)) {
+        throw new Error("You don't outrank this member.");
+      }
+      const minted = tier === "admin" ? adminRole(bytesToHex(random32())) : tier === "moderator" ? moderatorRole(bytesToHex(random32())) : undefined;
+      if (minted && !canActOnPosition(roster, user.pubkey, ownerHex, minted.position, Permissions.MANAGE_ROLES)) {
+        throw new Error(tier === "admin" ? "Only the owner can grant Admin." : "You can't grant a role at this rank.");
+      }
+
+      // Ensure the stock role exists (mint + publish if absent).
+      let roleId: string | undefined;
+      if (minted) {
+        roleId = tier === "admin" ? adminRoleId : moderatorRoleId;
+        if (!roleId) {
+          roleId = minted.roleId;
+          await publishEdition2(
+            nostr,
+            community,
+            user.signer,
+            buildRoleEdition(minted, {
+              actorPubkey: user.pubkey,
+              version: 1n,
+              authority: citationFor(community, folded, user.pubkey),
+            }),
+          );
+        }
       }
 
       const head = grantHeadOf(member);
-      const grant: MemberGrant = { member, roleIds: admin && roleId ? [roleId] : [] };
+      const grant: MemberGrant = { member, roleIds: roleId ? [roleId] : [] };
       await publishEdition2(
         nostr,
         community,
@@ -161,8 +186,8 @@ export function useRoles2(community: CommunityV2 | undefined) {
   return {
     folded,
     isLoading,
-    setAdmin: setAdmin.mutateAsync,
-    isSettingAdmin: setAdmin.isPending,
+    setTier: setTier.mutateAsync,
+    isSettingTier: setTier.isPending,
     saveRole: saveRole.mutateAsync,
     isSavingRole: saveRole.isPending,
     setMemberRoles: setMemberRoles.mutateAsync,

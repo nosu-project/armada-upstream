@@ -4,6 +4,18 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.17.4] - 2026-07-06
+
+Fixes member promotion in newer communities: "Make moderator" was silently
+doing nothing, and "Make admin" published correctly but the promoter often
+didn't see the change take effect right away.
+
+### Fixed
+- "Make moderator" now actually grants moderator permissions instead of
+  silently doing nothing
+- Promoting or demoting a member now shows up immediately for the person who
+  made the change, and failures are now reported instead of failing silently
+
 ## [0.17.3] - 2026-07-06
 
 Polishes invites and a few everyday interactions. Inviting someone is now
