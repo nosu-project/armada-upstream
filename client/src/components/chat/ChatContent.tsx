@@ -430,11 +430,17 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
       }
     }
 
-    // Collapse excessive whitespace around block-level tokens.
+    // Collapse excessive whitespace around block-level tokens. `link-embed` is
+    // deliberately excluded: it doesn't always render as a block (it becomes an
+    // inline link inside quotes, and falls back to an inline <a> when no preview
+    // data is available), so stripping the surrounding space would glue the URL
+    // onto adjacent text (e.g. "new apk https://…" → "new apkhttps://…"). When
+    // it does render as a preview card, the card is block-level, so a leftover
+    // space in the preceding text is invisible anyway.
     for (let i = 0; i < result.length; i++) {
       const token = result[i];
       const isBlock = token.type === "image-embed" || token.type === "media-embed"
-        || token.type === "link-embed" || token.type === "nevent-embed"
+        || token.type === "nevent-embed"
         || (token.type === "naddr-embed" && !token.url) || token.type === "lightning-invoice"
         || token.type === "code-block" || token.type === "quote";
 
