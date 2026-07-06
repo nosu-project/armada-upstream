@@ -114,6 +114,13 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   const cursorRef = useRef<number | undefined>(undefined);
   const loadingRef = useRef(false);
 
+  // Which relay the currently-rendered `query.data` belongs to. Used by
+  // `placeholderData` below to decide whether the previous room's messages are
+  // safe to keep painted during a switch: same server → yes (no skeleton
+  // flash); different community → no (blank rather than show another
+  // community's timeline).
+  const dataRelayRef = useRef<string | undefined>(relayUrl);
+
   // Last-known-good localStorage snapshot scope for this room. Read
   // synchronously as the query's initialData so the previous visit's screenful
   // paints on the FIRST frame of a cold launch — before the (slow-on-Android)
@@ -223,9 +230,18 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     // Keep showing the previous channel's messages while the next loads, so
-    // switching channels never flashes the skeleton (cache-first feel).
-    placeholderData: (prev) => prev,
+    // switching channels within the SAME community never flashes the skeleton
+    // (cache-first feel). But when switching to a DIFFERENT community, the
+    // previous server's timeline is unrelated and confusing — drop it so the
+    // new room paints blank/loading rather than lingering on the old community.
+    placeholderData: (prev) => (dataRelayRef.current === relayUrl ? prev : undefined),
   });
+
+  // Track which relay the data now on screen belongs to, for the next switch's
+  // `placeholderData` decision. Runs after render commits `query.data`.
+  useEffect(() => {
+    dataRelayRef.current = relayUrl;
+  }, [relayUrl, query.data]);
 
   // Send-status for optimistic messages (kept in its own cache entry, shared
   // with Concord via useSendStatusMap).
