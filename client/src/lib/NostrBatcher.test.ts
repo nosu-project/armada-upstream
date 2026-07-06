@@ -268,3 +268,44 @@ describe("NostrBatcher — relay()/group() req multiplexing", () => {
   });
 });
 
+describe("NostrBatcher — gift wraps are never cached", () => {
+  /** A store stub recording every event handed to `.event()`. */
+  function makeStore() {
+    const cached: NostrEvent[] = [];
+    const store = {
+      event: vi.fn(async (event: NostrEvent) => {
+        cached.push(event);
+      }),
+      query: vi.fn(async () => []),
+    };
+    return { store: Promise.resolve(store) as unknown as Promise<import("@nostrify/nostrify").NStore>, cached };
+  }
+
+  /** A pool returning a mix of a gift wrap and a normal event for any query. */
+  function makeMixedPool() {
+    const normal: NostrEvent = { id: "n1", pubkey: "p", kind: 1, created_at: 1000, content: "hi", tags: [], sig: "s" };
+    const wrap: NostrEvent = wrapEvent("w1"); // kind 1059
+    const ephemeralWrap: NostrEvent = { ...wrapEvent("w2"), kind: 21059 };
+    const pool = {
+      query: vi.fn(async () => [normal, wrap, ephemeralWrap]),
+    } as unknown as NPool;
+    return { pool, normal, wrap, ephemeralWrap };
+  }
+
+  it("drops kind 1059/21059 from the cache but keeps other kinds (top-level query)", async () => {
+    const { pool } = makeMixedPool();
+    const { store, cached } = makeStore();
+    const batcher = new NostrBatcher(pool, store);
+
+    const events = await batcher.query([{ kinds: [1, 1059, 21059] }]);
+    // The caller still receives everything the relay returned.
+    expect(events.map((e) => e.kind).sort()).toEqual([1, 1059, 21059]);
+    // Let the fire-and-forget cache write settle.
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Only the non-wrap event was cached.
+    expect(cached.map((e) => e.kind)).toEqual([1]);
+    expect(cached.some((e) => e.kind === 1059 || e.kind === 21059)).toBe(false);
+  });
+});
+

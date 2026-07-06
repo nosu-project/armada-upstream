@@ -22,9 +22,6 @@ import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
-/** Read options, incl. the NostrBatcher `cache` opt-out (see rumorStore.ts). */
-type ReadOpts = { signal?: AbortSignal; cache?: boolean };
-
 /**
  * The persisted control-fold snapshot key for a community (see
  * {@link useDeferredFold}). Shared with the notification-subscription builder,
@@ -120,8 +117,7 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
         try {
           for await (const msg of nostr.relay(url).req([filter], {
             signal: controller.signal,
-            cache: false,
-          } as ReadOpts)) {
+          })) {
             if (msg[0] === "EVENT") {
               const opened = openControlRaw([msg[2] as NostrEvent], groups);
               if (opened.length === 0) continue;
@@ -163,7 +159,7 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
         community!.relays.map((url) =>
           nostr
             .relay(url)
-            .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]), cache: false } as ReadOpts)
+            .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) })
             .catch(() => [] as NostrEvent[]),
         ),
       );
@@ -242,8 +238,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
             .relay(url)
             .query([{ kinds: [KIND_WRAP], authors: [group.pk], limit: 10 }], {
               signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-              cache: false,
-            } as ReadOpts)
+            })
             .catch(() => [] as NostrEvent[]),
         ),
       );

@@ -38,9 +38,6 @@ import type { CommunityV2, HeldRoot } from "@/concord-v2/lib/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** Read options, incl. the NostrBatcher `cache` opt-out (see rumorStore.ts). */
-type ReadOpts = { signal?: AbortSignal; cache?: boolean };
-
 const ZERO_SCOPE = new Uint8Array(32);
 
 /**
@@ -85,7 +82,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
         community!.relays.map((url) =>
           nostr
             .relay(url)
-            .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]), cache: false } as ReadOpts)
+            .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) })
             .catch(() => [] as NostrEvent[]),
         ),
       );

@@ -798,13 +798,21 @@ export class NostrBatcher {
    * event that flows out of `.query()` and `.req()`, so the cache mirrors
    * whatever the relays return without any caller having to opt in.
    *
+   * Gift-wrap kinds (1059/21059) are NEVER cached: they are opaque ciphertext,
+   * a waste of space in the shared `armada-events` store, and every Concord/DM
+   * consumer that needs them persists the DECRYPTED rumor in its own store
+   * instead. This is the single chokepoint every caching path flows through, so
+   * blocking here guarantees no wrap can leak into the cache from any read.
+   *
    * Failures are swallowed: the cache is a best-effort mirror, never on the
    * critical path of a relay read.
    */
   private cacheEvents(events: NostrEvent[]): void {
-    if (!this.store || events.length === 0) return;
+    if (!this.store) return;
+    const cacheable = events.filter((event) => event.kind !== 1059 && event.kind !== 21059);
+    if (cacheable.length === 0) return;
     void this.store
-      .then((store) => Promise.all(events.map((event) => store.event(event))))
+      .then((store) => Promise.all(cacheable.map((event) => store.event(event))))
       .catch(() => {
         // Best-effort cache; ignore write failures.
       });
@@ -1027,11 +1035,11 @@ export class NostrBatcher {
     return new Proxy(relay, {
       get(target, prop, receiver) {
         if (prop === 'query') {
-          return (filters: NostrFilter[], opts?: { signal?: AbortSignal; cache?: boolean }) =>
+          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) =>
             coalescedQuery(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         if (prop === 'req') {
-          return (filters: NostrFilter[], opts?: { signal?: AbortSignal; cache?: boolean }) =>
+          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) =>
             coalescedReq(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         const value = Reflect.get(target, prop, receiver);
@@ -1055,14 +1063,9 @@ export class NostrBatcher {
     scopeRelays: string[],
     sourceUrl: string | undefined,
     filters: NostrFilter[],
-    opts?: { signal?: AbortSignal; cache?: boolean },
+    opts?: { signal?: AbortSignal },
   ): Promise<NostrEvent[]> {
-    // Callers may opt out of the fire-and-forget cache mirror (e.g. the Concord
-    // V2 chat path, which persists DECRYPTED rumors in its own store and would
-    // only waste space caching the opaque kind-1059 wraps here). Keyed into the
-    // coalesce key so a `cache:false` read never shares with a caching one.
-    const doCache = opts?.cache !== false;
-    const key = `${via}::${doCache ? '' : 'nc:'}${coalesceKey(scopeRelays, filters)}`;
+    const key = `${via}::${coalesceKey(scopeRelays, filters)}`;
     let shared = this.inflightQueries.get(key);
     if (!shared) {
       logNostrReq(scopeRelays, filters, via);
@@ -1072,7 +1075,7 @@ export class NostrBatcher {
       shared = target
         .query(filters)
         .then((events) => {
-          if (doCache) this.cacheEvents(events);
+          this.cacheEvents(events);
           this.recordDirectoryProvenance(events, sourceUrl);
           return events;
         })
@@ -1116,10 +1119,9 @@ export class NostrBatcher {
     scopeRelays: string[],
     sourceUrl: string | undefined,
     filters: NostrFilter[],
-    opts?: { signal?: AbortSignal; cache?: boolean },
+    opts?: { signal?: AbortSignal },
   ): AsyncIterable<RelayMsg> {
-    const doCache = opts?.cache !== false;
-    const key = `${via}::${doCache ? '' : 'nc:'}${coalesceKey(scopeRelays, filters)}`;
+    const key = `${via}::${coalesceKey(scopeRelays, filters)}`;
     let shared = this.sharedSubs.get(key);
     if (!shared || !shared.isOpen()) {
       logNostrReq(scopeRelays, filters, via);
@@ -1133,7 +1135,7 @@ export class NostrBatcher {
         },
         (msg) => {
           if (msg[0] === 'EVENT') {
-            if (doCache) this.cacheEvents([msg[2]]);
+            this.cacheEvents([msg[2]]);
             this.recordDirectoryProvenance([msg[2]], sourceUrl);
           }
         },

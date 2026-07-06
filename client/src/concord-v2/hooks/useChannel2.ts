@@ -58,14 +58,6 @@ function channelFilter(channel: ChannelV2, extra?: Partial<NostrFilter>): NostrF
   return { kinds: [KIND_WRAP], authors: channel.streams.map((s) => s.group.pk), ...extra };
 }
 
-/**
- * Read options, including the NostrBatcher-specific `cache` opt-out. The
- * injected `nostr` is typed as the vanilla NRelay, but the runtime value is our
- * batcher, whose `relay(url).query/req` honour `cache: false` to skip mirroring
- * the opaque kind-1059 wraps into the shared event store.
- */
-type ReadOpts = { signal?: AbortSignal; cache?: boolean };
-
 /** Upsert opened events into the raw set, deduped by rumor id, sorted by ms. */
 function upsert(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedChat[] {
   const byId = new Map<string, OpenedChat>();
@@ -88,9 +80,9 @@ function upsert(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedCh
  * passes (so the caller can decrypt them into the rumor cache directly), and
  * whether history is exhausted (no relay had a full page left to page past).
  *
- * These reads pass `cache: false`: the opaque kind-1059 wraps must NOT be
- * mirrored into the shared `armada-events` store — the decrypted rumors are
- * persisted in the Concord rumor store instead (see rumorStore.ts).
+ * The kind-1059 wraps these reads return are NEVER mirrored into the shared
+ * `armada-events` store — `NostrBatcher.cacheEvents` drops all gift-wrap kinds
+ * unconditionally. Only the decrypted rumors are persisted (see rumorStore.ts).
  */
 async function backfillStore(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -123,8 +115,7 @@ async function backfillStore(
             .relay(relay.url)
             .query([filter], {
               signal: AbortSignal.any([pageSignal, AbortSignal.timeout(8000)]),
-              cache: false,
-            } as ReadOpts);
+            });
           armGrace();
           return { relay, events };
         } catch {
@@ -293,8 +284,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         try {
           for await (const msg of nostr.relay(url).req([channelFilter(channel, { since })], {
             signal: controller.signal,
-            cache: false,
-          } as ReadOpts)) {
+          })) {
             if (msg[0] === "EVENT") await apply([msg[2] as NostrEvent]);
           }
         } catch {
