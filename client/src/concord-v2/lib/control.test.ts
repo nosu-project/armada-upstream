@@ -17,7 +17,7 @@ import {
 } from "@/concord-v2/lib/control";
 import { bytesToHex, communityIdOf, controlGroupKey, hex32, random32 } from "@/concord-v2/lib/derive";
 import { rewrapSeal } from "@/concord-v2/lib/stream";
-import { adminRole, hasPermission, isAdmin, Permissions } from "@/concord-v2/lib/roles";
+import { adminRole, badgeOf, hasPermission, isAdmin, moderatorRole, Permissions } from "@/concord-v2/lib/roles";
 
 function signer(sk = generateSecretKey()) {
   return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
@@ -87,6 +87,73 @@ describe("control plane fold (CORD-04)", () => {
     expect(isAdmin(folded.roster, admin.pubkey)).toBe(true);
     expect(hasPermission(folded.roster, stranger.pubkey, Permissions.MANAGE_ROLES)).toBe(false);
     expect(folded.metadata?.name).toBe("Renamed");
+  });
+
+  it("an admin can mint + grant the stock Moderator (position 2), but not a peer Admin", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const mod = signer();
+    const wannabe = signer();
+
+    const adm = adminRole(bytesToHex(random32()));
+    const mrole = moderatorRole(bytesToHex(random32()));
+    const peerAdm = adminRole(bytesToHex(random32()));
+    const wraps: NostrEvent[] = [
+      // Owner roots the Admin.
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+      // The admin (position 1) mints Moderator (position 2) and grants it — honored.
+      await sealEdition(buildRoleEdition(mrole, { actorPubkey: admin.pubkey, version: 1n }), control, admin),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: mod.pubkey, roleIds: [mrole.roleId] }, { actorPubkey: admin.pubkey, version: 1n }),
+        control,
+        admin,
+      ),
+      // The admin mints a PEER Admin (position 1) — dropped (equal cannot act on equal).
+      await sealEdition(buildRoleEdition(peerAdm, { actorPubkey: admin.pubkey, version: 1n }), control, admin),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: wannabe.pubkey, roleIds: [peerAdm.roleId] }, { actorPubkey: admin.pubkey, version: 1n }),
+        control,
+        admin,
+      ),
+    ];
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(badgeOf(folded.roster, admin.pubkey)).toBe("admin");
+    expect(badgeOf(folded.roster, mod.pubkey)).toBe("moderator");
+    expect(hasPermission(folded.roster, mod.pubkey, Permissions.BAN)).toBe(true);
+    expect(hasPermission(folded.roster, mod.pubkey, Permissions.MANAGE_ROLES)).toBe(false);
+    expect(badgeOf(folded.roster, wannabe.pubkey)).toBeUndefined();
+  });
+
+  it("a moderator (no MANAGE_ROLES) cannot grant roles", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const mod = signer();
+    const friend = signer();
+
+    const mrole = moderatorRole(bytesToHex(random32()));
+    const wraps: NostrEvent[] = [
+      await sealEdition(buildRoleEdition(mrole, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: mod.pubkey, roleIds: [mrole.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+      // The moderator hands their friend the same role — dropped.
+      await sealEdition(
+        buildGrantEdition(communityId, { member: friend.pubkey, roleIds: [mrole.roleId] }, { actorPubkey: mod.pubkey, version: 1n }),
+        control,
+        mod,
+      ),
+    ];
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(badgeOf(folded.roster, mod.pubkey)).toBe("moderator");
+    expect(badgeOf(folded.roster, friend.pubkey)).toBeUndefined();
   });
 
   it("refuses a downgrade: a replayed stale banlist never wins", async () => {

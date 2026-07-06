@@ -86,6 +86,19 @@ export function adminRole(roleId: string): Role {
   return { roleId, name: "Admin", position: 1, permissions: ADMIN_ALL, scope: { kind: "server" }, color: 0 };
 }
 
+/** The moderation bits a stock Moderator holds (people + message management). */
+export const MODERATOR_ALL =
+  Permissions.KICK | Permissions.BAN | Permissions.MANAGE_MESSAGES | Permissions.MENTION_EVERYONE;
+
+/**
+ * A stock server-scope Moderator role at position 2 — below Admin (1), so a
+ * position-1 Admin strictly outranks it and may grant it (CORD-04 §3; the
+ * Admin position itself is grantable only by the owner).
+ */
+export function moderatorRole(roleId: string): Role {
+  return { roleId, name: "Moderator", position: 2, permissions: MODERATOR_ALL, scope: { kind: "server" }, color: 0 };
+}
+
 // ── Wire JSON (CORD-04 §2) ───────────────────────────────────────────────────
 
 interface RoleWire {
@@ -216,6 +229,18 @@ export function highestPosition(roles: CommunityRoles, memberHex: string): numbe
 
 export function isAdmin(roles: CommunityRoles, memberHex: string): boolean {
   return rolesOf(roles, memberHex).some((r) => isManagement(r.permissions));
+}
+
+/**
+ * The member's display tier for the shared member list: "admin" if they can
+ * shape the roster itself (MANAGE_ROLES), "moderator" for any other management
+ * bits (kick/ban/messages/channels/…), undefined for a roleless member.
+ */
+export function badgeOf(roles: CommunityRoles, memberHex: string): "admin" | "moderator" | undefined {
+  const perms = effectivePermissions(roles, memberHex);
+  if (permsContain(perms, Permissions.MANAGE_ROLES)) return "admin";
+  if (isManagement(perms)) return "moderator";
+  return undefined;
 }
 
 /** Owner is supreme; otherwise the actor must hold `permission`. */
