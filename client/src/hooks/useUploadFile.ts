@@ -1,10 +1,10 @@
 import { BlossomUploader } from "@nostrify/nostrify/uploaders";
 import { N64 } from "@nostrify/nostrify/utils";
-import { useNostr } from "@nostrify/react";
 import { useMutation } from "@tanstack/react-query";
 
-import { mergeBlossomServers, parseBlossomServerList } from "@/lib/blossom";
+import { getEffectiveBlossomServers } from "@/lib/blossom";
 
+import { useAppContext } from "./useAppContext";
 import { useCurrentUser } from "./useCurrentUser";
 
 import type { NostrSigner } from "@nostrify/nostrify";
@@ -15,7 +15,7 @@ import type { NostrSigner } from "@nostrify/nostrify";
  * describing the uploaded blob (`[["url", ...], ["m", ...], ["x", ...], ...]`).
  */
 export function useUploadFile() {
-  const { nostr } = useNostr();
+  const { config } = useAppContext();
   const { user } = useCurrentUser();
 
   return useMutation({
@@ -24,18 +24,12 @@ export function useUploadFile() {
         throw new Error("Must be logged in to upload files");
       }
 
-      // Merge the user's kind 10063 server list with the app defaults.
-      let userServers: string[] = [];
-      try {
-        const [listEvent] = await nostr.query(
-          [{ kinds: [10063], authors: [user.pubkey], limit: 1 }],
-          { signal: AbortSignal.timeout(3000) },
-        );
-        if (listEvent) userServers = parseBlossomServerList(listEvent);
-      } catch {
-        // No server list — use defaults
-      }
-      const servers = mergeBlossomServers(userServers);
+      // App default servers merged with the user's kind 10063 list, which
+      // NostrSync keeps cached in config.blossomServerMetadata.
+      const servers = getEffectiveBlossomServers(
+        config.blossomServerMetadata,
+        config.useAppBlossomServers,
+      );
 
       const uploader = new BlossomUploader({
         servers,

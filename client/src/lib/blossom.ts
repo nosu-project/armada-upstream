@@ -1,13 +1,30 @@
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
- * Default Blossom media servers used when the user has no kind 10063 server
- * list. Order follows BUD-03's "most trusted first" convention.
+ * App default Blossom media servers (mirrors Ditto's APP_BLOSSOM_SERVERS).
+ * Used in addition to the user's kind 10063 server list when
+ * `useAppBlossomServers` is enabled (the default), and as the only servers
+ * when the user has no list of their own. Order follows BUD-03's "most
+ * trusted first" convention.
  */
-export const DEFAULT_BLOSSOM_SERVERS = [
+export const APP_BLOSSOM_SERVERS = [
+  "https://blossom.ditto.pub/",
+  "https://blossom.dreamith.to/",
   "https://blossom.primal.net/",
-  "https://blossom.band/",
 ];
+
+/**
+ * The user's personal Blossom server list, mirroring Ditto's
+ * BlossomServerMetadata. `servers` is synced bidirectionally with the user's
+ * kind 10063 event; `updatedAt` is the event's `created_at` (0 = never
+ * synced), used so a stale relay read never clobbers a fresh local edit.
+ */
+export interface BlossomServerMetadata {
+  /** Ordered server URLs (most trusted/reliable first per BUD-03). */
+  servers: string[];
+  /** Unix timestamp of the last update (from kind 10063 created_at). */
+  updatedAt: number;
+}
 
 /** Parse a kind 10063 Blossom server list event into validated server URLs. */
 export function parseBlossomServerList(event: NostrEvent): string[] {
@@ -24,21 +41,62 @@ export function parseBlossomServerList(event: NostrEvent): string[] {
     });
 }
 
+/**
+ * Normalize a Blossom server URL for storage/publishing: require http(s),
+ * default bare hostnames to https, strip search/hash, ensure a trailing
+ * slash. Returns null when the input isn't a usable server URL.
+ */
+export function normalizeBlossomServerUrl(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(withScheme);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    url.search = "";
+    url.hash = "";
+    if (!url.pathname.endsWith("/")) url.pathname += "/";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 /** Normalize a Blossom server URL for deduplication. */
 function normalizeUrl(url: string): string {
   return url.toLowerCase().replace(/\/+$/, "");
 }
 
-/** Merge the user's servers with the app defaults, deduplicated, user first. */
-export function mergeBlossomServers(userServers: string[]): string[] {
+/**
+ * Get the effective Blossom server list based on user settings. Mirrors
+ * Ditto's getEffectiveBlossomServers (and Armada's effectiveDmRelays)
+ * semantics:
+ *
+ * - When `useAppBlossomServers` is true, merges the app servers with the
+ *   user's servers (app first, deduped).
+ * - When false, returns only the user's servers — unless they have none,
+ *   in which case the app servers are used so uploads still work.
+ */
+export function getEffectiveBlossomServers(
+  userMeta: BlossomServerMetadata,
+  useAppBlossomServers: boolean,
+): string[] {
+  if (!useAppBlossomServers && userMeta.servers.length > 0) {
+    return dedupeServers(userMeta.servers);
+  }
+  return dedupeServers([...APP_BLOSSOM_SERVERS, ...userMeta.servers]);
+}
+
+/** Deduplicate server URLs by normalized form, preserving order. */
+function dedupeServers(urls: string[]): string[] {
   const seen = new Set<string>();
-  const merged: string[] = [];
-  for (const url of [...userServers, ...DEFAULT_BLOSSOM_SERVERS]) {
+  const out: string[] = [];
+  for (const url of urls) {
     const normalized = normalizeUrl(url);
     if (!seen.has(normalized)) {
       seen.add(normalized);
-      merged.push(url);
+      out.push(url);
     }
   }
-  return merged;
+  return out;
 }

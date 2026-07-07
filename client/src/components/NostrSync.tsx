@@ -13,6 +13,8 @@ import {
 import { useTheme } from "@/hooks/useTheme";
 import { useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
+import { parseBlossomServerList } from "@/lib/blossom";
+import { KIND_BLOSSOM_SERVERS } from "@/hooks/useBlossomServerList";
 import { PLATFORM_RELAYS } from "@/lib/platform";
 import { type EncryptedSettings } from "@/lib/schemas";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
@@ -60,6 +62,7 @@ export function NostrSync() {
 
   const dittoCheckedPubkey = useRef<string | undefined>(undefined);
   const serversAppliedPubkey = useRef<string | undefined>(undefined);
+  const blossomAppliedPubkey = useRef<string | undefined>(undefined);
   // The remote sync timestamp we've most recently folded into local config.
   const appliedSyncTs = useRef<number>(-1);
   // Whether the initial incoming pull has settled for the current account.
@@ -78,6 +81,7 @@ export function NostrSync() {
     pulledForPubkey.current = undefined;
     lastSyncedSnapshot.current = undefined;
     serversAppliedPubkey.current = undefined;
+    blossomAppliedPubkey.current = undefined;
   }, [user?.pubkey]);
 
   // ─── 1. Armada encrypted settings → local config ─────────────────────
@@ -195,6 +199,47 @@ export function NostrSync() {
       return { ...current, addedRelays: [...current.addedRelays, ...missing] };
     });
   }, [user?.pubkey, groupList, updateConfig]);
+
+  // ─── 1c. Blossom server list (kind 10063 `server` tags) → config ──────
+  // The 10063 event is the cross-device source of truth for the user's
+  // Blossom media servers (BUD-03); `config.blossomServerMetadata` is the
+  // fast/offline cache. Apply only when the event is newer than what we hold
+  // (`updatedAt` is the created_at of the last list we synced) and non-empty
+  // — a transient empty/failed read must never wipe a good local list.
+  // Mirrors Ditto's NostrSync 10063 hydration. Runs once per account.
+  useEffect(() => {
+    if (!user?.pubkey) return;
+    if (blossomAppliedPubkey.current === user.pubkey) return;
+    blossomAppliedPubkey.current = user.pubkey;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const events = await nostr.query(
+          [{ kinds: [KIND_BLOSSOM_SERVERS], authors: [user.pubkey], limit: 1 }],
+          { signal: AbortSignal.timeout(6000) },
+        );
+        const event = events.sort((a, b) => b.created_at - a.created_at)[0];
+        if (!event || cancelled) return;
+        const servers = parseBlossomServerList(event);
+        if (servers.length === 0) return;
+        updateConfig((current) => {
+          if (event.created_at <= current.blossomServerMetadata.updatedAt) return current;
+          return {
+            ...current,
+            blossomServerMetadata: { servers, updatedAt: event.created_at },
+          };
+        });
+      } catch {
+        // Relay error — keep the local cache.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.pubkey, nostr, updateConfig]);
 
   // ─── 2. Ditto active profile theme fallback (first-time Armada users) ─
   useEffect(() => {

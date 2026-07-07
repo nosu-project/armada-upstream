@@ -23,6 +23,12 @@ export const ThemesConfigSchema = z.object({
   dark: ThemeConfigSchema,
 });
 
+/** The user's Blossom server list + kind 10063 sync timestamp (BUD-03). */
+export const BlossomServerMetadataSchema = z.object({
+  servers: z.array(z.string()),
+  updatedAt: z.number(),
+});
+
 /**
  * Validates the persisted AppConfig. Used field-by-field in AppProvider so a
  * single corrupt key never wipes the entire config.
@@ -38,6 +44,8 @@ export const AppConfigSchema = z.object({
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
   useOwnDmRelays: z.boolean().catch(defaultConfig.useOwnDmRelays),
   dmRelays: z.array(z.string()).catch(defaultConfig.dmRelays),
+  blossomServerMetadata: BlossomServerMetadataSchema.catch(defaultConfig.blossomServerMetadata),
+  useAppBlossomServers: z.boolean().catch(defaultConfig.useAppBlossomServers),
   lastChannelByServer: z.record(z.string(), z.string()).catch({}),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
@@ -70,6 +78,10 @@ export const EncryptedSettingsSchema = z.looseObject({
   useOwnDmRelays: z.boolean().optional(),
   /** The user's custom DM relays. */
   dmRelays: z.array(z.string()).optional(),
+  /** The user's Blossom server list (canonical source: kind 10063). */
+  blossomServerMetadata: BlossomServerMetadataSchema.optional(),
+  /** Whether app default Blossom servers are used alongside the user's. */
+  useAppBlossomServers: z.boolean().optional(),
   /** Last channel/room opened per server/community (see AppConfig). */
   lastChannelByServer: z.record(z.string(), z.string()).optional(),
   /**

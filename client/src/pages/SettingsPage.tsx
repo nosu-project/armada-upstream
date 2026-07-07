@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  Image,
   MessageSquareLock,
   Mic,
   Palette,
@@ -19,6 +20,7 @@ import { useNavigate } from "react-router-dom";
 
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ConcordResyncCard } from "@/concord-v1/components/ConcordResyncCard";
+import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
@@ -29,11 +31,13 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useBlossomServerList } from "@/hooks/useBlossomServerList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
+import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { APP_RELAYS, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
@@ -55,6 +59,7 @@ type SectionId =
   | "app-relays"
   | "search-relays"
   | "dms"
+  | "media"
   | "advanced"
   | "install"
   | "about";
@@ -88,6 +93,7 @@ export function SettingsPage() {
   const { user } = useCurrentUser();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const dmRelayList = useDmRelayList();
+  const blossomServerList = useBlossomServerList();
 
   // Voice mic-processing prefs are device-local (stored in localStorage, not
   // synced AppConfig — a setting right for a laptop mic is wrong on a phone).
@@ -171,6 +177,28 @@ export function SettingsPage() {
     }
   };
 
+  /**
+   * Persist the user's Blossom media servers. Updates local config (the
+   * encrypted-settings push is handled centrally by NostrSync) and — since
+   * kind 10063 is the canonical, discoverable "where my media lives" list
+   * (BUD-03) — republishes it so other clients stay in sync.
+   */
+  const setBlossomServers = (servers: string[]) => {
+    updateConfig((current) => ({
+      ...current,
+      blossomServerMetadata: { servers, updatedAt: Math.floor(Date.now() / 1000) },
+    }));
+    if (user) {
+      blossomServerList.publish(servers).catch((err) =>
+        console.warn("Blossom server list (kind 10063) publish failed:", err));
+    }
+  };
+
+  /** Toggle whether uploads also use the app default Blossom servers. */
+  const setUseAppBlossomServers = (value: boolean) => {
+    updateConfig((current) => ({ ...current, useAppBlossomServers: value }));
+  };
+
   // Section list, gated the same way the old flat sections were.
   const navGroups = useMemo<NavGroup[]>(() => {
     const userItems: NavItem[] = [
@@ -189,6 +217,7 @@ export function SettingsPage() {
       { id: "app-relays", title: "App relays", icon: Waypoints },
       { id: "search-relays", title: "Search relays", icon: Search },
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
+      { id: "media", title: "Media servers", icon: Image },
     ];
     if (user && CONCORD_ENABLED) {
       appItems.push({ id: "advanced", title: "Advanced", icon: Wrench, inline: true });
@@ -284,6 +313,28 @@ export function SettingsPage() {
                 />
               </SettingsRow>
             )}
+          </>
+        );
+      case "media":
+        return (
+          <>
+            <SettingsRow
+              label="Use app media servers"
+              description="Upload files to Armada's default Blossom media servers in addition to your own."
+            >
+              <Switch
+                checked={config.useAppBlossomServers}
+                onCheckedChange={setUseAppBlossomServers}
+              />
+            </SettingsRow>
+            <SettingsRow>
+              <BlossomServerListEditor
+                pinned={config.useAppBlossomServers ? APP_BLOSSOM_SERVERS : []}
+                servers={config.blossomServerMetadata.servers}
+                onChange={setBlossomServers}
+                emptyText="No media servers of your own — uploads use the app defaults."
+              />
+            </SettingsRow>
           </>
         );
       case "voice":

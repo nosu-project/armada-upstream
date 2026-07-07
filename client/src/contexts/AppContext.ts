@@ -2,6 +2,7 @@ import { createContext } from "react";
 
 import { APP_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 
+import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { ThemeConfig, ThemesConfig } from "@/themes";
 
 export type Theme = "light" | "dark" | "system" | "custom";
@@ -81,6 +82,20 @@ export interface AppConfig {
    */
   dmRelays: string[];
   /**
+   * The user's personal Blossom file server list (BUD-03), mirroring Ditto's
+   * blossomServerMetadata. `servers` is synced bidirectionally with the
+   * user's kind 10063 event (NostrSync pulls newer lists; Settings edits
+   * publish). App default servers (APP_BLOSSOM_SERVERS) are managed
+   * separately.
+   */
+  blossomServerMetadata: BlossomServerMetadata;
+  /**
+   * Whether to use the app default Blossom servers in addition to the user's
+   * kind 10063 servers. Mirrors Ditto's useAppBlossomServers (and the
+   * useOwnDmRelays toggle pattern). On by default.
+   */
+  useAppBlossomServers: boolean;
+  /**
    * The last channel/room the user had open in each server/community, so we
    * can re-open it on return instead of dumping them on a channel list. Keyed
    * by `relayUrl` (NIP-29 servers, value = groupId) and by `c:${communityId}`
@@ -127,6 +142,8 @@ export const SYNCED_CONFIG_KEYS = [
   "searchRelays",
   "useOwnDmRelays",
   "dmRelays",
+  "blossomServerMetadata",
+  "useAppBlossomServers",
   "lastChannelByServer",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
@@ -141,6 +158,8 @@ export const defaultConfig: AppConfig = {
   searchRelays: [...SEARCH_RELAYS],
   useOwnDmRelays: false,
   dmRelays: [...APP_RELAYS],
+  blossomServerMetadata: { servers: [], updatedAt: 0 },
+  useAppBlossomServers: true,
   lastChannelByServer: {},
   meshIncognito: true,
   meshEnabled: false,
