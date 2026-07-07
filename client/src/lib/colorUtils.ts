@@ -87,6 +87,25 @@ export function getLuminance(r: number, g: number, b: number): number {
   return 0.2126 * sRGB[0] + 0.7152 * sRGB[1] + 0.0722 * sRGB[2];
 }
 
+/** WCAG contrast ratio between two colors (each as [r,g,b]). */
+export function getContrastRatio(
+  rgb1: [number, number, number],
+  rgb2: [number, number, number],
+): number {
+  const l1 = getLuminance(...rgb1);
+  const l2 = getLuminance(...rgb2);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** Get contrast ratio between two HSL strings. */
+export function getContrastRatioHsl(hsl1: string, hsl2: string): number {
+  const c1 = parseHsl(hsl1);
+  const c2 = parseHsl(hsl2);
+  return getContrastRatio(hslToRgb(c1.h, c1.s, c1.l), hslToRgb(c2.h, c2.s, c2.l));
+}
+
 /** Determine if an HSL background string represents a "dark" theme. */
 export function isDarkTheme(backgroundHsl: string): boolean {
   const { h, s, l } = parseHsl(backgroundHsl);
@@ -118,7 +137,14 @@ function darken(hsl: string, amount: number): string {
 
 /** Get a contrast foreground (white or near-black) for a given background. */
 function contrastForeground(bgHsl: string): string {
-  return isDarkTheme(bgHsl) ? "0 0% 100%" : "222.2 84% 4.9%";
+  const { h, s, l } = parseHsl(bgHsl);
+  const [r, g, b] = hslToRgb(h, s, l);
+  // Choose text color by the perceptual luminance midpoint (0.5): light
+  // backgrounds get dark text, dark backgrounds get white text. The previous
+  // `isDarkTheme` cutoff of 0.2 was tuned for picking page backgrounds and
+  // left saturated mid-tones (e.g. a vivid green at luminance ~0.34) with
+  // unreadable black text.
+  return getLuminance(r, g, b) > 0.5 ? "222.2 84% 4.9%" : "0 0% 100%";
 }
 
 /**

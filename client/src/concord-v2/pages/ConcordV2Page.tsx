@@ -182,9 +182,11 @@ function ChannelRow2({
       type="button"
       onClick={onSelect}
       className={cn(
-        "flex w-full items-center gap-2 pl-4 pr-2 py-1.5 text-sm transition-colors text-left",
-        "text-muted-foreground hover:text-foreground",
-        active && "text-foreground font-medium",
+        // Slack-style selection: the active channel sits on a filled primary
+        // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
+        "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
+        !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
+        active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
       )}
     >
       <Icon className="size-4 shrink-0" />
