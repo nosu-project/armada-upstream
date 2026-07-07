@@ -47,7 +47,8 @@ import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
 import { useConcord2Unread, type Concord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
 import { useTyping2, useTypingPublisher2 } from "@/concord-v2/hooks/useTyping2";
-import { useVoiceBroker2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
+import { resolveVoiceBroker, useVoiceBroker2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
+import type { VoicePresenceFold } from "@/concord-v2/lib/voice";
 import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
 import { badgeOf, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import type { ChannelV2, CommunityV2, ImagePointer } from "@/concord-v2/lib/types";
@@ -207,7 +208,7 @@ function ChannelRow2({
   speaking?: ReadonlySet<string>;
   unread?: Concord2Unread;
   onSelect: () => void;
-  onJoinVoice: (channel: ChannelV2, broker: string | null) => void;
+  onJoinVoice: (channel: ChannelV2, broker: string | null, fold?: VoicePresenceFold) => void;
 }) {
   // Voice channels (CORD-07): live presence drives the Discord-style nested
   // roster under the row, and the rendezvous broker is resolved ahead of the
@@ -233,7 +234,7 @@ function ChannelRow2({
           onSelect();
           // Discord-style: clicking a voice channel joins its call (and opens
           // its chat via onSelect).
-          if (channel.isVoice && !inCall) onJoinVoice(channel, broker ?? null);
+          if (channel.isVoice && !inCall) onJoinVoice(channel, broker ?? null, fold);
         }}
         className={cn(
           // Slack-style selection: the active channel sits on a filled primary
@@ -375,18 +376,27 @@ export function ConcordV2Page() {
   );
 
   const handleJoinVoice = useCallback(
-    (ch: ChannelV2, broker: string | null) => {
+    async (ch: ChannelV2, broker: string | null, fold?: VoicePresenceFold) => {
       if (!community || !user) return;
       if (activeCall?.concord?.channel.idHex === ch.idHex) return; // already there
-      if (!broker) {
+      let resolved = broker;
+      if (!resolved) {
+        // The broker query may still be loading, or a transient probe failure
+        // cached `null` — re-run the rendezvous live instead of refusing.
+        const roomHex = ch.voice?.room.pk;
+        resolved = roomHex
+          ? await resolveVoiceBroker(roomHex, fold ?? { present: [], claims: new Map() })
+          : null;
+      }
+      if (!resolved) {
         toast({
           title: "Voice unavailable",
-          description: "No reachable voice broker for this channel.",
+          description: "No reachable voice server. You can set one under Settings → Voice.",
           variant: "destructive",
         });
         return;
       }
-      joinConcordCall({ community, channel: ch, broker });
+      joinConcordCall({ community, channel: ch, broker: resolved });
     },
     [community, user, activeCall, joinConcordCall],
   );
@@ -737,7 +747,7 @@ export function ConcordV2Page() {
                       className={cn("size-8 touch:size-10", inThisVoice && "text-success")}
                       aria-label={inThisVoice ? "In voice" : "Join voice"}
                       disabled={inThisVoice}
-                      onClick={() => channel && handleJoinVoice(channel, activeBroker ?? null)}
+                      onClick={() => channel && handleJoinVoice(channel, activeBroker ?? null, activeFold)}
                     >
                       {inThisVoice ? <Headphones className="size-4" /> : <Phone className="size-4" />}
                     </Button>

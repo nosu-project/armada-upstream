@@ -17,6 +17,9 @@ const SPEAKER_KEY = "armada:voice:speakerDeviceId";
 const CAMERA_KEY = "armada:voice:cameraDeviceId";
 const PROCESSING_KEY = "armada:voice:processing";
 const VOLUME_KEY = "armada:voice:userVolumes";
+const VOICE_SERVER_KEY = "armada:voice:preferredServer";
+/** The Concord-v1-era key for the same setting; read as a fallback. */
+const LEGACY_VOICE_SERVER_KEY = "armada:voice:concordServer";
 
 function read(key: string): string | undefined {
   try {
@@ -59,6 +62,61 @@ export function rememberVoiceDevice(kind: MediaDeviceKind, deviceId: string): vo
   if (kind === "audioinput") write(MIC_KEY, deviceId);
   else if (kind === "audiooutput") write(SPEAKER_KEY, deviceId);
   else if (kind === "videoinput") write(CAMERA_KEY, deviceId);
+}
+
+/**
+ * The user's preferred voice server, raw as typed (empty = use the build-time
+ * defaults). This is a CLIENT setting, not community state: it's consulted
+ * ahead of the deployment defaults when starting a call in an empty Concord
+ * voice channel, and when picking a LiveKit-capable relay to host a DM call.
+ * Once anyone is in a Concord call, their presence-announced broker is the
+ * rendezvous point and overrides this (CORD-07 §5).
+ */
+export function getPreferredVoiceServer(): string {
+  try {
+    const v = localStorage.getItem(VOICE_SERVER_KEY) ?? localStorage.getItem(LEGACY_VOICE_SERVER_KEY);
+    return v?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Persist (or clear, with empty) the preferred voice server. */
+export function setPreferredVoiceServer(value: string): void {
+  try {
+    const v = value.trim().replace(/\/+$/, "");
+    if (v) localStorage.setItem(VOICE_SERVER_KEY, v);
+    else localStorage.removeItem(VOICE_SERVER_KEY);
+    localStorage.removeItem(LEGACY_VOICE_SERVER_KEY);
+  } catch {
+    // localStorage unavailable — ignore.
+  }
+}
+
+/**
+ * The preference as an https origin (the Concord AV broker form). Accepts a
+ * bare host, an https origin, or a wss relay URL — they all name the same
+ * Armada host. Undefined when unset or not coercible to a clean https origin
+ * (brokers are bearer-credential endpoints; plaintext http is refused).
+ */
+export function preferredVoiceServerOrigin(): string | undefined {
+  const raw = getPreferredVoiceServer();
+  if (!raw) return undefined;
+  let v = raw.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://");
+  if (!/^https?:\/\//i.test(v)) v = `https://${v}`;
+  try {
+    const u = new URL(v);
+    if (u.protocol !== "https:" || u.username || u.password) return undefined;
+    return `https://${u.host.toLowerCase()}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The preference as a wss relay URL (the NIP-29 DM-voice form). */
+export function preferredDmVoiceRelay(): string | undefined {
+  const origin = preferredVoiceServerOrigin();
+  return origin ? origin.replace(/^https:\/\//, "wss://") : undefined;
 }
 
 /**

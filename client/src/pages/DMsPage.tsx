@@ -51,6 +51,7 @@ import { getDisplayName } from "@/lib/getDisplayName";
 import { DM_VOICE_RELAYS, PLATFORM_RELAYS } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
+import { preferredDmVoiceRelay } from "@/lib/voiceDevices";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -242,10 +243,12 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
   const voiceCandidates = useMemo(
     () => {
-      // Prefer the user's pinned/DM relays, then fall back to the platform's
-      // default LiveKit-capable relay so 1:1 voice works even when none of the
-      // user's own relays host the NIP-29 LiveKit extension. Deduped.
-      const ordered = [...PLATFORM_RELAYS, ...dmRelays, ...DM_VOICE_RELAYS];
+      // The user's Settings -> Voice server (when set) wins, then the pinned/DM
+      // relays, then the platform's default LiveKit-capable relay so 1:1 voice
+      // works even when none of the user's own relays host the NIP-29 LiveKit
+      // extension. Deduped.
+      const preferred = preferredDmVoiceRelay();
+      const ordered = [...(preferred ? [preferred] : []), ...PLATFORM_RELAYS, ...dmRelays, ...DM_VOICE_RELAYS];
       return ordered.filter((r, i) => ordered.indexOf(r) === i);
     },
     [dmRelays],
@@ -861,10 +864,12 @@ function ConversationList({
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
   const voiceCandidates = useMemo(
     () => {
-      // Prefer the user's pinned/DM relays, then fall back to the platform's
-      // default LiveKit-capable relay so 1:1 voice works even when none of the
-      // user's own relays host the NIP-29 LiveKit extension. Deduped.
-      const ordered = [...PLATFORM_RELAYS, ...dmRelays, ...DM_VOICE_RELAYS];
+      // The user's Settings -> Voice server (when set) wins, then the pinned/DM
+      // relays, then the platform's default LiveKit-capable relay so 1:1 voice
+      // works even when none of the user's own relays host the NIP-29 LiveKit
+      // extension. Deduped.
+      const preferred = preferredDmVoiceRelay();
+      const ordered = [...(preferred ? [preferred] : []), ...PLATFORM_RELAYS, ...dmRelays, ...DM_VOICE_RELAYS];
       return ordered.filter((r, i) => ordered.indexOf(r) === i);
     },
     [dmRelays],

@@ -1,7 +1,9 @@
-import { Mic, MicOff, Volume2 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Globe, Mic, MicOff, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -9,11 +11,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ownAvServers } from "@/concord-v2/hooks/useVoice2";
+import { probeAvBroker } from "@/concord-v2/lib/voice";
+import { CONCORD_AV_SERVERS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import {
   getPreferredMicId,
   getPreferredSpeakerId,
+  getPreferredVoiceServer,
+  preferredVoiceServerOrigin,
   rememberVoiceDevice,
+  setPreferredVoiceServer,
 } from "@/lib/voiceDevices";
 
 /** Whether this browser can route audio output to a chosen device. */
@@ -39,6 +47,36 @@ export function VoiceDeviceSettings() {
   const [micId, setMicId] = useState<string>(() => getPreferredMicId() ?? "default");
   const [speakerId, setSpeakerId] = useState<string>(() => getPreferredSpeakerId() ?? "default");
   const [permissionError, setPermissionError] = useState<string | null>(null);
+
+  // Voice server (advanced): the server used to start calls in empty Concord
+  // voice channels and to host DM calls. Device-local; empty = build defaults.
+  const [voiceServer, setVoiceServer] = useState<string>(() => getPreferredVoiceServer());
+  const queryClient = useQueryClient();
+  const commitVoiceServer = useCallback(() => {
+    setPreferredVoiceServer(voiceServer);
+    setVoiceServer(getPreferredVoiceServer());
+    // Re-run every consumer of the preference: Concord broker rendezvous, the
+    // DM voice-relay pick, and our own status probe below.
+    void queryClient.invalidateQueries({ queryKey: ["concord2", "av-broker"] });
+    void queryClient.invalidateQueries({ queryKey: ["nip29", "dm-voice-relay"] });
+    void queryClient.invalidateQueries({ queryKey: ["voice-server-status"] });
+  }, [voiceServer, queryClient]);
+
+  // Live reachability: probe the effective server list (preference first, then
+  // the deployment defaults) exactly the way call setup does, so this row
+  // diagnoses "voice unavailable" on any device.
+  const voiceServerInvalid = Boolean(getPreferredVoiceServer()) && !preferredVoiceServerOrigin();
+  const effectiveServers = ownAvServers();
+  const { data: reachableServer, isFetching: checkingServer } = useQuery<string | null>({
+    queryKey: ["voice-server-status", effectiveServers.join(",")],
+    queryFn: async ({ signal }) => {
+      for (const origin of effectiveServers) {
+        if (await probeAvBroker(origin, signal)) return origin;
+      }
+      return null;
+    },
+    staleTime: 60_000,
+  });
 
   // Mic-test state.
   const [testing, setTesting] = useState(false);
@@ -308,6 +346,46 @@ export function VoiceDeviceSettings() {
           </Button>
         </div>
       )}
+
+      {/* Voice server (advanced). The server your client uses to START a call
+          in an empty Concord voice channel and to host 1:1 DM calls; once
+          anyone is in a Concord call, their announced server is the rendezvous
+          point, so this only matters for cold-starting or self-hosting. */}
+      <div className="space-y-2.5">
+        <div className="flex items-center gap-2">
+          <Globe className="size-4 text-muted-foreground shrink-0" />
+          <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Voice server
+          </label>
+        </div>
+        <Input
+          value={voiceServer}
+          placeholder={CONCORD_AV_SERVERS[0] ?? "https://your-armada-host"}
+          onChange={(e) => setVoiceServer(e.target.value)}
+          onBlur={commitVoiceServer}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+          className="bg-background/40 border-transparent"
+        />
+        {voiceServerInvalid ? (
+          <p className="text-xs text-destructive">
+            Not a usable server address — enter a host like armada.example.com (https only).
+          </p>
+        ) : checkingServer ? (
+          <p className="text-xs text-muted-foreground">Checking voice server…</p>
+        ) : reachableServer ? (
+          <p className="text-xs text-success">Voice server reachable: {reachableServer}</p>
+        ) : (
+          <p className="text-xs text-destructive">
+            No voice server reachable — calls can’t start. Check the address or your connection.
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Used to start calls in empty voice channels and for direct-message calls. Leave empty
+          for the default{CONCORD_AV_SERVERS[0] ? ` (${CONCORD_AV_SERVERS[0]})` : ""}.
+        </p>
+      </div>
     </div>
   );
 }

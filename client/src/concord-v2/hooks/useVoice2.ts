@@ -27,6 +27,7 @@ import {
 } from "@/concord-v2/lib/voice";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { CONCORD_AV_SERVERS } from "@/lib/platform";
+import { preferredVoiceServerOrigin } from "@/lib/voiceDevices";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -212,6 +213,34 @@ export function useVoiceHeartbeat2(
 }
 
 /**
+ * The client's own default AV servers, in preference order: the user's
+ * Settings → Voice server first (when set), then the deployment's build-time
+ * defaults. Consulted only when a room is empty — an occupied room's
+ * presence-announced brokers always win the rendezvous (§5).
+ */
+export function ownAvServers(): string[] {
+  const preferred = preferredVoiceServerOrigin();
+  return preferred ? [preferred, ...CONCORD_AV_SERVERS] : [...CONCORD_AV_SERVERS];
+}
+
+/**
+ * Imperatively resolve a reachable broker for a room (the same §5 rendezvous
+ * `useVoiceBroker2` runs, but live). Used at join time when the cached query
+ * value is missing or a previous probe failed — a stale `null` must not block
+ * a join that would succeed now.
+ */
+export async function resolveVoiceBroker(
+  roomHex: string,
+  fold: VoicePresenceFold,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  for (const origin of rendezvousCandidates(roomHex, fold, ownAvServers())) {
+    if (await probeAvBroker(origin, signal)) return origin;
+  }
+  return null;
+}
+
+/**
  * The §5 rendezvous: resolve the broker to join this channel's call through.
  * If anyone is present, their broker wins (tie-break ordered); an empty room
  * falls back to the deployment's own defaults. Every candidate is probed
@@ -223,7 +252,7 @@ export function useVoiceBroker2(
 ): { data: string | null | undefined; isLoading: boolean } {
   const roomHex = channel?.voice?.room.pk;
   const candidates = useMemo(
-    () => (roomHex ? rendezvousCandidates(roomHex, fold, CONCORD_AV_SERVERS) : []),
+    () => (roomHex ? rendezvousCandidates(roomHex, fold, ownAvServers()) : []),
     [roomHex, fold],
   );
   const candidatesKey = candidates.join(",");
