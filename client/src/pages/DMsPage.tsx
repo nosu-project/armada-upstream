@@ -900,9 +900,6 @@ function ConversationList({
     >
       <header className="relative pl-5 pr-3 pt-5 pb-3 flex flex-col justify-center shrink-0">
         <h1 className="font-semibold truncate leading-tight tracking-wide text-sm pr-8">Direct Messages</h1>
-        <span className="text-[11px] text-muted-foreground truncate leading-tight">
-          Message your friends.
-        </span>
         <div className="absolute right-3 bottom-3 flex items-center gap-0.5">
           <Button
             variant="ghost"
