@@ -14,8 +14,11 @@
         <item name="windowNoTitle">true</item>
         <!-- Dark window background so the area behind the transparent edge-to-edge
              system bars renders the app's dark theme color (#100b15) instead of a
-             white flash before the WebView paints. -->
-        <item name="android:background">@color/armadaBackground</item>
+             white flash before the WebView paints. Deliberately windowBackground
+             ONLY: a theme-level android:background is inherited by every view,
+             including the floating text-selection toolbar and selection-handle
+             popups, which then render as solid #100b15 boxes. -->
+        <item name="android:background">@null</item>
         <item name="android:windowBackground">@color/armadaBackground</item>
         <!-- Transparent system bars; the WebView draws edge-to-edge beneath them. -->
         <item name="android:statusBarColor">@android:color/transparent</item>
