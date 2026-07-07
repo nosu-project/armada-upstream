@@ -14,15 +14,22 @@ import { ServerRail } from "./ServerRail";
 
 vi.mock("@/components/dialogs/AddDialog", () => ({ AddDialog: () => null }));
 vi.mock("@/hooks/useCall", () => ({ useCall: () => ({ activeCall: null }) }));
-vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: undefined }) }));
+vi.mock("@/hooks/useCurrentUser", () => ({
+  useCurrentUser: () => ({ user: { pubkey: "test-pubkey" } }),
+}));
 vi.mock("@/hooks/useDirectMessages", () => ({ useHasUnreadDMs: () => false }));
 vi.mock("@/hooks/useMeshTransport", () => ({
   useMeshTransport: () => ({ mesh: { available: false } }),
 }));
 vi.mock("@/hooks/useRelayGroups", () => ({ useRelayGroups: () => ({ data: [] }) }));
 vi.mock("@/hooks/useRelayInfo", () => ({ useRelayInfo: () => ({ data: undefined }) }));
+// Per-relay unread state, settable per test (drives badges + folder rollups).
+const relayUnread = vi.hoisted(
+  () => ({}) as Record<string, { anyUnread: boolean; anyMention: boolean }>,
+);
 vi.mock("@/hooks/useRelayUnread", () => ({
-  useRelayUnread: () => ({ anyUnread: false, anyMention: false }),
+  useRelayUnread: (url?: string) =>
+    (url && relayUnread[url]) || { anyUnread: false, anyMention: false },
 }));
 vi.mock("@/hooks/useUserGroupList", () => ({
   useUpdateUserGroupList: () => ({ mutateAsync: vi.fn(async () => undefined) }),
@@ -153,14 +160,24 @@ function mouseDrag(fromAnchor: string, toY: number) {
   firePointer(window, "pointerup", { x: 36, y: toY });
 }
 
-function renderRail() {
+function renderRail(initialEntries: string[] = ["/"]) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <TooltipProvider>
         <ServerRail />
       </TooltipProvider>
     </MemoryRouter>,
   );
+}
+
+/** The active-route blade (left bar) inside an anchored rail entry, if lit. */
+function bladeIsLit(anchor: string): boolean {
+  const el = document.querySelector(`[data-rail-anchor="${anchor}"]`);
+  expect(el, `element with anchor ${anchor}`).toBeTruthy();
+  const blade = Array.from(el!.querySelectorAll("span")).find((s) =>
+    s.className.includes("w-[3px]"),
+  );
+  return blade !== undefined && blade.className.includes("h-12");
 }
 
 describe("ServerRail drag wiring", () => {
@@ -228,5 +245,123 @@ describe("ServerRail drag wiring", () => {
       { type: "item", key: RELAY_C },
       { type: "item", key: RELAY_A },
     ]);
+  });
+
+  it("touch long-press picks up, claims touchmove from the browser, and drops", async () => {
+    renderRail();
+    const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
+    firePointer(el, "pointerdown", { x: 36, y: slotCenter(0), pointerType: "touch" });
+    // Long-press threshold (~300ms) fires the pickup.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    // With the drag live, raw touchmove must be canceled — otherwise the
+    // browser pans the rail (touch-action was resolved at gesture start)
+    // and kills the drag with pointercancel. The canceller lives permanently
+    // on the nav (Chrome ignores blocking listeners attached mid-gesture),
+    // and touch events keep targeting the touchstart element, so dispatch
+    // there and let it bubble through the rail.
+    const touchMove = new Event("touchmove", { bubbles: true, cancelable: true });
+    act(() => {
+      el.dispatchEvent(touchMove);
+    });
+    expect(touchMove.defaultPrevented).toBe(true);
+    firePointer(window, "pointermove", { x: 36, y: slotCenter(1), pointerType: "touch" });
+    firePointer(window, "pointerup", { x: 36, y: slotCenter(1), pointerType: "touch" });
+    expect(config.railLayout).toEqual([
+      { type: "folder", id: expect.any(String), name: "", keys: [RELAY_B, RELAY_A] },
+      { type: "item", key: RELAY_C },
+    ]);
+  });
+
+  it("pointercancel aborts the drag without applying a drop", async () => {
+    renderRail();
+    const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
+    firePointer(el, "pointerdown", { x: 36, y: slotCenter(0), pointerType: "touch" });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    firePointer(window, "pointermove", { x: 36, y: slotCenter(2), pointerType: "touch" });
+    firePointer(window, "pointercancel", { x: 36, y: slotCenter(2), pointerType: "touch" });
+    expect(config.railLayout).toEqual([]); // nothing persisted
+  });
+});
+
+describe("ServerRail active-route blade", () => {
+  let restoreGeometry: () => void;
+
+  beforeEach(() => {
+    config = { ...defaultConfig, railLayout: [], railOrder: [], railOpenFolders: [] };
+    restoreGeometry = installGeometry();
+    return () => restoreGeometry();
+  });
+
+  const ROOM_ROUTE = `/s/${encodeURIComponent(RELAY_A)}/room1`;
+
+  it("lights the collapsed folder's blade when the open room's server is inside", () => {
+    config.railLayout = [
+      { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B] },
+      { type: "item", key: RELAY_C },
+    ];
+    renderRail([ROOM_ROUTE]);
+    expect(bladeIsLit("folder:f")).toBe(true);
+    expect(bladeIsLit(`item:${RELAY_C}`)).toBe(false);
+  });
+
+  it("lights the child's blade (not the header's) when the folder is open", () => {
+    config.railLayout = [
+      { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B] },
+      { type: "item", key: RELAY_C },
+    ];
+    config.railOpenFolders = ["f"];
+    renderRail([ROOM_ROUTE]);
+    expect(bladeIsLit(`item:${RELAY_A}`)).toBe(true);
+    expect(bladeIsLit(`item:${RELAY_B}`)).toBe(false);
+    expect(bladeIsLit("folder:f")).toBe(false);
+  });
+});
+
+describe("ServerRail folder notification rollup", () => {
+  let restoreGeometry: () => void;
+
+  // Five members: D and E come from addedRelays; the collapsed mini grid only
+  // shows the first four, so activity on E must surface via the folder badge.
+  const RELAY_D = "wss://d.example/";
+  const RELAY_E = "wss://e.example/";
+
+  beforeEach(() => {
+    config = {
+      ...defaultConfig,
+      addedRelays: [RELAY_D, RELAY_E],
+      railLayout: [
+        { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B, RELAY_C, RELAY_D, RELAY_E] },
+      ],
+      railOrder: [],
+      railOpenFolders: [],
+    };
+    for (const key of Object.keys(relayUnread)) delete relayUnread[key];
+    restoreGeometry = installGeometry();
+    return () => restoreGeometry();
+  });
+
+  const folderBtn = () => document.querySelector('[data-rail-anchor="folder:f"]')!;
+
+  it("shows a mention badge on the collapsed folder for a member beyond the grid", () => {
+    relayUnread[RELAY_E] = { anyUnread: true, anyMention: true };
+    renderRail();
+    expect(folderBtn().querySelector('[aria-label="You were mentioned"]')).toBeTruthy();
+  });
+
+  it("shows an unread dot on the collapsed folder for plain unread", () => {
+    relayUnread[RELAY_E] = { anyUnread: true, anyMention: false };
+    renderRail();
+    expect(folderBtn().querySelector('[aria-label="Unread messages"]')).toBeTruthy();
+    expect(folderBtn().querySelector('[aria-label="You were mentioned"]')).toBeNull();
+  });
+
+  it("shows nothing when no member has activity", () => {
+    renderRail();
+    expect(folderBtn().querySelector('[aria-label="Unread messages"]')).toBeNull();
+    expect(folderBtn().querySelector('[aria-label="You were mentioned"]')).toBeNull();
   });
 });

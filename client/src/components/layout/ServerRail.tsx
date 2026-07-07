@@ -222,6 +222,59 @@ function RailMiniIcon({ item }: { item: RailItem }) {
   return <Concord2MiniIcon communityId={item.communityId} name={item.name} />;
 }
 
+// ─── Unread probes (folder-level notification rollup) ───────────────────
+//
+// A collapsed folder must light up when ANY member has activity — including
+// members beyond the four shown in its mini grid. Hooks can't be called in a
+// loop, so each member mounts an invisible probe component that runs its
+// kind's unread hooks and reports the result up to the folder.
+
+function ServerUnreadProbe({
+  url,
+  onChange,
+}: {
+  url: string;
+  onChange: (unread: boolean, mention: boolean) => void;
+}) {
+  const { user } = useCurrentUser();
+  const { data: groups } = useRelayGroups(user ? url : undefined);
+  const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
+  const { anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
+  useEffect(() => onChange(anyUnread, anyMention), [anyUnread, anyMention, onChange]);
+  return null;
+}
+
+function Concord2UnreadProbe({
+  communityId,
+  onChange,
+}: {
+  communityId: string;
+  onChange: (unread: boolean, mention: boolean) => void;
+}) {
+  const community = useCommunity2(communityId);
+  const channels = useChannels2(community, false);
+  const { byChannel } = useConcord2Unread(channels);
+  const summaries = Object.values(byChannel);
+  const unread = summaries.length > 0;
+  const mention = summaries.some((u) => u.mention);
+  useEffect(() => onChange(unread, mention), [unread, mention, onChange]);
+  return null;
+}
+
+function RailItemUnreadProbe({
+  item,
+  onChange,
+}: {
+  item: RailItem;
+  onChange: (unread: boolean, mention: boolean) => void;
+}) {
+  if (item.kind === "server") return <ServerUnreadProbe url={item.url} onChange={onChange} />;
+  if (item.kind === "concord2") {
+    return <Concord2UnreadProbe communityId={item.communityId} onChange={onChange} />;
+  }
+  return null; // Concord V1 has no unread model (its rail button shows none either).
+}
+
 /**
  * Discord-style collapsed-folder face: a 2×2 grid of the first four member
  * icons inside the rail's cut-corner square.
@@ -328,12 +381,24 @@ function DragGhost({
 
 // ─── Rail entries ────────────────────────────────────────────────────────
 
-/** Dashed placeholder occupying a dragged entry's original slot. */
-const dragPlaceholder = (
-  <span className="relative block size-12">
-    <span className="absolute inset-0 rounded-xl border-2 border-dashed border-primary/50 bg-primary/5" />
-  </span>
-);
+/**
+ * Keeps a rail entry's real content MOUNTED while it is being dragged,
+ * hiding it and overlaying the dashed slot placeholder instead. Swapping the
+ * subtree out (the old approach) unmounted the exact DOM node the finger was
+ * touching — and a detached touch target's events stop bubbling, so Chrome
+ * cancelled the whole gesture (pointercancel) on the first movement. This is
+ * why touch drags died the moment they were picked up.
+ */
+function DragSlot({ dragging, children }: { dragging?: boolean; children: React.ReactNode }) {
+  return (
+    <>
+      <span className={cn("contents", dragging && "invisible")}>{children}</span>
+      {dragging && (
+        <span className="absolute left-1/2 top-1/2 size-12 -translate-x-1/2 -translate-y-1/2 rounded-xl border-2 border-dashed border-primary/50 bg-primary/5" />
+      )}
+    </>
+  );
+}
 
 function ServerButton({
   url,
@@ -433,10 +498,12 @@ function ServerButton({
     </>
   );
 
-  const triggerClass = "group relative flex items-center justify-center shrink-0 touch-pan-y";
+  const triggerClass = "group relative flex items-center justify-center shrink-0 touch-none";
 
   const dragClass = cn(
-    draggable && "cursor-grab",
+    // No grab-on-hover cursor: entries read as normal links until actually
+    // picked up (the hover hand suggested HTML5 dragging and confused people).
+    // While a drag is live the body carries a global grabbing cursor.
     dragging && "cursor-grabbing",
     // While a reorder is in flight, lock touch-action so the browser can't
     // steal the (mostly vertical) gesture as a pan and stop delivering moves.
@@ -462,7 +529,7 @@ function ServerButton({
             className={cn(triggerClass, dragClass, selected && "is-active")}
             {...interactionProps}
           >
-            {dragging ? dragPlaceholder : inner(Boolean(selected))}
+            <DragSlot dragging={dragging}>{inner(Boolean(selected))}</DragSlot>
           </button>
         ) : (
           <NavLink
@@ -479,7 +546,7 @@ function ServerButton({
             className={({ isActive }) => cn(triggerClass, dragClass, isActive && "is-active")}
             {...interactionProps}
           >
-            {({ isActive }) => (dragging ? dragPlaceholder : inner(isActive))}
+            {({ isActive }) => <DragSlot dragging={dragging}>{inner(isActive)}</DragSlot>}
           </NavLink>
         )}
       </TooltipTrigger>
@@ -545,41 +612,50 @@ function ConcordButton({
             onNavigate?.();
           }}
           className={cn(
-            "group relative flex items-center justify-center shrink-0 touch-pan-y",
-            draggable && "cursor-grab",
+            "group relative flex items-center justify-center shrink-0 touch-none",
             dragging && "cursor-grabbing",
             reordering && "touch-none",
           )}
           {...(draggable ? dragAttrs(itemAnchor(concord1Key(communityId)), dragParent) : {})}
         >
-          {({ isActive }) =>
-            dragging ? (
-              dragPlaceholder
-            ) : (
-              <span
-                className={cn(
-                  "relative block size-12",
-                  highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
-                )}
-              >
+          {({ isActive }) => (
+            <DragSlot dragging={dragging}>
+              <>
+                {/* Active marker: the same neon blade servers get, so the
+                    open room keeps its left-bar highlight (incl. in folders). */}
                 <span
                   className={cn(
-                    "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
-                    "bg-muted text-success opacity-60 saturate-75",
-                    "group-hover:opacity-100 group-hover:saturate-100",
-                    (isActive || highlight) && "opacity-100 saturate-100",
-                    isActive && "is-active",
+                    "absolute -left-2 w-[3px] bg-primary transition-all",
+                    isActive
+                      ? "h-12 opacity-100"
+                      : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "relative block size-12",
+                    highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
                   )}
                 >
-                  {iconUrl ? (
-                    <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
-                  ) : (
-                    <span className="text-sm font-semibold">{initials}</span>
-                  )}
+                  <span
+                    className={cn(
+                      "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
+                      "bg-muted text-success opacity-60 saturate-75",
+                      "group-hover:opacity-100 group-hover:saturate-100",
+                      (isActive || highlight) && "opacity-100 saturate-100",
+                      isActive && "is-active",
+                    )}
+                  >
+                    {iconUrl ? (
+                      <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
+                    ) : (
+                      <span className="text-sm font-semibold">{initials}</span>
+                    )}
+                  </span>
                 </span>
-              </span>
-            )
-          }
+              </>
+            </DragSlot>
+          )}
         </NavLink>
       </TooltipTrigger>
       <TooltipContent side="right" className="font-medium">
@@ -647,55 +723,64 @@ function Concord2Button({
             onNavigate?.();
           }}
           className={cn(
-            "group relative flex items-center justify-center shrink-0 touch-pan-y",
-            draggable && "cursor-grab",
+            "group relative flex items-center justify-center shrink-0 touch-none",
             dragging && "cursor-grabbing",
             reordering && "touch-none",
           )}
           {...(draggable ? dragAttrs(itemAnchor(concord2Key(communityId)), dragParent) : {})}
         >
-          {({ isActive }) =>
-            dragging ? (
-              dragPlaceholder
-            ) : (
-              <span
-                className={cn(
-                  "relative block size-12",
-                  highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
-                )}
-              >
+          {({ isActive }) => (
+            <DragSlot dragging={dragging}>
+              <>
+                {/* Active marker: the same neon blade servers get, so the
+                    open room keeps its left-bar highlight (incl. in folders). */}
                 <span
                   className={cn(
-                    "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
-                    "bg-muted text-success opacity-60 saturate-75",
-                    "group-hover:opacity-100 group-hover:saturate-100",
-                    (isActive || highlight) && "opacity-100 saturate-100",
-                    isActive && "is-active",
+                    "absolute -left-2 w-[3px] bg-primary transition-all",
+                    isActive
+                      ? "h-12 opacity-100"
+                      : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "relative block size-12",
+                    highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
                   )}
                 >
-                  {iconUrl ? (
-                    <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
-                  ) : (
-                    <span className="text-sm font-semibold">{initials}</span>
-                  )}
-                </span>
-                {/* Unread / mention indicator (hidden while active — you're reading it). */}
-                {!isActive && anyMention ? (
                   <span
-                    className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
-                    aria-label="You were mentioned"
+                    className={cn(
+                      "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
+                      "bg-muted text-success opacity-60 saturate-75",
+                      "group-hover:opacity-100 group-hover:saturate-100",
+                      (isActive || highlight) && "opacity-100 saturate-100",
+                      isActive && "is-active",
+                    )}
                   >
-                    @
+                    {iconUrl ? (
+                      <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
+                    ) : (
+                      <span className="text-sm font-semibold">{initials}</span>
+                    )}
                   </span>
-                ) : !isActive && anyUnread ? (
-                  <span
-                    className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
-                    aria-label="Unread messages"
-                  />
-                ) : null}
-              </span>
-            )
-          }
+                  {/* Unread / mention indicator (hidden while active — you're reading it). */}
+                  {!isActive && anyMention ? (
+                    <span
+                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+                      aria-label="You were mentioned"
+                    >
+                      @
+                    </span>
+                  ) : !isActive && anyUnread ? (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
+                      aria-label="Unread messages"
+                    />
+                  ) : null}
+                </span>
+              </>
+            </DragSlot>
+          )}
         </NavLink>
       </TooltipTrigger>
       <TooltipContent side="right" className="font-medium">
@@ -744,6 +829,32 @@ function RailFolder({
 
   const label = name.trim() || "Folder";
 
+  // Aggregate unread/mention across ALL members (not just the four visible
+  // in the mini grid), reported by the invisible per-member probes below.
+  // Shown on the folder face only while collapsed — expanded, the members'
+  // own buttons carry their badges.
+  const [memberUnread, setMemberUnread] = useState<
+    Record<string, { unread: boolean; mention: boolean }>
+  >({});
+  const reportUnread = useCallback((key: string, unread: boolean, mention: boolean) => {
+    setMemberUnread((prev) => {
+      const cur = prev[key];
+      if (cur && cur.unread === unread && cur.mention === mention) return prev;
+      return { ...prev, [key]: { unread, mention } };
+    });
+  }, []);
+  const anyUnread = !open && items.some((it) => memberUnread[it.key]?.unread);
+  const anyMention = !open && items.some((it) => memberUnread[it.key]?.mention);
+  const probes = !open
+    ? items.map((it) => (
+        <RailItemUnreadProbe
+          key={it.key}
+          item={it}
+          onChange={(unread, mention) => reportUnread(it.key, unread, mention)}
+        />
+      ))
+    : null;
+
   const header = (
     <ContextMenu>
       <Tooltip>
@@ -759,8 +870,7 @@ function RailFolder({
                 onToggle();
               }}
               className={cn(
-                "group relative flex items-center justify-center shrink-0 touch-pan-y",
-                draggable && "cursor-grab",
+                "group relative flex items-center justify-center shrink-0 touch-none cursor-pointer",
                 dragging && "cursor-grabbing",
                 reordering && "touch-none",
               )}
@@ -775,26 +885,47 @@ function RailFolder({
                     : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
                 )}
               />
-              {dragging && !open ? (
-                dragPlaceholder
-              ) : (
+              <DragSlot dragging={dragging && !open}>
                 <span
                   className={cn(
                     "relative block size-12 transition-all duration-150",
                     highlight && "rounded-xl ring-2 ring-primary scale-110",
-                    !open && !active && !highlight &&
-                      "opacity-70 saturate-75 group-hover:opacity-100 group-hover:saturate-100",
                   )}
                 >
-                  {open ? (
-                    <span className="flex size-12 items-center justify-center clip-corner-lg bg-secondary/80 text-primary">
-                      <FolderOpen className="size-5" />
+                  {/* Dimming lives on an inner wrapper so the notification
+                      badge outside it stays at full strength (mirrors how
+                      server buttons keep badges outside the dimmed avatar). */}
+                  <span
+                    className={cn(
+                      "block size-12 transition-all duration-150",
+                      !open && !active && !highlight &&
+                        "opacity-70 saturate-75 group-hover:opacity-100 group-hover:saturate-100",
+                    )}
+                  >
+                    {open ? (
+                      <span className="flex size-12 items-center justify-center clip-corner-lg bg-secondary/80 text-primary">
+                        <FolderOpen className="size-5" />
+                      </span>
+                    ) : (
+                      <FolderMiniGrid items={items} />
+                    )}
+                  </span>
+                  {/* Folder-level rollup: any member mentioned / unread. */}
+                  {anyMention ? (
+                    <span
+                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+                      aria-label="You were mentioned"
+                    >
+                      @
                     </span>
-                  ) : (
-                    <FolderMiniGrid items={items} />
-                  )}
+                  ) : anyUnread ? (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
+                      aria-label="Unread messages"
+                    />
+                  ) : null}
                 </span>
-              )}
+              </DragSlot>
             </button>
           </ContextMenuTrigger>
         </TooltipTrigger>
@@ -812,7 +943,14 @@ function RailFolder({
     </ContextMenu>
   );
 
-  if (!open) return header;
+  if (!open) {
+    return (
+      <>
+        {probes}
+        {header}
+      </>
+    );
+  }
 
   return (
     <div
@@ -1022,6 +1160,25 @@ export function ServerRail({
   const navRectRef = useRef<{ left: number; width: number } | null>(null);
   const dropPlanRef = useRef<RailDropPlan | null>(null);
 
+  // A PERMANENT non-passive touchmove canceller on the rail. Chrome decides
+  // at gesture start (touchstart) whether a blocking touch listener exists in
+  // the region; a listener attached mid-gesture (e.g. in pointerdown) is not
+  // consulted, its preventDefault is silently ignored, and the browser still
+  // pans the rail — killing the drag with pointercancel. This listener exists
+  // before any gesture starts, and only cancels moves while a drag is live,
+  // so normal rail scrolling stays native. Touch events keep targeting the
+  // touchstart element, so drags that wander outside the rail still bubble
+  // through it.
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const onTouchMove = (ev: TouchEvent) => {
+      if (dragActive.current !== null && ev.cancelable) ev.preventDefault();
+    };
+    nav.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => nav.removeEventListener("touchmove", onTouchMove);
+  }, []);
+
   const beginDrag = useCallback((source: RailDragSource, x: number, y: number) => {
     const nav = navRef.current;
     if (nav) {
@@ -1056,6 +1213,10 @@ export function ServerRail({
       startPos.current = { x: e.clientX, y: e.clientY };
       const pointerId = e.pointerId;
       const isMouse = e.pointerType === "mouse";
+      // Touch-scroll fallback state (see onMove): set once the gesture is
+      // classified as a scroll rather than a long-press drag.
+      let manualScroll = false;
+      let lastScrollY = e.clientY;
 
       const clear = () => {
         if (longPressTimer.current !== null) {
@@ -1064,7 +1225,7 @@ export function ServerRail({
         }
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
-        window.removeEventListener("pointercancel", onUp);
+        window.removeEventListener("pointercancel", onCancel);
         window.removeEventListener("contextmenu", onContextMenu, true);
       };
 
@@ -1081,6 +1242,18 @@ export function ServerRail({
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
         if (dragActive.current === null) {
+          // Touch gesture that committed to scrolling: pan the rail manually.
+          // Entries carry `touch-action: none` (the ONLY reliable way to keep
+          // Chrome from claiming the drag as a pan and killing it with
+          // pointercancel — its gesture arbitration is racy no matter what we
+          // preventDefault), so the browser never scrolls the rail for
+          // gestures that start on an entry; we do it here instead.
+          if (manualScroll) {
+            const nav = navRef.current;
+            if (nav) nav.scrollTop -= ev.clientY - lastScrollY;
+            lastScrollY = ev.clientY;
+            return;
+          }
           const s = startPos.current;
           if (!s) return;
           const dist = Math.hypot(ev.clientX - s.x, ev.clientY - s.y);
@@ -1088,8 +1261,14 @@ export function ServerRail({
             // Mouse: drag starts as soon as the pointer commits to moving.
             if (dist > 6) beginDrag(source, ev.clientX, ev.clientY);
           } else if (dist > 10) {
-            // Touch: movement before the long-press fires is a scroll.
-            clear();
+            // Touch: movement before the long-press fires is a scroll — hand
+            // the rest of the gesture to the manual panner above.
+            if (longPressTimer.current !== null) {
+              window.clearTimeout(longPressTimer.current);
+              longPressTimer.current = null;
+            }
+            manualScroll = true;
+            lastScrollY = ev.clientY;
           }
           return;
         }
@@ -1128,9 +1307,22 @@ export function ServerRail({
         clear();
       };
 
+      // The browser reclaimed the pointer (scroll takeover, palm rejection,
+      // system gesture): abort WITHOUT applying the drop — the last computed
+      // plan no longer reflects the user's intent.
+      const onCancel = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        dragActive.current = null;
+        dropPlanRef.current = null;
+        setDragSource(null);
+        setDragPos(null);
+        setDropPlan(null);
+        clear();
+      };
+
       window.addEventListener("pointermove", onMove, { passive: false });
       window.addEventListener("pointerup", onUp);
-      window.addEventListener("pointercancel", onUp);
+      window.addEventListener("pointercancel", onCancel);
       window.addEventListener("contextmenu", onContextMenu, true);
 
       if (!isMouse) {
@@ -1146,6 +1338,19 @@ export function ServerRail({
   const reordering = dragSource !== null;
   const draggable = items.length > 1;
   const shouldSuppressClick = useCallback(() => didDragRef.current, []);
+
+  // While an entry is picked up, carry the grabbing cursor globally (the
+  // pointer crosses many elements mid-drag). At rest, entries show the
+  // normal link cursor — the old grab-on-hover hand suggested a drag
+  // affordance before anything was picked up, which confused people.
+  useEffect(() => {
+    if (!reordering) return;
+    const prev = document.body.style.cursor;
+    document.body.style.cursor = "grabbing";
+    return () => {
+      document.body.style.cursor = prev;
+    };
+  }, [reordering]);
 
   // What the floating ghost carries.
   const draggedItem =
