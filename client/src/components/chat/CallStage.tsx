@@ -178,8 +178,17 @@ function useTileDisplayName(participant: Participant): {
 function useApplyUserVolume(participant: Participant, pubkey: string) {
   const [volume] = useUserVolume(pubkey);
   useEffect(() => {
-    if (!participant.isLocal) (participant as RemoteParticipant).setVolume(volume);
-  }, [participant, volume]);
+    if (!participant.isLocal) {
+      // The store/UI intent is 0–1 (0–100%). Defensively clamp before handing
+      // the value to LiveKit: with the default room config (webAudioMix off)
+      // `setVolume` maps straight to `HTMLMediaElement.volume`, which throws
+      // outside [0, 1]. This guards against stale/corrupted localStorage values
+      // (e.g. a 1.5 or 2.0 persisted by an older 0–200% build).
+      // TODO: real Discord-style 100–200% boost needs LiveKit `webAudioMix`
+      // (a Web Audio GainNode, whose gain accepts >1) — tracked separately.
+      (participant as RemoteParticipant).setVolume(Math.min(Math.max(volume, 0), 1));
+    }
+  }, [participant, volume, pubkey]);
 }
 
 /**

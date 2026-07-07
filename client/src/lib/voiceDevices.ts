@@ -171,10 +171,17 @@ export function setAudioProcessing(prefs: AudioProcessingPrefs): void {
 }
 
 /**
- * Per-user playback volume, keyed by pubkey, as a multiplier (1 = unchanged,
- * 0 = muted, up to 2 = boosted). Stored so a deliberately quieted/boosted user
- * stays that way across calls and reloads. Volumes equal to the default 1 are
- * not stored, keeping the map small.
+ * Per-user playback volume, keyed by pubkey, as a multiplier in [0, 1]
+ * (1 = unchanged, 0 = muted). Stored so a deliberately quieted user stays that
+ * way across calls and reloads. Volumes equal to the default 1 are not stored,
+ * keeping the map small.
+ *
+ * Values are clamped to [0, 1] on both read and write: LiveKit's default
+ * playback path maps this straight onto `HTMLMediaElement.volume`, which only
+ * accepts [0, 1]. (Real Discord-style 100–200% boost would need LiveKit
+ * `webAudioMix` / a Web Audio GainNode; tracked as a separate feature.) The
+ * clamp on read also sanitizes any out-of-range values persisted by an older
+ * 0–200% build so they can never reach playback.
  *
  * Changes are observable (`subscribeUserVolumes`) so every surface that shows
  * a volume control — the call-stage tiles, the sidebar roster's context
@@ -182,6 +189,12 @@ export function setAudioProcessing(prefs: AudioProcessingPrefs): void {
  * matter where they were made.
  */
 const volumeListeners = new Set<() => void>();
+
+/** Clamp a volume multiplier to the supported [0, 1] range (NaN → 1). */
+function clampVolume(v: number): number {
+  if (!Number.isFinite(v)) return 1;
+  return Math.min(Math.max(v, 0), 1);
+}
 
 /** Subscribe to per-user volume changes. Returns an unsubscribe function. */
 export function subscribeUserVolumes(listener: () => void): () => void {
@@ -200,18 +213,26 @@ export function getUserVolumes(): Record<string, number> {
   }
 }
 
-/** The remembered playback volume for a pubkey (defaults to 1). */
+/**
+ * The remembered playback volume for a pubkey, clamped to [0, 1] (defaults to
+ * 1). The clamp sanitizes stale >1 values from older builds — they read as
+ * 100% rather than crashing playback.
+ */
 export function getUserVolume(pubkey: string): number {
   const v = getUserVolumes()[pubkey];
-  return typeof v === "number" && v >= 0 ? v : 1;
+  return typeof v === "number" ? clampVolume(v) : 1;
 }
 
-/** Persist a per-user playback volume. A value of 1 clears the override. */
+/**
+ * Persist a per-user playback volume, clamped to [0, 1]. A value of 1 clears
+ * the override.
+ */
 export function rememberUserVolume(pubkey: string, volume: number): void {
+  const next = clampVolume(volume);
   try {
     const all = getUserVolumes();
-    if (volume === 1) delete all[pubkey];
-    else all[pubkey] = volume;
+    if (next === 1) delete all[pubkey];
+    else all[pubkey] = next;
     localStorage.setItem(VOLUME_KEY, JSON.stringify(all));
   } catch {
     // localStorage unavailable — ignore.

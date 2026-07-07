@@ -3,11 +3,12 @@ import { useCallback, useSyncExternalStore } from "react";
 import { getUserVolume, rememberUserVolume, subscribeUserVolumes } from "@/lib/voiceDevices";
 
 /**
- * A user's persisted playback volume (multiplier, 0 = muted … 2 = boosted;
- * default 1) as live React state. Backed by the shared `voiceDevices` store,
- * so every surface showing a control for the same pubkey — the call-stage
- * tile menus, the sidebar roster's context menu — reads and writes one value,
- * and the connected room applies changes live wherever they were made.
+ * A user's persisted playback volume (multiplier in [0, 1]: 0 = muted …
+ * 1 = unchanged, the default) as live React state. Backed by the shared
+ * `voiceDevices` store, so every surface showing a control for the same pubkey
+ * — the call-stage tile menus, the sidebar roster's context menu — reads and
+ * writes one value, and the connected room applies changes live wherever they
+ * were made.
  */
 export function useUserVolume(pubkey: string): [number, (next: number) => void] {
   const volume = useSyncExternalStore(subscribeUserVolumes, () => getUserVolume(pubkey));
