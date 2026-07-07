@@ -4,6 +4,19 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.19.1] - 2026-07-07
+
+Fixes voice and video calls on the Android app and the desktop app: both now
+properly request microphone and camera access, so calls no longer fail with a
+silently denied mic.
+
+### Fixed
+- Android app: microphone and camera permissions are now requested, so voice
+  and video calls work instead of the mic being silently denied
+- Desktop app: microphone and camera access is granted for calls (with the
+  required macOS usage prompts), and other permission requests are denied
+  unless they come from Armada itself
+
 ## [0.19.0] - 2026-07-07
 
 Organize your community rail Discord-style: drop one community onto another to
