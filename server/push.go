@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,10 @@ type pushPrefs struct {
 	// AllGroupMessages: every kind-9 message in groups the user belongs to,
 	// not just mentions. Off by default (Discord "All messages" vs "Mentions").
 	AllGroupMessages *bool `json:"all_group_messages,omitempty"`
+	// MutedGroups: group ids (`h` tags) the user muted. No pushes at all for
+	// these groups — chat, reactions, replies, mentions included. Managed by
+	// the client's per-channel / per-server mute toggles.
+	MutedGroups []string `json:"muted_groups,omitempty"`
 }
 
 func prefEnabled(p *bool, dflt bool) bool {
@@ -503,6 +508,12 @@ func resolvePushTargets(event *nostr.Event) map[string]notification {
 // wantsNotification applies the recipient's preferences to decide whether this
 // event should be pushed to them.
 func wantsNotification(prefs pushPrefs, event *nostr.Event, recipient string) bool {
+	// A muted group is silent for every event kind scoped to it — mentions
+	// included ("mute" means no pushes, period; the client still badges
+	// mentions in-app).
+	if h := tagValue(event, "h"); h != "" && slices.Contains(prefs.MutedGroups, h) {
+		return false
+	}
 	mentioned := pSet(event)[recipient]
 	switch event.Kind {
 	case 9:

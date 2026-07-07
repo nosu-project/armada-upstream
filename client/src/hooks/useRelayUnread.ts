@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutes } from "@/hooks/useMutes";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 
@@ -37,6 +38,11 @@ const EMPTY: RelayUnread = { byGroup: {}, anyUnread: false, anyMention: false };
  * to drive unread dots and mention badges on the channel list and server rail.
  *
  * Self-authored messages never mark a channel unread.
+ *
+ * Muted channels (or a muted server) are excluded from the aggregate
+ * `anyUnread` — but unread *mentions* still count toward `anyMention`,
+ * Discord-style. `byGroup` always carries the full unread data (so
+ * "mark as read" and per-row rendering keep working on muted channels).
  */
 export function useRelayUnread(
   relayUrl: string | undefined,
@@ -45,6 +51,7 @@ export function useRelayUnread(
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { readState } = useReadState();
+  const { isChannelMuted } = useMutes();
 
   const idsKey = useMemo(() => [...groupIds].sort().join(","), [groupIds]);
 
@@ -109,11 +116,11 @@ export function useRelayUnread(
       };
     }
 
-    const groups = Object.values(byGroup);
+    const groups = Object.entries(byGroup);
     return {
       byGroup,
-      anyUnread: groups.length > 0,
-      anyMention: groups.some((g) => g.mention),
+      anyUnread: groups.some(([id]) => !isChannelMuted(relayUrl, id)),
+      anyMention: groups.some(([, g]) => g.mention),
     };
-  }, [relayUrl, user, activity, live, readState, groupIds]);
+  }, [relayUrl, user, activity, live, readState, groupIds, isChannelMuted]);
 }

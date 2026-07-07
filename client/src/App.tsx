@@ -20,6 +20,7 @@ import { ScreenSharePicker } from "@/components/ScreenSharePicker";
 import { SyncGate } from "@/components/SyncGate";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { WebPushNotifications } from "@/components/WebPushNotifications";
 
 import AppRouter from "./AppRouter";
 
@@ -60,6 +61,7 @@ export function App() {
                 <DeepLinkWarmup />
                 <DesktopBadge />
                 <NativeNotifications />
+                <WebPushNotifications />
                 <ControlPlaneSync />
                 <ScreenSharePicker />
                 <Toaster />

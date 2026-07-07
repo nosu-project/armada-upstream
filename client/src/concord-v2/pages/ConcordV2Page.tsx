@@ -1,4 +1,4 @@
-import { ChevronLeft, Hash, Headphones, Loader2, Lock, LogOut, MoreVertical, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MoreVertical, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -21,6 +21,12 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -34,6 +40,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
@@ -216,6 +223,10 @@ function ChannelRow2({
   const fold = useVoicePresence2(community, channel);
   const { data: broker } = useVoiceBroker2(channel, fold);
   const { voiceRoomPubkeys } = useCall();
+  const { isConcordChannelMuted, toggleConcordChannelMute } = useMutes();
+  const muted = community
+    ? isConcordChannelMuted("c2", community.idHex, channel.idHex)
+    : false;
   const foldedParticipants = useMemo(() => fold.present.map((p) => p.author), [fold]);
   // While YOU are in this call, the connected room's live LiveKit roster is
   // authoritative — presence heartbeats lag (30s cadence, 90s staleness) and
@@ -227,43 +238,69 @@ function ChannelRow2({
   const hasMention = Boolean(unread?.mention);
   const occupied = channel.isVoice && participants.length > 0;
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => {
-          onSelect();
-          // Discord-style: clicking a voice channel joins its call (and opens
-          // its chat via onSelect).
-          if (channel.isVoice && !inCall) onJoinVoice(channel, broker ?? null, fold);
-        }}
-        className={cn(
-          // Slack-style selection: the active channel sits on a filled primary
-          // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
-          "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
-          !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
-          // Unread (but not selected) channels read brighter + bold (Slack).
-          !active && hasUnread && "text-foreground font-semibold",
-          active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
-        )}
-      >
-        <Icon className={cn("size-4 shrink-0", occupied && !active && "text-success")} />
-        <span className="truncate flex-1 min-w-0">{channel.name}</span>
-        {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
-        {/* Mention indicator: an "@" pill. Plain unread is conveyed by the row's
-            brighter + bold text (no dot). */}
-        {hasMention ? (
-          <span
-            className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
-            aria-label="You were mentioned"
+    <ContextMenu>
+      <ContextMenuTrigger className="block">
+        <div>
+          <button
+            type="button"
+            onClick={() => {
+              onSelect();
+              // Discord-style: clicking a voice channel joins its call (and opens
+              // its chat via onSelect).
+              if (channel.isVoice && !inCall) onJoinVoice(channel, broker ?? null, fold);
+            }}
+            className={cn(
+              // Slack-style selection: the active channel sits on a filled primary
+              // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
+              "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
+              !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
+              // Unread (but not selected) channels read brighter + bold (Slack).
+              // Muted channels never bold — their unread is deliberately silent.
+              !active && hasUnread && !muted && "text-foreground font-semibold",
+              // Muted channels read dimmer (Discord-style).
+              !active && muted && "opacity-60",
+              active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
+            )}
           >
-            @
-          </span>
-        ) : null}
-      </button>
-      {/* Discord-style nested voice roster: who's in the call, under the row
-          (with live speaking rings while you're in it). */}
-      {channel.isVoice && <VoiceParticipantList participants={participants} speaking={speaking} />}
-    </>
+            <Icon className={cn("size-4 shrink-0", occupied && !active && "text-success")} />
+            <span className="truncate flex-1 min-w-0">{channel.name}</span>
+            {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
+            {muted && <BellOff className="size-3 shrink-0 opacity-60" aria-label="Muted" />}
+            {/* Mention indicator: an "@" pill. Plain unread is conveyed by the row's
+                brighter + bold text (no dot). */}
+            {hasMention ? (
+              <span
+                className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                aria-label="You were mentioned"
+              >
+                @
+              </span>
+            ) : null}
+          </button>
+          {/* Discord-style nested voice roster: who's in the call, under the row
+              (with live speaking rings while you're in it). */}
+          {channel.isVoice && <VoiceParticipantList participants={participants} speaking={speaking} />}
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem
+          disabled={!community}
+          onSelect={() => {
+            if (community) toggleConcordChannelMute("c2", community.idHex, channel.idHex);
+          }}
+        >
+          {muted ? (
+            <>
+              <Bell className="mr-2 size-4" /> Unmute channel
+            </>
+          ) : (
+            <>
+              <BellOff className="mr-2 size-4" /> Mute channel
+            </>
+          )}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

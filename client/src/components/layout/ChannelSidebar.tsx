@@ -1,4 +1,4 @@
-import { CheckCheck, Hash, Headphones, Link as LinkIcon, Loader2, Lock, RefreshCw, Volume2 } from "lucide-react";
+import { Bell, BellOff, CheckCheck, Hash, Headphones, Link as LinkIcon, Loader2, Lock, RefreshCw, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
@@ -20,6 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
 import { useLivekitParticipants, useRelayLivekitSupport } from "@/hooks/useLivekit";
+import { useMutes } from "@/hooks/useMutes";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
@@ -40,6 +41,8 @@ function ChannelLink({
 }) {
   const { activeCall, speakingPubkeys, voiceRoomPubkeys } = useCall();
   const { markRead } = useReadState();
+  const { isChannelMuted, toggleChannelMute } = useMutes();
+  const muted = isChannelMuted(group.relay, group.id);
   // Voice capability: prefer the per-group `livekit` metadata tag, but fall
   // back to the relay-level capability (`/.well-known/nip29/livekit` 204).
   // Armada's relay29 metadata doesn't emit the `livekit` group tag, so
@@ -85,7 +88,10 @@ function ChannelLink({
             !isActive && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
             // Unread (but not selected) channels read brighter + bold, matching
             // Slack. This is now visually distinct from the active rectangle.
-            !isActive && hasUnread && "text-foreground font-semibold",
+            // Muted channels never bold — their unread is deliberately silent.
+            !isActive && hasUnread && !muted && "text-foreground font-semibold",
+            // Muted channels read dimmer (Discord-style).
+            !isActive && muted && "opacity-60",
             // Active/navigated channel: primary-filled chamfered rectangle.
             isActive && "clip-corner-lg bg-primary text-primary-foreground font-medium",
           )}
@@ -101,6 +107,7 @@ function ChannelLink({
           </Tooltip>
         )}
         {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
+        {muted && <BellOff className="size-3 shrink-0 opacity-60" aria-label="Muted" />}
         {/* Mention indicator: an "@" pill. Plain unread is conveyed by the
             row's brighter + bold text (no dot). */}
         {hasMention ? (
@@ -130,6 +137,17 @@ function ChannelLink({
           }}
         >
           <CheckCheck className="mr-2 size-4" /> Mark as read
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => toggleChannelMute(group.relay, group.id)}>
+          {muted ? (
+            <>
+              <Bell className="mr-2 size-4" /> Unmute channel
+            </>
+          ) : (
+            <>
+              <BellOff className="mr-2 size-4" /> Mute channel
+            </>
+          )}
         </ContextMenuItem>
         <ContextMenuItem
           onSelect={() => {

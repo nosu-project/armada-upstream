@@ -1,4 +1,4 @@
-import { Bluetooth, FolderOpen, Headphones, MessageSquare, Plus, Settings } from "lucide-react";
+import { Bell, BellOff, Bluetooth, FolderOpen, Headphones, MessageSquare, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
@@ -36,6 +36,7 @@ import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
+import { useMutes } from "@/hooks/useMutes";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useRelayUnread } from "@/hooks/useRelayUnread";
@@ -198,7 +199,7 @@ function Concord2MiniIcon({ communityId, name }: { communityId: string; name: st
   const initial = displayName.trim().charAt(0).toUpperCase() || "·";
   const channels = useChannels2(community, false);
   const { byChannel } = useConcord2Unread(channels);
-  const unreadSummaries = Object.values(byChannel);
+  const { isConcordChannelMuted } = useMutes();
   return (
     <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-muted text-success">
       {iconUrl ? (
@@ -207,8 +208,8 @@ function Concord2MiniIcon({ communityId, name }: { communityId: string; name: st
         <span className="text-[9px] font-semibold leading-none">{initial}</span>
       )}
       <MiniUnreadDot
-        mention={unreadSummaries.some((u) => u.mention)}
-        unread={unreadSummaries.length > 0}
+        mention={Object.values(byChannel).some((u) => u.mention)}
+        unread={Object.keys(byChannel).some((id) => !isConcordChannelMuted("c2", communityId, id))}
       />
     </span>
   );
@@ -254,9 +255,11 @@ function Concord2UnreadProbe({
   const community = useCommunity2(communityId);
   const channels = useChannels2(community, false);
   const { byChannel } = useConcord2Unread(channels);
-  const summaries = Object.values(byChannel);
-  const unread = summaries.length > 0;
-  const mention = summaries.some((u) => u.mention);
+  const { isConcordChannelMuted } = useMutes();
+  const unread = Object.keys(byChannel).some(
+    (id) => !isConcordChannelMuted("c2", communityId, id),
+  );
+  const mention = Object.values(byChannel).some((u) => u.mention);
   useEffect(() => onChange(unread, mention), [unread, mention, onChange]);
   return null;
 }
@@ -431,6 +434,8 @@ function ServerButton({
   const { data: groups } = useRelayGroups(user ? url : undefined);
   const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
   const { anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
+  const { isCommunityMuted, toggleCommunityMute } = useMutes();
+  const muted = isCommunityMuted(url);
   const host = relayHost(url);
   const name = info?.name || host;
   const initial = name.trim().charAt(0).toUpperCase() || "?";
@@ -515,46 +520,63 @@ function ServerButton({
   const interactionProps = draggable ? dragAttrs(itemAnchor(url), dragParent) : {};
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        {onSelect ? (
-          <button
-            ref={triggerRef as React.RefObject<HTMLButtonElement>}
-            type="button"
-            aria-label={name}
-            onClick={() => {
-              if (shouldSuppressClick?.()) return;
-              onSelect(url);
-            }}
-            className={cn(triggerClass, dragClass, selected && "is-active")}
-            {...interactionProps}
-          >
-            <DragSlot dragging={dragging}>{inner(Boolean(selected))}</DragSlot>
-          </button>
-        ) : (
-          <NavLink
-            ref={triggerRef as React.RefObject<HTMLAnchorElement>}
-            to={`/s/${relayToRouteParam(url)}`}
-            aria-label={name}
-            onClick={(e) => {
-              if (shouldSuppressClick?.()) {
-                e.preventDefault();
-                return;
-              }
-              onNavigate?.();
-            }}
-            className={({ isActive }) => cn(triggerClass, dragClass, isActive && "is-active")}
-            {...interactionProps}
-          >
-            {({ isActive }) => <DragSlot dragging={dragging}>{inner(isActive)}</DragSlot>}
-          </NavLink>
-        )}
-      </TooltipTrigger>
-      <TooltipContent side="right" className="font-medium">
-        {name}
-        <span className="block text-xs text-muted-foreground">{url}</span>
-      </TooltipContent>
-    </Tooltip>
+    <ContextMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>
+            {onSelect ? (
+              <button
+                ref={triggerRef as React.RefObject<HTMLButtonElement>}
+                type="button"
+                aria-label={name}
+                onClick={() => {
+                  if (shouldSuppressClick?.()) return;
+                  onSelect(url);
+                }}
+                className={cn(triggerClass, dragClass, selected && "is-active")}
+                {...interactionProps}
+              >
+                <DragSlot dragging={dragging}>{inner(Boolean(selected))}</DragSlot>
+              </button>
+            ) : (
+              <NavLink
+                ref={triggerRef as React.RefObject<HTMLAnchorElement>}
+                to={`/s/${relayToRouteParam(url)}`}
+                aria-label={name}
+                onClick={(e) => {
+                  if (shouldSuppressClick?.()) {
+                    e.preventDefault();
+                    return;
+                  }
+                  onNavigate?.();
+                }}
+                className={({ isActive }) => cn(triggerClass, dragClass, isActive && "is-active")}
+                {...interactionProps}
+              >
+                {({ isActive }) => <DragSlot dragging={dragging}>{inner(isActive)}</DragSlot>}
+              </NavLink>
+            )}
+          </ContextMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="font-medium">
+          {name}
+          <span className="block text-xs text-muted-foreground">{url}</span>
+        </TooltipContent>
+      </Tooltip>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => toggleCommunityMute(url)}>
+          {muted ? (
+            <>
+              <Bell className="mr-2 size-4" /> Unmute server
+            </>
+          ) : (
+            <>
+              <BellOff className="mr-2 size-4" /> Mute server
+            </>
+          )}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -581,6 +603,9 @@ function ConcordButton({
   const triggerRef = useRef<HTMLAnchorElement | null>(null);
   useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
+  const { isCommunityMuted, toggleCommunityMute } = useMutes();
+  const muted = isCommunityMuted(concord1Key(communityId));
+
   const initials = name.trim().slice(0, 2).toUpperCase() || "··";
   // Resolve the community's authoritative GroupRoot icon: rehydrate from the
   // membership bundle, overlay the folded metadata (the owner-controlled icon),
@@ -598,70 +623,87 @@ function ConcordButton({
   const iconUrl = useDecryptedCommunityImage(icon);
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <NavLink
-          ref={triggerRef}
-          to={`/c1/${encodeURIComponent(communityId)}`}
-          aria-label={name}
-          onClick={(e) => {
-            if (shouldSuppressClick?.()) {
-              e.preventDefault();
-              return;
-            }
-            onNavigate?.();
-          }}
-          className={cn(
-            "group relative flex items-center justify-center shrink-0 touch-none",
-            dragging && "cursor-grabbing",
-            reordering && "touch-none",
+    <ContextMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>
+            <NavLink
+              ref={triggerRef}
+              to={`/c1/${encodeURIComponent(communityId)}`}
+              aria-label={name}
+              onClick={(e) => {
+                if (shouldSuppressClick?.()) {
+                  e.preventDefault();
+                  return;
+                }
+                onNavigate?.();
+              }}
+              className={cn(
+                "group relative flex items-center justify-center shrink-0 touch-none",
+                dragging && "cursor-grabbing",
+                reordering && "touch-none",
+              )}
+              {...(draggable ? dragAttrs(itemAnchor(concord1Key(communityId)), dragParent) : {})}
+            >
+              {({ isActive }) => (
+                <DragSlot dragging={dragging}>
+                  <>
+                    {/* Active marker: the same neon blade servers get, so the
+                        open room keeps its left-bar highlight (incl. in folders). */}
+                    <span
+                      className={cn(
+                        "absolute -left-2 w-[3px] bg-primary transition-all",
+                        isActive
+                          ? "h-12 opacity-100"
+                          : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "relative block size-12",
+                        highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
+                          "bg-muted text-success opacity-60 saturate-75",
+                          "group-hover:opacity-100 group-hover:saturate-100",
+                          (isActive || highlight) && "opacity-100 saturate-100",
+                          isActive && "is-active",
+                        )}
+                      >
+                        {iconUrl ? (
+                          <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
+                        ) : (
+                          <span className="text-sm font-semibold">{initials}</span>
+                        )}
+                      </span>
+                    </span>
+                  </>
+                </DragSlot>
+              )}
+            </NavLink>
+          </ContextMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="font-medium">
+          {name}
+        </TooltipContent>
+      </Tooltip>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => toggleCommunityMute(concord1Key(communityId))}>
+          {muted ? (
+            <>
+              <Bell className="mr-2 size-4" /> Unmute community
+            </>
+          ) : (
+            <>
+              <BellOff className="mr-2 size-4" /> Mute community
+            </>
           )}
-          {...(draggable ? dragAttrs(itemAnchor(concord1Key(communityId)), dragParent) : {})}
-        >
-          {({ isActive }) => (
-            <DragSlot dragging={dragging}>
-              <>
-                {/* Active marker: the same neon blade servers get, so the
-                    open room keeps its left-bar highlight (incl. in folders). */}
-                <span
-                  className={cn(
-                    "absolute -left-2 w-[3px] bg-primary transition-all",
-                    isActive
-                      ? "h-12 opacity-100"
-                      : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
-                  )}
-                />
-                <span
-                  className={cn(
-                    "relative block size-12",
-                    highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
-                      "bg-muted text-success opacity-60 saturate-75",
-                      "group-hover:opacity-100 group-hover:saturate-100",
-                      (isActive || highlight) && "opacity-100 saturate-100",
-                      isActive && "is-active",
-                    )}
-                  >
-                    {iconUrl ? (
-                      <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
-                    ) : (
-                      <span className="text-sm font-semibold">{initials}</span>
-                    )}
-                  </span>
-                </span>
-              </>
-            </DragSlot>
-          )}
-        </NavLink>
-      </TooltipTrigger>
-      <TooltipContent side="right" className="font-medium">
-        {name}
-      </TooltipContent>
-    </Tooltip>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -701,18 +743,24 @@ function Concord2Button({
 
   // Aggregate unread across the community's channels, computed purely from the
   // local rumor cache (no extra relay fan-out — active=false shares the fold
-  // query key). Mirrors the NIP-29 rail badge.
+  // query key). Mirrors the NIP-29 rail badge. Muted channels (or a muted
+  // community) don't light the unread dot; unread mentions still badge.
   const channels = useChannels2(community, false);
   const { byChannel } = useConcord2Unread(channels);
-  const unreadSummaries = Object.values(byChannel);
-  const anyUnread = unreadSummaries.length > 0;
-  const anyMention = unreadSummaries.some((u) => u.mention);
+  const { isCommunityMuted, isConcordChannelMuted, toggleCommunityMute } = useMutes();
+  const muted = isCommunityMuted(concord2Key(communityId));
+  const anyUnread = Object.keys(byChannel).some(
+    (id) => !isConcordChannelMuted("c2", communityId, id),
+  );
+  const anyMention = Object.values(byChannel).some((u) => u.mention);
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <NavLink
-          ref={triggerRef}
+    <ContextMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>
+            <NavLink
+              ref={triggerRef}
           to={`/c/${encodeURIComponent(communityId)}`}
           aria-label={displayName}
           onClick={(e) => {
@@ -782,11 +830,26 @@ function Concord2Button({
             </DragSlot>
           )}
         </NavLink>
-      </TooltipTrigger>
-      <TooltipContent side="right" className="font-medium">
-        {displayName}
-      </TooltipContent>
-    </Tooltip>
+          </ContextMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="font-medium">
+          {displayName}
+        </TooltipContent>
+      </Tooltip>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => toggleCommunityMute(concord2Key(communityId))}>
+          {muted ? (
+            <>
+              <Bell className="mr-2 size-4" /> Unmute community
+            </>
+          ) : (
+            <>
+              <BellOff className="mr-2 size-4" /> Mute community
+            </>
+          )}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

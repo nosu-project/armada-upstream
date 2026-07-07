@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useFollowList } from "@/hooks/useFollowList";
+import { useMutes } from "@/hooks/useMutes";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import {
@@ -94,6 +95,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const { data: groupList } = useUserGroupList();
   const { data: concordData } = useConcordList();
   const { data: followData } = useFollowList();
+  const { isChannelMuted, isConcordChannelMuted } = useMutes();
 
   // Start dormant; the auto-enable effect below flips this on at launch (after
   // requesting the OS permission if it hasn't been granted yet).
@@ -121,10 +123,20 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     return [...set].sort();
   }, [groupList]);
 
-  // Joined group ids (the `h` tag values) for the kind-9 filter.
+  // Joined group ids (the `h` tag values) for the kind-9 filter. Muted
+  // channels (and every channel of a muted server) are omitted entirely, so
+  // the service never subscribes to them — no notifications, mentions
+  // included.
   const groupIds = useMemo(
-    () => [...new Set((groupList?.groups ?? []).map((g) => g.id))].sort(),
-    [groupList],
+    () =>
+      [
+        ...new Set(
+          (groupList?.groups ?? [])
+            .filter((g) => !isChannelMuted(g.relay, g.id))
+            .map((g) => g.id),
+        ),
+      ].sort(),
+    [groupList, isChannelMuted],
   );
 
   // DM relays: where kind-4 DMs are read from (config.appRelays, or the user's
@@ -162,15 +174,28 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
 
   // Concord (E2E) channel subscriptions: relays + #z pseudonyms + display names.
   // Computed here (we hold the channel keys); the native service can't decrypt
-  // so it only fires generic "New message in <community>/#<channel>".
+  // so it only fires generic "New message in <community>/#<channel>". Muted
+  // channels/communities are dropped so the service never watches them.
   const concordSubs = useMemo<ConcordSub[]>(
-    () => buildConcordSubs(concordData?.list),
-    [concordData],
+    () =>
+      buildConcordSubs(concordData?.list).filter((sub) => {
+        const channelId = sub.keys[0]?.channelId;
+        return !channelId || !isConcordChannelMuted("c1", sub.communityId, channelId);
+      }),
+    [concordData, isConcordChannelMuted],
   );
 
   // Concord V2 channel subscriptions: kind-1059 stream addresses + the
-  // conversation keys that open their wraps (see useConcord2Subs).
-  const concord2Subs = useConcord2Subs();
+  // conversation keys that open their wraps (see useConcord2Subs). Muted
+  // channels/communities are dropped the same way.
+  const allConcord2Subs = useConcord2Subs();
+  const concord2Subs = useMemo(
+    () =>
+      allConcord2Subs.filter(
+        (sub) => !isConcordChannelMuted("c2", sub.communityId, sub.channelId),
+      ),
+    [allConcord2Subs, isConcordChannelMuted],
+  );
 
   // Push the current config to the native service whenever the relevant inputs
   // change. Three cases:

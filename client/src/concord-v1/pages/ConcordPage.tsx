@@ -1,5 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { ChevronLeft, Hash, Loader2, LogOut, MoreVertical, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
+import { ChevronLeft, Bell, BellOff, Hash, Loader2, LogOut, MoreVertical, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -20,6 +20,12 @@ import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,6 +51,7 @@ import { useConcordTransport } from "@/concord-v1/hooks/useConcordTransport";
 import { useSendConcordMessage } from "@/concord-v1/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
+import { useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/concord-v1/lib/roles";
 import { type Channel, type Community, type CommunityImage } from "@/concord-v1/lib/types";
@@ -178,31 +185,57 @@ function ConcordSidebarFooter() {
 
 /**
  * A channel row in the Concord sidebar, mirroring the NIP-29 channel list.
+ * V1 has no unread model, so muting here only affects notifications.
  */
 function ConcordChannelRow({
+  communityId,
   channel,
   active,
   onSelect,
 }: {
+  communityId: string;
   channel: Channel;
   active: boolean;
   onSelect: () => void;
 }) {
+  const { isConcordChannelMuted, toggleConcordChannelMute } = useMutes();
+  const channelIdHex = bytesToHex(channel.id);
+  const muted = isConcordChannelMuted("c1", communityId, channelIdHex);
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        // Slack-style selection: the active channel sits on a filled primary
-        // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
-        "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
-        !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
-        active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
-      )}
-    >
-      <Hash className="size-4 shrink-0" />
-      <span className="truncate flex-1 min-w-0">{channel.name}</span>
-    </button>
+    <ContextMenu>
+      <ContextMenuTrigger className="block">
+        <button
+          type="button"
+          onClick={onSelect}
+          className={cn(
+            // Slack-style selection: the active channel sits on a filled primary
+            // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
+            "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
+            !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
+            // Muted channels read dimmer (Discord-style).
+            !active && muted && "opacity-60",
+            active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
+          )}
+        >
+          <Hash className="size-4 shrink-0" />
+          <span className="truncate flex-1 min-w-0">{channel.name}</span>
+          {muted && <BellOff className="size-3 shrink-0 opacity-60" aria-label="Muted" />}
+        </button>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem onSelect={() => toggleConcordChannelMute("c1", communityId, channelIdHex)}>
+          {muted ? (
+            <>
+              <Bell className="mr-2 size-4" /> Unmute channel
+            </>
+          ) : (
+            <>
+              <BellOff className="mr-2 size-4" /> Mute channel
+            </>
+          )}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -558,6 +591,7 @@ export function ConcordPage() {
           return (
             <ConcordChannelRow
               key={idHex}
+              communityId={communityId!}
               channel={c}
               active={active}
               onSelect={() => {

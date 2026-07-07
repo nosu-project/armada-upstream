@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutes } from "@/hooks/useMutes";
 import { useRelayUnread } from "@/hooks/useRelayUnread";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { isDesktop, setDesktopBadge } from "@/lib/desktop";
@@ -76,7 +77,12 @@ function RelayUnreadCounter({
   onCount: (count: number) => void;
 }) {
   const { byGroup } = useRelayUnread(relay, groupIds);
-  const count = Object.keys(byGroup).length;
+  const { isChannelMuted } = useMutes();
+  // Muted channels don't count toward the OS badge — unless they carry an
+  // unread mention (mentions pierce mutes, Discord-style).
+  const count = Object.entries(byGroup).filter(
+    ([id, g]) => g.mention || !isChannelMuted(relay, id),
+  ).length;
   useEffect(() => {
     onCount(count);
   }, [count, onCount]);

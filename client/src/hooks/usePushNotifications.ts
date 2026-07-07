@@ -1,8 +1,10 @@
 import { useNostr } from "@nostrify/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
+import { useMutes } from "@/hooks/useMutes";
+import { useUserGroupList } from "@/hooks/useUserGroupList";
+import { normalizeRelayUrl, PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
 
 import type { NostrSigner } from "@nostrify/types";
 
@@ -149,6 +151,8 @@ export function usePushNotifications(): UsePushNotificationsReturn {
   // useNostr is referenced to keep the hook within the Nostr provider tree even
   // though publishing here goes over plain fetch (NIP-98), not the pool.
   useNostr();
+  const { data: groupList } = useUserGroupList();
+  const { mutedChannels, isCommunityMuted } = useMutes();
 
   const supported =
     typeof window !== "undefined" &&
@@ -165,6 +169,33 @@ export function usePushNotifications(): UsePushNotificationsReturn {
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPrefs);
 
   const swRef = useRef<ServiceWorkerRegistration | null>(null);
+
+  // Group ids on the platform relay (the push gateway) the user has muted —
+  // individually, or via a whole-server mute. Sent with the registration so
+  // the relay's fan-out skips them (it pushes to group *members*; only it can
+  // enforce a mute with the app closed).
+  const mutedGroups = useMemo(() => {
+    const platform = PLATFORM_RELAYS[0] ? normalizeRelayUrl(PLATFORM_RELAYS[0]) : undefined;
+    if (!platform) return [];
+    const out = new Set<string>();
+    // Explicit channel mutes on the platform relay, parsed from their
+    // `${relayUrl}::${groupId}` keys (Concord `c1:`/`c2:` keys never
+    // normalize to a relay URL, so they fall out here).
+    for (const key of mutedChannels) {
+      const idx = key.lastIndexOf("::");
+      if (idx < 0) continue;
+      if (normalizeRelayUrl(key.slice(0, idx)) !== platform) continue;
+      const groupId = key.slice(idx + 2);
+      if (groupId) out.add(groupId);
+    }
+    // A muted server mutes every joined group on it.
+    if (isCommunityMuted(platform)) {
+      for (const g of groupList?.groups ?? []) {
+        if (normalizeRelayUrl(g.relay) === platform) out.add(g.id);
+      }
+    }
+    return [...out].sort();
+  }, [mutedChannels, isCommunityMuted, groupList]);
 
   // Restore enabled state on mount: if permission is granted and a browser push
   // subscription already exists, we're enabled.
@@ -190,7 +221,7 @@ export function usePushNotifications(): UsePushNotificationsReturn {
     };
   }, [supported]);
 
-  /** PUT the subscription + prefs to the relay (NIP-98 authed). */
+  /** PUT the subscription + prefs + mutes to the relay (NIP-98 authed). */
   const register = useCallback(
     async (subscription: PushSubscription, p: PushPrefs) => {
       if (!user) throw new Error("Not logged in");
@@ -209,12 +240,13 @@ export function usePushNotifications(): UsePushNotificationsReturn {
             replies: p.replies,
             direct_messages: p.directMessages,
             all_group_messages: p.allGroupMessages,
+            muted_groups: mutedGroups,
           },
         }),
       });
       if (!res.ok) throw new Error(`Push registration failed: HTTP ${res.status}`);
     },
-    [user],
+    [user, mutedGroups],
   );
 
   const enable = useCallback(async () => {
@@ -266,6 +298,27 @@ export function usePushNotifications(): UsePushNotificationsReturn {
     autoTried.current = true;
     enable();
   }, [supported, user, enabled, busy, enable]);
+
+  // Re-sync the server record whenever the muted-group set changes while push
+  // is active, so a mute/unmute reaches the gateway immediately (it enforces
+  // mutes at fan-out — the only place that can, with the app closed). Guarded
+  // so the same set is never re-PUT.
+  const mutedKey = mutedGroups.join(",");
+  const lastSyncedMutes = useRef<string | null>(null);
+  useEffect(() => {
+    if (!supported || !enabled || !user) return;
+    if (lastSyncedMutes.current === mutedKey) return;
+    lastSyncedMutes.current = mutedKey;
+    (async () => {
+      const reg = swRef.current ?? (await navigator.serviceWorker.ready);
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) await register(sub, prefs);
+    })().catch((err) => {
+      // Retry on the next change (or re-mount).
+      lastSyncedMutes.current = null;
+      console.warn("[push] failed to sync mutes:", err);
+    });
+  }, [supported, enabled, user, mutedKey, prefs, register]);
 
   const disable = useCallback(async () => {
     setBusy(true);

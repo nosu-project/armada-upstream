@@ -118,6 +118,21 @@ export interface AppConfig {
    */
   lastChannelByServer: Record<string, string>;
   /**
+   * Muted communities, by stable rail key: a relay URL for NIP-29 servers,
+   * `c1:${communityId}` for Concord V1, `c2:${communityId}` for Concord V2.
+   * Muting silences all notifications from every room in the community
+   * (push, native background service) and suppresses its unread badge —
+   * without leaving. Synced across devices.
+   */
+  mutedCommunities: string[];
+  /**
+   * Muted individual channels/rooms, by stable conversation key
+   * (`${relayUrl}::${groupId}` for NIP-29 channels — the same key scheme as
+   * the read state). Same effect as a community mute, scoped to one room.
+   * Synced across devices.
+   */
+  mutedChannels: string[];
+  /**
    * Bluetooth-mesh incognito mode. When on (the default), this device announces
    * a derived `anon<peerid>` nickname over the mesh rather than the user's
    * Armada display name — matching bitchat's anonymous-by-default behavior.
@@ -160,6 +175,8 @@ export const SYNCED_CONFIG_KEYS = [
   "blossomServerMetadata",
   "useAppBlossomServers",
   "lastChannelByServer",
+  "mutedCommunities",
+  "mutedChannels",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
 export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
@@ -178,6 +195,8 @@ export const defaultConfig: AppConfig = {
   blossomServerMetadata: { servers: [], updatedAt: 0 },
   useAppBlossomServers: true,
   lastChannelByServer: {},
+  mutedCommunities: [],
+  mutedChannels: [],
   meshIncognito: true,
   meshEnabled: false,
 };
