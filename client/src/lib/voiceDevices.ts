@@ -117,7 +117,20 @@ export function setAudioProcessing(prefs: AudioProcessingPrefs): void {
  * 0 = muted, up to 2 = boosted). Stored so a deliberately quieted/boosted user
  * stays that way across calls and reloads. Volumes equal to the default 1 are
  * not stored, keeping the map small.
+ *
+ * Changes are observable (`subscribeUserVolumes`) so every surface that shows
+ * a volume control — the call-stage tiles, the sidebar roster's context
+ * menu — stays in sync, and the connected room can apply changes live no
+ * matter where they were made.
  */
+const volumeListeners = new Set<() => void>();
+
+/** Subscribe to per-user volume changes. Returns an unsubscribe function. */
+export function subscribeUserVolumes(listener: () => void): () => void {
+  volumeListeners.add(listener);
+  return () => volumeListeners.delete(listener);
+}
+
 export function getUserVolumes(): Record<string, number> {
   try {
     const raw = localStorage.getItem(VOLUME_KEY);
@@ -145,4 +158,5 @@ export function rememberUserVolume(pubkey: string, volume: number): void {
   } catch {
     // localStorage unavailable — ignore.
   }
+  for (const listener of volumeListeners) listener();
 }

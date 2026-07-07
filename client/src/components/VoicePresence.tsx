@@ -3,7 +3,9 @@ import type { CSSProperties } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { VoiceUserContextMenu } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { getAvatarShape, shapedAvatarSpeakingStyle } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
@@ -64,12 +66,18 @@ export function VoiceParticipantList({
   );
 }
 
-/** One row of the nested voice roster (green speaking ring while talking). */
+/**
+ * One row of the nested voice roster (green speaking ring while talking).
+ * Right-click opens the voice user menu: per-user volume + local mute (for
+ * others) and copy npub.
+ */
 function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeaking?: boolean }) {
   const author = useAuthor(pubkey);
+  const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
   const name = getDisplayName(metadata, pubkey);
   const hasCustomShape = !!getAvatarShape(metadata);
+  const isSelf = user?.pubkey === pubkey;
 
   // Emoji-shaped avatars carry a CSS mask that would clip a ring/box-shadow,
   // so their speaking indicator is a drop-shadow filter hugging the silhouette;
@@ -78,23 +86,25 @@ function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeakin
     hasCustomShape && isSpeaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined;
 
   return (
-    <div className="flex items-center gap-2 pl-7 pr-2 py-1 text-sm text-muted-foreground">
-      <div
-        className={cn(
-          "rounded-full shrink-0 transition-shadow",
-          !hasCustomShape && isSpeaking && "ring-2 ring-success",
-        )}
-        style={wrapperStyle}
-      >
-        <Avatar shape={getAvatarShape(metadata)} className="size-6">
-          <AvatarImage src={metadata?.picture} alt={name} />
-          <AvatarFallback className="bg-success/20 text-success text-[10px]">
-            {name[0]?.toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
+    <VoiceUserContextMenu pubkey={pubkey} displayName={name} showVolume={!isSelf}>
+      <div className="flex items-center gap-2 pl-7 pr-2 py-1 text-sm text-muted-foreground">
+        <div
+          className={cn(
+            "rounded-full shrink-0 transition-shadow",
+            !hasCustomShape && isSpeaking && "ring-2 ring-success",
+          )}
+          style={wrapperStyle}
+        >
+          <Avatar shape={getAvatarShape(metadata)} className="size-6">
+            <AvatarImage src={metadata?.picture} alt={name} />
+            <AvatarFallback className="bg-success/20 text-success text-[10px]">
+              {name[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+        </div>
+        <span className={cn("truncate", isSpeaking && "text-success")}>{name}</span>
       </div>
-      <span className={cn("truncate", isSpeaking && "text-success")}>{name}</span>
-    </div>
+    </VoiceUserContextMenu>
   );
 }
 
