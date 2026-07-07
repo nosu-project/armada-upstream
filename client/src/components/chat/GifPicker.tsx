@@ -156,7 +156,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
             </button>
           ) : (
             <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/50 pointer-events-none select-none">
-              Powered by Tenor
+              Powered by GIFverse
             </span>
           )}
         </div>
