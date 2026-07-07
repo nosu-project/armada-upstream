@@ -32,7 +32,7 @@ function makeChannel(): { channel: ChannelV2; idHex: string } {
   const group = channelGroupKey(root, channelId, 0);
   const stream = { epoch: 0n, group };
   return {
-    channel: { id: channelId, idHex, name: "general", isPrivate: false, streams: [stream], current: stream },
+    channel: { id: channelId, idHex, name: "general", isPrivate: false, isVoice: false, streams: [stream], current: stream },
     idHex,
   };
 }

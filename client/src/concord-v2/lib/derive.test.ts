@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { schnorr } from "@noble/curves/secp256k1.js";
+
 import {
   banlistLocator,
   baseRekeyGroupKey,
@@ -17,6 +21,9 @@ import {
   inviteLinksLocator,
   recipientLocator,
   verifyCommunityId,
+  voiceGroupKey,
+  voiceMediaKey,
+  voiceSenderKey,
 } from "@/concord-v2/lib/derive";
 
 const A = new Uint8Array(32).fill(1);
@@ -79,6 +86,58 @@ describe("coordinates", () => {
     const token = new Uint8Array(16).fill(7);
     expect(bytesToHex(inviteBundleKey(token))).toBe(bytesToHex(inviteBundleKey(token)));
     expect(bytesToHex(inviteBundleKey(new Uint8Array(16).fill(8)))).not.toBe(bytesToHex(inviteBundleKey(token)));
+  });
+});
+
+describe("voice sub-keys (CORD-07 §1/§3)", () => {
+  it("room and media keys are deterministic, distinct, and epoch-rolling", () => {
+    const room = voiceGroupKey(A, B, 0);
+    expect(voiceGroupKey(A, B, 0).pk).toBe(room.pk);
+    // The room keypair is NOT the channel's stream key nor the media key.
+    expect(room.pk).not.toBe(channelGroupKey(A, B, 0).pk);
+    expect(bytesToHex(voiceMediaKey(A, B, 0))).not.toBe(bytesToHex(room.sk));
+    // A rekey (epoch bump) rolls both — the same rotation that severs chat.
+    expect(voiceGroupKey(A, B, 1).pk).not.toBe(room.pk);
+    expect(bytesToHex(voiceMediaKey(A, B, 1))).not.toBe(bytesToHex(voiceMediaKey(A, B, 0)));
+    // Channel-id separation: two channels never share a room.
+    expect(voiceGroupKey(A, C, 0).pk).not.toBe(room.pk);
+  });
+
+  it("matches an independent construction of the frozen A.1 layout", () => {
+    // Reimplement `hkdf(secret, label, id, epoch)` from scratch (CORD-02 A.1):
+    // info = utf8(label) || 0x00 || id[32] || epoch_be[8]?
+    const info = (label: string, id: Uint8Array, epoch?: bigint) => {
+      const l = new TextEncoder().encode(label);
+      const out = new Uint8Array(l.length + 1 + 32 + (epoch !== undefined ? 8 : 0));
+      out.set(l, 0);
+      out.set(id, l.length + 1);
+      if (epoch !== undefined) new DataView(out.buffer).setBigUint64(l.length + 33, epoch, false);
+      return out;
+    };
+    const media = hkdf(sha256, A, new Uint8Array(0), info("concord/voice-media", B, 0n), 32);
+    expect(bytesToHex(voiceMediaKey(A, B, 0))).toBe(bytesToHex(media));
+
+    const seed = hkdf(sha256, A, new Uint8Array(0), info("concord/voice-signer", B, 0n), 32);
+    // The seed is a valid scalar with overwhelming probability, so sk == seed.
+    expect(voiceGroupKey(A, B, 0).pk).toBe(bytesToHex(schnorr.getPublicKey(seed)));
+
+    const identity = "00112233445566778899aabbccddeeff";
+    const sender = hkdf(
+      sha256,
+      media,
+      new Uint8Array(0),
+      info("concord/voice-sender", sha256(new TextEncoder().encode(identity))),
+      32,
+    );
+    expect(bytesToHex(voiceSenderKey(media, identity))).toBe(bytesToHex(sender));
+  });
+
+  it("sender keys partition per identity and never equal the media root", () => {
+    const media = voiceMediaKey(A, B, 0);
+    const k1 = voiceSenderKey(media, "alice-identity");
+    expect(bytesToHex(voiceSenderKey(media, "alice-identity"))).toBe(bytesToHex(k1));
+    expect(bytesToHex(voiceSenderKey(media, "bob-identity"))).not.toBe(bytesToHex(k1));
+    expect(bytesToHex(k1)).not.toBe(bytesToHex(media));
   });
 });
 

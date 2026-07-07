@@ -46,7 +46,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
-import { pubkeyFromLivekitIdentity } from "@/hooks/useLivekit";
+import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
 import {
   getAudioProcessing,
@@ -127,12 +127,15 @@ function ParticipantAvatar({
  */
 function ParticipantRow({
   pubkey,
+  verified = true,
   isSpeaking,
   isMuted,
   isLocal,
   participant,
 }: {
   pubkey: string;
+  /** False when the identity fails presence verification (Concord, CORD-07 §4). */
+  verified?: boolean;
   isSpeaking?: boolean;
   isMuted?: boolean;
   isLocal?: boolean;
@@ -140,7 +143,8 @@ function ParticipantRow({
   participant?: RemoteParticipant;
 }) {
   const author = useAuthor(pubkey);
-  const displayName = useScopedDisplayName(pubkey, author.data?.metadata);
+  const scopedName = useScopedDisplayName(pubkey, author.data?.metadata);
+  const displayName = verified ? scopedName : "Unverified";
 
   const body = (
     <>
@@ -428,6 +432,7 @@ interface InCallViewProps {
  */
 export function InCallView({ label, onLabelClick, stacked, compact }: InCallViewProps) {
   const { stageOpen, toggleStage } = useCall();
+  const resolveIdentity = useVoiceIdentity();
   const participants = useParticipants();
   const remoteParticipants = useRemoteParticipants();
   const connectionState = useConnectionState();
@@ -505,10 +510,12 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     <div className="flex flex-col max-h-44 overflow-y-auto overflow-x-hidden py-0.5">
       {participants.map((p) => {
         const identity = p.identity;
+        const { pubkey, verified } = resolveIdentity(identity);
         return (
           <ParticipantRow
             key={identity}
-            pubkey={pubkeyFromLivekitIdentity(identity)}
+            pubkey={pubkey}
+            verified={verified}
             isSpeaking={speaking.has(identity)}
             isMuted={!p.isMicrophoneEnabled}
             isLocal={p.isLocal}

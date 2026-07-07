@@ -27,6 +27,9 @@ const LABEL_REKEY_PSEUDONYM = "concord/rekey-pseudonym";
 const LABEL_BASE_REKEY_PSEUDONYM = "concord/base-rekey-pseudonym";
 const LABEL_RECIPIENT_PSEUDONYM = "concord/recipient-pseudonym";
 const LABEL_GUESTBOOK = "concord/guestbook";
+const LABEL_VOICE_SIGNER = "concord/voice-signer";
+const LABEL_VOICE_MEDIA = "concord/voice-media";
+const LABEL_VOICE_SENDER = "concord/voice-sender";
 const LABEL_DISSOLVED = "concord/dissolved";
 const LABEL_GRANT = "concord/grant";
 const LABEL_BANLIST = "concord/banlist";
@@ -168,6 +171,46 @@ export function guestbookGroupKey(communityRoot: Uint8Array, communityId: Uint8A
   assert32("communityRoot", communityRoot);
   assert32("communityId", communityId);
   return groupKey(LABEL_GUESTBOOK, communityRoot, communityId, toEpoch(epoch));
+}
+
+// ── Voice sub-keys (CORD-07) ─────────────────────────────────────────────────
+
+/**
+ * A voice Channel's SFU room keypair (CORD-07 §1): `voice_key.pk` IS the SFU
+ * room name and `voice_key.sk` signs token grants (§2). `secret`/`epoch` are
+ * the same pair that addresses the Channel's Chat Plane — the community_root at
+ * the root epoch for a Public Channel, the Channel's own key/epoch for a
+ * Private one — so the room rolls exactly when the Channel's key does. The
+ * `group_key` shape is reused only for its deterministic keypair; the pk is
+ * never a stream address.
+ */
+export function voiceGroupKey(secret: Uint8Array, channelId: Uint8Array, epoch: number | bigint): GroupKey {
+  assert32("secret", secret);
+  assert32("channelId", channelId);
+  return groupKey(LABEL_VOICE_SIGNER, secret, channelId, toEpoch(epoch));
+}
+
+/**
+ * A voice Channel's raw 32-byte media-encryption root (CORD-07 §1). Never feeds
+ * a cipher directly — every publisher's per-sender frame key derives from it
+ * (see {@link voiceSenderKey}).
+ */
+export function voiceMediaKey(secret: Uint8Array, channelId: Uint8Array, epoch: number | bigint): Uint8Array {
+  assert32("secret", secret);
+  assert32("channelId", channelId);
+  return hkdf32(secret, buildInfo(LABEL_VOICE_MEDIA, channelId, toEpoch(epoch)));
+}
+
+/**
+ * A publisher's per-sender frame key material (CORD-07 §3):
+ * `hkdf(voice_media_key, "concord/voice-sender", sha256(utf8(identity)))` —
+ * the epoch field is omitted, `voice_media_key` already carries it. Distinct
+ * keys per sender partition the AEAD nonce domains; every member computes
+ * every sender's key from the identity the SFU presents, no in-band exchange.
+ */
+export function voiceSenderKey(mediaKey: Uint8Array, identity: string): Uint8Array {
+  assert32("mediaKey", mediaKey);
+  return hkdf32(mediaKey, buildInfo(LABEL_VOICE_SENDER, sha256(ASCII.encode(identity))));
 }
 
 /** The dissolution tombstone's group key — community_id-keyed, epoch-free (§9). */

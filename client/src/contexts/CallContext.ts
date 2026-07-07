@@ -1,6 +1,21 @@
 import { createContext } from "react";
 
-/** Identifies a single voice room (a NIP-29 group or a 1:1 DM room). */
+import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
+
+/**
+ * A Concord (CORD-07, serverless, end-to-end-encrypted) voice room: the
+ * community + voice channel whose key material derives the SFU room name, the
+ * self-signed token grant, and the per-sender media keys, plus the blind
+ * broker (`broker`, an https origin) the §5 rendezvous chose. Present only for
+ * Concord calls.
+ */
+export interface ConcordVoiceContext {
+  community: CommunityV2;
+  channel: ChannelV2;
+  broker: string;
+}
+
+/** Identifies a single voice room (a NIP-29 group, a 1:1 DM room, or a Concord channel). */
 export interface ActiveCall {
   relayUrl: string;
   /** The LiveKit room id: a NIP-29 group id, or a `dm:<a>:<b>` DM room id. */
@@ -11,6 +26,12 @@ export interface ActiveCall {
    * group calls.
    */
   dmPeer?: string;
+  /**
+   * For Concord calls, the serverless voice context. When set, the room uses
+   * the blind-broker token path + per-sender E2EE media instead of the NIP-29
+   * relay token.
+   */
+  concord?: ConcordVoiceContext;
 }
 
 export interface CallContextType {
@@ -24,6 +45,12 @@ export interface CallContextType {
    * relay that hosts the room.
    */
   joinDmCall: (relayUrl: string, roomId: string, peer: string) => void;
+  /**
+   * Connect to a Concord voice channel's serverless room (replaces any current
+   * call). Uses the CORD-07 blind-broker token path + per-sender E2EE media
+   * keyed by the channel epoch.
+   */
+  joinConcordCall: (ctx: ConcordVoiceContext) => void;
   /** Disconnect from the current call. */
   leaveCall: () => void;
   /**

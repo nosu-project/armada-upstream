@@ -96,6 +96,32 @@ export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "w
   .filter((url: string | undefined): url is string => Boolean(url));
 
 /**
+ * Default Concord AV brokers (CORD-07 §2): blind LiveKit token brokers (https
+ * origins) used to START a call in an empty voice channel — once anyone is in
+ * a call, their presence-announced broker is the rendezvous point (§5). The
+ * broker authorizes by channel-key-possession proof, not membership, so it
+ * learns nothing about the community.
+ *
+ * Resolution order when `VITE_CONCORD_AV_SERVERS` is unset:
+ *   - Hosted build (PLATFORM_RELAYS non-empty): armada's own relay hosts the
+ *     broker endpoint, so the platform relays' HTTP origins are the default.
+ *   - Non-hosted build (APK / Electron / dev): no platform relay hosts one, so
+ *     default to the public Armada instance.
+ * Operators can override with `VITE_CONCORD_AV_SERVERS` (comma-separated https
+ * origins) or set it empty to disable Concord voice.
+ */
+const DEFAULT_PUBLIC_AV_SERVER = "https://armada.dreamith.to";
+export const CONCORD_AV_SERVERS: string[] = (
+  import.meta.env.VITE_CONCORD_AV_SERVERS ??
+  (PLATFORM_RELAYS.length > 0
+    ? PLATFORM_RELAYS.map((url) => relayToHttpUrl(url)).join(",")
+    : DEFAULT_PUBLIC_AV_SERVER)
+)
+  .split(",")
+  .map((s: string) => s.trim())
+  .filter((s: string) => Boolean(s));
+
+/**
  * Default LiveKit-capable NIP-29 relay(s) to host **DM** voice rooms, when none
  * of the user's own DM/platform relays speak the NIP-29 LiveKit extension.
  *

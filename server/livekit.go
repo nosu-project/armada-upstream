@@ -47,6 +47,11 @@ func setupLivekit() {
 	// shares the loopback IP), so it is intentionally not limited here.
 	router.HandleFunc("/livekit/webhook", handleLivekitWebhook)
 
+	// Concord AV: the CORD-07 blind, community-agnostic LiveKit broker for
+	// serverless E2E communities. Authorizes by channel-key-possession proof,
+	// not NIP-29 membership; gated on the same LiveKit config as these endpoints.
+	setupConcordAV()
+
 	// Serve kind 39004 (participants) queries from the in-memory room state.
 	relay.QueryEvents = append(relay.QueryEvents, func(ctx context.Context, filter nostr.Filter) (chan *nostr.Event, error) {
 		ch := make(chan *nostr.Event, 1)
@@ -192,16 +197,20 @@ func handleLivekitToken(w http.ResponseWriter, r *http.Request) {
 	}
 	identity := pubkey + "-" + hex.EncodeToString(suffix)
 
-	writeTokenResponse(w, identity, groupId, "livekit token")
+	writeTokenResponse(w, identity, groupId, nip29TokenTTL, "livekit token")
 }
 
-// mintLivekitToken issues a 6h LiveKit JWT granting join access to `room` for
-// the given identity. NIP-29 requires identities to start with the 64-char hex
-// pubkey followed by a random suffix (so a user can join from multiple tabs).
-func mintLivekitToken(identity, room string) (string, error) {
+// nip29TokenTTL is the JWT lifetime for the NIP-29 group/DM voice endpoints.
+const nip29TokenTTL = 6 * time.Hour
+
+// mintLivekitToken issues a LiveKit JWT valid for `ttl` granting join access to
+// `room` for the given identity. NIP-29 requires identities to start with the
+// 64-char hex pubkey followed by a random suffix (so a user can join from
+// multiple tabs); Concord AV identities are fully random (CORD-07 §2).
+func mintLivekitToken(identity, room string, ttl time.Duration) (string, error) {
 	token := auth.NewAccessToken(s.LivekitAPIKey, s.LivekitAPISecret).
 		SetIdentity(identity).
-		SetValidFor(6 * time.Hour).
+		SetValidFor(ttl).
 		SetVideoGrant(&auth.VideoGrant{
 			RoomJoin: true,
 			Room:     room,
@@ -283,7 +292,7 @@ func handleLivekitDMToken(w http.ResponseWriter, r *http.Request) {
 	}
 	identity := pubkey + "-" + hex.EncodeToString(suffix)
 
-	writeTokenResponse(w, identity, roomId, "dm livekit token")
+	writeTokenResponse(w, identity, roomId, nip29TokenTTL, "dm livekit token")
 }
 
 func handleLivekitWebhook(w http.ResponseWriter, r *http.Request) {

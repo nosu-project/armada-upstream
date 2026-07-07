@@ -1,6 +1,6 @@
 # Armada — single-domain reverse proxy (Caddy reference).
 #
-# The relay (NIP-29 Nostr websocket + NIP-11 + LiveKit token endpoints)
+# The relay (NIP-29 Nostr websocket + NIP-11 + LiveKit/Concord token endpoints)
 # and the web client SPA share ONE origin (e.g. armada.example.com), split by
 # request path and by WebSocket upgrade. This mirrors the production deployment;
 # see AGENTS.md for the full hosting story (LiveKit/TURN, SNI passthrough, etc.).
@@ -32,9 +32,18 @@ armada.example.com {
 		reverse_proxy RELAY_HOST:5577
 	}
 
+	# Concord AV (CORD-07): the blind LiveKit token broker + its capability
+	# probe (GET /.well-known/concord/av → 204). MUST route to the relay;
+	# without this rule the request falls through to the SPA, which returns
+	# index.html (HTTP 200, HTML), and the client fails with a JSON parse error
+	# when it tries to read the token response.
+	handle /.well-known/concord/* {
+		reverse_proxy RELAY_HOST:5577
+	}
+
 	# Web Push notification gateway: VAPID key + subscription registration
-	# (NIP-98 authed PUT/DELETE). MUST route to the relay — otherwise the
-	# request hits the SPA and the client gets HTML
+	# (NIP-98 authed PUT/DELETE). MUST route to the relay — like the Concord
+	# route above, otherwise the request hits the SPA and the client gets HTML
 	# instead of JSON when fetching the VAPID key.
 	handle /.well-known/armada/* {
 		reverse_proxy RELAY_HOST:5577

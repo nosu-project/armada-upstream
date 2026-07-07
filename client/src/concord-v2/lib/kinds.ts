@@ -31,8 +31,10 @@ export const KIND_DELETE = 5;
 export const KIND_EDIT = 3302;
 /** WebXDC peer signal. */
 export const KIND_WEBXDC = 3310;
-/** Typing indicator — the one ephemeral rumor (rides a 21059 wrap). */
+/** Typing indicator — ephemeral rumor (rides a 21059 wrap). */
 export const KIND_TYPING = 23311;
+/** Voice presence (CORD-07 §4) — ephemeral rumor (rides a 21059 wrap). */
+export const KIND_VOICE_PRESENCE = 23313;
 
 // ── Guestbook Plane rumor kinds ──────────────────────────────────────────────
 

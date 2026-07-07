@@ -15,7 +15,7 @@ const channelIdHex = bytesToHex(channelId);
 function makeChannel(): ChannelV2 {
   const group = channelGroupKey(root, channelId, 0);
   const stream = { epoch: 0n, group };
-  return { id: channelId, idHex: channelIdHex, name: "general", isPrivate: false, streams: [stream], current: stream };
+  return { id: channelId, idHex: channelIdHex, name: "general", isPrivate: false, isVoice: false, streams: [stream], current: stream };
 }
 
 function signer(sk = generateSecretKey()) {

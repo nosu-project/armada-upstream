@@ -21,6 +21,11 @@ interface ChannelSidebarViewProps {
   addChannelLabel?: string;
   onAddChannel?: () => void;
   /**
+   * Whether the inline add-channel form is open. While open the "+" rotates
+   * into an "×" (45°, animated) and the action reads as Cancel.
+   */
+  addChannelOpen?: boolean;
+  /**
    * Render the add-channel "+" as a disabled placeholder (no action yet). Keeps
    * the "Channels" header row at the same height as transports that do have an
    * add action, so sidebars without one (e.g. Mesh) line up identically.
@@ -53,22 +58,26 @@ export function ChannelSidebarView({
   badge,
   addChannelLabel,
   onAddChannel,
+  addChannelOpen,
   addChannelDisabled,
   channelsHeaderExtra,
   children,
   footer,
   className,
 }: ChannelSidebarViewProps) {
+  const addLabel = addChannelOpen ? "Cancel" : addChannelLabel;
   const addButton = (onAddChannel || addChannelDisabled) && (
     <Button
       variant="ghost"
       size="icon"
       className="size-5"
-      aria-label={addChannelLabel ?? "Add channel"}
+      aria-label={addLabel ?? "Add channel"}
+      aria-expanded={addChannelOpen}
       onClick={onAddChannel}
       disabled={!onAddChannel}
     >
-      <Plus className="size-4" />
+      {/* A Plus rotated 45° IS an ×: one glyph, animated between the states. */}
+      <Plus className={cn("size-4 transition-transform duration-200", addChannelOpen && "rotate-45")} />
     </Button>
   );
 
@@ -112,10 +121,10 @@ export function ChannelSidebarView({
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Channels
           </span>
-          {addChannelLabel ? (
+          {addLabel ? (
             <Tooltip>
               <TooltipTrigger asChild>{addButton}</TooltipTrigger>
-              <TooltipContent>{addChannelLabel}</TooltipContent>
+              <TooltipContent>{addLabel}</TooltipContent>
             </Tooltip>
           ) : (
             addButton

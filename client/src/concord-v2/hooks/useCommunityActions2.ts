@@ -219,8 +219,8 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     },
   });
 
-  const createChannel = useMutation<{ channelIdHex: string }, Error, { name: string }>({
-    mutationFn: async ({ name }) => {
+  const createChannel = useMutation<{ channelIdHex: string }, Error, { name: string; voice?: boolean }>({
+    mutationFn: async ({ name, voice }) => {
       if (!user || !community) throw new Error("Not ready.");
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Channel name is required.");
@@ -231,7 +231,7 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
         user.signer,
         buildChannelEdition(
           channelId,
-          { name: trimmed, private: false },
+          { name: trimmed, private: false, ...(voice ? { voice: true } : {}) },
           { actorPubkey: user.pubkey, version: 1n, authority: citationFor(community, folded, user.pubkey) },
         ),
       );
@@ -253,7 +253,8 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
         user.signer,
         buildChannelEdition(
           hex32(channelIdHex),
-          { name: trimmed, private: def?.isPrivate ?? false },
+          // Round-trip the flags a rename doesn't touch (CORD-02 §6 discipline).
+          { name: trimmed, private: def?.isPrivate ?? false, ...(def?.voice ? { voice: true } : {}) },
           {
             actorPubkey: user.pubkey,
             version: head ? head.version + 1n : 1n,
@@ -277,7 +278,12 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
         user.signer,
         buildChannelEdition(
           hex32(channelIdHex),
-          { name: def?.name ?? "deleted", private: def?.isPrivate ?? false, deleted: true },
+          {
+            name: def?.name ?? "deleted",
+            private: def?.isPrivate ?? false,
+            ...(def?.voice ? { voice: true } : {}),
+            deleted: true,
+          },
           {
             actorPubkey: user.pubkey,
             version: head ? head.version + 1n : 1n,

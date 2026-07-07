@@ -6,10 +6,12 @@ import {
 } from "@livekit/components-react";
 import {
   AudioPresets,
+  BaseKeyProvider,
   ConnectionState,
   DisconnectReason,
   LocalAudioTrack,
   ParticipantEvent,
+  Room,
   RoomEvent,
   Track,
   VideoPresets,
@@ -26,11 +28,17 @@ import { InCallView } from "@/components/chat/VoiceBar";
 import { CallStage } from "@/components/chat/CallStage";
 import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCall } from "@/hooks/useCall";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useGroup } from "@/hooks/useGroup";
 import { useLivekitToken } from "@/hooks/useLivekit";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
-import { type ActiveCall } from "@/contexts/CallContext";
+import { type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
+import { VoiceIdentityContext, type VoiceIdentityResolver } from "@/contexts/VoiceIdentityContext";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
+import { random32, voiceSenderKey } from "@/concord-v2/lib/derive";
+import { rendezvousCandidates, verifiedAuthorOf } from "@/concord-v2/lib/voice";
+import { useAvToken2, useVoiceHeartbeat2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
@@ -279,11 +287,14 @@ function makePlaceStage(slots: HTMLElement[]): PlaceStage {
 /**
  * The connected LiveKit room + its UI bars. Given a token, server url, room
  * options, and labels, renders the room context and the mobile/desktop bars.
+ * Shared by the NIP-29 and Concord voice paths; only the token source, E2EE,
+ * and labeling differ (computed by the wrappers).
  */
 function VoiceRoomShell({
   serverUrl,
   token,
   options,
+  room,
   onDisconnected,
   placeBar,
   placeStage,
@@ -294,12 +305,14 @@ function VoiceRoomShell({
   serverUrl: string;
   token: string;
   options: RoomOptions;
+  /** Pre-constructed Room (used for the E2EE-enabled Concord path). */
+  room?: Room;
   onDisconnected: (reason?: DisconnectReason) => void;
   placeBar: PlaceBar;
   placeStage: PlaceStage;
   stageOpen: boolean;
   label: React.ReactNode;
-  /** Server scope for display names (NIP-29 relay url; undefined for DM). */
+  /** Server scope for display names (NIP-29 relay url; undefined for DM/Concord). */
   scopeRelayUrl?: string;
 }) {
   const mobileBar = (
@@ -321,6 +334,7 @@ function VoiceRoomShell({
     <LiveKitRoom
       serverUrl={serverUrl}
       token={token}
+      room={room}
       connect
       audio
       video={false}
@@ -420,6 +434,216 @@ function Nip29VoiceRoom({
 }
 
 /**
+ * A per-sender key provider for Concord AV (CORD-07 §3): every publisher
+ * encrypts under its own key, derived from the channel's media root and the
+ * publisher's broker-assigned identity — so members never share one AEAD
+ * nonce domain. Configured to CORD-07's profile:
+ *
+ *   - `sharedKey: false`   — keys are per participant identity;
+ *   - `keySize: 256`       — AES-256-GCM frame keys (LiveKit defaults to 128);
+ *   - `ratchetWindowSize: 0`, `failureTolerance: -1` — keys are EXTERNALLY
+ *     derived; LiveKit's auto-ratchet-on-failure would silently diverge every
+ *     receiver from the deterministic derivation, so it must never fire.
+ */
+class SenderKeyProvider extends BaseKeyProvider {
+  constructor() {
+    super({ sharedKey: false, ratchetWindowSize: 0, failureTolerance: -1, keySize: 256 });
+  }
+
+  /** Install `material` as `identity`'s frame-key material (HKDF input). */
+  async setSenderMaterial(material: Uint8Array, identity: string): Promise<void> {
+    const key = await crypto.subtle.importKey("raw", material.slice().buffer, "HKDF", false, [
+      "deriveBits",
+      "deriveKey",
+    ]);
+    this.onSetEncryptionKey(key, identity);
+  }
+}
+
+/**
+ * Concord (CORD-07, serverless, E2E) voice room: token from a blind broker
+ * (authorized by channel-key-possession proof, not membership), media
+ * encrypted end-to-end under per-sender keys the SFU never sees, and presence
+ * announced over the channel itself so relays and brokers stay blind.
+ */
+function ConcordVoiceRoom({
+  ctx,
+  onLeave,
+  placeBar,
+  placeStage,
+  stageOpen,
+}: {
+  ctx: ConcordVoiceContext;
+  onLeave: () => void;
+  placeBar: PlaceBar;
+  placeStage: PlaceStage;
+  stageOpen: boolean;
+}) {
+  const { community, channel, broker } = ctx;
+  const { user } = useCurrentUser();
+  const { joinConcordCall } = useCall();
+  const { data: tokenData, error, isLoading } = useAvToken2(channel, broker, true);
+
+  // Live presence (§4): the identity→member verification input, the rendezvous
+  // hint stream (§5), and our own heartbeat (joined every 30s, left on leave).
+  const fold = useVoicePresence2(community, channel);
+  useVoiceHeartbeat2(community, channel, tokenData?.identity, tokenData ? broker : undefined);
+
+  // Build the E2EE-enabled Room once (the component remounts per room/epoch/broker).
+  const e2ee = useMemo(() => {
+    const keyProvider = new SenderKeyProvider();
+    const worker = new Worker(new URL("livekit-client/e2ee-worker", import.meta.url), {
+      type: "module",
+    });
+    const micId = getPreferredMicId();
+    const cameraId = getPreferredCameraId();
+    const processing = getAudioProcessing();
+    const opts: RoomOptions = {
+      adaptiveStream: true,
+      dynacast: true,
+      e2ee: { keyProvider, worker },
+      audioCaptureDefaults: {
+        ...(micId ? { deviceId: micId } : {}),
+        noiseSuppression: processing.noiseSuppression,
+        echoCancellation: processing.echoCancellation,
+        autoGainControl: processing.autoGainControl,
+      },
+      videoCaptureDefaults: {
+        ...(cameraId ? { deviceId: cameraId } : {}),
+        resolution: VideoPresets.h720.resolution,
+      },
+      publishDefaults: {
+        ...audioPublishDefaults,
+        videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
+        screenShareEncoding: VideoPresets.h1080.encoding,
+      },
+    };
+    return { room: new Room(opts), keyProvider, worker };
+  }, []);
+
+  // Key management (§3 + §7): every VERIFIED participant's frame key derives
+  // from the media root + their identity; an unverified identity (unclaimed,
+  // or contested by more than one fresh presence claim) gets a random key
+  // instead, so its tracks fail to decode and are never rendered — the §7
+  // SHOULD. Own identity is always keyed (we don't wait for our own heartbeat
+  // to echo back). `applied` makes key writes idempotent across fold changes.
+  const applied = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (!tokenData) return;
+    const mediaKey = channel.voice?.mediaKey;
+    if (!mediaKey) return;
+    const room = e2ee.room;
+
+    const syncKeys = () => {
+      const identities = new Set<string>([tokenData.identity]);
+      for (const p of room.remoteParticipants.values()) identities.add(p.identity);
+      // Pre-warm keys for identities presence already claims, so audio decodes
+      // from the first frame after their tracks subscribe.
+      for (const p of fold.present) identities.add(p.identity);
+      for (const identity of identities) {
+        const verified = identity === tokenData.identity || Boolean(verifiedAuthorOf(fold, identity));
+        const want = verified ? "sender" : "blocked";
+        if (applied.current.get(identity) === want) continue;
+        applied.current.set(identity, want);
+        const material = verified ? voiceSenderKey(mediaKey, identity) : random32();
+        void e2ee.keyProvider.setSenderMaterial(material, identity).catch(() => undefined);
+      }
+    };
+
+    syncKeys();
+    room.on(RoomEvent.ParticipantConnected, syncKeys);
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, syncKeys);
+    };
+  }, [e2ee, tokenData, fold, channel]);
+
+  // Enable E2EE once our own key is installed; terminate the worker on unmount.
+  useEffect(() => {
+    if (!tokenData) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (!cancelled) await e2ee.room.setE2EEEnabled(true);
+      } catch (err) {
+        console.warn("failed to enable Concord voice E2EE", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [e2ee, tokenData]);
+  useEffect(() => () => e2ee.worker.terminate(), [e2ee]);
+
+  // Split healing (§5): if presence shows the call occupied on an origin that
+  // beats ours in the tie-break, migrate there (once per mount — the remount
+  // key includes the broker, so a migration builds a fresh room).
+  const migrated = useRef(false);
+  useEffect(() => {
+    if (!tokenData || migrated.current) return;
+    const roomHex = channel.voice?.room.pk;
+    if (!roomHex) return;
+    const winner = rendezvousCandidates(roomHex, fold, [])[0];
+    const occupiedByOther = fold.present.some(
+      (p) => p.broker === winner && p.identity !== tokenData.identity,
+    );
+    if (winner && winner !== broker && occupiedByOther) {
+      migrated.current = true;
+      joinConcordCall({ ...ctx, broker: winner });
+    }
+  }, [fold, tokenData, broker, channel, ctx, joinConcordCall]);
+
+  // Identity → member resolution for the call UI (§4): our own identity is
+  // ourselves; anyone else's renders as a member only under a sole fresh
+  // presence claim, and contested/unclaimed identities show as unverified.
+  const resolveIdentity = useCallback<VoiceIdentityResolver>(
+    (identity) => {
+      if (tokenData && identity === tokenData.identity && user) {
+        return { pubkey: user.pubkey, verified: true };
+      }
+      const author = verifiedAuthorOf(fold, identity);
+      return author ? { pubkey: author, verified: true } : { pubkey: identity, verified: false };
+    },
+    [fold, tokenData, user],
+  );
+
+  const handleDisconnected = useCallback(
+    (reason?: DisconnectReason) => {
+      if (reason !== undefined && reason !== DisconnectReason.CLIENT_INITIATED) {
+        console.warn("concord voice disconnected", { reason: DisconnectReason[reason] ?? reason });
+      }
+      onLeave();
+    },
+    [onLeave],
+  );
+
+  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
+  if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
+
+  const label = (
+    <span className="flex items-center gap-1 min-w-0">
+      <span className="text-muted-foreground/70 truncate">{community.name}</span>
+      <span className="shrink-0">#{channel.name}</span>
+    </span>
+  );
+
+  return (
+    <VoiceIdentityContext.Provider value={resolveIdentity}>
+      <VoiceRoomShell
+        serverUrl={tokenData.url}
+        token={tokenData.token}
+        options={{}}
+        room={e2ee.room}
+        onDisconnected={handleDisconnected}
+        placeBar={placeBar}
+        placeStage={placeStage}
+        stageOpen={stageOpen}
+        label={label}
+      />
+    </VoiceIdentityContext.Provider>
+  );
+}
+
+/**
  * The persistent voice room. Mounted (lazily) by `CallProvider` — which lives
  * in the never-unmounting MainLayout — so the LiveKit connection survives
  * navigation between channels and servers.
@@ -447,6 +671,17 @@ export default function PersistentVoiceRoom({
   const placeBar = useMemo(() => makePlaceBar(slots, exiting, shellRef), [slots, exiting, shellRef]);
   const placeStage = useMemo(() => makePlaceStage(stageSlots), [stageSlots]);
 
+  if (call.concord) {
+    return (
+      <ConcordVoiceRoom
+        ctx={call.concord}
+        onLeave={onLeave}
+        placeBar={placeBar}
+        placeStage={placeStage}
+        stageOpen={stageOpen}
+      />
+    );
+  }
   return (
     <Nip29VoiceRoom
       call={call}

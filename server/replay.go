@@ -18,10 +18,11 @@ import (
 // reject any id seen twice. Entries are pruned lazily and by a background
 // sweeper so the map can't grow without bound.
 
-// replayWindow is how long a remembered id is retained. It must be at least the
-// grant freshness window (60s each side) so an id can't be evicted while the
-// same grant would still pass the freshness check and be replayable.
-const replayWindow = 2 * time.Minute
+// replayWindow is how long a remembered id is retained. It must be at least
+// twice the grant freshness window (60s each side) so an id can't be evicted
+// while the same grant would still pass the freshness check and be replayable
+// (CORD-07 §2 pins the same bound: ids retained for at least 240 seconds).
+const replayWindow = 4 * time.Minute
 
 var (
 	seenMu    sync.Mutex

@@ -71,6 +71,12 @@ armada.example.com {
     handle /.well-known/nip29/* {
         reverse_proxy RELAY_HOST:5577
     }
+    # Concord AV (CORD-07): blind LiveKit token broker + capability probe.
+    # Without this, the request falls through to the SPA (HTML 200) and the
+    # client fails with a JSON parse error reading the token.
+    handle /.well-known/concord/* {
+        reverse_proxy RELAY_HOST:5577
+    }
     handle /livekit/* {
         reverse_proxy RELAY_HOST:5577
     }
@@ -99,7 +105,7 @@ in the app. Verification requires
 `https://armada.buzz/.well-known/assetlinks.json` to be served by the **client**
 container (the file lives in `client/public/.well-known/` and ships in the
 static build; the Caddy split only routes specific `/.well-known/` prefixes
-(`nip29`, `armada`) to the relay, so assetlinks falls through to the SPA
+(`nip29`, `concord`, `armada`) to the relay, so assetlinks falls through to the SPA
 container correctly). The file lists the APK signing cert's SHA-256 fingerprint
 (get it with `apksigner verify --print-certs Armada.apk`). If the signing key
 rotates, or the app is ever published through a store that re-signs (e.g. Play
@@ -244,6 +250,7 @@ Encrypt cert (as above) sidesteps that entirely.
 ### Verifying voice
 
 - `curl -o /dev/null -w '%{http_code}' https://armada.example.com/.well-known/nip29/livekit` → `204`
+- Concord AV broker (CORD-07): `curl -o /dev/null -w '%{http_code}' https://armada.example.com/.well-known/concord/av` → `204` (an HTML/`200` means the proxy is missing the `/.well-known/concord/*` route and the request is hitting the SPA).
 - TURN/TLS cert: `openssl s_client -connect turn.example.com:443 -servername turn.example.com` → cert CN matches.
 - Watch ICE selection: `docker logs -f infra-livekit-1 | grep -iE "participant active|connectionType|switched pair"`.
   Healthy = a stable selected pair (`connectionType: udp`/`relay`) without

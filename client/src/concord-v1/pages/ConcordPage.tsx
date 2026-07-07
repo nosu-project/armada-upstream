@@ -507,6 +507,7 @@ export function ConcordPage() {
       banner={<CommunityBanner banner={community?.banner} />}
       addChannelLabel={user && community ? "Add channel" : undefined}
       onAddChannel={user && community ? () => setCreatingChannel((v) => !v) : undefined}
+      addChannelOpen={creatingChannel}
       footer={<ConcordSidebarFooter />}
       channelsHeaderExtra={
         creatingChannel ? (

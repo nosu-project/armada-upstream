@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -26,11 +27,13 @@ func preflight(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// writeTokenResponse mints a LiveKit JWT for the identity/room and writes it as
-// the JSON body the token endpoints share. On a minting failure it logs
-// with `what` for context and writes a 500.
-func writeTokenResponse(w http.ResponseWriter, identity, room, what string) {
-	jwt, err := mintLivekitToken(identity, room)
+// writeTokenResponse mints a LiveKit JWT (valid for `ttl`) for the
+// identity/room and writes it as the JSON body the token endpoints share,
+// echoing the assigned identity (the Concord AV client announces it in
+// presence, CORD-07 §2; the NIP-29 client can read its own from the prefix).
+// On a minting failure it logs with `what` for context and writes a 500.
+func writeTokenResponse(w http.ResponseWriter, identity, room string, ttl time.Duration, what string) {
+	jwt, err := mintLivekitToken(identity, room, ttl)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to mint " + what)
 		http.Error(w, "failed to mint token", http.StatusInternalServerError)
@@ -38,8 +41,9 @@ func writeTokenResponse(w http.ResponseWriter, identity, room, what string) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"token": jwt,
-		"url":   s.LivekitURL,
+		"token":    jwt,
+		"url":      s.LivekitURL,
+		"identity": identity,
 	})
 }
 

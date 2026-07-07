@@ -15,7 +15,7 @@ import { createPortal } from "react-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
-import { pubkeyFromLivekitIdentity } from "@/hooks/useLivekit";
+import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { playScreenShareSound } from "@/lib/callSounds";
 import {
@@ -117,10 +117,11 @@ function VideoTile({
   onToggleFocus: () => void;
 }) {
   const participant = trackRef.participant;
-  const pubkey = pubkeyFromLivekitIdentity(participant.identity);
+  const { pubkey, verified } = useVoiceIdentity()(participant.identity);
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  const displayName = useScopedDisplayName(pubkey, metadata);
+  const scopedName = useScopedDisplayName(pubkey, metadata);
+  const displayName = verified ? scopedName : "Unverified";
   const shape = getAvatarShape(metadata);
   const isScreenShare = trackRef.source === Track.Source.ScreenShare;
   // A placeholder (no track) means the participant has the source but the track
@@ -206,10 +207,11 @@ function AvatarTile({
   focused: boolean;
   onToggleFocus: () => void;
 }) {
-  const pubkey = pubkeyFromLivekitIdentity(participant.identity);
+  const { pubkey, verified } = useVoiceIdentity()(participant.identity);
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  const displayName = useScopedDisplayName(pubkey, metadata);
+  const scopedName = useScopedDisplayName(pubkey, metadata);
+  const displayName = verified ? scopedName : "Unverified";
   const shape = getAvatarShape(metadata);
   const hasCustomShape = !!shape;
   const isLocal = participant.isLocal;

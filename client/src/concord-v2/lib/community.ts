@@ -10,10 +10,12 @@ import {
   communityIdOf,
   hex32,
   random32,
+  voiceGroupKey,
+  voiceMediaKey,
 } from "@/concord-v2/lib/derive";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
 import type { FoldedControl } from "@/concord-v2/lib/control";
-import { capRelays, type ChannelV2, type CommunityV2 } from "@/concord-v2/lib/types";
+import { capRelays, type ChannelV2, type CommunityV2, type VoiceKeys } from "@/concord-v2/lib/types";
 
 /**
  * Mint a brand-new community: a random `owner_salt` commits the owner into the
@@ -70,6 +72,14 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
 
   const privateKeysById = new Map(community.privateChannels.map((ch) => [bytesToHex(ch.id), ch]));
 
+  // A voice Channel's call coordinates derive from the same (secret, epoch)
+  // that addresses its CURRENT Chat Plane (CORD-07 §1), so the room name and
+  // media root roll with the Channel's key on a rekey.
+  const voiceKeys = (secret: Uint8Array, id: Uint8Array, epoch: bigint): VoiceKeys => ({
+    room: voiceGroupKey(secret, id, epoch),
+    mediaKey: voiceMediaKey(secret, id, epoch),
+  });
+
   for (const def of folded?.channels.values() ?? []) {
     if (def.deleted) continue;
     seen.add(def.channelIdHex);
@@ -85,6 +95,8 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
         idHex: def.channelIdHex,
         name: def.name,
         isPrivate: false,
+        isVoice: def.voice,
+        voice: def.voice ? voiceKeys(community.root, id, community.rootEpoch) : undefined,
         streams,
         current: streams[0],
       });
@@ -99,6 +111,8 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
       idHex: def.channelIdHex,
       name: def.name,
       isPrivate: true,
+      isVoice: def.voice,
+      voice: def.voice ? voiceKeys(held.key, id, held.epoch) : undefined,
       streams: [stream],
       current: stream,
     });
@@ -116,6 +130,7 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
       idHex,
       name: held.name || idHex.slice(0, 8),
       isPrivate: true,
+      isVoice: false,
       streams: [stream],
       current: stream,
     });
