@@ -4,6 +4,37 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.19.0] - 2026-07-07
+
+Organize your community rail Discord-style: drop one community onto another to
+create a folder, and long-press any icon to pick it up and reorder — folders,
+order and all synced across your devices. Notifications get personal too:
+right-click a community or channel to mute it everywhere, including push
+notifications. Plus @mentions in thread replies, a redesigned status dialog
+with an emoji picker, and a Voice server setting for diagnosing call
+connectivity.
+
+### Added
+- Folders on the community rail: drop one community onto another to group
+  them, drag in and out to organize, and right-click a folder to rename or
+  remove it; collapsed folders show a mini icon grid with unread indicators
+- Reorder the rail by long-pressing an icon to pick it up, with a live
+  preview of where it will land; the layout syncs across your devices
+- Mute a community or channel from its right-click menu — muted places stop
+  notifying (including push notifications), stop bolding, and stop counting
+  toward badges, while mentions still get through; mutes sync across devices
+- @mentions in thread replies
+- "Voice server" setting with a live reachability check, so you can see and
+  change the server voice calls run through
+
+### Changed
+- The status dialog is now a proper modal with a full emoji picker for the
+  status emoji
+
+### Fixed
+- Joining a voice channel right after opening a community no longer fails
+  with a spurious "no voice server" error
+
 ## [0.18.0] - 2026-07-07
 
 Voice calls arrive in newer encrypted communities, with verified participant
