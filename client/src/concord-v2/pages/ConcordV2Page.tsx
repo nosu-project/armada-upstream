@@ -908,6 +908,7 @@ export function ConcordV2Page() {
                     relayUrl="dm"
                     groupId={channel.idHex}
                     canWrite={canWrite}
+                    mentionPubkeys={memberPubkeys}
                     autoFocus={threadAutoFocus}
                     onClose={() => setThreadRoot(undefined)}
                   />

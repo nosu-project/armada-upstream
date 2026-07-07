@@ -423,8 +423,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       reactionsFor,
       openThread,
       threadRepliesFor,
-      sendThreadReply: async (root, content) => {
-        await sendThreadReply(root, content);
+      sendThreadReply: async (root, content, tags) => {
+        await sendThreadReply(root, content, tags);
       },
     }),
     [

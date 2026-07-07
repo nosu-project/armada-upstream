@@ -78,6 +78,12 @@ interface ThreadPanelProps {
   groupId: string;
   /** Whether the current user can post replies. */
   canWrite: boolean;
+  /**
+   * Explicit @-mention roster for the reply composer. Required for Concord
+   * transports (`relayUrl="dm"` has no NIP-29 group to derive members from);
+   * NIP-29 callers can omit it and the composer derives the roster itself.
+   */
+  mentionPubkeys?: string[];
   /** Focus the reply input on open (e.g. when launched via /thread). */
   autoFocus?: boolean;
   onClose: () => void;
@@ -91,7 +97,7 @@ interface ThreadPanelProps {
  * via the {@link ChatTransport} (`threadRepliesFor`/`sendThreadReply`), so
  * replies never appear in the main timeline (they're nested here instead).
  */
-export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, autoFocus = false, onClose }: ThreadPanelProps) {
+export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, autoFocus = false, onClose }: ThreadPanelProps) {
   const replies = transport.threadRepliesFor?.(root.id) ?? [];
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   const reactionsFor = transport.reactionsFor;
@@ -139,6 +145,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, auto
           relayUrl={relayUrl}
           groupId={groupId}
           messages={[]}
+          mentionPubkeys={mentionPubkeys}
           placeholder="Reply in thread…"
           draftScope={`thread:${root.id}`}
           autoFocus={autoFocus}

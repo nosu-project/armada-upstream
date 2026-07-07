@@ -124,16 +124,32 @@ const EMPTY_REPLIES: ChatMsg[] = [];
  * inside a NIP-29 group, publishing to the group's host relay. The batched
  * {@link useGroupThreads} live subscription folds the echo back into the open
  * thread + reply-count badge, so no local optimistic insert is needed.
+ *
+ * `composerTags` are the content-derived tags the shared composer built for
+ * the reply (NIP-27 mention `p` tags, `t` hashtags, NIP-30 `emoji`, NIP-92
+ * `imeta`, NIP-18 `q` quotes). They are merged into the NIP-22 comment
+ * skeleton — dropping the composer's own `h`/`e` structure (the comment tags
+ * carry the group + thread pointers) and de-duplicating `p` tags — so
+ * @-mentions in thread replies actually tag (and notify) the mentioned users.
  */
 export function useSendThreadReply(relayUrl: string, groupId: string) {
   const { mutateAsync: createEvent } = useNostrPublish();
   const queryClient = useQueryClient();
   return useCallback(
-    async (root: NostrEvent, content: string) => {
+    async (root: NostrEvent, content: string, composerTags: string[][] = []) => {
+      const tags = buildCommentTags(root, groupId);
+      for (const tag of composerTags) {
+        // Thread structure (`h` group, `e` pointers) comes from
+        // buildCommentTags; the composer's variants would conflict.
+        if (tag[0] === "h" || tag[0] === "e") continue;
+        // De-dupe mention p tags against the parent-author p tag.
+        if (tag[0] === "p" && tags.some(([n, v]) => n === "p" && v === tag[1])) continue;
+        tags.push(tag);
+      }
       await createEvent({
         kind: KIND_COMMENT,
         content,
-        tags: buildCommentTags(root, groupId),
+        tags,
         relay: relayUrl,
       });
       queryClient.invalidateQueries({ queryKey: ["nip29", "reply-counts", relayUrl, groupId] });
