@@ -42,6 +42,7 @@ import { useRekeyWatch2 } from "@/concord-v2/hooks/useRekey2";
 import { useRoles2 } from "@/concord-v2/hooks/useRoles2";
 import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
+import { useConcord2Unread, type Concord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
 import { useTyping2, useTypingPublisher2 } from "@/concord-v2/hooks/useTyping2";
 import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
 import { badgeOf, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
@@ -170,13 +171,17 @@ function SidebarFooter2() {
 function ChannelRow2({
   channel,
   active,
+  unread,
   onSelect,
 }: {
   channel: ChannelV2;
   active: boolean;
+  unread?: Concord2Unread;
   onSelect: () => void;
 }) {
   const Icon = channel.isPrivate ? Lock : Hash;
+  const hasUnread = Boolean(unread);
+  const hasMention = Boolean(unread?.mention);
   return (
     <button
       type="button"
@@ -186,11 +191,24 @@ function ChannelRow2({
         // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
         "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
         !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
+        // Unread (but not selected) channels read brighter + bold (Slack).
+        !active && hasUnread && "text-foreground font-semibold",
         active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
       )}
     >
       <Icon className="size-4 shrink-0" />
       <span className="truncate flex-1 min-w-0">{channel.name}</span>
+      {/* Unread / mention indicator: an "@" pill for mentions, else a dot. */}
+      {hasMention ? (
+        <span
+          className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+          aria-label="You were mentioned"
+        >
+          @
+        </span>
+      ) : hasUnread ? (
+        <span className="shrink-0 size-2 rounded-full bg-foreground" aria-label="Unread messages" />
+      ) : null}
     </button>
   );
 }
@@ -217,6 +235,9 @@ export function ConcordV2Page() {
     return { ...baseCommunity, name: folded.metadata.name || baseCommunity.name };
   }, [baseCommunity, folded]);
   const channels = useChannels2(baseCommunity);
+
+  // Per-channel unread badges, computed purely from the local rumor cache.
+  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels);
 
   // Authenticate the connection as this community's per-channel stream keys
   // (control/guestbook/dissolved keys are registered app-wide in MainLayout).
@@ -271,6 +292,22 @@ export function ConcordV2Page() {
 
   const { transport: baseTransport, reactionsFor, allMessages } = useTransport2(community, channel, canWrite, canModerateMessages);
   const { mutateAsync: send } = useSendMessage2(community, channel);
+
+  // Mark the open channel read up to its newest message while it's on screen —
+  // immediately and again on tab refocus (mirrors GroupChat's NIP-29 behavior).
+  const channelIdForRead = channel?.idHex;
+  useEffect(() => {
+    if (!user || !channelIdForRead || allMessages.length === 0) return;
+    const latest = allMessages[allMessages.length - 1]?.created_at ?? 0;
+    if (latest <= 0) return;
+    const stamp = () => {
+      if (document.visibilityState === "visible") markChannelRead(channelIdForRead, latest);
+    };
+    stamp();
+    document.addEventListener("visibilitychange", stamp);
+    return () => document.removeEventListener("visibilitychange", stamp);
+  }, [user, channelIdForRead, allMessages, markChannelRead]);
+
   const { leave, isLeaving, dissolve, createChannel, isAddingChannel } = useCommunityManagement2(community);
   const { data: dissolved } = useDissolved2(community);
   const { coalesced } = useGuestbook2(community);
@@ -479,6 +516,7 @@ export function ConcordV2Page() {
             key={c.idHex}
             channel={c}
             active={Boolean(channel && channel.idHex === c.idHex)}
+            unread={unreadByChannel[c.idHex]}
             onSelect={() => {
               setChannelIdHex(c.idHex);
               onNavigate?.();
