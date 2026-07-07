@@ -130,6 +130,10 @@ func main() {
 	// internal deployment works with this relay alone. See unmanaged.go.
 	setupUnmanagedKinds()
 
+	// NIP-46 remote-signer traffic (kind 24133) so signer apps like Amber can
+	// use this relay as their rendezvous point. See nip46.go.
+	setupNip46()
+
 	// Invite-code support (kind 9009 + honoring codes on kind 9021). See invites.go.
 	setupInvites()
 
