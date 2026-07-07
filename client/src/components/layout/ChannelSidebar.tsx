@@ -38,7 +38,7 @@ function ChannelLink({
   unread?: GroupUnread;
   onNavigate?: () => void;
 }) {
-  const { activeCall, speakingPubkeys } = useCall();
+  const { activeCall, speakingPubkeys, voiceRoomPubkeys } = useCall();
   const { markRead } = useReadState();
   // Voice capability: prefer the per-group `livekit` metadata tag, but fall
   // back to the relay-level capability (`/.well-known/nip29/livekit` 204).
@@ -58,6 +58,11 @@ function ChannelLink({
     hasVoice ? group.id : undefined,
   );
   const othersInVoice = !inCall && (participants?.length ?? 0) > 0;
+  // Roster to render: while YOU are in this call, the connected room's live
+  // LiveKit participant list is authoritative — kind-39004 presence rides
+  // webhooks + relay memory and desyncs too easily. It's only the fallback
+  // (and the only source for calls you're not in).
+  const roster = inCall && voiceRoomPubkeys ? voiceRoomPubkeys : participants;
   // The audio icon should only appear when a call is actually live here (you're
   // in it or others are) — otherwise a voice-capable channel reads as a normal
   // text channel.
@@ -109,9 +114,9 @@ function ChannelLink({
       </NavLink>
       {/* Discord-style nested voice roster: who's in the live call here (with
           live speaking rings while you're in it). */}
-      {callActive && (participants?.length ?? 0) > 0 && (
+      {callActive && (roster?.length ?? 0) > 0 && (
         <VoiceParticipantList
-          participants={participants!}
+          participants={roster!}
           speaking={inCall ? speakingPubkeys : undefined}
         />
       )}

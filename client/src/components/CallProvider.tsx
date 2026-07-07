@@ -22,6 +22,13 @@ function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   return true;
 }
 
+/** Element-wise list equality (rosters are tiny and order-stable). */
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 /**
  * App-level voice call state. Holds the active room and renders the persistent
  * LiveKitRoom so navigation doesn't tear down the call.
@@ -36,6 +43,10 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // Live speaker set (pubkeys), reported by the connected room so voice
   // activity can render outside the LiveKit context (sidebar rosters).
   const [speakingPubkeys, setSpeakingState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
+  // Live roster of the connected room (pubkeys), reported by the room so the
+  // active call's occupancy renders from LiveKit truth instead of relay
+  // presence events (which lag/desync). Null while not connected.
+  const [voiceRoomPubkeys, setRosterState] = useState<readonly string[] | null>(null);
   const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The app shell; the mobile call bar writes its measured height to
   // `--call-bar-h` here so the shell reserves exactly that as bottom padding.
@@ -79,6 +90,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setExiting(true);
     setStageOpen(false);
     setSpeakingState(NO_SPEAKERS);
+    setRosterState(null);
     if (exitTimer.current) clearTimeout(exitTimer.current);
     exitTimer.current = setTimeout(() => {
       setActiveCall(null);
@@ -130,6 +142,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setSpeakingState((prev) => (sameSet(prev, next) ? prev : next));
   }, []);
 
+  // Equality-guarded so the room's participant reports only re-render context
+  // consumers when the roster actually changed.
+  const setVoiceRoomPubkeys = useCallback((next: readonly string[] | null) => {
+    setRosterState((prev) => {
+      if (prev === next) return prev;
+      if (prev && next && sameList(prev, next)) return prev;
+      return next;
+    });
+  }, []);
+
   return (
     <CallContext.Provider
       value={{
@@ -145,6 +167,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         setStageOpen,
         speakingPubkeys,
         setSpeakingPubkeys,
+        voiceRoomPubkeys,
+        setVoiceRoomPubkeys,
       }}
     >
       <div

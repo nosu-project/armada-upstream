@@ -84,6 +84,20 @@ export interface CallContextType {
   speakingPubkeys: ReadonlySet<string>;
   /** Internal: the connected room reports its live speaker set here. */
   setSpeakingPubkeys: (pubkeys: Set<string>) => void;
+  /**
+   * The ACTIVE call's live roster: every participant currently in the
+   * connected LiveKit room (local + remote), resolved to pubkeys (deduped
+   * across multiple sessions; unverified Concord identities excluded). Null
+   * while not connected to a call (or before the first report).
+   *
+   * While connected, this is the AUTHORITATIVE occupancy for the active room —
+   * prefer it over relay presence events (kind 39004) or presence heartbeats,
+   * which lag and desync (missed webhooks, dropped subscriptions, relay
+   * restarts). The SFU's own participant list can't drift: it IS the call.
+   */
+  voiceRoomPubkeys: readonly string[] | null;
+  /** Internal: the connected room reports its live participant roster here. */
+  setVoiceRoomPubkeys: (pubkeys: readonly string[] | null) => void;
 }
 
 export const CallContext = createContext<CallContextType | undefined>(undefined);

@@ -45,15 +45,19 @@ export function VoiceParticipantList({
   speaking,
   className,
 }: {
-  participants: string[];
+  participants: readonly string[];
   /** Pubkeys currently speaking (live, from the connected call), if known. */
   speaking?: ReadonlySet<string>;
   className?: string;
 }) {
   if (participants.length === 0) return null;
+  // Stable order: presence folds/LiveKit deliver participants in arrival (or
+  // speaking) order, which reshuffles rows as events land. Sort by pubkey so
+  // the roster holds still.
+  const sorted = [...participants].sort();
   return (
     <div className={cn("flex flex-col pb-0.5", className)} aria-label={`${participants.length} in voice`}>
-      {participants.map((pk) => (
+      {sorted.map((pk) => (
         <VoiceParticipantRow key={pk} pubkey={pk} isSpeaking={speaking?.has(pk) ?? false} />
       ))}
     </div>
@@ -74,7 +78,7 @@ function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeakin
     hasCustomShape && isSpeaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined;
 
   return (
-    <div className="flex items-center gap-2 pl-10 pr-2 py-0.5 text-[13px] text-muted-foreground">
+    <div className="flex items-center gap-2 pl-7 pr-2 py-1 text-sm text-muted-foreground">
       <div
         className={cn(
           "rounded-full shrink-0 transition-shadow",
@@ -82,9 +86,9 @@ function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeakin
         )}
         style={wrapperStyle}
       >
-        <Avatar shape={getAvatarShape(metadata)} className="size-5">
+        <Avatar shape={getAvatarShape(metadata)} className="size-6">
           <AvatarImage src={metadata?.picture} alt={name} />
-          <AvatarFallback className="bg-success/20 text-success text-[9px]">
+          <AvatarFallback className="bg-success/20 text-success text-[10px]">
             {name[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
@@ -105,7 +109,7 @@ export function VoicePresence({
   max = 3,
   className,
 }: {
-  participants: string[];
+  participants: readonly string[];
   /** Max avatars to show before collapsing to a "+N" badge. */
   max?: number;
   className?: string;

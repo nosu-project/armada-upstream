@@ -11,7 +11,7 @@ import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
-import { VoiceParticipantList, VoicePresence } from "@/components/VoicePresence";
+import { VoiceParticipantList } from "@/components/VoicePresence";
 import { CommunityInfoDialog2 } from "@/concord-v2/components/CommunityInfoDialog2";
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
@@ -214,7 +214,12 @@ function ChannelRow2({
   // click so joining is instant. Both hooks no-op for text channels.
   const fold = useVoicePresence2(community, channel);
   const { data: broker } = useVoiceBroker2(channel, fold);
-  const participants = useMemo(() => fold.present.map((p) => p.author), [fold]);
+  const { voiceRoomPubkeys } = useCall();
+  const foldedParticipants = useMemo(() => fold.present.map((p) => p.author), [fold]);
+  // While YOU are in this call, the connected room's live LiveKit roster is
+  // authoritative — presence heartbeats lag (30s cadence, 90s staleness) and
+  // desync. Folded presence remains the source for calls you're not in.
+  const participants = inCall && voiceRoomPubkeys ? voiceRoomPubkeys : foldedParticipants;
 
   const Icon = channel.isVoice ? Volume2 : channel.isPrivate ? Lock : Hash;
   const hasUnread = Boolean(unread);
@@ -361,11 +366,10 @@ export function ConcordV2Page() {
   const { coalesced } = useGuestbook2(community);
 
   // Voice (CORD-07): the active channel's live presence + rendezvous broker
-  // (both no-op for text channels) power the header stack and the join button.
+  // (both no-op for text channels) power the join button.
   const { joinConcordCall, activeCall, speakingPubkeys } = useCall();
   const activeFold = useVoicePresence2(community, channel);
   const { data: activeBroker } = useVoiceBroker2(channel, activeFold);
-  const activeVoicePubkeys = useMemo(() => activeFold.present.map((p) => p.author), [activeFold]);
   const inThisVoice = Boolean(
     activeCall?.concord && channel && activeCall.concord.channel.idHex === channel.idHex,
   );
@@ -724,13 +728,6 @@ export function ConcordV2Page() {
               </div>
             </button>
             <div className="ml-auto flex items-center gap-0.5">
-              {/* Voice presence in the header is desktop-only: the mobile header
-                  is already full (community avatar + name + actions), and the
-                  avatar stack crammed it. On mobile, who's-in-voice lives in the
-                  channel sidebar's nested roster and the bottom call bar. */}
-              {channel?.isVoice && activeVoicePubkeys.length > 0 && (
-                <VoicePresence participants={activeVoicePubkeys} className="mr-1 hidden sidebar:flex" />
-              )}
               {user && channel?.isVoice && (
                 <Tooltip>
                   <TooltipTrigger asChild>

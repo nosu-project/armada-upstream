@@ -204,7 +204,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { toast } = useToast();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
-  const { activeCall, joinDmCall } = useCall();
+  const { activeCall, joinDmCall, voiceRoomPubkeys } = useCall();
   const muteUser = useMuteUser();
 
   // Inline message search: toggled from the header, filters the loaded thread
@@ -259,12 +259,16 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
     hasVoice ? voiceRelay! : undefined,
     hasVoice ? roomId : undefined,
   );
-  const inCallCount = participants?.length ?? 0;
+  // While WE are in this call, the connected room's live LiveKit roster is
+  // authoritative — kind-39004 presence rides webhooks + relay memory and
+  // desyncs too easily. It remains the only source for calls we're not in.
+  const roster = (inThisCall ? voiceRoomPubkeys : null) ?? participants;
+  const inCallCount = roster?.length ?? 0;
   // Others (exclude us) currently in this DM's voice room — for the presence
   // avatar stack in the header.
   const dmOthersInVoice = useMemo(
-    () => (participants ?? []).filter((pk) => pk !== user?.pubkey),
-    [participants, user?.pubkey],
+    () => (roster ?? []).filter((pk) => pk !== user?.pubkey),
+    [roster, user?.pubkey],
   );
 
   // Lazy decryption: a single IntersectionObserver decrypts placeholder rows as

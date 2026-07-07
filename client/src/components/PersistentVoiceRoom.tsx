@@ -2,6 +2,7 @@ import {
   LiveKitRoom,
   RoomAudioRenderer,
   useLocalParticipant,
+  useParticipants,
   useRoomContext,
   useSpeakingParticipants,
 } from "@livekit/components-react";
@@ -80,6 +81,44 @@ function SpeakingReporter() {
 
   // Clear on room teardown (room switch or leave) so no stale rings linger.
   useEffect(() => () => setSpeakingPubkeys(new Set()), [setSpeakingPubkeys]);
+
+  return null;
+}
+
+/**
+ * Reports the room's live participant roster (resolved to pubkeys) up to the
+ * call context, so the active call's occupancy renders from LiveKit truth
+ * everywhere — sidebar rosters, DM headers — instead of relay presence events
+ * (kind 39004), which ride webhooks + a relay's in-memory map and desync far
+ * too easily (missed webhooks, dropped subscriptions, relay restarts). The
+ * SFU's participant list can't drift while we're connected: it IS the call.
+ * Must render inside `LiveKitRoom` (and, for Concord, inside the
+ * identity-resolver provider). Multiple sessions of one pubkey are deduped;
+ * unverified Concord identities are skipped, matching the call stage.
+ */
+function RosterReporter() {
+  const { setVoiceRoomPubkeys } = useCall();
+  const resolveIdentity = useVoiceIdentity();
+  const participants = useParticipants();
+
+  useEffect(() => {
+    const pubkeys: string[] = [];
+    const seen = new Set<string>();
+    for (const p of participants) {
+      // The local participant exists before the connection completes, with an
+      // empty identity — skip until it's real.
+      if (!p.identity) continue;
+      const { pubkey, verified } = resolveIdentity(p.identity);
+      if (!verified || seen.has(pubkey)) continue;
+      seen.add(pubkey);
+      pubkeys.push(pubkey);
+    }
+    setVoiceRoomPubkeys(pubkeys);
+  }, [participants, resolveIdentity, setVoiceRoomPubkeys]);
+
+  // Clear on room teardown (room switch or leave) so consumers fall back to
+  // relay presence instead of showing a stale roster.
+  useEffect(() => () => setVoiceRoomPubkeys(null), [setVoiceRoomPubkeys]);
 
   return null;
 }
@@ -395,6 +434,7 @@ function VoiceRoomShell({
       <CallSoundEffects />
       <MicNoiseProcessor />
       <SpeakingReporter />
+      <RosterReporter />
       {placeStage(
         <ServerScopeProvider relayUrl={scopeRelayUrl}>
           <CallStage callLabel={label} open={stageOpen} />
