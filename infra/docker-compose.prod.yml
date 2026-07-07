@@ -51,6 +51,12 @@ services:
           cert_file: /certs/tls.crt
           key_file: /certs/tls.key
           external_tls: false
+        # Active-speaker detection cadence (keep in sync with the base compose;
+        # this LIVEKIT_CONFIG replaces it entirely). Server defaults (400ms/2)
+        # lag the speaking indicator ~1s behind actual speech.
+        audio:
+          update_interval: 150
+          smooth_intervals: 2
         keys:
           ${LIVEKIT_API_KEY:-armada}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
         webhook:

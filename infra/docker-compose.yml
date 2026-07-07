@@ -72,6 +72,14 @@ services:
           cert_file: /certs/tls.crt
           key_file: /certs/tls.key
           external_tls: false
+        # Active-speaker detection cadence. Server defaults (400ms updates,
+        # smoothed over 2 intervals) make the speaking indicator lag ~1s behind
+        # actual speech; 150ms/2 keeps it responsive without flicker. Keep in
+        # sync with docker-compose.prod.yml (its LIVEKIT_CONFIG replaces this
+        # one entirely).
+        audio:
+          update_interval: 150
+          smooth_intervals: 2
         keys:
           ${LIVEKIT_API_KEY:-armada}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
         webhook:
