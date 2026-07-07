@@ -110,7 +110,7 @@ export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "w
  * Operators can override with `VITE_CONCORD_AV_SERVERS` (comma-separated https
  * origins) or set it empty to disable Concord voice.
  */
-const DEFAULT_PUBLIC_AV_SERVER = "https://armada.dreamith.to";
+const DEFAULT_PUBLIC_AV_SERVER = "https://armada.buzz";
 export const CONCORD_AV_SERVERS: string[] = (
   import.meta.env.VITE_CONCORD_AV_SERVERS ??
   (PLATFORM_RELAYS.length > 0
@@ -129,12 +129,12 @@ export const CONCORD_AV_SERVERS: string[] = (
  * token endpoint. On a hosted build the platform relay already hosts it; on a
  * non-hosted build (APK / Electron / dev, `PLATFORM_RELAYS` empty) there's no
  * such relay among the default app relays, so
- * default to the public Armada instance (`wss://armada.dreamith.to`)
+ * default to the public Armada instance (`wss://armada.buzz`)
  * so 1:1 calls work out of the box. Operators can override with
  * `VITE_DM_VOICE_RELAYS` (comma-separated ws/wss URLs) or set it empty to
  * disable the fallback.
  */
-const DEFAULT_PUBLIC_DM_VOICE_RELAY = "wss://armada.dreamith.to";
+const DEFAULT_PUBLIC_DM_VOICE_RELAY = "wss://armada.buzz";
 export const DM_VOICE_RELAYS: string[] = (
   import.meta.env.VITE_DM_VOICE_RELAYS ??
   (PLATFORM_RELAYS.length > 0 ? PLATFORM_RELAYS.join(",") : DEFAULT_PUBLIC_DM_VOICE_RELAY)

@@ -3,7 +3,7 @@
   "productName": "Armada",
   "version": "0.0.0",
   "description": "Armada desktop client (Electron wrapper around the web app).",
-  "homepage": "https://armada.dreamith.to",
+  "homepage": "https://armada.buzz",
   "author": {
     "name": "Armada",
     "email": "chad@chadwick.site"
