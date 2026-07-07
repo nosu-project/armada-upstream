@@ -9,12 +9,21 @@ import type { TrackReference } from "@livekit/components-react";
 import type { NostrMetadata } from "@nostrify/nostrify";
 import type { Participant, RemoteParticipant } from "livekit-client";
 import { Track } from "livekit-client";
-import { Maximize2, Minimize2, MicOff, Monitor, ScreenShare, Shrink, Volume2, VolumeX, X } from "lucide-react";
+import { Copy, Maximize2, Minimize2, MicOff, Monitor, ScreenShare, Shrink, Volume2, VolumeX, X } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,9 +32,12 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
+import { toast } from "@/hooks/useToast";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { playScreenShareSound } from "@/lib/callSounds";
+import { writeClipboardText } from "@/lib/clipboard";
+import { tryNpubEncode } from "@/lib/safeNip19";
 import { getUserVolume, rememberUserVolume } from "@/lib/voiceDevices";
 import {
   getAvatarShape,
@@ -168,44 +180,88 @@ function useTileDisplayName(participant: Participant): {
 }
 
 /**
- * A dropdown anchored on a remote participant's tile nameplate with a
- * playback-volume slider (0–200%), à la Discord. Applied live via LiveKit's
- * `RemoteParticipant.setVolume` and persisted per pubkey so it sticks across
- * calls. The stage is the only roster surface (the call bar shows no
- * participant list), so this is where per-user volume lives.
+ * Local playback volume (0–200%) for a remote participant: applied live via
+ * LiveKit's `RemoteParticipant.setVolume` and persisted per pubkey so it
+ * sticks across calls. No-ops for the local participant (there's no local
+ * playback of your own audio to adjust).
  */
-function VolumeMenu({
-  participant,
-  pubkey,
-  displayName,
-  children,
-}: {
-  participant: RemoteParticipant;
-  pubkey: string;
-  displayName: string;
-  children: React.ReactNode;
-}) {
+function useParticipantVolume(participant: Participant, pubkey: string) {
   const [volume, setVolume] = useState(() => getUserVolume(pubkey));
 
-  // Re-apply the remembered volume whenever this participant (re)joins or their
-  // track changes, since LiveKit resets to 1 on a fresh subscription.
+  // (Re)apply the remembered volume whenever this participant (re)joins or
+  // their verified pubkey resolves: LiveKit resets to 1 on a fresh
+  // subscription, and the persisted override is keyed by pubkey.
   useEffect(() => {
-    participant.setVolume(volume);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [participant]);
+    const remembered = getUserVolume(pubkey);
+    setVolume(remembered);
+    if (!participant.isLocal) (participant as RemoteParticipant).setVolume(remembered);
+  }, [participant, pubkey]);
 
   const apply = useCallback(
     (next: number) => {
       setVolume(next);
-      participant.setVolume(next);
+      if (!participant.isLocal) (participant as RemoteParticipant).setVolume(next);
       rememberUserVolume(pubkey, next);
     },
     [participant, pubkey],
   );
 
-  const muted = volume === 0;
-  const pct = Math.round(volume * 100);
+  return { volume, apply };
+}
 
+/**
+ * The mute-toggle + 0–200% volume slider row, shared by the nameplate
+ * dropdown and the tile's right-click context menu.
+ */
+function VolumeSliderRow({
+  volume,
+  apply,
+  displayName,
+}: {
+  volume: number;
+  apply: (next: number) => void;
+  displayName: string;
+}) {
+  const muted = volume === 0;
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        aria-label={muted ? "Unmute user" : "Mute user"}
+        className="shrink-0 text-muted-foreground hover:text-foreground"
+        onClick={() => apply(muted ? 1 : 0)}
+      >
+        {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+      </button>
+      <Slider
+        value={[volume]}
+        min={0}
+        max={2}
+        step={0.05}
+        aria-label={`Volume for ${displayName}`}
+        onValueChange={([v]) => apply(v)}
+      />
+    </div>
+  );
+}
+
+/**
+ * A dropdown anchored on a remote participant's tile nameplate with the
+ * playback-volume slider, à la Discord. The same volume state also backs the
+ * tile's right-click context menu (`TileContextMenu`).
+ */
+function VolumeMenu({
+  volume,
+  apply,
+  displayName,
+  children,
+}: {
+  volume: number;
+  apply: (next: number) => void;
+  displayName: string;
+  children: React.ReactNode;
+}) {
+  const pct = Math.round(volume * 100);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -222,26 +278,64 @@ function VolumeMenu({
           <span className="text-sm font-medium truncate">{displayName}</span>
           <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            aria-label={muted ? "Unmute user" : "Mute user"}
-            className="shrink-0 text-muted-foreground hover:text-foreground"
-            onClick={() => apply(muted ? 1 : 0)}
-          >
-            {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
-          </button>
-          <Slider
-            value={[volume]}
-            min={0}
-            max={2}
-            step={0.05}
-            aria-label={`Volume for ${displayName}`}
-            onValueChange={([v]) => apply(v)}
-          />
-        </div>
+        <VolumeSliderRow volume={volume} apply={apply} displayName={displayName} />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * Right-click menu on a remote participant's tile: per-user volume slider,
+ * local mute toggle, and copy npub.
+ */
+function TileContextMenu({
+  volume,
+  apply,
+  pubkey,
+  displayName,
+  children,
+}: {
+  volume: number;
+  apply: (next: number) => void;
+  pubkey: string;
+  displayName: string;
+  children: React.ReactNode;
+}) {
+  const muted = volume === 0;
+  const pct = Math.round(volume * 100);
+
+  const copyNpub = () => {
+    const npub = tryNpubEncode(pubkey);
+    if (!npub) return;
+    writeClipboardText(npub).then(
+      () => toast({ title: "Copied npub" }),
+      () => toast({ title: "Copy failed", variant: "destructive" }),
+    );
+  };
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-56">
+        <ContextMenuLabel className="flex items-center justify-between gap-2">
+          <span className="truncate">{displayName}</span>
+          <span className="text-xs text-muted-foreground tabular-nums font-normal">{pct}%</span>
+        </ContextMenuLabel>
+        {/* Not a menu Item: the slider needs pointer drags, which Radix item
+            semantics would swallow (same treatment as the nameplate dropdown). */}
+        <div className="px-2 pb-2 pt-1">
+          <VolumeSliderRow volume={volume} apply={apply} displayName={displayName} />
+        </div>
+        <ContextMenuSeparator />
+        <ContextMenuCheckboxItem checked={muted} onSelect={() => apply(muted ? 1 : 0)}>
+          Mute
+        </ContextMenuCheckboxItem>
+        <ContextMenuItem className="gap-2" onSelect={copyNpub}>
+          <Copy className="size-4" />
+          Copy npub
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -263,6 +357,10 @@ function VideoTile({
   // isn't subscribed yet — show their avatar instead of video.
   const hasVideo = Boolean(trackRef.publication?.track);
   const isLocal = participant.isLocal;
+  // Remote (non-screenshare) tiles get per-user volume: the nameplate dropdown
+  // and the right-click context menu share this state.
+  const { volume, apply } = useParticipantVolume(participant, pubkey);
+  const hasVolumeMenu = !isLocal && !isScreenShare;
 
   const nameplate = (
     <>
@@ -279,7 +377,7 @@ function VideoTile({
     </>
   );
 
-  return (
+  const tile = (
     <div
       className={cn(
         "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10 h-full w-full",
@@ -307,18 +405,22 @@ function VideoTile({
       )}
       <FocusButton focused={focused} onClick={onToggleFocus} />
       {/* Remote (non-screenshare) nameplates open the per-user volume menu. */}
-      {!isLocal && !isScreenShare ? (
-        <VolumeMenu
-          participant={participant as RemoteParticipant}
-          pubkey={pubkey}
-          displayName={displayName}
-        >
+      {hasVolumeMenu ? (
+        <VolumeMenu volume={volume} apply={apply} displayName={displayName}>
           {nameplate}
         </VolumeMenu>
       ) : (
         <div className={nameplateClass}>{nameplate}</div>
       )}
     </div>
+  );
+
+  return hasVolumeMenu ? (
+    <TileContextMenu volume={volume} apply={apply} pubkey={pubkey} displayName={displayName}>
+      {tile}
+    </TileContextMenu>
+  ) : (
+    tile
   );
 }
 
@@ -362,6 +464,9 @@ function AvatarTile({
   const hasCustomShape = !!shape;
   const isLocal = participant.isLocal;
   const muted = !participant.isMicrophoneEnabled;
+  // Remote tiles get per-user volume: the nameplate dropdown and the
+  // right-click context menu share this state.
+  const { volume, apply } = useParticipantVolume(participant, pubkey);
 
   // For emoji-shaped avatars the speaking ring is a drop-shadow that hugs the
   // silhouette (a box ring would clip against the mask); circular avatars get a
@@ -379,7 +484,7 @@ function AvatarTile({
     </>
   );
 
-  return (
+  const tile = (
     <div
       className={cn(
         "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10",
@@ -403,17 +508,21 @@ function AvatarTile({
       <FocusButton focused={focused} onClick={onToggleFocus} />
       {/* Remote nameplates open the per-user volume menu. */}
       {!isLocal ? (
-        <VolumeMenu
-          participant={participant as RemoteParticipant}
-          pubkey={pubkey}
-          displayName={displayName}
-        >
+        <VolumeMenu volume={volume} apply={apply} displayName={displayName}>
           {nameplate}
         </VolumeMenu>
       ) : (
         <div className={nameplateClass}>{nameplate}</div>
       )}
     </div>
+  );
+
+  return !isLocal ? (
+    <TileContextMenu volume={volume} apply={apply} pubkey={pubkey} displayName={displayName}>
+      {tile}
+    </TileContextMenu>
+  ) : (
+    tile
   );
 }
 
