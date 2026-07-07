@@ -25,8 +25,8 @@ import type { CommunityV2 } from "@/concord-v2/lib/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** The persisted per-community guestbook sync cursor scope. */
-const guestbookCursorScope = (idHex: string) => `guestbook:${idHex}`;
+/** The persisted per-community, PER-RELAY guestbook sync cursor scope. */
+const guestbookCursorScope = (idHex: string, relayUrl: string) => `guestbook:${idHex}|${relayUrl}`;
 
 /** Decrypt raw guestbook wraps under the held groups into opened events. */
 function openGuestbookRaw(wraps: NostrEvent[], groups: GroupKey[]): OpenedEvent[] {
@@ -66,28 +66,38 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const groups = guestbookGroups(community!);
-      const scope = guestbookCursorScope(community!.idHex);
-      const cursor = await readStreamCursor(scope);
-      const filter: { kinds: number[]; authors: string[]; limit: number; since?: number } = {
+      const base: { kinds: number[]; authors: string[]; limit: number } = {
         kinds: [KIND_WRAP],
         authors: groups.map((g) => g.pk),
         limit: 500,
       };
-      if (cursor?.newest) filter.since = cursor.newest;
 
+      // PER-RELAY `since` cursors (see useControlPlane2): a fast relay must
+      // never advance a shared cursor past a motion a lagging relay still owes
+      // us, or that motion is skipped forever.
       const results = await Promise.all(
-        community!.relays.map((url) =>
-          nostr
-            .relay(url)
-            .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) })
-            .catch(() => [] as NostrEvent[]),
-        ),
+        community!.relays.map(async (url) => {
+          const scope = guestbookCursorScope(community!.idHex, url);
+          const cursor = await readStreamCursor(scope);
+          const filter = cursor?.newest ? { ...base, since: cursor.newest } : base;
+          try {
+            const events = await nostr
+              .relay(url)
+              .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
+            if (events.length > 0) {
+              await updateStreamCursor(scope, {
+                newest: Math.max(...events.map((e) => e.created_at)),
+              });
+            }
+            return events;
+          } catch {
+            // Failed/aborted — the cursor stays put; the next poll re-asks.
+            return [] as NostrEvent[];
+          }
+        }),
       );
       const fresh = openGuestbookRaw(results.flat(), groups);
-      if (fresh.length > 0) {
-        writeOpened(fresh);
-        await updateStreamCursor(scope, { newest: Math.max(...fresh.map((e) => e.createdAt)) });
-      }
+      if (fresh.length > 0) writeOpened(fresh);
       const stored = await queryByStreams(groups.map((g) => g.pk));
       const byId = new Map<string, OpenedEvent>();
       for (const e of stored) byId.set(e.rumorId, e);

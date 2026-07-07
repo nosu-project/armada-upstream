@@ -9,7 +9,6 @@ import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 import { readFolded } from "@/lib/foldedCache";
-import { APP_RELAYS } from "@/lib/platform";
 
 /**
  * The Concord V2 native-notification subscriptions for EVERY live community
@@ -53,7 +52,7 @@ export function useConcord2Subs(): Concord2Sub[] {
       const subs: Concord2Sub[] = [];
       const keys: GroupKey[] = [];
       for (const entry of entries) {
-        const community = rehydrateCommunity(entry, APP_RELAYS);
+        const community = rehydrateCommunity(entry);
         if (!community) continue;
         const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
         const built = buildConcord2Subs(community, folded);

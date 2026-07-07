@@ -4,7 +4,6 @@ import { useEffect, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
-import { APP_RELAYS } from "@/lib/platform";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import {
   addToList,
@@ -247,7 +246,7 @@ export function useCommunity2(idHex: string | undefined): CommunityV2 | undefine
     if (!idHex || !data) return undefined;
     const entry = data.list.entries.find((e) => e.community_id === idHex);
     if (!entry) return undefined;
-    return rehydrateCommunity(entry, APP_RELAYS);
+    return rehydrateCommunity(entry);
   }, [data, idHex]);
 }
 

@@ -9,9 +9,10 @@ import { KIND_DELETE, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_SEA
 import { buildRumor, channelBindingTags, openWrap, rewrapSeal, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import {
-  drainPendingWraps,
+  ackPendingWraps,
   openedToStored,
   parkPendingWraps,
+  peekPendingWraps,
   queryByStreams,
   queryChannelRumors,
   storedToOpenedChat,
@@ -180,17 +181,23 @@ describe("concord-v2 rumor store", () => {
     expect(openWrap(rewrapped, control).rumorId).toBe(opened.rumorId);
   });
 
-  it("parks and drains raw wraps without decrypting", async () => {
+  it("parks, peeks (non-destructively), and acks raw wraps", async () => {
     const alice = signer();
     const control = channelGroupKey(new Uint8Array(32).fill(7), new Uint8Array(32).fill(2), 0);
     const rumor = buildRumor({ kind: 3308, content: "{}", tags: [["vsk", "0"], ["eid", "cd".repeat(32)], ["ev", "1"]], pubkey: alice.pubkey, ms: null });
     const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control);
 
     parkPendingWraps([wrap]);
-    const drained = await eventually(() => drainPendingWraps([control.pk]), (r) => r.length === 1);
-    expect(drained.map((w) => w.id)).toEqual([wrap.id]);
-    // Draining removes them — a second drain is empty.
-    const second = await drainPendingWraps([control.pk]);
-    expect(second.length).toBe(0);
+    const peeked = await eventually(() => peekPendingWraps([control.pk]), (r) => r.length === 1);
+    expect(peeked.map((w) => w.id)).toEqual([wrap.id]);
+    // Peeking is non-destructive: an interrupted decode round must be able to
+    // find the wrap again (issue #19 — a notified message must never be
+    // locally destructible before its rumor is stored).
+    const again = await peekPendingWraps([control.pk]);
+    expect(again.map((w) => w.id)).toEqual([wrap.id]);
+    // Only an explicit ack (after the decoded rumor is safely stored) removes it.
+    ackPendingWraps([wrap.id]);
+    const after = await eventually(() => peekPendingWraps([control.pk]), (r) => r.length === 0);
+    expect(after.length).toBe(0);
   });
 });

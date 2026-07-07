@@ -12,7 +12,6 @@ import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { useChannels2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
 import { rehydrateCommunity } from "@/concord-v2/lib/communityList";
-import { APP_RELAYS } from "@/lib/platform";
 
 /**
  * The stream keys the client must NIP-42-authenticate as to READ a community's
@@ -55,7 +54,7 @@ export function useRegisterAllStreamKeys2(): void {
     if (communities.length === 0) return;
     const keys: GroupKey[] = [];
     for (const entry of communities) {
-      const community = rehydrateCommunity(entry, APP_RELAYS);
+      const community = rehydrateCommunity(entry);
       if (community) keys.push(...communityCoreKeys(community));
     }
     registerStreamKeys(keys);

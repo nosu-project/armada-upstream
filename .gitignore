@@ -16,3 +16,6 @@ client/android/app/google-services.json
 # Desktop (Electron) build outputs.
 client/electron/dist/
 client/electron/release/
+
+# Local diagnostic scratch (may hold invite secrets) — never commit.
+client/scratch/

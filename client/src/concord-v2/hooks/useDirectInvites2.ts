@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { bundleToEntry } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCommunityList2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { APP_RELAYS } from "@/lib/platform";
 import {
   directInviteExpired,
   parseDirectInviteRumor,
@@ -153,7 +152,7 @@ export function useAcceptDirectInvite2() {
       // beats an unverified creator_npub claim) — coalesce self-heals if it
       // never lands.
       void (async () => {
-        const community = rehydrateCommunity(entry, APP_RELAYS);
+        const community = rehydrateCommunity(entry);
         if (!community) return;
         const rumor = buildJoinRumor(user.pubkey, Date.now(), { creator: invite.sender, label: bundle.label });
         const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer);

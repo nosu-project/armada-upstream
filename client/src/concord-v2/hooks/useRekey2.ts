@@ -69,22 +69,38 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const address = baseRekeyGroupKey(community!.root, community!.id, nextEpoch);
-      const scope = `rekey:${community!.idHex}:${nextEpoch}`;
-      const cursor = await readStreamCursor(scope);
-      const filter: { kinds: number[]; authors: string[]; limit: number; since?: number } = {
+      const base: { kinds: number[]; authors: string[]; limit: number } = {
         kinds: [KIND_WRAP],
         authors: [address.pk],
         limit: 50,
       };
-      if (cursor?.newest) filter.since = cursor.newest;
 
+      // PER-RELAY `since` cursors: each relay is re-asked from what IT has
+      // delivered, so a fast relay can never advance a shared cursor past a
+      // rekey chunk a lagging relay still owes us. A permanently-skipped chunk
+      // would leave the rotation `!complete` forever — the member never adopts
+      // the new epoch and every message under it stays undecryptable
+      // (issue #19 family).
       const results = await Promise.all(
-        community!.relays.map((url) =>
-          nostr
-            .relay(url)
-            .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) })
-            .catch(() => [] as NostrEvent[]),
-        ),
+        community!.relays.map(async (url) => {
+          const scope = `rekey:${community!.idHex}:${nextEpoch}|${url}`;
+          const cursor = await readStreamCursor(scope);
+          const filter = cursor?.newest ? { ...base, since: cursor.newest } : base;
+          try {
+            const events = await nostr
+              .relay(url)
+              .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
+            if (events.length > 0) {
+              await updateStreamCursor(scope, {
+                newest: Math.max(...events.map((e) => e.created_at)),
+              });
+            }
+            return events;
+          } catch {
+            // Failed/aborted — the cursor stays put; the next poll re-asks.
+            return [] as NostrEvent[];
+          }
+        }),
       );
       // Decrypt the stream layer once (the inner blob stays pairwise-encrypted);
       // persist the opened events so a seen rekey round is never refetched.
@@ -96,10 +112,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
           // not this address / malformed
         }
       }
-      if (fresh.length > 0) {
-        writeOpened(fresh);
-        await updateStreamCursor(scope, { newest: Math.max(...fresh.map((e) => e.createdAt)) });
-      }
+      if (fresh.length > 0) writeOpened(fresh);
       const stored = await queryByStreams([address.pk]);
       const byId = new Map<string, OpenedEvent>();
       for (const e of stored) byId.set(e.rumorId, e);

@@ -56,7 +56,11 @@ function useControlPlaneSync(): void {
     if (!v2Data) return [];
     const out: CommunityV2[] = [];
     for (const entry of liveEntries(v2Data.list)) {
-      const community = rehydrateCommunity(entry, APP_RELAYS);
+      // V2 planes live ONLY on the community's own relays (the bundle/fold's
+      // relay set). Never union the deployment's app/platform relays in: they
+      // don't store Concord wraps, and their instant empty answers can starve
+      // the real relays (issue #19).
+      const community = rehydrateCommunity(entry);
       if (community) out.push(community);
     }
     return out;

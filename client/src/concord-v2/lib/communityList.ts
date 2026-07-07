@@ -194,9 +194,14 @@ export function assertListBounds(list: CommunityList): void {
 
 /**
  * Rehydrate a runtime {@link CommunityV2} from an entry. Verifies the
- * self-certifying owner commitment (a corrupted entry fails closed). The
- * runtime relay set is the union of the community's own relays and
- * `extraRelays` (the deployment's app relays), community-first.
+ * self-certifying owner commitment (a corrupted entry fails closed).
+ *
+ * `extraRelays` is unioned into the runtime relay set (community-first) — but
+ * note that V2 plane traffic belongs ONLY on the community's own relays:
+ * callers must NOT pass the deployment's app/platform relays here. A relay
+ * that stores no Concord wraps answers every plane REQ instantly with an empty
+ * EOSE, which can win the backfill's page race and starve the real relays
+ * (issue #19).
  */
 export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: string[] = []): CommunityV2 | undefined {
   const jm = entry.current;

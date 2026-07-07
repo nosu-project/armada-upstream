@@ -20,7 +20,8 @@ import {
   readChannelCursor,
   updateChannelCursor,
   writeRumors,
-  drainPendingWraps,
+  peekPendingWraps,
+  ackPendingWraps,
 } from "@/concord-v2/lib/rumorStore";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
@@ -77,8 +78,14 @@ function upsert(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedCh
  * Backfill wraps from the relays with `until` pagination and per-relay cursors
  * (a relay ignoring `until` is culled after one non-progressing page). Returns
  * the oldest and newest `created_at` seen, every raw wrap collected across the
- * passes (so the caller can decrypt them into the rumor cache directly), and
- * whether history is exhausted (no relay had a full page left to page past).
+ * passes (so the caller can decrypt them into the rumor cache directly),
+ * whether history is exhausted (no relay had a full page left to page past),
+ * and whether any relay FAILED (error/abort) — a failed relay's events may be
+ * missing, so failure must never be recorded as exhaustion and must block
+ * cursor advancement past the failed region.
+ *
+ * `since` bounds a pass from below (the bridge pass uses it to fetch exactly
+ * the region between the saved cursor and the newest page).
  *
  * The kind-1059 wraps these reads return are NEVER mirrored into the shared
  * `armada-events` store — `NostrBatcher.cacheEvents` drops all gift-wrap kinds
@@ -89,13 +96,14 @@ async function backfillStore(
   relays: string[],
   channel: ChannelV2,
   signal: AbortSignal,
-  until?: number,
-  maxPages: number = BACKFILL_MAX_PAGES,
-): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; exhausted: boolean }> {
+  opts: { until?: number; since?: number; maxPages?: number } = {},
+): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; exhausted: boolean; failed: boolean }> {
+  const maxPages = opts.maxPages ?? BACKFILL_MAX_PAGES;
   let oldest: number | undefined;
   let newest: number | undefined;
-  let active = relays.map((url) => ({ url, cursor: until }));
+  let active = relays.map((url) => ({ url, cursor: opts.until }));
   const collected: NostrEvent[] = [];
+  let failed = false;
 
   for (let page = 0; page < maxPages && active.length > 0; page++) {
     if (signal.aborted) break;
@@ -110,23 +118,37 @@ async function backfillStore(
       active.map(async (relay) => {
         const filter = channelFilter(channel, { limit: BACKFILL_PAGE });
         if (relay.cursor !== undefined) filter.until = relay.cursor;
+        if (opts.since !== undefined) filter.since = opts.since;
         try {
           const events = await nostr
             .relay(relay.url)
             .query([filter], {
               signal: AbortSignal.any([pageSignal, AbortSignal.timeout(8000)]),
             });
-          armGrace();
-          return { relay, events };
+          // Only a relay that actually HAS events may start the race clock. An
+          // instant empty EOSE (e.g. a relay that stores no wraps) must never
+          // abort relays still mid-answer — cold NIP-42 AUTH costs extra
+          // round-trips, and losing that race silently drops their messages
+          // (issue #19: the platform relay answered empty in ~0ms and starved
+          // the real community relays on every cold open).
+          if (events.length > 0) armGrace();
+          return { relay, events, ok: true };
         } catch {
-          return { relay, events: [] as NostrEvent[] };
+          return { relay, events: [] as NostrEvent[], ok: false };
         }
       }),
     );
     if (graceTimer !== undefined) clearTimeout(graceTimer);
 
     const next: typeof active = [];
-    for (const { relay, events } of results) {
+    for (const { relay, events, ok } of results) {
+      if (!ok) {
+        // Error or aborted — this relay's region was NOT read. Track the
+        // failure (blocks exhaustion/cursor advancement) and drop it for this
+        // run; a later poll retries it.
+        failed = true;
+        continue;
+      }
       collected.push(...events);
       let relayOldest = Infinity;
       let progressed = 0;
@@ -146,7 +168,7 @@ async function backfillStore(
     }
     active = next;
   }
-  return { oldest, newest, events: collected, exhausted: active.length === 0 };
+  return { oldest, newest, events: collected, exhausted: active.length === 0 && !failed, failed };
 }
 
 /** The moderation context resolved from the community's control fold. */
@@ -191,7 +213,11 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   // In-memory mirror of the persisted per-channel cursor (created_at bounds +
   // exhausted flag), loaded on channel change and written through on progress.
-  const cursor = useRef<Map<string, { oldest?: number; exhausted: boolean }>>(new Map());
+  // `newest` is the top of CONTIGUOUSLY-synced history: it only advances when
+  // a backfill's bridge pass has verifiably fetched everything between the old
+  // `newest` and the newest page (see backfillAndRefresh), so a hole can never
+  // be sealed over.
+  const cursor = useRef<Map<string, { newest?: number; oldest?: number; exhausted: boolean }>>(new Map());
   const initialLoadedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -202,7 +228,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     // Hydrate the in-memory cursor from the persisted one for this channel.
     if (channelIdHex) {
       void readChannelCursor(channelIdHex).then((c) => {
-        if (c) cursor.current.set(channelIdHex, { oldest: c.oldest, exhausted: c.exhausted });
+        if (c) cursor.current.set(channelIdHex, { newest: c.newest, oldest: c.oldest, exhausted: c.exhausted });
       });
     }
   }, [channelIdHex]);
@@ -239,8 +265,9 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       const opened = await openChatBatch(events, channel);
       if (opened.length === 0) return;
       writeRumors(opened);
-      const newest = Math.max(...events.map((e) => e.created_at));
-      void updateChannelCursor(channelIdHex, { newest });
+      // NOTE: live events do NOT advance the persisted `newest` cursor — that
+      // would seal over any not-yet-bridged offline gap below them. Only a
+      // completed backfill bridge advances `newest` (see backfillAndRefresh).
       queryClient.setQueryData<OpenedChat[]>(queryKey, (old) => upsert(old, opened));
       // Clear optimistic pending/failed for anything echoed back.
       queryClient.setQueryData<SendStatusMap>(statusKey(channelIdHex), (s = {}) => {
@@ -308,11 +335,17 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     queryFn: async ({ signal }) => {
       const cursorKeyId = channelIdHex ?? "";
 
-      // Drain any wraps the native service parked (it can't decrypt) into the
-      // rumor store first, so a notification's message is present on cold read.
-      const parked = await drainPendingWraps(channel!.streams.map((s) => s.group.pk));
+      // Fold in any wraps the native service parked (it can't decrypt) so a
+      // notification's message is present on cold read. Decode WITHOUT the
+      // query's abort signal (the batch is notification-sized) and acknowledge
+      // only what actually decoded — an interrupted or key-less decode leaves
+      // the wraps parked for the next read instead of destroying them.
+      const parked = await peekPendingWraps(channel!.streams.map((s) => s.group.pk));
       if (parked.length > 0) {
-        writeRumors(await openChatBatch(parked, channel!, { signal }));
+        const opened = await openChatBatch(parked, channel!);
+        writeRumors(opened);
+        const openedWrapIds = new Set(opened.map((o) => o.wrapId));
+        ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
       }
 
       // hasMore is true if the local rumor window is full OR relays may have more.
@@ -338,29 +371,61 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         if (signal.aborted) return;
         // Pass 1: pull the newest page (no `until`) so live-adjacent history
         // lands first.
-        const newest = await backfillStore(nostr, community!.relays, channel!, signal, undefined, 1);
+        const newest = await backfillStore(nostr, community!.relays, channel!, signal, { maxPages: 1 });
         if (signal.aborted) return;
-        // Pass 2: page OLDER history back-to-back. Resume from the saved cursor
-        // if we have one; otherwise (cold channel) resume from just below pass
-        // 1's newest page rather than re-fetching that identical page.
-        const saved = cursor.current.get(cursorKeyId)?.oldest;
-        const resumeFrom = saved ?? (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
-        const older = await backfillStore(nostr, community!.relays, channel!, signal, resumeFrom);
+
+        const saved = cursor.current.get(cursorKeyId);
+
+        // Pass 2 (the bridge): fetch the REGION BETWEEN the saved `newest` and
+        // pass 1's oldest. Without it, an offline burst larger than one page
+        // leaves a permanent hole — pass 3 resumes BELOW already-seen history
+        // and the advanced cursor seals the gap forever (issue #19).
+        let bridge: Awaited<ReturnType<typeof backfillStore>> = {
+          events: [],
+          exhausted: true,
+          failed: false,
+        };
+        if (saved?.newest && newest.oldest !== undefined && newest.oldest > saved.newest) {
+          bridge = await backfillStore(nostr, community!.relays, channel!, signal, {
+            until: newest.oldest - 1,
+            since: saved.newest,
+          });
+          if (signal.aborted) return;
+        }
+
+        // Pass 3: page OLDER history back-to-back. Resume from the saved
+        // cursor if we have one; otherwise (cold channel) resume from just
+        // below pass 1's newest page rather than re-fetching that page.
+        const resumeFrom = saved?.oldest ?? (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
+        const older = await backfillStore(nostr, community!.relays, channel!, signal, { until: resumeFrom });
         if (signal.aborted) return;
 
         // Decrypt every wrap collected across the passes into the rumor cache.
-        const opened = await openChatBatch([...newest.events, ...older.events], channel!, { signal });
+        const opened = await openChatBatch(
+          [...newest.events, ...bridge.events, ...older.events],
+          channel!,
+          { signal },
+        );
         writeRumors(opened);
 
-        // Advance the persisted cursor: newest forward, oldest back, exhausted sticky.
+        // Advance the persisted cursor: `oldest` back, `exhausted` sticky, and
+        // `newest` forward ONLY when the newest region is verifiably complete —
+        // pass 1 had no relay failures and the bridge ran to exhaustion. An
+        // incomplete round leaves `newest` where it was, so the next poll
+        // re-bridges the same region instead of sealing a hole.
         const c = cursor.current.get(cursorKeyId) ?? { exhausted: false };
         if (older.oldest !== undefined && (c.oldest === undefined || older.oldest < c.oldest)) {
           c.oldest = older.oldest;
         }
         if (older.exhausted) c.exhausted = true;
+        const complete = !newest.failed && bridge.exhausted;
+        if (complete) {
+          const top = Math.max(newest.newest ?? 0, bridge.newest ?? 0, c.newest ?? 0);
+          if (top > 0) c.newest = top;
+        }
         cursor.current.set(cursorKeyId, c);
         void updateChannelCursor(cursorKeyId, {
-          newest: Math.max(newest.newest ?? 0, older.newest ?? 0),
+          newest: complete ? c.newest : undefined,
           oldest: c.oldest,
           exhausted: c.exhausted,
         });
@@ -404,14 +469,10 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       if (!localHasMore && !cursor.current.get(cursorKeyId)?.exhausted) {
         const controller = new AbortController();
         const resumeFrom = cursor.current.get(cursorKeyId)?.oldest;
-        const older = await backfillStore(
-          nostr,
-          community!.relays,
-          channel!,
-          controller.signal,
-          resumeFrom,
-          LOAD_OLDER_MAX_PAGES,
-        );
+        const older = await backfillStore(nostr, community!.relays, channel!, controller.signal, {
+          until: resumeFrom,
+          maxPages: LOAD_OLDER_MAX_PAGES,
+        });
         const opened = await openChatBatch(older.events, channel!);
         writeRumors(opened);
 
@@ -421,8 +482,8 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         }
         if (older.exhausted) c.exhausted = true;
         cursor.current.set(cursorKeyId, c);
+        // Deep-history paging never touches `newest` (that's the bridge's job).
         void updateChannelCursor(cursorKeyId, {
-          newest: older.newest ?? 0,
           oldest: c.oldest,
           exhausted: c.exhausted,
         });

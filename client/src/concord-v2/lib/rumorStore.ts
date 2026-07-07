@@ -223,13 +223,21 @@ export function writeRumors(opened: OpenedChat[]): void {
 // The native background service (Android/iOS) receives V2 wraps but can't
 // decrypt them — it has no stream keys. It parks the raw kind-1059/21059 wraps
 // here (a SEPARATE tiny NIndexedDB) instead of the shared `armada-events` store;
-// the WebView's plane hooks — which DO hold the keys — drain and decrypt them on
-// their next read (into the opened-event store), then delete them from here. So
-// no 1059 ever lands in `armada-events`, yet a notification's message survives a
-// cold launch. Wraps are indexed only by their author (the stream address) so a
-// plane can drain exactly its own.
+// the WebView's plane hooks — which DO hold the keys — read them with
+// {@link peekPendingWraps}, decrypt, and acknowledge ONLY the wraps that
+// actually decoded with {@link ackPendingWraps}. A wrap is never deleted
+// before its rumor is safely in the opened-event store: an aborted or failed
+// decrypt round leaves it parked for the next read (a notified message must
+// never be locally destructible — issue #19). Undecodable stragglers (e.g. a
+// key never arrives) are pruned by age. So no 1059 ever lands in
+// `armada-events`, yet a notification's message survives a cold launch. Wraps
+// are indexed only by their author (the stream address) so a plane can read
+// exactly its own.
 
 const PENDING_DB_NAME = "armada-concord-pending";
+
+/** Parked wraps older than this are pruned (key never arrived / dead plane). */
+const PENDING_MAX_AGE_SECS = 14 * 24 * 3600;
 
 let pending: NIndexedDB | undefined;
 
@@ -248,21 +256,29 @@ export function parkPendingWraps(wraps: NostrEvent[]): void {
 }
 
 /**
- * Drain the raw wraps parked for a plane's stream addresses: returns them and
- * removes them from the pending store. The caller decrypts + writes them to the
- * opened-event store. No-op / empty when nothing is parked.
+ * Read (WITHOUT removing) the raw wraps parked for a plane's stream addresses.
+ * The caller decrypts them, writes the recovered rumors to the opened-event
+ * store, and then acknowledges the decoded ones via {@link ackPendingWraps}.
+ * Also prunes wraps past {@link PENDING_MAX_AGE_SECS} so permanently
+ * undecodable stragglers can't accumulate.
  */
-export async function drainPendingWraps(streamPks: string[]): Promise<NostrEvent[]> {
+export async function peekPendingWraps(streamPks: string[]): Promise<NostrEvent[]> {
   if (streamPks.length === 0) return [];
   const s = pendingStore();
   try {
-    const filter = { kinds: [1059, 21059], authors: streamPks, limit: 1000 };
-    const wraps = await s.query([filter]);
-    if (wraps.length > 0) await s.remove([filter]);
-    return wraps;
+    const cutoff = Math.floor(Date.now() / 1000) - PENDING_MAX_AGE_SECS;
+    void s.remove([{ kinds: [1059, 21059], until: cutoff }]).catch(() => undefined);
+    return await s.query([{ kinds: [1059, 21059], authors: streamPks, limit: 1000 }]);
   } catch {
     return [];
   }
+}
+
+/** Remove parked wraps whose rumors are now safely in the opened-event store. */
+export function ackPendingWraps(wrapIds: string[]): void {
+  if (wrapIds.length === 0) return;
+  const s = pendingStore();
+  void s.remove([{ ids: wrapIds }]).catch(() => undefined);
 }
 
 // ── Sync cursor ───────────────────────────────────────────────────────────────

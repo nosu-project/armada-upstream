@@ -83,12 +83,20 @@ export function useTransport2(
   // top-level — they're nested under their root in the thread panel. Split the
   // decoded list into top-level messages (the timeline) and replies bucketed by
   // root id (the threads).
+  //
+  // ORPHANS render top-level: a reply whose root is not in the loaded window
+  // (older history, or a root this client never decoded) would otherwise be
+  // bucketed under a row that never renders — decoded, in memory, and
+  // completely unreachable (issue #19: "notified but never rendered"). It
+  // degrades to an ordinary timeline row until the root loads, at which point
+  // it folds back into the thread.
   const { topLevel, repliesByRoot } = useMemo(() => {
     const topLevel: ChatMsg[] = [];
     const repliesByRoot = new Map<string, ChatMsg[]>();
+    const loaded = new Set(messages.map((m) => m.id));
     for (const m of messages) {
       const root = replyRootOf(m);
-      if (root) {
+      if (root && loaded.has(root)) {
         const list = repliesByRoot.get(root) ?? [];
         list.push(m);
         repliesByRoot.set(root, list);

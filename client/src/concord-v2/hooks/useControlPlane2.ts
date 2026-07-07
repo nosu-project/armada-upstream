@@ -16,7 +16,7 @@ import { channelsView } from "@/concord-v2/lib/community";
 import { bytesToHex, dissolvedGroupKey, grantLocator, hex32, type GroupKey } from "@/concord-v2/lib/derive";
 import type { AuthorityCitation } from "@/concord-v2/lib/edition";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
-import { queryByStreams, readStreamCursor, updateStreamCursor, writeOpened, drainPendingWraps } from "@/concord-v2/lib/rumorStore";
+import { queryByStreams, readStreamCursor, updateStreamCursor, writeOpened, peekPendingWraps, ackPendingWraps } from "@/concord-v2/lib/rumorStore";
 import { openWrap, type OpenedEvent, type Rumor, type StreamSigner } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -29,8 +29,8 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
  */
 export const controlFoldKey = (idHex: string) => `concord2-fold:${idHex}`;
 
-/** The persisted per-community control-plane sync cursor scope. */
-const controlCursorScope = (idHex: string) => `control:${idHex}`;
+/** The persisted per-community, PER-RELAY control-plane sync cursor scope. */
+const controlCursorScope = (idHex: string, relayUrl: string) => `control:${idHex}|${relayUrl}`;
 
 /** Merge two opened-event sets by rumor id (a partial round must not drop editions). */
 function mergeOpened(a: OpenedEvent[], b: OpenedEvent[]): OpenedEvent[] {
@@ -105,6 +105,11 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
   // Live subscription (open community only): stream new editions as they land.
   // Each wrap is decrypted, written to the opened cache, and merged into the
   // same query the fold reads; the poll below is a gap-filler for dropped subs.
+  // NOTE: live events deliberately do NOT advance any sync cursor — a shared
+  // cursor advanced by the fastest event would make the poll's `since` skip an
+  // older edition still in flight from a lagging relay, permanently (a missed
+  // unban/rekey edition corrupts the fold forever — issue #19). Cursors only
+  // advance from each relay's OWN query results below.
   useEffect(() => {
     if (!community || !active) return;
     const controller = new AbortController();
@@ -122,9 +127,6 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
               const opened = openControlRaw([msg[2] as NostrEvent], groups);
               if (opened.length === 0) continue;
               writeOpened(opened);
-              void updateStreamCursor(controlCursorScope(community.idHex), {
-                newest: opened[0].createdAt,
-              });
               queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], opened));
             }
           }
@@ -144,30 +146,49 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
     refetchInterval: active ? 60_000 : false,
     queryFn: async ({ signal }) => {
       const groups = controlGroups(community!);
-      const scope = controlCursorScope(community!.idHex);
       // Drain any wraps the native service parked (it can't decrypt) into the
       // opened-event cache first.
-      const parked = await drainPendingWraps(groups.map((g) => g.pk));
-      if (parked.length > 0) writeOpened(openControlRaw(parked, groups));
-      // Only fetch editions newer than the newest we've already stored — seen
-      // editions are never refetched.
-      const cursor = await readStreamCursor(scope);
+      const parked = await peekPendingWraps(groups.map((g) => g.pk));
+      if (parked.length > 0) {
+        const opened = openControlRaw(parked, groups);
+        writeOpened(opened);
+        // Only acknowledge (delete) the wraps that actually decoded; the rest
+        // stay parked for a retry (e.g. after a rekey catch-up delivers the
+        // missing group key). The store prunes stale leftovers by age.
+        const openedWrapIds = new Set(opened.map((o) => o.wrapId));
+        ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
+      }
+      // Fetch with a PER-RELAY `since` cursor: each relay's cursor reflects
+      // only what THAT relay has delivered, so a relay that was down or
+      // lagging is re-asked from its own last position — a fast relay can
+      // never advance a shared cursor past an edition a slow relay still owes
+      // us (the since-skip bug, issue #19). An edition chain is append-only;
+      // one missed edition (an unban, a rekey chunk) corrupts state forever.
       const base = controlFilter(community!);
-      const filter: NostrFilter = cursor?.newest ? { ...base, since: cursor.newest } : base;
-
       const results = await Promise.all(
-        community!.relays.map((url) =>
-          nostr
-            .relay(url)
-            .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) })
-            .catch(() => [] as NostrEvent[]),
-        ),
+        community!.relays.map(async (url) => {
+          const scope = controlCursorScope(community!.idHex, url);
+          const cursor = await readStreamCursor(scope);
+          const filter: NostrFilter = cursor?.newest ? { ...base, since: cursor.newest } : base;
+          try {
+            const events = await nostr
+              .relay(url)
+              .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
+            if (events.length > 0) {
+              await updateStreamCursor(scope, {
+                newest: Math.max(...events.map((e) => e.created_at)),
+              });
+            }
+            return events;
+          } catch {
+            // Failed/aborted — the cursor stays put, so the next poll re-asks
+            // this relay for the same region.
+            return [] as NostrEvent[];
+          }
+        }),
       );
       const fresh = openControlRaw(results.flat(), groups);
-      if (fresh.length > 0) {
-        writeOpened(fresh);
-        await updateStreamCursor(scope, { newest: Math.max(...fresh.map((e) => e.createdAt)) });
-      }
+      if (fresh.length > 0) writeOpened(fresh);
       // Union the stored set with what we already hold + this round's fresh
       // editions: an edition chain is append-only, a short read must never drop.
       const stored = await queryByStreams(groups.map((g) => g.pk));

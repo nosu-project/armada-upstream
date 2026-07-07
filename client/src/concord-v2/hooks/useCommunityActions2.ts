@@ -159,7 +159,7 @@ export function useCommunityActions2() {
       // Best-effort self-signed Guestbook Join, echoing the link's attribution
       // (CORD-02 §5 / CORD-05 §1) — the coalesce self-heals if it never lands.
       void (async () => {
-        const community = rehydrateCommunity(entry, APP_RELAYS);
+        const community = rehydrateCommunity(entry);
         if (!community) return;
         const attribution = bundle.creator_npub
           ? { creator: bundle.creator_npub, label: bundle.label }

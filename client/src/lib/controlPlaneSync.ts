@@ -11,10 +11,12 @@
  * wraps (`kinds:[1059]`, `authors` = every community's control stream keys
  * across held epochs) — and fan them out to the union of all community relays.
  *
- * A SINGLE shared cursor (not one per community) gates the fetch: on first run
- * we sync WITHOUT a `since`; afterwards we persist the newest `created_at` seen
- * and pass it as `since` on subsequent runs, so we only ever pull editions
- * newer than the last full sweep.
+ * A PER-RELAY cursor gates the fetch: on a relay's first run we sync it
+ * WITHOUT a `since`; afterwards we persist the newest `created_at` THAT relay
+ * delivered and pass it as its `since` on subsequent runs, so we only ever
+ * pull editions newer than what that relay has already given us. (Never a
+ * single shared cursor: one relay's newest edition must not skip another
+ * relay's still-undelivered older one.)
  *
  * Storage flows through the SAME sinks the per-community hooks read from, so a
  * later navigation (or the notification-subscription builder) sees the events:
@@ -57,26 +59,32 @@ interface NostrLike {
 }
 
 /**
- * The single shared cursor for the whole control-plane sweep. Deliberately NOT
- * one of the per-community `concord2-cursor:control:<id>` cursors — this tracks
- * the newest control edition seen across ALL communities in one place.
+ * The shared control-plane sweep cursor, kept PER RELAY. Deliberately NOT one
+ * of the per-community `concord2-cursor:control:<id>` cursors — this tracks the
+ * newest control edition seen across ALL communities, but separately for each
+ * relay: a fast relay must never advance a cursor past an edition a lagging or
+ * temporarily-down relay still owes us, or that edition is skipped by every
+ * later `since` filter forever (issue #19 — a missed unban/channel edition
+ * corrupts the fold permanently).
  */
-const CURSOR_KEY = "control-plane-sync:all";
+const cursorKey = (relayUrl: string) => `control-plane-sync:all|${relayUrl}`;
 
 interface ControlPlaneCursor {
-  /** `created_at` of the newest control edition ingested by the last sweep. */
+  /** `created_at` of the newest control edition this relay delivered. */
   newest: number;
 }
 
-/** Read the shared control-plane sync cursor, or undefined if none saved yet. */
-export function readControlPlaneCursor(): Promise<ControlPlaneCursor | undefined> {
-  return readFolded<ControlPlaneCursor>(CURSOR_KEY);
+/** Read one relay's control-plane sync cursor, or undefined if none saved yet. */
+function readRelayCursor(relayUrl: string): Promise<ControlPlaneCursor | undefined> {
+  return readFolded<ControlPlaneCursor>(cursorKey(relayUrl));
 }
 
-/** Advance the shared cursor forward (never backward). */
-async function advanceCursor(newest: number): Promise<void> {
-  const prev = await readControlPlaneCursor();
-  await writeFolded(CURSOR_KEY, { newest: Math.max(prev?.newest ?? 0, newest) } satisfies ControlPlaneCursor);
+/** Advance one relay's cursor forward (never backward). */
+async function advanceRelayCursor(relayUrl: string, newest: number): Promise<void> {
+  const prev = await readRelayCursor(relayUrl);
+  await writeFolded(cursorKey(relayUrl), {
+    newest: Math.max(prev?.newest ?? 0, newest),
+  } satisfies ControlPlaneCursor);
 }
 
 /** The union of every community's relays (deduped) — where the two filters fan out. */
@@ -85,24 +93,6 @@ function unionRelays(v1: Community[], v2: CommunityV2[]): string[] {
   for (const c of v1) for (const r of c.relays) set.add(r);
   for (const c of v2) for (const r of c.relays) set.add(r);
   return [...set];
-}
-
-/** Query one filter across every relay, tolerating per-relay failures. */
-async function queryAll(
-  nostr: NostrLike,
-  relays: string[],
-  filter: NostrFilter,
-  signal?: AbortSignal,
-): Promise<NostrEvent[]> {
-  const results = await Promise.all(
-    relays.map((url) =>
-      nostr
-        .relay(url)
-        .query([filter], { signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(10_000)]) })
-        .catch(() => [] as NostrEvent[]),
-    ),
-  );
-  return results.flat();
 }
 
 export interface ControlPlaneSyncResult {
@@ -133,9 +123,6 @@ export async function syncControlPlane(
   const relays = unionRelays(v1, v2);
   if (relays.length === 0) return result;
 
-  const cursor = await readControlPlaneCursor();
-  const since = cursor?.newest;
-
   // ── V1: one filter selecting every community's control pseudonym (#z). ──────
   // The pseudonym → community index lets us map each returned edition back for
   // per-community invalidation, and NostrBatcher caches the raw 3308 editions
@@ -158,63 +145,76 @@ export async function syncControlPlane(
     }
   }
 
-  const jobs: Promise<void>[] = [];
-
-  if (v1ByPseudonym.size > 0) {
-    const filter: NostrFilter = {
-      kinds: [KIND_COMMUNITY_CONTROL],
-      "#z": [...v1ByPseudonym.keys()],
-      ...(since ? { since } : {}),
-    };
-    jobs.push(
-      queryAll(nostr, relays, filter, opts?.signal).then((events) => {
-        for (const ev of events) {
-          if (ev.created_at > result.newest) result.newest = ev.created_at;
-          for (const z of ev.tags) {
-            if (z[0] === "z") {
-              const c = v1ByPseudonym.get(z[1]);
-              if (c) result.v1Touched.add(bytesToHex(c.id));
-            }
+  /** Ingest one relay's mixed (V1 + V2) result batch into the proper sinks. */
+  const ingest = (events: NostrEvent[]): void => {
+    const opened: OpenedEvent[] = [];
+    for (const ev of events) {
+      if (ev.kind === KIND_COMMUNITY_CONTROL) {
+        if (ev.created_at > result.newest) result.newest = ev.created_at;
+        for (const z of ev.tags) {
+          if (z[0] === "z") {
+            const c = v1ByPseudonym.get(z[1]);
+            if (c) result.v1Touched.add(bytesToHex(c.id));
           }
         }
-      }),
-    );
-  }
-
-  if (v2Groups.length > 0) {
-    const filter: NostrFilter = {
-      kinds: [KIND_WRAP],
-      authors: [...v2ByPk.keys()],
-      ...(since ? { since } : {}),
-    };
-    jobs.push(
-      queryAll(nostr, relays, filter, opts?.signal).then((wraps) => {
-        const opened: OpenedEvent[] = [];
-        for (const wrap of wraps) {
-          const group = v2GroupByPk.get(wrap.pubkey);
-          if (!group) continue;
-          let ev: OpenedEvent;
-          try {
-            ev = openWrap(wrap, group);
-          } catch {
-            continue; // not ours / malformed
-          }
-          opened.push(ev);
-          if (wrap.created_at > result.newest) result.newest = wrap.created_at;
-          const c = v2ByPk.get(wrap.pubkey);
-          if (c) result.v2Touched.add(c.idHex);
+        continue;
+      }
+      if (ev.kind === KIND_WRAP) {
+        const group = v2GroupByPk.get(ev.pubkey);
+        if (!group) continue;
+        let op: OpenedEvent;
+        try {
+          op = openWrap(ev, group);
+        } catch {
+          continue; // not ours / malformed
         }
-        // Decrypt-once into the opened-event store, where useControlEvents2's
-        // queryByStreams seed reads them back with no decrypt.
-        if (opened.length > 0) writeOpened(opened);
-      }),
-    );
-  }
+        opened.push(op);
+        if (ev.created_at > result.newest) result.newest = ev.created_at;
+        const c = v2ByPk.get(ev.pubkey);
+        if (c) result.v2Touched.add(c.idHex);
+      }
+    }
+    // Decrypt-once into the opened-event store, where useControlEvents2's
+    // queryByStreams seed reads them back with no decrypt.
+    if (opened.length > 0) writeOpened(opened);
+  };
 
-  await Promise.all(jobs);
-
-  // Advance the shared cursor so the next sweep only pulls newer editions.
-  if (result.newest > 0) await advanceCursor(result.newest);
+  // Sweep each relay with its OWN `since` cursor, and advance that cursor only
+  // from events the relay itself returned — a failed relay's cursor stays put,
+  // so the next sweep re-asks it for the region it never delivered.
+  await Promise.all(
+    relays.map(async (url) => {
+      const cursor = await readRelayCursor(url);
+      const since = cursor?.newest;
+      const filters: NostrFilter[] = [];
+      if (v1ByPseudonym.size > 0) {
+        filters.push({
+          kinds: [KIND_COMMUNITY_CONTROL],
+          "#z": [...v1ByPseudonym.keys()],
+          ...(since ? { since } : {}),
+        });
+      }
+      if (v2Groups.length > 0) {
+        filters.push({
+          kinds: [KIND_WRAP],
+          authors: [...v2ByPk.keys()],
+          ...(since ? { since } : {}),
+        });
+      }
+      if (filters.length === 0) return;
+      try {
+        const events = await nostr.relay(url).query(filters, {
+          signal: AbortSignal.any([...(opts?.signal ? [opts.signal] : []), AbortSignal.timeout(10_000)]),
+        });
+        ingest(events);
+        if (events.length > 0) {
+          await advanceRelayCursor(url, Math.max(...events.map((e) => e.created_at)));
+        }
+      } catch {
+        // Relay failed — swallow; its cursor stays put for the next sweep.
+      }
+    }),
+  );
 
   // Invalidate the touched communities' control queries so any mounted hook (or
   // the rail's fold snapshot) refolds against the freshly stored events.
