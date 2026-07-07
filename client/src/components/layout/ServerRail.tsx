@@ -15,7 +15,8 @@ import { useConcordMetadata } from "@/concord-v1/hooks/useConcordMetadata";
 import { useCommunityImageDescriptors } from "@/concord-v1/hooks/useCommunityImageDescriptors";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
 import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
-import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useConcord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
@@ -485,6 +486,15 @@ function Concord2Button({
   const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
   const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
 
+  // Aggregate unread across the community's channels, computed purely from the
+  // local rumor cache (no extra relay fan-out — active=false shares the fold
+  // query key). Mirrors the NIP-29 rail badge.
+  const channels = useChannels2(community, false);
+  const { byChannel } = useConcord2Unread(channels);
+  const unreadSummaries = Object.values(byChannel);
+  const anyUnread = unreadSummaries.length > 0;
+  const anyMention = unreadSummaries.some((u) => u.mention);
+
   const shiftStyle: React.CSSProperties =
     !dragging && shiftY
       ? { transform: `translateY(${shiftY}px)`, transition: "transform 180ms ease" }
@@ -538,6 +548,20 @@ function Concord2Button({
                     <span className="text-sm font-semibold">{initials}</span>
                   )}
                 </span>
+                {/* Unread / mention indicator (hidden while active — you're reading it). */}
+                {!isActive && anyMention ? (
+                  <span
+                    className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+                    aria-label="You were mentioned"
+                  >
+                    @
+                  </span>
+                ) : !isActive && anyUnread ? (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
+                    aria-label="Unread messages"
+                  />
+                ) : null}
               </span>
             )
           }
