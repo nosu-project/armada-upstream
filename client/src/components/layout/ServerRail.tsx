@@ -1,12 +1,27 @@
-import { Bluetooth, Headphones, MessageSquare, Plus, Settings } from "lucide-react";
+import { Bluetooth, FolderOpen, Headphones, MessageSquare, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import type React from "react";
 
 import { AddDialog } from "@/components/dialogs/AddDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
@@ -27,7 +42,25 @@ import { useRelayUnread } from "@/hooks/useRelayUnread";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { impact } from "@/lib/haptics";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
+import {
+  applyDrop,
+  dissolveFolder,
+  flattenLayout,
+  folderAnchor,
+  itemAnchor,
+  mergeLayout,
+  normalizeLayout,
+  planDrop,
+  renameFolder,
+} from "@/lib/railLayout";
 import { cn } from "@/lib/utils";
+
+import type {
+  RailDragSource,
+  RailDropPlan,
+  RailLayoutNode,
+  RailSlot,
+} from "@/lib/railLayout";
 
 /** Human-ish short name for a relay URL (hostname). */
 function relayHost(url: string): string {
@@ -40,8 +73,8 @@ function relayHost(url: string): string {
 
 /**
  * A single entry in the unified community rail. NIP-29 servers and both
- * flavours of Concord community live in one flat, user-reorderable list; each
- * carries a stable `key` used for drag/reorder and persisted order.
+ * flavours of Concord community live in one list; each carries a stable `key`
+ * used for drag/reorder, folders, and the persisted layout.
  */
 type RailItem =
   | { kind: "server"; key: string; url: string }
@@ -52,6 +85,158 @@ type RailItem =
 const concord1Key = (communityId: string) => `c1:${communityId}`;
 /** Stable rail key for a Concord V2 community. */
 const concord2Key = (communityId: string) => `c2:${communityId}`;
+
+/** A rail node resolved against the currently-live items (render model). */
+type RenderNode =
+  | { type: "item"; item: RailItem }
+  | { type: "folder"; id: string; name: string; items: RailItem[] };
+
+/**
+ * Drag-related props shared by every rail entry (items and folders). The rail
+ * attaches pointer listeners natively via a ref (Radix `asChild` Slots do not
+ * reliably forward React pointer props), and tags each draggable node with
+ * `data-rail-anchor` (+ `data-rail-parent` for folder children) so slot
+ * geometry can be frozen at drag pickup.
+ */
+interface RailDragProps {
+  /** Whether this entry can be drag-reordered. */
+  draggable?: boolean;
+  /** This entry is the one currently being dragged (dims to placeholder). */
+  dragging?: boolean;
+  /** Whether any drag is in progress (locks touch-action). */
+  reordering?: boolean;
+  /** This entry is the current drop target (combine / drop-into-folder). */
+  highlight?: boolean;
+  /** Folder id when this entry is rendered inside an expanded folder. */
+  dragParent?: string;
+  /** Begin a potential drag from this entry. */
+  onDragPointerDown?: (e: PointerEvent) => void;
+  /** Returns true if a click should be suppressed (a drag just finished). */
+  shouldSuppressClick?: () => boolean;
+}
+
+/** data-* attributes identifying a draggable node for slot hit-testing. */
+function dragAttrs(anchor: string, parent?: string): Record<string, string> {
+  return { "data-rail-anchor": anchor, ...(parent ? { "data-rail-parent": parent } : {}) };
+}
+
+/** Attach a native pointerdown listener (see RailDragProps docs). */
+function useDragPointerDown(
+  ref: React.RefObject<HTMLElement | null>,
+  draggable: boolean | undefined,
+  onDragPointerDown: ((e: PointerEvent) => void) | undefined,
+) {
+  const handlerRef = useRef(onDragPointerDown);
+  handlerRef.current = onDragPointerDown;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !draggable) return;
+    const handler = (e: PointerEvent) => handlerRef.current?.(e);
+    el.addEventListener("pointerdown", handler);
+    return () => el.removeEventListener("pointerdown", handler);
+  }, [ref, draggable]);
+}
+
+// ─── Mini icons (folder grids + drag ghosts) ────────────────────────────
+
+/** Tiny unread/mention dot for mini icons inside a collapsed folder. */
+function MiniUnreadDot({ mention, unread }: { mention: boolean; unread: boolean }) {
+  if (!mention && !unread) return null;
+  return (
+    <span
+      className={cn(
+        "absolute -top-px -right-px z-10 size-1.5 rounded-full ring-1 ring-background",
+        mention ? "bg-primary" : "bg-foreground",
+      )}
+      aria-label={mention ? "You were mentioned" : "Unread messages"}
+    />
+  );
+}
+
+function ServerMiniIcon({ url }: { url: string }) {
+  const { data: info } = useRelayInfo(url);
+  const { user } = useCurrentUser();
+  const { data: groups } = useRelayGroups(user ? url : undefined);
+  const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
+  const { anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
+  const name = info?.name || relayHost(url);
+  const initial = name.trim().charAt(0).toUpperCase() || "?";
+  return (
+    <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-secondary">
+      {info?.icon ? (
+        <img src={info.icon} alt="" draggable={false} className="size-full object-cover" />
+      ) : (
+        <span className="text-[9px] font-semibold leading-none text-secondary-foreground">{initial}</span>
+      )}
+      <MiniUnreadDot mention={anyMention} unread={anyUnread} />
+    </span>
+  );
+}
+
+function Concord1MiniIcon({ communityId, name }: { communityId: string; name: string }) {
+  const community = useConcordCommunity(communityId);
+  const { data: folded } = useConcordMetadata(community, false);
+  const { icon } = useCommunityImageDescriptors(community, folded);
+  const iconUrl = useDecryptedCommunityImage(icon);
+  const initial = name.trim().charAt(0).toUpperCase() || "·";
+  return (
+    <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-muted text-success">
+      {iconUrl ? (
+        <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
+      ) : (
+        <span className="text-[9px] font-semibold leading-none">{initial}</span>
+      )}
+    </span>
+  );
+}
+
+function Concord2MiniIcon({ communityId, name }: { communityId: string; name: string }) {
+  const community = useCommunity2(communityId);
+  const { data: folded } = useControlFold2(community, false);
+  const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
+  const displayName = folded?.metadata?.name || name;
+  const initial = displayName.trim().charAt(0).toUpperCase() || "·";
+  const channels = useChannels2(community, false);
+  const { byChannel } = useConcord2Unread(channels);
+  const unreadSummaries = Object.values(byChannel);
+  return (
+    <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-muted text-success">
+      {iconUrl ? (
+        <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
+      ) : (
+        <span className="text-[9px] font-semibold leading-none">{initial}</span>
+      )}
+      <MiniUnreadDot
+        mention={unreadSummaries.some((u) => u.mention)}
+        unread={unreadSummaries.length > 0}
+      />
+    </span>
+  );
+}
+
+function RailMiniIcon({ item }: { item: RailItem }) {
+  if (item.kind === "server") return <ServerMiniIcon url={item.url} />;
+  if (item.kind === "concord1") {
+    return <Concord1MiniIcon communityId={item.communityId} name={item.name} />;
+  }
+  return <Concord2MiniIcon communityId={item.communityId} name={item.name} />;
+}
+
+/**
+ * Discord-style collapsed-folder face: a 2×2 grid of the first four member
+ * icons inside the rail's cut-corner square.
+ */
+function FolderMiniGrid({ items }: { items: RailItem[] }) {
+  return (
+    <span className="grid size-12 grid-cols-2 grid-rows-2 gap-1 clip-corner-lg bg-secondary/80 p-1.5">
+      {items.slice(0, 4).map((item) => (
+        <RailMiniIcon key={item.key} item={item} />
+      ))}
+    </span>
+  );
+}
+
+// ─── Drag ghosts ─────────────────────────────────────────────────────────
 
 /**
  * The floating "ghost" icon that follows the pointer while dragging a rail
@@ -109,22 +294,46 @@ function Concord2DragGhost({ communityId, name }: { communityId: string; name: s
   );
 }
 
-function DragGhost({ item, x, y }: { item: RailItem; x: number; y: number }) {
+/** Fixed pointer-following layer carrying the dragged item or folder. */
+function DragGhost({
+  item,
+  folderItems,
+  x,
+  y,
+}: {
+  item?: RailItem;
+  folderItems?: RailItem[];
+  x: number;
+  y: number;
+}) {
   return (
     <div
       className="pointer-events-none fixed z-[300] -translate-x-1/2 -translate-y-1/2 animate-in zoom-in-75 duration-150"
       style={{ left: x, top: y }}
     >
-      {item.kind === "server" ? (
+      {folderItems ? (
+        <span className="block rotate-[-6deg] scale-110 [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
+          <FolderMiniGrid items={folderItems} />
+        </span>
+      ) : item?.kind === "server" ? (
         <ServerDragGhost url={item.url} />
-      ) : item.kind === "concord1" ? (
+      ) : item?.kind === "concord1" ? (
         <Concord1DragGhost communityId={item.communityId} name={item.name} />
-      ) : (
+      ) : item ? (
         <Concord2DragGhost communityId={item.communityId} name={item.name} />
-      )}
+      ) : null}
     </div>
   );
 }
+
+// ─── Rail entries ────────────────────────────────────────────────────────
+
+/** Dashed placeholder occupying a dragged entry's original slot. */
+const dragPlaceholder = (
+  <span className="relative block size-12">
+    <span className="absolute inset-0 rounded-xl border-2 border-dashed border-primary/50 bg-primary/5" />
+  </span>
+);
 
 function ServerButton({
   url,
@@ -134,8 +343,9 @@ function ServerButton({
   inCall,
   draggable,
   dragging,
-  shiftY,
   reordering,
+  highlight,
+  dragParent,
   onDragPointerDown,
   shouldSuppressClick,
 }: {
@@ -147,36 +357,9 @@ function ServerButton({
   selected?: boolean;
   /** Whether the active voice call is on this server. */
   inCall?: boolean;
-  /** Whether this server can be drag-reordered. */
-  draggable?: boolean;
-  /** This server is the one currently being dragged (collapsed to placeholder). */
-  dragging?: boolean;
-  /** Vertical offset (px) this item shifts to make room for the dragged one. */
-  shiftY?: number;
-  /** Whether a drag is in progress (enables smooth shift transitions). */
-  reordering?: boolean;
-  /** Begin a potential long-press drag from this server. */
-  onDragPointerDown?: (e: PointerEvent) => void;
-  /** Returns true if a click should be suppressed (a drag just finished). */
-  shouldSuppressClick?: () => boolean;
-}) {
+} & RailDragProps) {
   const triggerRef = useRef<HTMLElement | null>(null);
-  const dragHandlerRef = useRef(onDragPointerDown);
-  dragHandlerRef.current = onDragPointerDown;
-
-  // Attach the long-press pointerdown listener natively on the rendered DOM
-  // node. Going through a React prop on a Radix `asChild` trigger proved
-  // unreliable (the Slot did not always forward it); a direct listener always
-  // fires. `touch-action: pan-y` is set in the class so the rail can still be
-  // scrolled vertically by touch-dragging an item, while the long-press
-  // drag-to-reorder gesture (which holds still, then moves) still works.
-  useEffect(() => {
-    const el = triggerRef.current;
-    if (!el || !draggable) return;
-    const handler = (e: PointerEvent) => dragHandlerRef.current?.(e);
-    el.addEventListener("pointerdown", handler);
-    return () => el.removeEventListener("pointerdown", handler);
-  }, [draggable]);
+  useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
   const { data: info } = useRelayInfo(url);
   const { user } = useCurrentUser();
@@ -205,12 +388,15 @@ function ServerButton({
         className={cn(
           "relative block size-12 transition-all duration-150",
           isActive && "[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
+          // Drop-combine target: dragging another item onto this one folders them.
+          highlight && "rounded-xl ring-2 ring-primary scale-110",
         )}
       >
         <Avatar
           className={cn(
             "size-12 clip-corner-lg transition-all duration-150",
-            !isActive && "opacity-50 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
+            !isActive && !highlight &&
+              "opacity-50 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
           )}
         >
           <AvatarImage src={info?.icon} alt={name} />
@@ -257,24 +443,9 @@ function ServerButton({
     reordering && "touch-none",
   );
 
-  // While this item is the one being dragged, its slot becomes a dashed
-  // placeholder (the floating ghost carries the real icon).
-  const placeholder = (
-    <span className="relative block size-12">
-      <span className="absolute inset-0 rounded-xl border-2 border-dashed border-primary/50 bg-primary/5" />
-    </span>
-  );
-
   // Identify the draggable node for hit-testing; the pointerdown listener is
-  // attached natively via `triggerRef` (see effect above).
-  const interactionProps = draggable ? { "data-rail-key": url } : {};
-
-  // Shift this icon (smoothly) to open a gap for the dragged item. The dragged
-  // item itself is not shifted (its placeholder stays put; the ghost moves).
-  const shiftStyle: React.CSSProperties =
-    !dragging && shiftY
-      ? { transform: `translateY(${shiftY}px)`, transition: "transform 180ms ease" }
-      : { transform: "translateY(0)", transition: reordering ? "transform 180ms ease" : undefined };
+  // attached natively via `triggerRef` (see useDragPointerDown).
+  const interactionProps = draggable ? dragAttrs(itemAnchor(url), dragParent) : {};
 
   return (
     <Tooltip>
@@ -284,7 +455,6 @@ function ServerButton({
             ref={triggerRef as React.RefObject<HTMLButtonElement>}
             type="button"
             aria-label={name}
-            style={shiftStyle}
             onClick={() => {
               if (shouldSuppressClick?.()) return;
               onSelect(url);
@@ -292,14 +462,13 @@ function ServerButton({
             className={cn(triggerClass, dragClass, selected && "is-active")}
             {...interactionProps}
           >
-            {dragging ? placeholder : inner(Boolean(selected))}
+            {dragging ? dragPlaceholder : inner(Boolean(selected))}
           </button>
         ) : (
           <NavLink
             ref={triggerRef as React.RefObject<HTMLAnchorElement>}
             to={`/s/${relayToRouteParam(url)}`}
             aria-label={name}
-            style={shiftStyle}
             onClick={(e) => {
               if (shouldSuppressClick?.()) {
                 e.preventDefault();
@@ -310,7 +479,7 @@ function ServerButton({
             className={({ isActive }) => cn(triggerClass, dragClass, isActive && "is-active")}
             {...interactionProps}
           >
-            {({ isActive }) => (dragging ? placeholder : inner(isActive))}
+            {({ isActive }) => (dragging ? dragPlaceholder : inner(isActive))}
           </NavLink>
         )}
       </TooltipTrigger>
@@ -332,31 +501,18 @@ function ConcordButton({
   onNavigate,
   draggable,
   dragging,
-  shiftY,
   reordering,
+  highlight,
+  dragParent,
   onDragPointerDown,
   shouldSuppressClick,
 }: {
   communityId: string;
   name: string;
   onNavigate?: () => void;
-  draggable?: boolean;
-  dragging?: boolean;
-  shiftY?: number;
-  reordering?: boolean;
-  onDragPointerDown?: (e: PointerEvent) => void;
-  shouldSuppressClick?: () => boolean;
-}) {
+} & RailDragProps) {
   const triggerRef = useRef<HTMLAnchorElement | null>(null);
-  const dragHandlerRef = useRef(onDragPointerDown);
-  dragHandlerRef.current = onDragPointerDown;
-  useEffect(() => {
-    const el = triggerRef.current;
-    if (!el || !draggable) return;
-    const handler = (e: PointerEvent) => dragHandlerRef.current?.(e);
-    el.addEventListener("pointerdown", handler);
-    return () => el.removeEventListener("pointerdown", handler);
-  }, [draggable]);
+  useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
   const initials = name.trim().slice(0, 2).toUpperCase() || "··";
   // Resolve the community's authoritative GroupRoot icon: rehydrate from the
@@ -374,17 +530,6 @@ function ConcordButton({
   const { icon } = useCommunityImageDescriptors(community, folded);
   const iconUrl = useDecryptedCommunityImage(icon);
 
-  const shiftStyle: React.CSSProperties =
-    !dragging && shiftY
-      ? { transform: `translateY(${shiftY}px)`, transition: "transform 180ms ease" }
-      : { transform: "translateY(0)", transition: reordering ? "transform 180ms ease" : undefined };
-
-  const placeholder = (
-    <span className="relative block size-12">
-      <span className="absolute inset-0 rounded-xl border-2 border-dashed border-primary/50 bg-primary/5" />
-    </span>
-  );
-
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -392,7 +537,6 @@ function ConcordButton({
           ref={triggerRef}
           to={`/c1/${encodeURIComponent(communityId)}`}
           aria-label={name}
-          style={shiftStyle}
           onClick={(e) => {
             if (shouldSuppressClick?.()) {
               e.preventDefault();
@@ -406,19 +550,25 @@ function ConcordButton({
             dragging && "cursor-grabbing",
             reordering && "touch-none",
           )}
-          {...(draggable ? { "data-rail-key": concord1Key(communityId) } : {})}
+          {...(draggable ? dragAttrs(itemAnchor(concord1Key(communityId)), dragParent) : {})}
         >
           {({ isActive }) =>
             dragging ? (
-              placeholder
+              dragPlaceholder
             ) : (
-              <span className="relative block size-12">
+              <span
+                className={cn(
+                  "relative block size-12",
+                  highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
+                )}
+              >
                 <span
                   className={cn(
                     "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
                     "bg-muted text-success opacity-60 saturate-75",
                     "group-hover:opacity-100 group-hover:saturate-100",
-                    isActive && "opacity-100 saturate-100 is-active",
+                    (isActive || highlight) && "opacity-100 saturate-100",
+                    isActive && "is-active",
                   )}
                 >
                   {iconUrl ? (
@@ -450,31 +600,18 @@ function Concord2Button({
   onNavigate,
   draggable,
   dragging,
-  shiftY,
   reordering,
+  highlight,
+  dragParent,
   onDragPointerDown,
   shouldSuppressClick,
 }: {
   communityId: string;
   name: string;
   onNavigate?: () => void;
-  draggable?: boolean;
-  dragging?: boolean;
-  shiftY?: number;
-  reordering?: boolean;
-  onDragPointerDown?: (e: PointerEvent) => void;
-  shouldSuppressClick?: () => boolean;
-}) {
+} & RailDragProps) {
   const triggerRef = useRef<HTMLAnchorElement | null>(null);
-  const dragHandlerRef = useRef(onDragPointerDown);
-  dragHandlerRef.current = onDragPointerDown;
-  useEffect(() => {
-    const el = triggerRef.current;
-    if (!el || !draggable) return;
-    const handler = (e: PointerEvent) => dragHandlerRef.current?.(e);
-    el.addEventListener("pointerdown", handler);
-    return () => el.removeEventListener("pointerdown", handler);
-  }, [draggable]);
+  useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
   const community = useCommunity2(communityId);
   // Rail buttons only need the icon/name, which the fold serves from its
@@ -495,17 +632,6 @@ function Concord2Button({
   const anyUnread = unreadSummaries.length > 0;
   const anyMention = unreadSummaries.some((u) => u.mention);
 
-  const shiftStyle: React.CSSProperties =
-    !dragging && shiftY
-      ? { transform: `translateY(${shiftY}px)`, transition: "transform 180ms ease" }
-      : { transform: "translateY(0)", transition: reordering ? "transform 180ms ease" : undefined };
-
-  const placeholder = (
-    <span className="relative block size-12">
-      <span className="absolute inset-0 rounded-xl border-2 border-dashed border-primary/50 bg-primary/5" />
-    </span>
-  );
-
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -513,7 +639,6 @@ function Concord2Button({
           ref={triggerRef}
           to={`/c/${encodeURIComponent(communityId)}`}
           aria-label={displayName}
-          style={shiftStyle}
           onClick={(e) => {
             if (shouldSuppressClick?.()) {
               e.preventDefault();
@@ -527,19 +652,25 @@ function Concord2Button({
             dragging && "cursor-grabbing",
             reordering && "touch-none",
           )}
-          {...(draggable ? { "data-rail-key": concord2Key(communityId) } : {})}
+          {...(draggable ? dragAttrs(itemAnchor(concord2Key(communityId)), dragParent) : {})}
         >
           {({ isActive }) =>
             dragging ? (
-              placeholder
+              dragPlaceholder
             ) : (
-              <span className="relative block size-12">
+              <span
+                className={cn(
+                  "relative block size-12",
+                  highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
+                )}
+              >
                 <span
                   className={cn(
                     "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
                     "bg-muted text-success opacity-60 saturate-75",
                     "group-hover:opacity-100 group-hover:saturate-100",
-                    isActive && "opacity-100 saturate-100 is-active",
+                    (isActive || highlight) && "opacity-100 saturate-100",
+                    isActive && "is-active",
                   )}
                 >
                   {iconUrl ? (
@@ -575,8 +706,140 @@ function Concord2Button({
 }
 
 /**
- * Far-left vertical rail listing every server (relay): pinned platform
- * relays first, then user-added ones, then add-server and settings actions.
+ * A Discord-style server folder in the rail. Collapsed it shows a 2×2 grid of
+ * its members' icons; clicking expands it in place, listing the members
+ * inside a tinted container. Right-click to rename or remove (dissolve) it.
+ * The folder itself drags as one unit to reorder it in the rail.
+ */
+function RailFolder({
+  id,
+  name,
+  items,
+  open,
+  active,
+  onToggle,
+  onRenameRequest,
+  onDissolve,
+  draggable,
+  dragging,
+  reordering,
+  highlight,
+  onDragPointerDown,
+  shouldSuppressClick,
+  children,
+}: {
+  id: string;
+  name: string;
+  items: RailItem[];
+  open: boolean;
+  /** A member of this folder is the active route (shown while collapsed). */
+  active: boolean;
+  onToggle: () => void;
+  onRenameRequest: () => void;
+  onDissolve: () => void;
+  children?: React.ReactNode;
+} & RailDragProps) {
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  useDragPointerDown(triggerRef, draggable, onDragPointerDown);
+
+  const label = name.trim() || "Folder";
+
+  const header = (
+    <ContextMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>
+            <button
+              ref={triggerRef}
+              type="button"
+              aria-label={label}
+              aria-expanded={open}
+              onClick={() => {
+                if (shouldSuppressClick?.()) return;
+                onToggle();
+              }}
+              className={cn(
+                "group relative flex items-center justify-center shrink-0 touch-pan-y",
+                draggable && "cursor-grab",
+                dragging && "cursor-grabbing",
+                reordering && "touch-none",
+              )}
+              {...(draggable ? dragAttrs(folderAnchor(id)) : {})}
+            >
+              {/* Active blade while collapsed (a member is the open route). */}
+              <span
+                className={cn(
+                  "absolute -left-2 w-[3px] bg-primary transition-all",
+                  !open && active
+                    ? "h-12 opacity-100"
+                    : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                )}
+              />
+              {dragging && !open ? (
+                dragPlaceholder
+              ) : (
+                <span
+                  className={cn(
+                    "relative block size-12 transition-all duration-150",
+                    highlight && "rounded-xl ring-2 ring-primary scale-110",
+                    !open && !active && !highlight &&
+                      "opacity-70 saturate-75 group-hover:opacity-100 group-hover:saturate-100",
+                  )}
+                >
+                  {open ? (
+                    <span className="flex size-12 items-center justify-center clip-corner-lg bg-secondary/80 text-primary">
+                      <FolderOpen className="size-5" />
+                    </span>
+                  ) : (
+                    <FolderMiniGrid items={items} />
+                  )}
+                </span>
+              )}
+            </button>
+          </ContextMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="font-medium">
+          {label}
+          <span className="block text-xs text-muted-foreground">
+            {items.length === 1 ? "1 community" : `${items.length} communities`}
+          </span>
+        </TooltipContent>
+      </Tooltip>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={onRenameRequest}>Rename folder</ContextMenuItem>
+        <ContextMenuItem onSelect={onDissolve}>Remove folder</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+
+  if (!open) return header;
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col items-center gap-4 sidebar:gap-5 shrink-0 rounded-2xl bg-secondary/40 px-1.5 py-1.5 transition-colors",
+        // While this folder itself is being dragged, dim it in place (its
+        // frozen slot geometry must not change mid-gesture).
+        dragging && "opacity-40",
+      )}
+    >
+      {header}
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Far-left vertical rail listing every community — NIP-29 servers and Concord
+ * (V1/V2) communities in one user-arranged list with Discord-style folders —
+ * plus DMs, add-community and settings actions.
+ *
+ * Drag interactions (Discord semantics):
+ * - Mouse: press and move a few pixels to pick an entry up immediately.
+ * - Touch: press and hold (~300ms), then drag (a short tap navigates).
+ * - Drop in a gap to reorder; drop onto another community to create a folder;
+ *   drop onto a folder to move it inside; drag out of a folder to remove it.
+ *   Folders holding a single item dissolve automatically.
  */
 export function ServerRail({
   onNavigate,
@@ -593,6 +856,7 @@ export function ServerRail({
 }) {
   const { config, updateConfig } = useAppContext();
   const navigate = useNavigate();
+  const location = useLocation();
   const { activeCall } = useCall();
   const { user } = useCurrentUser();
   const { mesh } = useMeshTransport();
@@ -603,7 +867,7 @@ export function ServerRail({
   const [addOpen, setAddOpen] = useState(false);
 
   // Build the full rail list (pinned platform relays + user-added ones),
-  // de-duplicated. Order is applied at the unified-list level below.
+  // de-duplicated. Order/grouping is applied by the layout below.
   const servers = useMemo(() => {
     const base: string[] = [];
     const seen = new Set<string>();
@@ -617,11 +881,9 @@ export function ServerRail({
     return base;
   }, [config.addedRelays]);
 
-  // Unify NIP-29 servers and Concord (V1/V2) communities into one flat list,
-  // then apply the user's saved rail order (`config.railOrder`) on top. Any
-  // item missing from the saved order keeps its default position (servers
-  // first, then Concord V1, then V2, in discovery order); unknown saved entries
-  // are ignored. This is the single reorderable list shown in the rail.
+  // Every live rail item (NIP-29 servers and Concord V1/V2 communities) in
+  // discovery order. The persisted layout arranges these into the visible
+  // ordered list + folders.
   const items = useMemo<RailItem[]>(() => {
     const base: RailItem[] = [];
     base.push(...servers.map((url) => ({ kind: "server" as const, key: url, url })));
@@ -643,68 +905,89 @@ export function ServerRail({
         });
       }
     }
+    return base;
+  }, [servers, concord, concord2, user]);
 
-    const byKey = new Map(base.map((it) => [it.key, it]));
-    const order = config.railOrder.filter((k) => byKey.has(k));
-    if (order.length === 0) return base;
-    const ordered: RailItem[] = [];
-    const placed = new Set<string>();
-    for (const key of order) {
-      const it = byKey.get(key)!;
-      ordered.push(it);
-      placed.add(key);
+  const liveByKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items]);
+
+  // The working layout: the synced `railLayout` (seeded from the legacy flat
+  // `railOrder` when absent) with newly-discovered items appended. Keys the
+  // layout knows but that aren't live yet (still loading / since removed) are
+  // KEPT in the data — they're only skipped at render — so an early drag can't
+  // wipe another device's folders.
+  const layout = useMemo(
+    () => mergeLayout(config.railLayout, config.railOrder, items.map((it) => it.key)),
+    [config.railLayout, config.railOrder, items],
+  );
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
+  // Resolve the layout against live items for rendering.
+  const renderNodes = useMemo<RenderNode[]>(() => {
+    const out: RenderNode[] = [];
+    for (const node of layout) {
+      if (node.type === "item") {
+        const item = liveByKey.get(node.key);
+        if (item) out.push({ type: "item", item });
+      } else {
+        const kids = node.keys
+          .map((k) => liveByKey.get(k))
+          .filter((it): it is RailItem => it !== undefined);
+        if (kids.length > 0) out.push({ type: "folder", id: node.id, name: node.name, items: kids });
+      }
     }
-    for (const it of base) {
-      if (!placed.has(it.key)) ordered.push(it);
-    }
-    return ordered;
-  }, [servers, concord, concord2, user, config.railOrder]);
+    return out;
+  }, [layout, liveByKey]);
 
-  // Long-press drag-to-reorder for the whole community rail. Works for both
-  // touch and mouse via pointer events: press and hold (~300ms) to pick an item
-  // up, then drag to slide it into a new spot — the other icons shift to open a
-  // gap and a floating ghost follows the pointer. A short press/tap navigates.
-  //
-  // The rendered DOM order never changes during a drag (it stays `items`);
-  // instead each icon gets a vertical `shiftY` to open the drop gap. This
-  // avoids reading the DOM mid-animation, which previously caused flicker.
-  const [dragKey, setDragKey] = useState<string | null>(null);
-  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
-  // Target slot index (in the original `items` list) the dragged item lands.
-  const [targetIndex, setTargetIndex] = useState<number | null>(null);
-  const navRef = useRef<HTMLElement | null>(null);
-  const longPressTimer = useRef<number | null>(null);
-  const startPos = useRef<{ x: number; y: number } | null>(null);
-  // Tracks the in-flight drag outside React state (read inside listeners).
-  const dragActive = useRef<string | null>(null);
-  // Set briefly after a drag so the ensuing click doesn't navigate/select.
-  const didDragRef = useRef(false);
-  // Snapshot of the order at drag start, so the math is stable mid-gesture.
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
-  const orderKeysRef = useRef<string[]>([]);
-  orderKeysRef.current = items.map((it) => it.key);
-  // Frozen slot centers (viewport Y) + pitch, captured once at pickup from
-  // clean DOM. Drives the arithmetic, never re-measured during the drag.
-  const slotCentersRef = useRef<number[]>([]);
-  const pitchRef = useRef(68);
-  const targetIndexRef = useRef<number | null>(null);
-  targetIndexRef.current = targetIndex;
+  const openFolders = useMemo(() => new Set(config.railOpenFolders), [config.railOpenFolders]);
+  const toggleFolder = useCallback(
+    (id: string) => {
+      updateConfig((current) => {
+        const open = new Set(current.railOpenFolders);
+        if (open.has(id)) open.delete(id);
+        else open.add(id);
+        return { ...current, railOpenFolders: [...open] };
+      });
+    },
+    [updateConfig],
+  );
 
-  const persistOrder = useCallback(
-    (keys: string[]) => {
-      // Persist the unified rail order in app config (servers + communities).
+  /** Whether a rail item is the active route / drawer selection. */
+  const isItemActive = useCallback(
+    (item: RailItem): boolean => {
+      if (item.kind === "server" && onServerSelect) return selectedServer === item.url;
+      const base =
+        item.kind === "server"
+          ? `/s/${relayToRouteParam(item.url)}`
+          : item.kind === "concord1"
+            ? `/c1/${encodeURIComponent(item.communityId)}`
+            : `/c/${encodeURIComponent(item.communityId)}`;
+      return location.pathname === base || location.pathname.startsWith(`${base}/`);
+    },
+    [location.pathname, onServerSelect, selectedServer],
+  );
+
+  /** Persist a layout change everywhere it needs to go. */
+  const persistLayout = useCallback(
+    (nodes: RailLayoutNode[]) => {
+      const normalized = normalizeLayout(nodes);
+      const keys = flattenLayout(normalized);
       updateConfig((current) => ({
         ...current,
+        // The structured layout (items + folders) — the source of truth.
+        railLayout: normalized,
+        // Flattened orders kept in sync for the QuickSwitcher and for older
+        // clients that only understand the flat lists.
         railOrder: keys,
-        // Keep the legacy server-only order in sync for backward compat.
         serverOrder: keys.filter((k) => !k.startsWith("c1:") && !k.startsWith("c2:")),
       }));
 
       // Also sync the relative order of user-added relays to the kind 10009
       // list (the cross-device source of truth for the added-server set).
       const pinnedSet = new Set(PLATFORM_RELAYS);
-      const addedOrder = keys.filter((k) => !k.startsWith("c1:") && !k.startsWith("c2:") && !pinnedSet.has(k));
+      const addedOrder = keys.filter(
+        (k) => !k.startsWith("c1:") && !k.startsWith("c2:") && !pinnedSet.has(k),
+      );
       if (user && addedOrder.length > 0) {
         updateList({ type: "reorder-servers", urls: addedOrder }).catch((err) =>
           console.warn("Failed to persist server order:", err),
@@ -714,37 +997,65 @@ export function ServerRail({
     [updateConfig, updateList, user],
   );
 
-  /** Nearest slot index for a pointer Y, from the frozen slot centers. */
-  const indexForY = useCallback((y: number): number => {
-    const centers = slotCentersRef.current;
-    if (centers.length === 0) return 0;
-    let idx = 0;
-    let best = Infinity;
-    for (let i = 0; i < centers.length; i++) {
-      const d = Math.abs(y - centers[i]);
-      if (d < best) {
-        best = d;
-        idx = i;
-      }
+  // ─── Drag to reorder / fold (Discord semantics) ─────────────────────────
+  //
+  // With a mouse, an entry picks up as soon as the pointer moves a few pixels
+  // (no hold needed — this is what makes the grab cursor honest). On touch,
+  // press and hold (~300ms) picks up, so the rail can still scroll.
+  //
+  // The rendered DOM order never changes during a drag; slot geometry is
+  // frozen at pickup and a fixed-position indicator line / target highlight
+  // previews the drop (`planDrop`). On release the drop is applied to the
+  // layout (`applyDrop`) and persisted.
+  const [dragSource, setDragSource] = useState<RailDragSource | null>(null);
+  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
+  const [dropPlan, setDropPlan] = useState<RailDropPlan | null>(null);
+  const navRef = useRef<HTMLElement | null>(null);
+  const longPressTimer = useRef<number | null>(null);
+  const startPos = useRef<{ x: number; y: number } | null>(null);
+  // Tracks the in-flight drag outside React state (read inside listeners).
+  const dragActive = useRef<RailDragSource | null>(null);
+  // Set briefly after a drag so the ensuing click doesn't navigate/toggle.
+  const didDragRef = useRef(false);
+  // Frozen slot geometry + rail frame, captured once at pickup from clean DOM.
+  const slotsRef = useRef<RailSlot[]>([]);
+  const navRectRef = useRef<{ left: number; width: number } | null>(null);
+  const dropPlanRef = useRef<RailDropPlan | null>(null);
+
+  const beginDrag = useCallback((source: RailDragSource, x: number, y: number) => {
+    const nav = navRef.current;
+    if (nav) {
+      const slots: RailSlot[] = [];
+      nav.querySelectorAll<HTMLElement>("[data-rail-anchor]").forEach((el) => {
+        const r = el.getBoundingClientRect();
+        slots.push({
+          anchor: el.dataset.railAnchor!,
+          parentFolderId: el.dataset.railParent || undefined,
+          top: r.top,
+          height: r.height,
+        });
+      });
+      slotsRef.current = slots;
+      const navRect = nav.getBoundingClientRect();
+      navRectRef.current = { left: navRect.left, width: navRect.width };
     }
-    return idx;
+    dragActive.current = source;
+    const plan = planDrop(y, slotsRef.current, source);
+    dropPlanRef.current = plan;
+    setDragSource(source);
+    setDragPos({ x, y });
+    setDropPlan(plan);
+    // Haptic nudge on supported devices.
+    impact("medium");
   }, []);
 
-  /** Build the reordered key list from a target index. */
-  const orderForTarget = useCallback((draggedKey: string, target: number): string[] => {
-    const without = orderKeysRef.current.filter((k) => k !== draggedKey);
-    const clamped = Math.max(0, Math.min(target, without.length));
-    const next = [...without];
-    next.splice(clamped, 0, draggedKey);
-    return next;
-  }, []);
-
-  const handleItemPointerDown = useCallback(
-    (key: string, e: PointerEvent) => {
+  const handleDragPointerDown = useCallback(
+    (source: RailDragSource, e: PointerEvent) => {
       // Only left mouse / touch / pen; ignore right-click etc.
       if (e.button !== 0 && e.pointerType === "mouse") return;
       startPos.current = { x: e.clientX, y: e.clientY };
       const pointerId = e.pointerId;
+      const isMouse = e.pointerType === "mouse";
 
       const clear = () => {
         if (longPressTimer.current !== null) {
@@ -754,30 +1065,54 @@ export function ServerRail({
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onUp);
+        window.removeEventListener("contextmenu", onContextMenu, true);
+      };
+
+      // While a drag is in flight, swallow the context menu the browser
+      // synthesizes for a touch long-press (~500ms on Android) — it would
+      // otherwise pop the folder's Radix menu in the middle of the gesture.
+      const onContextMenu = (ev: Event) => {
+        if (dragActive.current !== null) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
       };
 
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
-        // Before the long-press fires, treat movement as a scroll/cancel.
         if (dragActive.current === null) {
           const s = startPos.current;
-          if (s && Math.hypot(ev.clientX - s.x, ev.clientY - s.y) > 10) {
+          if (!s) return;
+          const dist = Math.hypot(ev.clientX - s.x, ev.clientY - s.y);
+          if (isMouse) {
+            // Mouse: drag starts as soon as the pointer commits to moving.
+            if (dist > 6) beginDrag(source, ev.clientX, ev.clientY);
+          } else if (dist > 10) {
+            // Touch: movement before the long-press fires is a scroll.
             clear();
           }
           return;
         }
         ev.preventDefault();
         setDragPos({ x: ev.clientX, y: ev.clientY });
-        setTargetIndex(indexForY(ev.clientY));
+        const plan = planDrop(ev.clientY, slotsRef.current, dragActive.current);
+        dropPlanRef.current = plan;
+        setDropPlan(plan);
       };
 
       const onUp = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
         if (dragActive.current !== null) {
-          const ti = targetIndexRef.current;
-          const finalOrder =
-            ti === null ? orderKeysRef.current : orderForTarget(dragActive.current, ti);
-          persistOrder(finalOrder);
+          const plan = dropPlanRef.current;
+          try {
+            if (plan) {
+              persistLayout(applyDrop(layoutRef.current, dragActive.current, plan.target));
+            }
+          } catch (err) {
+            // Never let a failed drop wedge the drag state / leave listeners
+            // attached (this bit us when crypto.randomUUID threw over http).
+            console.error("Failed to apply rail drop:", err);
+          }
           didDragRef.current = true;
           // Keep the guard up long enough to swallow the click that the
           // browser synthesizes after pointerup, then clear it.
@@ -786,63 +1121,109 @@ export function ServerRail({
           }, 300);
         }
         dragActive.current = null;
-        setDragKey(null);
+        dropPlanRef.current = null;
+        setDragSource(null);
         setDragPos(null);
-        setTargetIndex(null);
+        setDropPlan(null);
         clear();
       };
 
       window.addEventListener("pointermove", onMove, { passive: false });
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onUp);
+      window.addEventListener("contextmenu", onContextMenu, true);
 
-      longPressTimer.current = window.setTimeout(() => {
-        // Freeze slot geometry from clean DOM (no transforms applied yet).
-        const nav = navRef.current;
-        const centers: number[] = [];
-        if (nav) {
-          const els = nav.querySelectorAll<HTMLElement>("[data-rail-key]");
-          els.forEach((el) => {
-            const r = el.getBoundingClientRect();
-            centers.push(r.top + r.height / 2);
-          });
-        }
-        slotCentersRef.current = centers;
-        if (centers.length >= 2) pitchRef.current = centers[1] - centers[0];
-
-        dragActive.current = key;
-        setDragKey(key);
-        setDragPos({ x: e.clientX, y: e.clientY });
-        setTargetIndex(orderKeysRef.current.indexOf(key));
-        // Haptic nudge on supported devices.
-        impact("medium");
-      }, 300);
+      if (!isMouse) {
+        longPressTimer.current = window.setTimeout(
+          () => beginDrag(source, e.clientX, e.clientY),
+          300,
+        );
+      }
     },
-    [indexForY, orderForTarget, persistOrder],
+    [beginDrag, persistLayout],
   );
 
-  // Per-item vertical shift while dragging: each icon translates from its
-  // original slot to the slot it would occupy in the previewed order. Pure
-  // arithmetic off frozen state — no DOM reads — so it can't feedback/flicker.
-  const reordering = dragKey !== null;
-  const shiftFor = useCallback(
-    (key: string): number => {
-      if (!dragKey || targetIndex === null || key === dragKey) return 0;
-      const previewOrder = orderForTarget(dragKey, targetIndex);
-      const fromIdx = items.findIndex((it) => it.key === key);
-      const toIdx = previewOrder.indexOf(key);
-      if (fromIdx === -1 || toIdx === -1) return 0;
-      return (toIdx - fromIdx) * pitchRef.current;
-    },
-    [dragKey, targetIndex, items, orderForTarget],
-  );
-
-  // The item currently being dragged (drives the floating ghost).
-  const draggedItem = useMemo(
-    () => (dragKey ? (items.find((it) => it.key === dragKey) ?? null) : null),
-    [dragKey, items],
-  );
+  const reordering = dragSource !== null;
   const draggable = items.length > 1;
+  const shouldSuppressClick = useCallback(() => didDragRef.current, []);
+
+  // What the floating ghost carries.
+  const draggedItem =
+    dragSource?.kind === "item" ? (liveByKey.get(dragSource.key) ?? null) : null;
+  const draggedFolder =
+    dragSource?.kind === "folder"
+      ? (renderNodes.find(
+          (n): n is Extract<RenderNode, { type: "folder" }> =>
+            n.type === "folder" && n.id === dragSource.id,
+        ) ?? null)
+      : null;
+
+  // Folder rename dialog.
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const requestRename = useCallback(
+    (id: string) => {
+      const folder = layoutRef.current.find(
+        (n): n is Extract<RailLayoutNode, { type: "folder" }> =>
+          n.type === "folder" && n.id === id,
+      );
+      setRenameValue(folder?.name ?? "");
+      setRenameId(id);
+    },
+    [],
+  );
+  const submitRename = useCallback(() => {
+    if (renameId !== null) {
+      persistLayout(renameFolder(layoutRef.current, renameId, renameValue.trim()));
+    }
+    setRenameId(null);
+  }, [renameId, renameValue, persistLayout]);
+
+  const renderItem = (item: RailItem, parentFolderId?: string) => {
+    const common: RailDragProps = {
+      draggable,
+      dragging: dragSource?.kind === "item" && dragSource.key === item.key,
+      reordering,
+      highlight: dropPlan?.highlightAnchor === itemAnchor(item.key),
+      dragParent: parentFolderId,
+      onDragPointerDown: (e: PointerEvent) =>
+        handleDragPointerDown({ kind: "item", key: item.key }, e),
+      shouldSuppressClick,
+    };
+    if (item.kind === "server") {
+      return (
+        <ServerButton
+          key={item.key}
+          url={item.url}
+          onNavigate={onNavigate}
+          onSelect={onServerSelect}
+          selected={onServerSelect ? selectedServer === item.url : undefined}
+          inCall={!activeCall?.dmPeer && activeCall?.relayUrl === item.url}
+          {...common}
+        />
+      );
+    }
+    if (item.kind === "concord1") {
+      return (
+        <ConcordButton
+          key={item.key}
+          communityId={item.communityId}
+          name={item.name}
+          onNavigate={onNavigate}
+          {...common}
+        />
+      );
+    }
+    return (
+      <Concord2Button
+        key={item.key}
+        communityId={item.communityId}
+        name={item.name}
+        onNavigate={onNavigate}
+        {...common}
+      />
+    );
+  };
 
   return (
     <nav
@@ -851,7 +1232,7 @@ export function ServerRail({
       // Suppress the browser's native HTML5 drag (images and <a>/NavLink are
       // draggable by default). Without this, a press-and-drag on a community
       // icon starts a native image/link drag that hijacks our custom
-      // long-press reorder gesture.
+      // reorder gesture.
       onDragStart={(e) => e.preventDefault()}
       className={cn(
         // Chrome plane — deepest part of the recessed frame. The rail reaches
@@ -861,11 +1242,11 @@ export function ServerRail({
         // Slimmer + tighter on the mobile drill-down (where it shares the width
         // with the channel/DM list) so it doesn't read as a squeezed desktop
         // rail; widens to the full desktop rail at the `sidebar:` breakpoint.
-        "flex flex-col items-center gap-4 sidebar:gap-5 w-[60px] sidebar:w-[72px] shrink-0 overflow-y-auto bg-chrome-deep",
+        "flex flex-col items-center gap-4 sidebar:gap-5 w-[60px] sidebar:w-[72px] shrink-0 overflow-y-auto bg-chrome-deep select-none",
         "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
         "pb-[calc(0.75rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]",
         // Lock scrolling while dragging so the rail doesn't fight the gesture.
-        dragKey && "overflow-hidden",
+        reordering && "overflow-hidden",
         className,
       )}
     >
@@ -957,56 +1338,36 @@ export function ServerRail({
         </Tooltip>
       )}
 
-      {/* One unified, reorderable community list: NIP-29 servers and Concord
-          (V1/V2) communities intermixed. There is no divider between the two
-          trust models — they're a single drag-to-rearrange list. */}
-      {items.map((item) =>
-        item.kind === "server" ? (
-          <ServerButton
-            key={item.key}
-            url={item.url}
-            onNavigate={onNavigate}
-            onSelect={onServerSelect}
-            selected={onServerSelect ? selectedServer === item.url : undefined}
-            inCall={!activeCall?.dmPeer && activeCall?.relayUrl === item.url}
-            draggable={draggable}
-            dragging={dragKey === item.key}
-            shiftY={shiftFor(item.key)}
-            reordering={reordering}
-            onDragPointerDown={(e) => handleItemPointerDown(item.key, e)}
-            shouldSuppressClick={() => didDragRef.current}
-          />
-        ) : item.kind === "concord1" ? (
-          <ConcordButton
-            key={item.key}
-            communityId={item.communityId}
-            name={item.name}
-            onNavigate={onNavigate}
-            draggable={draggable}
-            dragging={dragKey === item.key}
-            shiftY={shiftFor(item.key)}
-            reordering={reordering}
-            onDragPointerDown={(e) => handleItemPointerDown(item.key, e)}
-            shouldSuppressClick={() => didDragRef.current}
-          />
+      {/* One unified, user-arranged community list: NIP-29 servers and Concord
+          (V1/V2) communities intermixed, with Discord-style folders. */}
+      {renderNodes.map((node) =>
+        node.type === "item" ? (
+          renderItem(node.item)
         ) : (
-          <Concord2Button
-            key={item.key}
-            communityId={item.communityId}
-            name={item.name}
-            onNavigate={onNavigate}
+          <RailFolder
+            key={node.id}
+            id={node.id}
+            name={node.name}
+            items={node.items}
+            open={openFolders.has(node.id)}
+            active={node.items.some(isItemActive)}
+            onToggle={() => toggleFolder(node.id)}
+            onRenameRequest={() => requestRename(node.id)}
+            onDissolve={() => persistLayout(dissolveFolder(layoutRef.current, node.id))}
             draggable={draggable}
-            dragging={dragKey === item.key}
-            shiftY={shiftFor(item.key)}
+            dragging={dragSource?.kind === "folder" && dragSource.id === node.id}
             reordering={reordering}
-            onDragPointerDown={(e) => handleItemPointerDown(item.key, e)}
-            shouldSuppressClick={() => didDragRef.current}
-          />
+            highlight={dropPlan?.highlightAnchor === folderAnchor(node.id)}
+            onDragPointerDown={(e) => handleDragPointerDown({ kind: "folder", id: node.id }, e)}
+            shouldSuppressClick={shouldSuppressClick}
+          >
+            {node.items.map((item) => renderItem(item, node.id))}
+          </RailFolder>
         ),
       )}
 
       {/* Separates the community list from the add/settings actions below. */}
-      {items.length > 0 && <div className="w-7 h-px bg-chrome-divider shrink-0" />}
+      {renderNodes.length > 0 && <div className="w-7 h-px bg-chrome-divider shrink-0" />}
 
       <Tooltip>
         <TooltipTrigger asChild>
@@ -1045,8 +1406,55 @@ export function ServerRail({
 
       <AddDialog open={addOpen} onOpenChange={setAddOpen} />
 
+      {/* Folder rename dialog (from the folder context menu). */}
+      <Dialog open={renameId !== null} onOpenChange={(open) => !open && setRenameId(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename folder</DialogTitle>
+            <DialogDescription>Name this group of communities.</DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitRename();
+            }}
+            className="space-y-4"
+          >
+            <Input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              placeholder="Folder name"
+              autoFocus
+              maxLength={64}
+            />
+            <DialogFooter>
+              <Button type="submit">Save</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {/* Floating ghost that follows the pointer during a drag. */}
-      {draggedItem && dragPos && <DragGhost item={draggedItem} x={dragPos.x} y={dragPos.y} />}
+      {dragSource && dragPos && (draggedItem || draggedFolder) && (
+        <DragGhost
+          item={draggedItem ?? undefined}
+          folderItems={draggedFolder?.items}
+          x={dragPos.x}
+          y={dragPos.y}
+        />
+      )}
+
+      {/* Insertion indicator: where a gap drop would land. */}
+      {reordering && dropPlan?.indicatorY !== undefined && navRectRef.current && (
+        <div
+          className="pointer-events-none fixed z-[299] h-0.5 rounded-full bg-primary shadow-[0_0_6px_hsl(var(--primary)/0.7)]"
+          style={{
+            left: navRectRef.current.left + 6,
+            width: navRectRef.current.width - 12,
+            top: dropPlan.indicatorY - 1,
+          }}
+        />
+      )}
     </nav>
   );
 }

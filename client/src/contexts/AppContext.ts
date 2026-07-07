@@ -3,6 +3,7 @@ import { createContext } from "react";
 import { APP_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
+import type { RailLayoutNode } from "@/lib/railLayout";
 import type { ThemeConfig, ThemesConfig } from "@/themes";
 
 export type Theme = "light" | "dark" | "system" | "custom";
@@ -56,6 +57,19 @@ export interface AppConfig {
    * discovery order). Stored locally in app config.
    */
   railOrder: string[];
+  /**
+   * The community rail's structured layout: an ordered list of items (by
+   * stable rail key — relay URLs and `c1:`/`c2:` community keys) and
+   * Discord-style folders grouping them. Supersedes `railOrder` (which is
+   * still written as the flattened order for backward compatibility and the
+   * QuickSwitcher). Synced across devices via the encrypted settings event.
+   */
+  railLayout: RailLayoutNode[];
+  /**
+   * Ids of rail folders currently expanded. Per-device UI state (like
+   * Discord, folder open/closed state does not sync).
+   */
+  railOpenFolders: string[];
   /**
    * App relays for non-NIP-29 traffic (kind 0 profiles, kind 10009 lists,
    * etc.) — Ditto's "app relays" concept. Seeded from VITE_APP_RELAYS
@@ -138,6 +152,7 @@ export const SYNCED_CONFIG_KEYS = [
   "addedRelays",
   "serverOrder",
   "railOrder",
+  "railLayout",
   "appRelays",
   "searchRelays",
   "useOwnDmRelays",
@@ -154,6 +169,8 @@ export const defaultConfig: AppConfig = {
   addedRelays: [],
   serverOrder: [],
   railOrder: [],
+  railLayout: [],
+  railOpenFolders: [],
   appRelays: [...APP_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
   useOwnDmRelays: false,

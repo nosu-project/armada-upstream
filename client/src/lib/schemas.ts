@@ -2,6 +2,8 @@ import { z } from "zod";
 
 import { defaultConfig } from "@/contexts/AppContext";
 
+import type { RailLayoutNode } from "@/lib/railLayout";
+
 /** An HSL string like "228 20% 10%". */
 const HslStringSchema = z
   .string()
@@ -30,6 +32,20 @@ export const BlossomServerMetadataSchema = z.object({
 });
 
 /**
+ * A node in the community rail's structured layout: a bare item (by stable
+ * rail key) or a Discord-style folder of items. See lib/railLayout.ts.
+ */
+export const RailLayoutNodeSchema: z.ZodType<RailLayoutNode> = z.union([
+  z.object({ type: z.literal("item"), key: z.string() }),
+  z.object({
+    type: z.literal("folder"),
+    id: z.string(),
+    name: z.string(),
+    keys: z.array(z.string()),
+  }),
+]);
+
+/**
  * Validates the persisted AppConfig. Used field-by-field in AppProvider so a
  * single corrupt key never wipes the entire config.
  */
@@ -40,6 +56,8 @@ export const AppConfigSchema = z.object({
   addedRelays: z.array(z.string()).catch([]),
   serverOrder: z.array(z.string()).catch([]),
   railOrder: z.array(z.string()).catch([]),
+  railLayout: z.array(RailLayoutNodeSchema).catch([]),
+  railOpenFolders: z.array(z.string()).catch([]),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
   useOwnDmRelays: z.boolean().catch(defaultConfig.useOwnDmRelays),
@@ -70,6 +88,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   serverOrder: z.array(z.string()).optional(),
   /** Unified community-rail order (relay URLs + `c1:`/`c2:` community keys). */
   railOrder: z.array(z.string()).optional(),
+  /** Structured rail layout: ordered items + folders (supersedes railOrder). */
+  railLayout: z.array(RailLayoutNodeSchema).optional(),
   /** General-purpose app relays. */
   appRelays: z.array(z.string()).optional(),
   /** NIP-50 search relays. */
