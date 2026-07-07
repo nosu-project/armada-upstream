@@ -1,20 +1,19 @@
-import { Loader2, Smile } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Loader2, Smile, SmilePlus } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useSetUserStatus, useUserStatus } from "@/hooks/useUserStatus";
+
+/** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
+const LazyEmojiPicker = lazy(() =>
+  import("@/components/chat/EmojiPicker").then((m) => ({ default: m.EmojiPicker })),
+);
 
 interface StatusDialogProps {
   open: boolean;
@@ -37,13 +36,32 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
   const { mutateAsync: setStatus, isPending } = useSetUserStatus();
 
   const [content, setContent] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Hydrate from the current status whenever the dialog opens.
   useEffect(() => {
     if (open) {
       setContent(data?.status?.content ?? "");
+      setPickerOpen(false);
     }
   }, [open, data?.status?.content]);
+
+  /** Insert an emoji at the caret (or append), then restore focus. */
+  const insertEmoji = (emoji: string) => {
+    const input = inputRef.current;
+    const start = input?.selectionStart ?? content.length;
+    const end = input?.selectionEnd ?? content.length;
+    const next = (content.slice(0, start) + emoji + content.slice(end)).slice(0, MAX_LEN);
+    setContent(next);
+    setPickerOpen(false);
+    requestAnimationFrame(() => {
+      if (!inputRef.current) return;
+      inputRef.current.focus();
+      const caret = Math.min(start + emoji.length, next.length);
+      inputRef.current.setSelectionRange(caret, caret);
+    });
+  };
 
   const save = async (next: string) => {
     try {
@@ -63,42 +81,80 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Smile className="size-4" />
-            Set a status
-          </DialogTitle>
-          <DialogDescription>
+      <ChromeDialogContent title="Set a status">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
+            <Smile className="size-6" />
+          </div>
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+            set a status
+          </h2>
+          <p className="text-sm text-muted-foreground">
             A short message shown next to your name. Visible to everyone. Clear it any time.
-          </DialogDescription>
-        </DialogHeader>
+          </p>
+        </div>
 
         <form
           onSubmit={(e) => {
             e.preventDefault();
             save(content);
           }}
-          className="space-y-4"
+          className="mt-6 space-y-5"
         >
-          <div className="space-y-2">
-            <Label htmlFor="user-status">What's happening?</Label>
-            <Input
-              id="user-status"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="e.g. 🎧 Heads down"
-              autoComplete="off"
-              maxLength={MAX_LEN}
-              autoFocus
-            />
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="user-status"
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+            >
+              What's happening?
+            </Label>
+            <div className="relative">
+              <Input
+                ref={inputRef}
+                id="user-status"
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                placeholder="e.g. 🎧 Heads down"
+                autoComplete="off"
+                maxLength={MAX_LEN}
+                autoFocus
+                className="pr-10 bg-background/40 border-transparent"
+              />
+              <Popover open={pickerOpen} onOpenChange={setPickerOpen} modal>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Add emoji"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 size-8 text-muted-foreground hover:text-primary"
+                  >
+                    <SmilePlus className="size-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  side="top"
+                  align="end"
+                  sideOffset={8}
+                  className="w-[min(20rem,90vw)] p-0 rounded-xl border-border shadow-lg overflow-hidden"
+                >
+                  <Suspense fallback={<div className="h-[360px]" />}>
+                    <LazyEmojiPicker
+                      onSelect={(selection) => {
+                        if (selection.type === "native") insertEmoji(selection.emoji);
+                      }}
+                    />
+                  </Suspense>
+                </PopoverContent>
+              </Popover>
+            </div>
             <div className="flex flex-wrap gap-1.5 pt-1">
               {PRESETS.map((preset) => (
                 <button
                   key={preset}
                   type="button"
                   onClick={() => setContent(preset)}
-                  className="rounded-full border bg-secondary/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="clip-corner-lg bg-background/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
                   {preset}
                 </button>
@@ -106,27 +162,32 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
             </div>
           </div>
 
-          <DialogFooter className="gap-2 sm:gap-2">
+          <div className="flex items-center gap-2 pt-1">
             {data?.status?.content && (
               <Button
                 type="button"
                 variant="ghost"
-                className="mr-auto text-muted-foreground"
+                className="mr-auto clip-corner-lg text-muted-foreground"
                 disabled={isPending}
                 onClick={() => save("")}
               >
                 Clear status
               </Button>
             )}
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              className="flex-1 clip-corner-lg"
+              onClick={() => onOpenChange(false)}
+            >
               Cancel
             </Button>
-            <Button type="submit" disabled={isPending}>
+            <Button type="submit" className="flex-1 clip-corner-lg" disabled={isPending}>
               {isPending ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : "Save"}
             </Button>
-          </DialogFooter>
+          </div>
         </form>
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }
