@@ -198,7 +198,8 @@ function ChannelRow2({
     >
       <Icon className="size-4 shrink-0" />
       <span className="truncate flex-1 min-w-0">{channel.name}</span>
-      {/* Unread / mention indicator: an "@" pill for mentions, else a dot. */}
+      {/* Mention indicator: an "@" pill. Plain unread is conveyed by the row's
+          brighter + bold text (no dot). */}
       {hasMention ? (
         <span
           className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
@@ -206,8 +207,6 @@ function ChannelRow2({
         >
           @
         </span>
-      ) : hasUnread ? (
-        <span className="shrink-0 size-2 rounded-full bg-foreground" aria-label="Unread messages" />
       ) : null}
     </button>
   );

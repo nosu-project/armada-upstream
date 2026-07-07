@@ -96,7 +96,8 @@ function ChannelLink({
           </Tooltip>
         )}
         {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
-        {/* Unread / mention indicator: an "@" pill for mentions, else a dot. */}
+        {/* Mention indicator: an "@" pill. Plain unread is conveyed by the
+            row's brighter + bold text (no dot). */}
         {hasMention ? (
           <span
             className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
@@ -104,8 +105,6 @@ function ChannelLink({
           >
             @
           </span>
-        ) : hasUnread ? (
-          <span className="shrink-0 size-2 rounded-full bg-foreground" aria-label="Unread messages" />
         ) : null}
       </NavLink>
       {/* Discord-style nested voice roster: who's in the live call here. */}
