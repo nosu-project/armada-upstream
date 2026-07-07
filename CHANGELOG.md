@@ -4,6 +4,50 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.18.0] - 2026-07-07
+
+Voice calls arrive in newer encrypted communities, with verified participant
+identities. Calls also get quality-of-life upgrades: right-click a participant
+to adjust their volume or mute them, the call UI stays alive while you browse
+other channels, and the sidebar shows live speaking indicators. Plus fixes for
+encrypted-community messages that notified but never appeared, and a bug that
+could make your microphone transmit silence.
+
+### Added
+- Voice calls in newer encrypted communities, with per-participant identity
+  verification
+- Right-click a participant — on their call tile or in the sidebar voice
+  roster — to adjust their volume or mute them for yourself; per-user volume
+  now works on mobile too
+- Voice memos in encrypted communities and direct messages
+- New "Media servers" settings section to manage where your uploads are stored
+
+### Changed
+- The call view and call bar stay alive when you navigate to other channels
+- The participant list for a call you're in now comes straight from the live
+  call connection, so it no longer shows ghost or missing participants
+- The sidebar voice roster shows live speaking rings while you're in that
+  channel's call, and the call bar no longer duplicates the participant list
+- Direct messages are now always limited to people you follow, and messages
+  from strangers are never fetched or notified
+- Removing a server now stays removed across your devices
+
+### Fixed
+- Encrypted-community messages that triggered a notification but never
+  appeared in the channel now show up reliably, including after being offline
+  for a while
+- Encrypted video and audio attachments now play instead of silently failing
+- The microphone no longer transmits silence in calls when background-noise
+  removal is enabled
+- Uploads with unusual file extensions now play correctly
+- Unread indicators on the community rail now clear as soon as you read the
+  channel, without needing a reload
+- Speaking indicators update more promptly
+
+### Removed
+- The experimental voice feature in older encrypted communities (superseded
+  by the new call system)
+
 ## [0.17.6] - 2026-07-06
 
 Adds unread tracking to Concord v2 channels, and gives the active channel a
