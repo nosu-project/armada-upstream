@@ -38,7 +38,7 @@ function ChannelLink({
   unread?: GroupUnread;
   onNavigate?: () => void;
 }) {
-  const { activeCall } = useCall();
+  const { activeCall, speakingPubkeys } = useCall();
   const { markRead } = useReadState();
   // Voice capability: prefer the per-group `livekit` metadata tag, but fall
   // back to the relay-level capability (`/.well-known/nip29/livekit` 204).
@@ -107,9 +107,13 @@ function ChannelLink({
           </span>
         ) : null}
       </NavLink>
-      {/* Discord-style nested voice roster: who's in the live call here. */}
+      {/* Discord-style nested voice roster: who's in the live call here (with
+          live speaking rings while you're in it). */}
       {callActive && (participants?.length ?? 0) > 0 && (
-        <VoiceParticipantList participants={participants!} />
+        <VoiceParticipantList
+          participants={participants!}
+          speaking={inCall ? speakingPubkeys : undefined}
+        />
       )}
         </div>
       </ContextMenuTrigger>

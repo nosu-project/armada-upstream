@@ -75,6 +75,15 @@ export interface CallContextType {
   toggleStage: () => void;
   /** Explicitly set the call stage open state (the stage's close button uses this). */
   setStageOpen: (open: boolean) => void;
+  /**
+   * Pubkeys currently speaking in the ACTIVE call (resolved from LiveKit
+   * identities; unverified Concord identities are excluded). Lets UI outside
+   * the LiveKit room — e.g. the sidebar's nested voice roster — show live
+   * voice activity. Empty when not in a call.
+   */
+  speakingPubkeys: ReadonlySet<string>;
+  /** Internal: the connected room reports its live speaker set here. */
+  setSpeakingPubkeys: (pubkeys: Set<string>) => void;
 }
 
 export const CallContext = createContext<CallContextType | undefined>(undefined);

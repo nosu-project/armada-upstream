@@ -1,9 +1,10 @@
 import { Headphones } from "lucide-react";
+import type { CSSProperties } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
-import { getAvatarShape } from "@/lib/avatarShape";
+import { getAvatarShape, shapedAvatarSpeakingStyle } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
@@ -35,39 +36,60 @@ function ParticipantName({ pubkey }: { pubkey: string }) {
 /**
  * Discord-style nested voice roster: one indented row per participant (small
  * avatar + name), rendered directly under a channel's row in the sidebar so a
- * live call reads as a first-class voice channel.
+ * live call reads as a first-class voice channel. When the viewer is in this
+ * channel's call, `speaking` carries the live speaker set so rows light up
+ * with voice activity.
  */
 export function VoiceParticipantList({
   participants,
+  speaking,
   className,
 }: {
   participants: string[];
+  /** Pubkeys currently speaking (live, from the connected call), if known. */
+  speaking?: ReadonlySet<string>;
   className?: string;
 }) {
   if (participants.length === 0) return null;
   return (
     <div className={cn("flex flex-col pb-0.5", className)} aria-label={`${participants.length} in voice`}>
       {participants.map((pk) => (
-        <VoiceParticipantRow key={pk} pubkey={pk} />
+        <VoiceParticipantRow key={pk} pubkey={pk} isSpeaking={speaking?.has(pk) ?? false} />
       ))}
     </div>
   );
 }
 
-/** One row of the nested voice roster. */
-function VoiceParticipantRow({ pubkey }: { pubkey: string }) {
+/** One row of the nested voice roster (green speaking ring while talking). */
+function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeaking?: boolean }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   const name = getDisplayName(metadata, pubkey);
+  const hasCustomShape = !!getAvatarShape(metadata);
+
+  // Emoji-shaped avatars carry a CSS mask that would clip a ring/box-shadow,
+  // so their speaking indicator is a drop-shadow filter hugging the silhouette;
+  // circular avatars get a plain ring (matches the call-stage treatment).
+  const wrapperStyle: CSSProperties | undefined =
+    hasCustomShape && isSpeaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined;
+
   return (
     <div className="flex items-center gap-2 pl-10 pr-2 py-0.5 text-[13px] text-muted-foreground">
-      <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
-        <AvatarImage src={metadata?.picture} alt={name} />
-        <AvatarFallback className="bg-success/20 text-success text-[9px]">
-          {name[0]?.toUpperCase()}
-        </AvatarFallback>
-      </Avatar>
-      <span className="truncate">{name}</span>
+      <div
+        className={cn(
+          "rounded-full shrink-0 transition-shadow",
+          !hasCustomShape && isSpeaking && "ring-2 ring-success",
+        )}
+        style={wrapperStyle}
+      >
+        <Avatar shape={getAvatarShape(metadata)} className="size-5">
+          <AvatarImage src={metadata?.picture} alt={name} />
+          <AvatarFallback className="bg-success/20 text-success text-[9px]">
+            {name[0]?.toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+      </div>
+      <span className={cn("truncate", isSpeaking && "text-success")}>{name}</span>
     </div>
   );
 }

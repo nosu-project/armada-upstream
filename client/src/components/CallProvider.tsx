@@ -13,6 +13,15 @@ import { cn } from "@/lib/utils";
  */
 const PersistentVoiceRoom = lazy(() => import("@/components/PersistentVoiceRoom"));
 
+const NO_SPEAKERS: ReadonlySet<string> = new Set();
+
+/** Order-insensitive set equality (speaker sets are tiny). */
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) if (!b.has(v)) return false;
+  return true;
+}
+
 /**
  * App-level voice call state. Holds the active room and renders the persistent
  * LiveKitRoom so navigation doesn't tear down the call.
@@ -24,6 +33,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const [slots, setSlots] = useState<HTMLElement[]>([]);
   const [stageSlots, setStageSlots] = useState<HTMLElement[]>([]);
   const [stageOpen, setStageOpen] = useState(false);
+  // Live speaker set (pubkeys), reported by the connected room so voice
+  // activity can render outside the LiveKit context (sidebar rosters).
+  const [speakingPubkeys, setSpeakingState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
   const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The app shell; the mobile call bar writes its measured height to
   // `--call-bar-h` here so the shell reserves exactly that as bottom padding.
@@ -66,6 +78,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const leaveCall = useCallback(() => {
     setExiting(true);
     setStageOpen(false);
+    setSpeakingState(NO_SPEAKERS);
     if (exitTimer.current) clearTimeout(exitTimer.current);
     exitTimer.current = setTimeout(() => {
       setActiveCall(null);
@@ -90,6 +103,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   const toggleStage = useCallback(() => setStageOpen((o) => !o), []);
 
+  // Equality-guarded so the room's frequent ActiveSpeakersChanged reports only
+  // re-render context consumers when the speaker set actually changed.
+  const setSpeakingPubkeys = useCallback((next: Set<string>) => {
+    setSpeakingState((prev) => (sameSet(prev, next) ? prev : next));
+  }, []);
+
   return (
     <CallContext.Provider
       value={{
@@ -103,6 +122,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         stageOpen,
         toggleStage,
         setStageOpen,
+        speakingPubkeys,
+        setSpeakingPubkeys,
       }}
     >
       <div

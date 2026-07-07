@@ -5,19 +5,26 @@ import {
   VideoTrack,
 } from "@livekit/components-react";
 import type { TrackReference } from "@livekit/components-react";
-import type { Participant } from "livekit-client";
+import type { Participant, RemoteParticipant } from "livekit-client";
 import { Track } from "livekit-client";
-import { Maximize2, Minimize2, MicOff, Monitor, ScreenShare, Shrink, X } from "lucide-react";
+import { Maximize2, Minimize2, MicOff, Monitor, ScreenShare, Shrink, Volume2, VolumeX, X } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Slider } from "@/components/ui/slider";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { playScreenShareSound } from "@/lib/callSounds";
+import { getUserVolume, rememberUserVolume } from "@/lib/voiceDevices";
 import {
   getAvatarShape,
   shapedAvatarSpeakingStyle,
@@ -106,6 +113,88 @@ function participantTileKey(participant: Participant): string {
   return `${participant.identity}:avatar`;
 }
 
+/** The shared look of a tile's bottom-left name pill. */
+const nameplateClass =
+  "absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-xs text-white max-w-[calc(100%-0.75rem)]";
+
+/**
+ * A dropdown anchored on a remote participant's tile nameplate with a
+ * playback-volume slider (0–200%), à la Discord. Applied live via LiveKit's
+ * `RemoteParticipant.setVolume` and persisted per pubkey so it sticks across
+ * calls. The stage is the only roster surface (the call bar shows no
+ * participant list), so this is where per-user volume lives.
+ */
+function VolumeMenu({
+  participant,
+  pubkey,
+  displayName,
+  children,
+}: {
+  participant: RemoteParticipant;
+  pubkey: string;
+  displayName: string;
+  children: React.ReactNode;
+}) {
+  const [volume, setVolume] = useState(() => getUserVolume(pubkey));
+
+  // Re-apply the remembered volume whenever this participant (re)joins or their
+  // track changes, since LiveKit resets to 1 on a fresh subscription.
+  useEffect(() => {
+    participant.setVolume(volume);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participant]);
+
+  const apply = useCallback(
+    (next: number) => {
+      setVolume(next);
+      participant.setVolume(next);
+      rememberUserVolume(pubkey, next);
+    },
+    [participant, pubkey],
+  );
+
+  const muted = volume === 0;
+  const pct = Math.round(volume * 100);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Volume for ${displayName}`}
+          className={cn(nameplateClass, "cursor-pointer hover:bg-black/80")}
+        >
+          {children}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56 p-3">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <span className="text-sm font-medium truncate">{displayName}</span>
+          <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label={muted ? "Unmute user" : "Mute user"}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={() => apply(muted ? 1 : 0)}
+          >
+            {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+          </button>
+          <Slider
+            value={[volume]}
+            min={0}
+            max={2}
+            step={0.05}
+            aria-label={`Volume for ${displayName}`}
+            onValueChange={([v]) => apply(v)}
+          />
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /** A single video tile (camera or screenshare) for one participant track. */
 function VideoTile({
   trackRef,
@@ -128,6 +217,21 @@ function VideoTile({
   // isn't subscribed yet — show their avatar instead of video.
   const hasVideo = Boolean(trackRef.publication?.track);
   const isLocal = participant.isLocal;
+
+  const nameplate = (
+    <>
+      {isScreenShare ? (
+        <ScreenShare className="size-3 shrink-0" />
+      ) : !participant.isMicrophoneEnabled ? (
+        <MicOff className="size-3 shrink-0 text-destructive" />
+      ) : null}
+      <span className="truncate">
+        {displayName}
+        {isScreenShare && " — screen"}
+        {isLocal && " (you)"}
+      </span>
+    </>
+  );
 
   return (
     <div
@@ -156,18 +260,18 @@ function VideoTile({
         </Avatar>
       )}
       <FocusButton focused={focused} onClick={onToggleFocus} />
-      <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-xs text-white max-w-[calc(100%-0.75rem)]">
-        {isScreenShare ? (
-          <ScreenShare className="size-3 shrink-0" />
-        ) : !participant.isMicrophoneEnabled ? (
-          <MicOff className="size-3 shrink-0 text-destructive" />
-        ) : null}
-        <span className="truncate">
-          {displayName}
-          {isScreenShare && " — screen"}
-          {isLocal && " (you)"}
-        </span>
-      </div>
+      {/* Remote (non-screenshare) nameplates open the per-user volume menu. */}
+      {!isLocal && !isScreenShare ? (
+        <VolumeMenu
+          participant={participant as RemoteParticipant}
+          pubkey={pubkey}
+          displayName={displayName}
+        >
+          {nameplate}
+        </VolumeMenu>
+      ) : (
+        <div className={nameplateClass}>{nameplate}</div>
+      )}
     </div>
   );
 }
@@ -223,6 +327,16 @@ function AvatarTile({
   const ringStyle: CSSProperties | undefined =
     hasCustomShape && isSpeaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined;
 
+  const nameplate = (
+    <>
+      {muted && <MicOff className="size-3 shrink-0 text-destructive" />}
+      <span className="truncate">
+        {displayName}
+        {isLocal && " (you)"}
+      </span>
+    </>
+  );
+
   return (
     <div
       className={cn(
@@ -245,13 +359,18 @@ function AvatarTile({
         </Avatar>
       </div>
       <FocusButton focused={focused} onClick={onToggleFocus} />
-      <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-xs text-white max-w-[calc(100%-0.75rem)]">
-        {muted && <MicOff className="size-3 shrink-0 text-destructive" />}
-        <span className="truncate">
-          {displayName}
-          {isLocal && " (you)"}
-        </span>
-      </div>
+      {/* Remote nameplates open the per-user volume menu. */}
+      {!isLocal ? (
+        <VolumeMenu
+          participant={participant as RemoteParticipant}
+          pubkey={pubkey}
+          displayName={displayName}
+        >
+          {nameplate}
+        </VolumeMenu>
+      ) : (
+        <div className={nameplateClass}>{nameplate}</div>
+      )}
     </div>
   );
 }

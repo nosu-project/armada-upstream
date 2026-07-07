@@ -3,6 +3,7 @@ import {
   RoomAudioRenderer,
   useLocalParticipant,
   useRoomContext,
+  useSpeakingParticipants,
 } from "@livekit/components-react";
 import {
   AudioPresets,
@@ -34,7 +35,7 @@ import { useGroup } from "@/hooks/useGroup";
 import { useLivekitToken } from "@/hooks/useLivekit";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
-import { VoiceIdentityContext, type VoiceIdentityResolver } from "@/contexts/VoiceIdentityContext";
+import { useVoiceIdentity, VoiceIdentityContext, type VoiceIdentityResolver } from "@/contexts/VoiceIdentityContext";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { random32, voiceSenderKey } from "@/concord-v2/lib/derive";
 import { rendezvousCandidates, verifiedAuthorOf } from "@/concord-v2/lib/voice";
@@ -55,6 +56,33 @@ import { nip19 } from "nostr-tools";
  * CallProvider (the state/context shell) stays eager and mounts this module
  * behind `React.lazy` only while a call is active.
  */
+
+/**
+ * Reports the room's live speaker set (resolved to pubkeys) up to the call
+ * context, so UI outside the LiveKit room — the sidebar's nested voice
+ * roster — can show voice activity. Must render inside `LiveKitRoom` (and, for
+ * Concord, inside the identity-resolver provider). Unverified identities are
+ * skipped: their media never renders, so they can't meaningfully "speak".
+ */
+function SpeakingReporter() {
+  const { setSpeakingPubkeys } = useCall();
+  const resolveIdentity = useVoiceIdentity();
+  const speakingParticipants = useSpeakingParticipants();
+
+  useEffect(() => {
+    const pubkeys = new Set<string>();
+    for (const p of speakingParticipants) {
+      const { pubkey, verified } = resolveIdentity(p.identity);
+      if (verified) pubkeys.add(pubkey);
+    }
+    setSpeakingPubkeys(pubkeys);
+  }, [speakingParticipants, resolveIdentity, setSpeakingPubkeys]);
+
+  // Clear on room teardown (room switch or leave) so no stale rings linger.
+  useEffect(() => () => setSpeakingPubkeys(new Set()), [setSpeakingPubkeys]);
+
+  return null;
+}
 
 /**
  * Plays a short chirp when you join the call, when another participant joins,
@@ -346,6 +374,7 @@ function VoiceRoomShell({
       <RoomAudioRenderer />
       <CallSoundEffects />
       <MicNoiseProcessor />
+      <SpeakingReporter />
       {placeStage(
         <ServerScopeProvider relayUrl={scopeRelayUrl}>
           <CallStage callLabel={label} open={stageOpen} />

@@ -193,6 +193,7 @@ function ChannelRow2({
   channel,
   active,
   inCall,
+  speaking,
   unread,
   onSelect,
   onJoinVoice,
@@ -202,6 +203,8 @@ function ChannelRow2({
   active: boolean;
   /** Whether the user's current call is THIS channel's voice room. */
   inCall: boolean;
+  /** Live speaker set (only passed when `inCall`), for roster voice activity. */
+  speaking?: ReadonlySet<string>;
   unread?: Concord2Unread;
   onSelect: () => void;
   onJoinVoice: (channel: ChannelV2, broker: string | null) => void;
@@ -251,8 +254,9 @@ function ChannelRow2({
           </span>
         ) : null}
       </button>
-      {/* Discord-style nested voice roster: who's in the call, under the row. */}
-      {channel.isVoice && <VoiceParticipantList participants={participants} />}
+      {/* Discord-style nested voice roster: who's in the call, under the row
+          (with live speaking rings while you're in it). */}
+      {channel.isVoice && <VoiceParticipantList participants={participants} speaking={speaking} />}
     </>
   );
 }
@@ -358,7 +362,7 @@ export function ConcordV2Page() {
 
   // Voice (CORD-07): the active channel's live presence + rendezvous broker
   // (both no-op for text channels) power the header stack and the join button.
-  const { joinConcordCall, activeCall } = useCall();
+  const { joinConcordCall, activeCall, speakingPubkeys } = useCall();
   const activeFold = useVoicePresence2(community, channel);
   const { data: activeBroker } = useVoiceBroker2(channel, activeFold);
   const activeVoicePubkeys = useMemo(() => activeFold.present.map((p) => p.author), [activeFold]);
@@ -628,21 +632,25 @@ export function ConcordV2Page() {
           ))}
         </div>
       ) : (
-        channels.map((c) => (
-          <ChannelRow2
-            key={c.idHex}
-            community={community}
-            channel={c}
-            active={Boolean(channel && channel.idHex === c.idHex)}
-            inCall={Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex)}
-            unread={unreadByChannel[c.idHex]}
-            onSelect={() => {
-              setChannelIdHex(c.idHex);
-              onNavigate?.();
-            }}
-            onJoinVoice={handleJoinVoice}
-          />
-        ))
+        channels.map((c) => {
+          const inCall = Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex);
+          return (
+            <ChannelRow2
+              key={c.idHex}
+              community={community}
+              channel={c}
+              active={Boolean(channel && channel.idHex === c.idHex)}
+              inCall={inCall}
+              speaking={inCall ? speakingPubkeys : undefined}
+              unread={unreadByChannel[c.idHex]}
+              onSelect={() => {
+                setChannelIdHex(c.idHex);
+                onNavigate?.();
+              }}
+              onJoinVoice={handleJoinVoice}
+            />
+          );
+        })
       )}
     </ChannelSidebarView>
   );
@@ -708,8 +716,12 @@ export function ConcordV2Page() {
               </div>
             </button>
             <div className="ml-auto flex items-center gap-0.5">
+              {/* Voice presence in the header is desktop-only: the mobile header
+                  is already full (community avatar + name + actions), and the
+                  avatar stack crammed it. On mobile, who's-in-voice lives in the
+                  channel sidebar's nested roster and the bottom call bar. */}
               {channel?.isVoice && activeVoicePubkeys.length > 0 && (
-                <VoicePresence participants={activeVoicePubkeys} className="mr-1" />
+                <VoicePresence participants={activeVoicePubkeys} className="mr-1 hidden sidebar:flex" />
               )}
               {user && channel?.isVoice && (
                 <Tooltip>

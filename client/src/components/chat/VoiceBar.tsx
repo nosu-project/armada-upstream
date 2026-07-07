@@ -4,11 +4,8 @@ import {
   useLocalParticipant,
   useMediaDeviceSelect,
   useParticipants,
-  useRemoteParticipants,
-  useSpeakingParticipants,
 } from "@livekit/components-react";
 import { ConnectionState, LocalAudioTrack, Track } from "livekit-client";
-import type { RemoteParticipant } from "livekit-client";
 import {
   Check,
   ChevronDown,
@@ -24,17 +21,13 @@ import {
   Video,
   VideoOff,
   Volume2,
-  VolumeX,
 } from "lucide-react";
 
 import "@livekit/components-styles";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import type { CSSProperties } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,223 +37,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
-import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
 import {
   getAudioProcessing,
-  getUserVolume,
-  rememberUserVolume,
   rememberVoiceDevice,
   setAudioProcessing,
   type AudioProcessingPrefs,
 } from "@/lib/voiceDevices";
 import { rnnoiseSupported, syncRnnoise } from "@/lib/voiceProcessor";
-import {
-  getAvatarShape,
-  shapedAvatarBorderStyle,
-  shapedAvatarSpeakingStyle,
-} from "@/lib/avatarShape";
-import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { cn } from "@/lib/utils";
-
-function ParticipantAvatar({
-  pubkey,
-  isSpeaking,
-  size = "size-7",
-  fallbackTextClass = "text-[10px]",
-}: {
-  pubkey: string;
-  isSpeaking?: boolean;
-  size?: string;
-  fallbackTextClass?: string;
-}) {
-  const author = useAuthor(pubkey);
-  const metadata = author.data?.metadata;
-  const displayName = useScopedDisplayName(pubkey, metadata);
-  const shape = getAvatarShape(metadata);
-  const hasCustomShape = !!shape;
-
-  // The speaking indicator + background separator border are drawn on a
-  // wrapper, never on the <Avatar> itself. For emoji-shaped avatars the
-  // Avatar carries a CSS mask, which would clip any ring/box-shadow to the
-  // emoji silhouette — so we use drop-shadow filters that hug the shape. For
-  // circular avatars a plain ring + box-shadow looks crisper.
-  const wrapperStyle: CSSProperties | undefined = hasCustomShape
-    ? {
-        // When speaking, a tight solid green outline hugs the emoji silhouette
-        // on its own (no wide white separator pushing it out). Otherwise just
-        // the background separator border.
-        filter: isSpeaking
-          ? shapedAvatarSpeakingStyle.filter
-          : shapedAvatarBorderStyle.filter,
-      }
-    : undefined;
-
-  return (
-    // Wrapper keeps the indicator outside the (overflow-hidden / masked)
-    // Avatar so it never gets cropped.
-    <div
-      className={cn(
-        "rounded-full transition-shadow shrink-0",
-        !hasCustomShape && "ring-2 ring-background",
-        !hasCustomShape && isSpeaking && "ring-success shadow-[0_0_0_2px_hsl(var(--success))]",
-      )}
-      style={wrapperStyle}
-    >
-      <Avatar shape={shape} className={size}>
-        <AvatarImage src={metadata?.picture} alt={displayName} />
-        <AvatarFallback className={cn("bg-primary/20 text-primary", fallbackTextClass)}>
-          {displayName[0]?.toUpperCase()}
-        </AvatarFallback>
-      </Avatar>
-    </div>
-  );
-}
-
-/**
- * One participant's row in the call panel: avatar (with speaking ring), display
- * name, and a mic-state icon. Remote participants' rows are clickable and open
- * a per-user playback-volume control (à la Discord); the local participant's
- * row is static.
- */
-function ParticipantRow({
-  pubkey,
-  verified = true,
-  isSpeaking,
-  isMuted,
-  isLocal,
-  participant,
-}: {
-  pubkey: string;
-  /** False when the identity fails presence verification (Concord, CORD-07 §4). */
-  verified?: boolean;
-  isSpeaking?: boolean;
-  isMuted?: boolean;
-  isLocal?: boolean;
-  /** When set (remote participant), the row opens a per-user volume control. */
-  participant?: RemoteParticipant;
-}) {
-  const author = useAuthor(pubkey);
-  const scopedName = useScopedDisplayName(pubkey, author.data?.metadata);
-  const displayName = verified ? scopedName : "Unverified";
-
-  const body = (
-    <>
-      <ParticipantAvatar pubkey={pubkey} isSpeaking={isSpeaking} />
-      <span
-        className={cn(
-          "flex-1 min-w-0 truncate text-sm",
-          isSpeaking ? "text-success font-medium" : "text-foreground",
-        )}
-      >
-        {displayName}
-        {isLocal && <span className="text-muted-foreground"> (you)</span>}
-      </span>
-      {isMuted ? (
-        <MicOff className="size-3.5 shrink-0 text-muted-foreground" />
-      ) : isSpeaking ? (
-        <Mic className="size-3.5 shrink-0 text-success" />
-      ) : null}
-    </>
-  );
-
-  const rowClass = "flex items-center gap-2 rounded-md px-2 py-1.5 w-full text-left";
-
-  // Local participant: static row, no volume control.
-  if (!participant) {
-    return <div className={rowClass}>{body}</div>;
-  }
-
-  // Remote participant: the whole row is a button that opens the per-user
-  // volume control.
-  return (
-    <ParticipantVolumeMenu
-      participant={participant}
-      pubkey={pubkey}
-      displayName={displayName}
-      className={cn(rowClass, "transition-colors hover:bg-foreground/5")}
-    >
-      {body}
-    </ParticipantVolumeMenu>
-  );
-}
-
-/**
- * A dropdown anchored on a remote participant's avatar with a playback-volume
- * slider (0–200%). The chosen volume is applied live via LiveKit's
- * `RemoteParticipant.setVolume` and persisted per pubkey so it sticks across
- * calls. This is the per-user volume control (à la Discord).
- */
-function ParticipantVolumeMenu({
-  participant,
-  pubkey,
-  displayName,
-  className,
-  children,
-}: {
-  participant: RemoteParticipant;
-  pubkey: string;
-  displayName: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  const [volume, setVolume] = useState(() => getUserVolume(pubkey));
-
-  // Re-apply the remembered volume whenever this participant (re)joins or their
-  // track changes, since LiveKit resets to 1 on a fresh subscription.
-  useEffect(() => {
-    participant.setVolume(volume);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [participant]);
-
-  const apply = useCallback(
-    (next: number) => {
-      setVolume(next);
-      participant.setVolume(next);
-      rememberUserVolume(pubkey, next);
-    },
-    [participant, pubkey],
-  );
-
-  const muted = volume === 0;
-  const pct = Math.round(volume * 100);
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button type="button" aria-label={`Volume for ${displayName}`} className={className}>
-          {children}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56 p-3">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <span className="text-sm font-medium truncate">{displayName}</span>
-          <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            aria-label={muted ? "Unmute user" : "Mute user"}
-            className="shrink-0 text-muted-foreground hover:text-foreground"
-            onClick={() => apply(muted ? 1 : 0)}
-          >
-            {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
-          </button>
-          <Slider
-            value={[volume]}
-            min={0}
-            max={2}
-            step={0.05}
-            aria-label={`Volume for ${displayName}`}
-            onValueChange={([v]) => apply(v)}
-          />
-        </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 /** Whether this browser supports choosing the audio output (speaker) sink. */
 const supportsSpeakerSelection =
@@ -427,27 +213,20 @@ interface InCallViewProps {
 }
 
 /**
- * In-call controls + live participant avatars. Must be rendered inside a
- * LiveKitRoom context (uses room hooks).
+ * In-call controls + connection/participant summary. Must be rendered inside a
+ * LiveKitRoom context (uses room hooks). Intentionally shows NO participant
+ * roster: who's in the call already lives in the sidebar's nested voice list
+ * (and the expandable call stage, toggled from the header count) — a roster
+ * here would duplicate it right above.
  */
 export function InCallView({ label, onLabelClick, stacked, compact }: InCallViewProps) {
   const { stageOpen, toggleStage } = useCall();
-  const resolveIdentity = useVoiceIdentity();
   const participants = useParticipants();
-  const remoteParticipants = useRemoteParticipants();
   const connectionState = useConnectionState();
   // These flags are reactive (the hook re-renders on the local participant's
   // track publish/mute), so the toggle buttons reflect live publish state.
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } =
     useLocalParticipant();
-  // `useSpeakingParticipants` subscribes to the room's ActiveSpeakersChanged
-  // events (which include the LOCAL participant) and re-renders on every
-  // change — unlike deriving from useTracks(), which only updates on track
-  // publish/mute and so missed `isSpeaking` toggles (notably one's own voice).
-  const speakingParticipants = useSpeakingParticipants();
-
-  const speaking = new Set(speakingParticipants.map((p) => p.identity));
-  const remoteByIdentity = new Map(remoteParticipants.map((p) => [p.identity, p]));
 
   if (connectionState === ConnectionState.Connecting) {
     return (
@@ -499,30 +278,6 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
         <span className="tabular-nums">{participants.length}</span>
         {stageOpen ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
       </button>
-    </div>
-  );
-
-  const participantsEl = (
-    // The roster. Each participant gets their own row (avatar + name + mic
-    // state). Capped height with scroll so a busy room can't grow the panel
-    // unbounded; padding leaves room for the speaking ring/glow so it isn't
-    // clipped at the row edges.
-    <div className="flex flex-col max-h-44 overflow-y-auto overflow-x-hidden py-0.5">
-      {participants.map((p) => {
-        const identity = p.identity;
-        const { pubkey, verified } = resolveIdentity(identity);
-        return (
-          <ParticipantRow
-            key={identity}
-            pubkey={pubkey}
-            verified={verified}
-            isSpeaking={speaking.has(identity)}
-            isMuted={!p.isMicrophoneEnabled}
-            isLocal={p.isLocal}
-            participant={remoteByIdentity.get(identity)}
-          />
-        );
-      })}
     </div>
   );
 
@@ -603,9 +358,9 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     </DisconnectButton>
   );
 
-  // A stacked panel (à la Discord): header → participant roster → control bar.
-  // `stacked` only widens the layout (desktop side-panel); the structure is the
-  // same on mobile so the controls are never crammed onto the activity row.
+  // A stacked panel (à la Discord): header → control bar. `stacked` only
+  // widens the layout (desktop side-panel); the structure is the same on
+  // mobile so the controls are never crammed onto the activity row.
   if (compact) {
     // Mobile: a single compact row. The roster/tiles live in the expandable
     // call stage (toggled from the header count), so the bar stays small.
@@ -623,7 +378,6 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   return (
     <div className={cn("flex flex-col gap-1.5 px-2 py-2", stacked && "min-w-0")}>
       {headerEl}
-      {participantsEl}
       <div className="flex items-center gap-1.5 pt-1.5 border-t border-foreground/10">
         <div className="flex items-center gap-1.5">
           {micBtn}
