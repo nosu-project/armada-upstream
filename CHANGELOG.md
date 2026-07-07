@@ -4,6 +4,19 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.19.3] - 2026-07-07
+
+GIF search now uses a new provider for more reliable results, and signing in
+with a remote signer (such as Amber) works against Armada's own relay, so you no
+longer need a separate rendezvous relay to log in that way.
+
+### Changed
+- GIF search now uses GIFverse for more reliable results
+
+### Fixed
+- Signing in with a remote signer (e.g. Amber) now works using Armada's relay as
+  the rendezvous point
+
 ## [0.19.2] - 2026-07-07
 
 Small quality-of-life update: mute a community or channel straight from its
