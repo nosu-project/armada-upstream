@@ -11,6 +11,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 
 /**
@@ -30,6 +31,7 @@ export function WelcomePage() {
   const { user } = useCurrentUser();
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
+  const { data: groupList } = useUserGroupList();
   const [joinOpen, setJoinOpen] = useState(false);
   const [signupOpen, setSignupOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -38,7 +40,16 @@ export function WelcomePage() {
   // platform relay on a hosted build, or the user's first added server.
   // Offline, the mesh is the fallback — but only where it exists (Android
   // with BLE); web/desktop stays here rather than landing on a dead page.
-  const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0];
+  //
+  // `config.addedRelays` is the fast/offline cache, but on a fresh reinstall
+  // (or a new device) it starts empty and only gets hydrated from the user's
+  // kind-10009 list by NostrSync a beat after login — which used to leave the
+  // user stranded on this join screen (and, worse, prompting them to "create a
+  // community" when they already have servers on the relay). So also consult
+  // the synced group list directly: the moment it resolves with servers we can
+  // redirect, without waiting on the config-cache write.
+  const syncedServer = groupList?.servers.find((url) => !PLATFORM_RELAYS.includes(url));
+  const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0] ?? syncedServer;
   if (user && !online && mesh.available) {
     return <Navigate to="/mesh" replace />;
   }

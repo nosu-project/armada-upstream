@@ -13,6 +13,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
@@ -43,14 +44,17 @@ const WelcomePage = lazy(() => import("@/pages/WelcomePage").then((m) => ({ defa
  *
  * Once signed in: a hosted deployment has pinned platform relays and goes
  * straight to the first one; a standalone (rogue) client ships with NO pinned
- * relay, so fall back to the user's first added server, or — if they have none
- * yet — the welcome screen (to add one).
+ * relay, so fall back to the user's first added server — from the local
+ * `addedRelays` cache, or (on a fresh reinstall, before that cache is
+ * hydrated) straight from the synced kind-10009 server list — or, if they
+ * have none yet, the welcome screen (to add one).
  */
 function HomeRedirect() {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
+  const { data: groupList } = useUserGroupList();
 
   // Cold launch from a notification tap: the launch URL resolves async (see
   // coldLaunchDeepLink). Hold the default redirect until it's known — otherwise
@@ -99,7 +103,8 @@ function HomeRedirect() {
     }
   }
 
-  const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0];
+  const syncedServer = groupList?.servers.find((url) => !PLATFORM_RELAYS.includes(url));
+  const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0] ?? syncedServer;
   if (!firstServer) {
     // No servers configured (standalone/rogue build): fall back to the mesh
     // where it exists, otherwise the welcome screen to add a server.
