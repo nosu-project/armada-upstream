@@ -379,28 +379,36 @@ describe("hasMoreCursor", () => {
 });
 
 describe("buildDmFilters", () => {
+  const FOLLOWS = [PEER1, PEER2];
+
   it("first page (undefined cursor) queries both directions with no until", () => {
-    const filters = buildDmFilters(SELF, undefined);
+    const filters = buildDmFilters(SELF, undefined, FOLLOWS);
     expect(filters).toHaveLength(2);
     expect(filters[0]).toMatchObject({ kinds: [4], authors: [SELF], limit: DM_PAGE_SIZE });
-    expect(filters[1]).toMatchObject({ kinds: [4], "#p": [SELF], limit: DM_PAGE_SIZE });
+    expect(filters[1]).toMatchObject({ kinds: [4], authors: FOLLOWS, "#p": [SELF], limit: DM_PAGE_SIZE });
     expect(filters[0].until).toBeUndefined();
     expect(filters[1].until).toBeUndefined();
   });
 
   it("a number cursor adds `until` for that direction", () => {
-    const filters = buildDmFilters(SELF, { sent: 1000, received: 2000 });
+    const filters = buildDmFilters(SELF, { sent: 1000, received: 2000 }, FOLLOWS);
     expect(filters[0].until).toBe(1000);
     expect(filters[1].until).toBe(2000);
   });
 
   it("an exhausted direction (null) is omitted entirely", () => {
-    const filters = buildDmFilters(SELF, { sent: null, received: 2000 });
+    const filters = buildDmFilters(SELF, { sent: null, received: 2000 }, FOLLOWS);
     expect(filters).toHaveLength(1);
-    expect(filters[0]).toMatchObject({ "#p": [SELF], until: 2000 });
+    expect(filters[0]).toMatchObject({ authors: FOLLOWS, "#p": [SELF], until: 2000 });
   });
 
   it("both directions exhausted → no filters", () => {
-    expect(buildDmFilters(SELF, { sent: null, received: null })).toHaveLength(0);
+    expect(buildDmFilters(SELF, { sent: null, received: null }, FOLLOWS)).toHaveLength(0);
+  });
+
+  it("no follows → received filter omitted (only the sent direction)", () => {
+    const filters = buildDmFilters(SELF, undefined, []);
+    expect(filters).toHaveLength(1);
+    expect(filters[0]).toMatchObject({ kinds: [4], authors: [SELF] });
   });
 });

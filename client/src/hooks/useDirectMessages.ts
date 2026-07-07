@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useFollowList } from "@/hooks/useFollowList";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
@@ -88,18 +89,23 @@ export function hasMoreCursor(cursors: RelayCursors): boolean {
 /**
  * Build the self-scoped kind-4 filters for one relay given its cursor.
  * Relays only serve the viewer's own DMs, so we query `authors:[self]` (sent)
- * and `#p:[self]` (received). A direction whose cursor is `null` (exhausted) is
- * omitted. `undefined` means no `until` (first page).
+ * and `#p:[self]` (received). The received direction is additionally scoped to
+ * `authors:[...follows]` so DMs from strangers are never fetched — only people
+ * the viewer follows (kind 3) can reach them. A direction whose cursor is
+ * `null` (exhausted) is omitted. `undefined` means no `until` (first page).
+ *
+ * When `follows` is empty, the received filter is omitted entirely (an empty
+ * `authors` would match nobody anyway, and some relays reject an empty array).
  */
-export function buildDmFilters(self: string, cursor: RelayCursor | undefined) {
+export function buildDmFilters(self: string, cursor: RelayCursor | undefined, follows: string[]) {
   const filters: { kinds: number[]; authors?: string[]; "#p"?: string[]; limit: number; until?: number }[] = [];
   const sent = cursor?.sent;
   const received = cursor?.received;
   if (sent !== null) {
     filters.push({ kinds: [KIND_DM], authors: [self], limit: DM_PAGE_SIZE, ...(typeof sent === "number" ? { until: sent } : {}) });
   }
-  if (received !== null) {
-    filters.push({ kinds: [KIND_DM], "#p": [self], limit: DM_PAGE_SIZE, ...(typeof received === "number" ? { until: received } : {}) });
+  if (received !== null && follows.length > 0) {
+    filters.push({ kinds: [KIND_DM], authors: follows, "#p": [self], limit: DM_PAGE_SIZE, ...(typeof received === "number" ? { until: received } : {}) });
   }
   return filters;
 }
@@ -300,9 +306,10 @@ async function queryRelayDmPage(
   url: string,
   self: string,
   cursor: RelayCursor | undefined,
+  follows: string[],
   signal: AbortSignal,
 ): Promise<{ url: string; events: NostrEvent[]; cursor: RelayCursor }> {
-  const filters = buildDmFilters(self, cursor);
+  const filters = buildDmFilters(self, cursor, follows);
   if (filters.length === 0) {
     return { url, events: [], cursor: { sent: null, received: null } };
   }
@@ -335,13 +342,14 @@ async function queryRelaysDmPage(
   relays: string[],
   self: string,
   cursors: RelayCursors,
+  follows: string[],
   signal: AbortSignal,
 ): Promise<{ events: NostrEvent[]; cursors: RelayCursors }> {
   const byId = new Map<string, NostrEvent>();
   const nextCursors: RelayCursors = {};
 
   const results = await Promise.allSettled(
-    relays.map((url) => queryRelayDmPage(nostr, url, self, cursors[url], signal)),
+    relays.map((url) => queryRelayDmPage(nostr, url, self, cursors[url], follows, signal)),
   );
 
   results.forEach((result, i) => {
@@ -372,10 +380,18 @@ export function useDMConversations() {
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
   const { mutedPubkeys, ready: muteReady } = useMutedPubkeys();
+  const { data: followData } = useFollowList();
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
 
-  const queryKey = ["dm", "conversations", user?.pubkey, relayKey];
+  // People the viewer follows (kind 3). All received-DM queries are scoped to
+  // these authors so DMs from strangers are never fetched — friends-only is a
+  // permanent, relay-level constraint, not a client-side view filter. Sorted +
+  // joined into a stable key so effects/queries don't churn on set reordering.
+  const follows = useMemo(() => [...(followData?.pubkeys ?? [])].sort(), [followData?.pubkeys]);
+  const followsKey = follows.join(",");
+
+  const queryKey = ["dm", "conversations", user?.pubkey, relayKey, followsKey];
   // Last-known-good localStorage snapshot (newest kind-4 per counterparty) so
   // the conversation list paints on the first frame of a cold launch, before
   // the IndexedDB cold-open. Ciphertext only — previews decrypt as usual.
@@ -392,7 +408,7 @@ export function useDMConversations() {
   useEffect(() => {
     cursorsRef.current = {};
     setHasMore(true);
-  }, [user?.pubkey, relayKey]);
+  }, [user?.pubkey, relayKey, followsKey]);
 
   const query = useQuery<NostrEvent[]>({
     queryKey,
@@ -403,10 +419,13 @@ export function useDMConversations() {
 
       // 1. LOCAL-FIRST: our own kind-4 set is mirrored into IndexedDB by
       //    NostrBatcher, so the conversation list paints instantly from cache on
-      //    reload instead of behind a relay round-trip.
+      //    reload instead of behind a relay round-trip. Received DMs are scoped
+      //    to followed authors (friends-only), matching the relay queries below.
       const cachedEvents = await store.query([
         { kinds: [KIND_DM], authors: [pubkey], limit: DM_PAGE_SIZE },
-        { kinds: [KIND_DM], "#p": [pubkey], limit: DM_PAGE_SIZE },
+        ...(follows.length > 0
+          ? [{ kinds: [KIND_DM], authors: follows, "#p": [pubkey], limit: DM_PAGE_SIZE }]
+          : []),
       ]);
       const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
       // Fold in DMs the native Android service received (e.g. the one whose
@@ -428,6 +447,7 @@ export function useDMConversations() {
             relays,
             pubkey,
             {}, // first page per relay (no `until`)
+            follows,
             AbortSignal.any([signal, AbortSignal.timeout(8000)]),
           );
           if (signal.aborted) return;
@@ -499,6 +519,10 @@ export function useDMConversations() {
           try {
             const ev = JSON.parse(json) as NostrEvent;
             if (ev && typeof ev.id === "string" && ev.kind === KIND_DM) {
+              // Friends-only: only keep DMs authored by the viewer (sent copies)
+              // or by someone they follow. Strangers never enter the list.
+              const author = ev.pubkey;
+              if (author !== user.pubkey && !follows.includes(author)) continue;
               recordNativeEvent(ev);
               parsed.push(ev);
             }
@@ -508,7 +532,7 @@ export function useDMConversations() {
         }
         if (parsed.length === 0) return;
         queryClient.setQueryData<NostrEvent[]>(
-          ["dm", "conversations", user.pubkey, relayKey],
+          ["dm", "conversations", user.pubkey, relayKey, followsKey],
           (old = []) => mergeDmEvents(old, parsed),
         );
       })
@@ -516,7 +540,7 @@ export function useDMConversations() {
     return () => {
       cancelled = true;
     };
-  }, [user?.pubkey, relayKey, queryClient]);
+  }, [user?.pubkey, relayKey, followsKey, follows, queryClient]);
 
   // Load an older page of conversations: advance each non-exhausted relay's
   // cursor one page and merge. Because each relay pages independently, a dense
@@ -536,6 +560,7 @@ export function useDMConversations() {
         relays,
         user.pubkey,
         cursorsRef.current,
+        follows,
         AbortSignal.timeout(8000),
       );
       cursorsRef.current = cursors;
@@ -556,7 +581,7 @@ export function useDMConversations() {
       setIsLoadingMore(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, relayKey, hasMore, queryClient]);
+  }, [nostr, user?.pubkey, relayKey, followsKey, hasMore, queryClient]);
 
   // The live subscription below surfaces new conversations; the
   // local-first queryFn handles cold-load rendering, so no separate seed effect.
@@ -574,7 +599,10 @@ export function useDMConversations() {
         for await (const msg of nostr.group(relays).req(
           [
             { kinds: [KIND_DM], authors: [pubkey], since },
-            { kinds: [KIND_DM], "#p": [pubkey], since },
+            // Received: only from people the viewer follows (friends-only).
+            ...(follows.length > 0
+              ? [{ kinds: [KIND_DM], authors: follows, "#p": [pubkey], since }]
+              : []),
           ],
           { signal: controller.signal },
         )) {
@@ -592,7 +620,7 @@ export function useDMConversations() {
 
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, relayKey, queryClient]);
+  }, [nostr, user?.pubkey, relayKey, followsKey, queryClient]);
 
   const self = user?.pubkey ?? "";
 
@@ -729,10 +757,12 @@ export function useDirectMessages(peer: string | undefined) {
       //    store (mirrored by NostrBatcher), narrow to this peer, and return
       //    placeholders IMMEDIATELY so the thread structure paints on the first
       //    frame after a refresh instead of behind the skeleton. Decryption of
-      //    the newest screenful streams in via the plaintext cache.
+      //    the newest screenful streams in via the plaintext cache. Both
+      //    directions carry an `authors` filter (self for sent, the peer for
+      //    received) so a thread never pulls in a stranger's kind-4 events.
       const localEvents = await store.query([
-        { kinds: [KIND_DM], authors: [self!], limit: 1000 },
-        { kinds: [KIND_DM], "#p": [self!], limit: 1000 },
+        { kinds: [KIND_DM], authors: [self!], "#p": [peer!], limit: 1000 },
+        { kinds: [KIND_DM], authors: [peer!], "#p": [self!], limit: 1000 },
       ]);
       // Fold in DMs the native Android service received for this thread (e.g.
       // a tapped notification's message) — they may not be in IndexedDB yet.
@@ -759,12 +789,14 @@ export function useDirectMessages(peer: string | undefined) {
       void (async () => {
         if (signal.aborted) return;
         try {
-          // Query ONLY self-scoped filters (relays reject filters naming another
-          // pubkey). Our own kind-4 set covers both directions.
+          // Recipient-scoped both ways (relays only serve the viewer's own
+          // kind-4 set): sent = `authors:[self] #p:[peer]`, received =
+          // `authors:[peer] #p:[self]`. The `authors` constraint keeps the query
+          // to this one conversation and never pulls a stranger's DMs.
           const events = await nostr.group(relays).query(
             [
-              { kinds: [KIND_DM], authors: [self!], limit: 1000 },
-              { kinds: [KIND_DM], "#p": [self!], limit: 1000 },
+              { kinds: [KIND_DM], authors: [self!], "#p": [peer!], limit: 1000 },
+              { kinds: [KIND_DM], authors: [peer!], "#p": [self!], limit: 1000 },
             ],
             { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
           );
@@ -841,8 +873,8 @@ export function useDirectMessages(peer: string | undefined) {
       try {
         for await (const msg of nostr.group(relays).req(
           [
-            { kinds: [KIND_DM], authors: [self], since },
-            { kinds: [KIND_DM], "#p": [self], since },
+            { kinds: [KIND_DM], authors: [self], "#p": [peer], since },
+            { kinds: [KIND_DM], authors: [peer], "#p": [self], since },
           ],
           { signal: controller.signal },
         )) {
@@ -910,8 +942,8 @@ export function useDirectMessages(peer: string | undefined) {
     try {
       const events = await nostr.group(relays).query(
         [
-          { kinds: [KIND_DM], authors: [self], until, limit: 500 },
-          { kinds: [KIND_DM], "#p": [self], until, limit: 500 },
+          { kinds: [KIND_DM], authors: [self], "#p": [peer], until, limit: 500 },
+          { kinds: [KIND_DM], authors: [peer], "#p": [self], until, limit: 500 },
         ],
         { signal: AbortSignal.timeout(8000) },
       );

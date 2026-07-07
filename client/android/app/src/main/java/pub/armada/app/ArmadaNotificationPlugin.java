@@ -357,6 +357,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         String relayUrlsRaw = arrayToString(call.getArray("relayUrls"));
         String groupIdsRaw = arrayToString(call.getArray("groupIds"));
         String dmRelaysRaw = arrayToString(call.getArray("dmRelays"));
+        String dmFollowsRaw = arrayToString(call.getArray("dmFollows"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         String concord2SubsRaw = arrayToString(call.getArray("concord2Subs"));
         // prefs is a flat object of booleans; store its JSON verbatim.
@@ -383,6 +384,8 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("groupIds");
             if (dmRelaysRaw != null) editor.putString("dmRelays", dmRelaysRaw);
             else editor.remove("dmRelays");
+            if (dmFollowsRaw != null) editor.putString("dmFollows", dmFollowsRaw);
+            else editor.remove("dmFollows");
             if (concordSubsRaw != null) editor.putString("concordSubs", concordSubsRaw);
             else editor.remove("concordSubs");
             if (concord2SubsRaw != null) editor.putString("concord2Subs", concord2SubsRaw);

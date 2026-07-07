@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useFollowList } from "@/hooks/useFollowList";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import {
@@ -92,6 +93,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const { config } = useAppContext();
   const { data: groupList } = useUserGroupList();
   const { data: concordData } = useConcordList();
+  const { data: followData } = useFollowList();
 
   // Start dormant; the auto-enable effect below flips this on at launch (after
   // requesting the OS permission if it hasn't been granted yet).
@@ -137,6 +139,15 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     }
     return [...set].sort();
   }, [config]);
+
+  // People the user follows (kind 3). The kind-4 DM subscription is scoped to
+  // `authors:[...dmFollows]` so the service only fires DM notifications from
+  // friends — matching the client's permanent friends-only DM view. Sorted so a
+  // follow-list refetch that merely reorders doesn't churn the native config.
+  const dmFollows = useMemo(
+    () => [...new Set(followData?.pubkeys ?? [])].sort(),
+    [followData?.pubkeys],
+  );
 
   const prefsRecord = useMemo<Record<string, boolean>>(
     () => ({
@@ -196,6 +207,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         concordSubs,
         concord2Subs,
         dmRelays,
+        dmFollows,
       };
     }
 
@@ -207,7 +219,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord, concordSubs, concord2Subs, dmRelays]);
+  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off, start the background service. Android lets us request the OS

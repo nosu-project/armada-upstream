@@ -62,7 +62,8 @@ import okhttp3.WebSocketListener;
  *
  * One WebSocket per relay is kept open with a live REQ:
  *   - {@code {kinds:[9], #h:[...groupIds], since}}      group messages
- *   - {@code {kinds:[7,1111,4], #p:[userPubkey], since}} reactions/replies/DMs
+ *   - {@code {kinds:[7,1111], #h:[...groupIds], #p:[userPubkey], since}} reactions/replies
+ *   - {@code {kinds:[4], authors:[...follows], #p:[userPubkey], since}} DMs (friends only)
  *   - {@code {kinds:[3300], #z:[...pseudonyms], since}}  Concord V1 sealed messages
  *   - {@code {kinds:[1059], authors:[...stream pks], since}} Concord V2 wraps
  *
@@ -129,6 +130,10 @@ public class NotificationRelayService extends Service {
     private final List<String> relayUrls = new ArrayList<>();
     private final Set<String> groupIds = new LinkedHashSet<>();
     private final Set<String> dmRelays = new LinkedHashSet<>();
+    // People the user follows (kind 3 `p` tags, hex). DM (kind 4) subscriptions
+    // are scoped to `authors:[...dmFollows]` so notifications only fire for DMs
+    // from friends — matching the client's permanent friends-only DM view.
+    private final Set<String> dmFollows = new LinkedHashSet<>();
     private JSONObject prefs = new JSONObject();
     // Concord (E2E) channel subscriptions, keyed for fast lookup:
     //   zToName: #z pseudonym (hex) → "Community / #channel" display name
@@ -355,6 +360,8 @@ public class NotificationRelayService extends Service {
         groupIds.addAll(parseStringArray(sp.getString("groupIds", null)));
         dmRelays.clear();
         dmRelays.addAll(parseStringArray(sp.getString("dmRelays", null)));
+        dmFollows.clear();
+        dmFollows.addAll(parseStringArray(sp.getString("dmFollows", null)));
         try {
             String p = sp.getString("prefs", null);
             prefs = p != null ? new JSONObject(p) : new JSONObject();
@@ -601,10 +608,15 @@ public class NotificationRelayService extends Service {
                     webSocket.send(reqMessage(subDirect, f2));
                 }
                 // Direct messages (kind 4) addressed to me, on the DM/app relays
-                // (NOT the NIP-29 group relays — DMs don't live there).
-                if (dmRelays.contains(relayUrl)) {
+                // (NOT the NIP-29 group relays — DMs don't live there). Scoped to
+                // `authors:[...dmFollows]` so only DMs from people I follow notify
+                // (permanent friends-only). No follows ⇒ no DM subscription.
+                if (dmRelays.contains(relayUrl) && !dmFollows.isEmpty()) {
                     JSONObject f4 = new JSONObject();
                     f4.put("kinds", new JSONArray().put(4));
+                    JSONArray dmAuthors = new JSONArray();
+                    for (String pk : dmFollows) dmAuthors.put(pk);
+                    f4.put("authors", dmAuthors);
                     f4.put("#p", new JSONArray().put(userPubkey));
                     f4.put("since", sinceSec);
                     webSocket.send(reqMessage(subDm, f4));

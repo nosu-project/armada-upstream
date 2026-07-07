@@ -1,4 +1,4 @@
-import { BellOff, ChevronLeft, Headphones, Loader2, MessageSquare, PenSquare, Phone, Plus, Search, UserCheck, Users, X } from "lucide-react";
+import { BellOff, ChevronLeft, Headphones, Loader2, MessageSquare, PenSquare, Phone, Plus, Search, UserCheck, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -826,8 +826,6 @@ function ConversationList({
   dmSupported,
   isLoading,
   onCompose,
-  friendsOnly,
-  setFriendsOnly,
   openPeer,
   loadMore,
   hasMore,
@@ -840,8 +838,6 @@ function ConversationList({
   dmSupported: boolean;
   isLoading: boolean;
   onCompose: () => void;
-  friendsOnly: boolean;
-  setFriendsOnly: (updater: (v: boolean) => boolean) => void;
   openPeer: (pubkey: string) => void;
   loadMore: () => Promise<number>;
   hasMore: boolean;
@@ -908,23 +904,6 @@ function ConversationList({
           Message your friends.
         </span>
         <div className="absolute right-3 bottom-3 flex items-center gap-0.5">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={friendsOnly ? "Showing people you follow" : "Show only people you follow"}
-                aria-pressed={friendsOnly}
-                className={cn("size-8 touch:size-10 text-muted-foreground", friendsOnly && "text-primary")}
-                onClick={() => setFriendsOnly((v) => !v)}
-              >
-                <Users className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {friendsOnly ? "Showing friends only" : "Friends only"}
-            </TooltipContent>
-          </Tooltip>
           <Button
             variant="ghost"
             size="icon"
@@ -964,9 +943,7 @@ function ConversationList({
           </div>
         ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground p-3">
-            {friendsOnly
-              ? "No conversations with people you follow. Turn off the friends filter to see everyone."
-              : "No conversations yet. Start one with the + button."}
+            No conversations with people you follow yet. Start one with the + button.
           </p>
         ) : (
           <>
@@ -1024,10 +1001,9 @@ export function DMsPage() {
   const { conversations, previews, isLoading, loadMore, hasMore, isLoadingMore } = useDMConversations();
   const { data: followData } = useFollowList();
   const [composing, setComposing] = useState(false);
-  // "Friends only" toggle: when on, the conversation list is narrowed to people
-  // the user follows (kind 3). Muted people are already excluded upstream in
-  // useDMConversations regardless of this toggle.
-  const [friendsOnly, setFriendsOnly] = useState(false);
+  // The conversation list is always narrowed to people the user follows (kind
+  // 3) — DMs from strangers are never shown. Muted people are also excluded
+  // upstream in useDMConversations.
   const followedPubkeys = useMemo(
     () => new Set(followData?.pubkeys ?? []),
     [followData?.pubkeys],
@@ -1055,19 +1031,17 @@ export function DMsPage() {
     if (composing) setRenderedPeer(undefined);
   }, [composing]);
 
-  // Conversations plus the active peer if it's a brand-new thread. When the
-  // friends filter is on, narrow to followed peers — but always keep the peer
-  // whose thread is currently open so the row you're reading never vanishes.
+  // Conversations plus the active peer if it's a brand-new thread. The list is
+  // always narrowed to followed peers — but always keep the peer whose thread is
+  // currently open so the row you're reading never vanishes.
   const rows = useMemo(() => {
     let list = conversations.map((c) => ({ peer: c.peer, latest: c.latest }));
-    if (friendsOnly) {
-      list = list.filter((c) => followedPubkeys.has(c.peer) || c.peer === activePeer);
-    }
+    list = list.filter((c) => followedPubkeys.has(c.peer) || c.peer === activePeer);
     if (activePeer && !list.some((c) => c.peer === activePeer)) {
       list.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent });
     }
     return list;
-  }, [conversations, activePeer, friendsOnly, followedPubkeys]);
+  }, [conversations, activePeer, followedPubkeys]);
 
   const openPeer = useCallback(
     (pubkey: string) => {
@@ -1124,8 +1098,6 @@ export function DMsPage() {
             dmSupported={dmSupported}
             isLoading={isLoading}
             onCompose={startComposing}
-            friendsOnly={friendsOnly}
-            setFriendsOnly={setFriendsOnly}
             openPeer={openPeer}
             loadMore={loadMore}
             hasMore={hasMore}

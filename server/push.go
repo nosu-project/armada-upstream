@@ -107,6 +107,13 @@ func setupPush() {
 	// Observe every saved event and fan out notifications. OnEventSaved runs
 	// after the event is durably stored and broadcast to live subscribers.
 	relay.OnEventSaved = append(relay.OnEventSaved, func(ctx context.Context, event *nostr.Event) {
+		// A new kind-3 changes who the author follows; drop its cached set so
+		// the next DM re-reads the fresh contact list.
+		if event.Kind == 3 {
+			followCacheMu.Lock()
+			delete(followCache, event.PubKey)
+			followCacheMu.Unlock()
+		}
 		// Never block the write path; fan out asynchronously.
 		go fanOutPush(event)
 	})
@@ -508,9 +515,85 @@ func wantsNotification(prefs pushPrefs, event *nostr.Event, recipient string) bo
 	case 1111:
 		return prefEnabled(prefs.Replies, true)
 	case 4:
-		return prefEnabled(prefs.DirectMessages, true)
+		if !prefEnabled(prefs.DirectMessages, true) {
+			return false
+		}
+		// Friends-only: only notify for a DM whose author the recipient follows
+		// (their kind-3 contact list). DMs from strangers never notify — this
+		// mirrors the client's permanent friends-only DM view and the native
+		// service's `authors:[...follows]` kind-4 filter.
+		return recipientFollows(recipient, event.PubKey)
 	}
 	return false
+}
+
+// followCacheTTL bounds how long a recipient's follow set is cached before a
+// re-read from badger, so a fresh follow starts notifying within the window
+// without a store hit on every incoming DM.
+const followCacheTTL = 5 * time.Minute
+
+type followCacheEntry struct {
+	set     map[string]struct{}
+	expires time.Time
+}
+
+var (
+	followCache   = map[string]followCacheEntry{}
+	followCacheMu sync.Mutex
+)
+
+// recipientFollows reports whether `recipient`'s latest kind-3 contact list
+// includes `author`. The result is cached briefly (see followCacheTTL). A
+// recipient with no contact list follows nobody, so DMs never notify them.
+func recipientFollows(recipient, author string) bool {
+	followCacheMu.Lock()
+	entry, ok := followCache[recipient]
+	if ok && time.Now().Before(entry.expires) {
+		followCacheMu.Unlock()
+		_, followed := entry.set[author]
+		return followed
+	}
+	followCacheMu.Unlock()
+
+	set := loadFollowSet(recipient)
+
+	followCacheMu.Lock()
+	followCache[recipient] = followCacheEntry{set: set, expires: time.Now().Add(followCacheTTL)}
+	followCacheMu.Unlock()
+
+	_, followed := set[author]
+	return followed
+}
+
+// loadFollowSet reads the recipient's latest kind-3 event from the store and
+// returns the set of `p`-tag pubkeys they follow.
+func loadFollowSet(recipient string) map[string]struct{} {
+	set := map[string]struct{}{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch, err := db.QueryEvents(ctx, nostr.Filter{
+		Kinds:   []int{3},
+		Authors: []string{recipient},
+		Limit:   1,
+	})
+	if err != nil {
+		return set
+	}
+	var latest *nostr.Event
+	for event := range ch {
+		if latest == nil || latest.CreatedAt < event.CreatedAt {
+			latest = event
+		}
+	}
+	if latest == nil {
+		return set
+	}
+	for _, tag := range latest.Tags {
+		if len(tag) >= 2 && tag[0] == "p" && tag[1] != "" {
+			set[tag[1]] = struct{}{}
+		}
+	}
+	return set
 }
 
 // sendPush delivers one Web Push, pruning the subscription if the endpoint is

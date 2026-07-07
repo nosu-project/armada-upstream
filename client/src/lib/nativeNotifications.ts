@@ -96,6 +96,12 @@ export interface ArmadaNotificationPlugin {
     groupIds?: string[];
     /** Relays to read DMs (kind 4) from — the app/DM relays, not group relays. */
     dmRelays?: string[];
+    /**
+     * People the user follows (kind 3 pubkeys, hex). The kind-4 DM subscription
+     * is scoped to `authors:[...dmFollows]` so only DMs from friends notify
+     * (permanent friends-only). Empty ⇒ no DM subscription at all.
+     */
+    dmFollows?: string[];
     /** Per-type notification prefs (mentions/reactions/replies/directMessages/allGroupMessages). */
     prefs?: Record<string, boolean>;
     /**
