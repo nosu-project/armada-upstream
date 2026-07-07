@@ -226,9 +226,16 @@ function applyAction(list: UserGroupList, action: GroupListAction): UserGroupLis
       // superficially (trailing slash / casing — `parseGroupListTags` keeps
       // the raw tag) is still dropped, rather than surviving to re-hydrate the
       // rail on the next boot.
+      //
+      // Also drop every joined `group` on this server. Otherwise a removed
+      // server "comes back": another device still has the server's channels in
+      // its list, restores/deep-links into one, and GroupPage re-publishes
+      // `add-server` — resurrecting the `r` tag. Purging the groups here leaves
+      // nothing on this server to trigger that re-add.
       return {
         ...list,
         servers: list.servers.filter((s) => (normalizeRelayUrl(s) ?? s) !== url),
+        groups: list.groups.filter((g) => (normalizeRelayUrl(g.relay) ?? g.relay) !== url),
       };
     }
     case "reorder-servers": {

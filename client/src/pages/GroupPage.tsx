@@ -220,9 +220,9 @@ export function GroupPage() {
   // Visiting a server/invite link (e.g. /s/chat.soapbox.pub/<group>) should add
   // the server to the user's rail so they can navigate back to it after going
   // to DMs or another server. Platform relays are always present in the rail, so
-  // only non-platform servers need adding. Mirrors AddDialog: write the local
-  // cache immediately (works logged-out, instant rail visibility) and, when
-  // signed in, sync to the kind 10009 list for cross-device persistence.
+  // only non-platform servers need adding. Write the local cache immediately
+  // (works logged-out, instant rail visibility). The cross-device 10009 sync is
+  // deliberately NOT done here — see the membership-gated effect below.
   const addedServerRef = useRef<string | null>(null);
   const syncedServerRef = useRef<string | null>(null);
   useEffect(() => {
@@ -235,18 +235,7 @@ export function GroupPage() {
           : { ...c, addedRelays: [...c.addedRelays, relayUrl] },
       );
     }
-    // Cross-device sync needs a signed-in user; `user` may resolve after the
-    // first render, so this re-runs (and fires once) when it does.
-    if (user && syncedServerRef.current !== relayUrl) {
-      syncedServerRef.current = relayUrl;
-      updateList({ type: "add-server", url: relayUrl }).catch((err) =>
-        console.warn("Failed to sync server to group list:", err));
-    }
-  }, [relayUrl, user, updateConfig, updateList]);
-
-  if (!relayUrl || !groupId) {
-    return <Navigate to="/" replace />;
-  }
+  }, [relayUrl, updateConfig]);
 
   const group = details?.group;
   // The user's own kind 10009 list (NIP-51) is the locally-persisted,
@@ -283,6 +272,29 @@ export function GroupPage() {
   // logged-in user is in this ambiguous window, the composer area shows a
   // skeleton instead of the join prompt.
   const membershipPending = Boolean(user) && !isMember && (isLoading || membershipLoading);
+  // Cross-device persistence: sync the server to the user's kind 10009 list —
+  // but ONLY once we have a positive membership signal, never on a mere passive
+  // visit. Auto-adding on every visit resurrected servers the user had
+  // *removed* on another device: a lingering deep link / last-channel restore
+  // would silently re-publish `add-server`. Gating on actual membership means a
+  // removed server stays removed unless the user genuinely (re)joins a channel
+  // on it. `isMember` may resolve after the first render, so this re-runs and
+  // fires once when it flips true. `joinedLocally` (presence in the user's own
+  // list) is one of the signals, so a normal join both writes the group and
+  // brings the server along.
+  useEffect(() => {
+    if (!user || !relayUrl || PLATFORM_RELAYS.includes(relayUrl)) return;
+    if (!isMember) return;
+    if (syncedServerRef.current === relayUrl) return;
+    syncedServerRef.current = relayUrl;
+    updateList({ type: "add-server", url: relayUrl }).catch((err) =>
+      console.warn("Failed to sync server to group list:", err));
+  }, [user, relayUrl, isMember, updateList]);
+
+  if (!relayUrl || !groupId) {
+    return <Navigate to="/" replace />;
+  }
+
   // Voice is available when the group is tagged `livekit` or the relay
   // advertises the NIP-29 LiveKit extension for all its groups.
   const hasVoice = Boolean(group?.hasLivekit || relayHasLivekit);
