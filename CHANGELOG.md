@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.17.6] - 2026-07-06
+
+Adds unread tracking to Concord v2 channels, and gives the active channel a
+clearer highlight everywhere.
+
+### Added
+- Concord v2 channels now show unread indicators (bright/bold text, and an
+  '@' pill for mentions) on both the channel list and community icon
+
+### Changed
+- The active channel now gets a clearer filled highlight, consistent across
+  NIP-29 rooms and Concord v1/v2
+- Improved text contrast on colored backgrounds (e.g. the active-channel
+  highlight) so text stays readable regardless of the color
+
 ## [0.17.5] - 2026-07-06
 
 Armada links now open straight into the Android app: tapping an
