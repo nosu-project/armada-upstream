@@ -1137,9 +1137,11 @@ export function ServerRail({
 
   // ─── Drag to reorder / fold (Discord semantics) ─────────────────────────
   //
-  // With a mouse, an entry picks up as soon as the pointer moves a few pixels
-  // (no hold needed — this is what makes the grab cursor honest). On touch,
-  // press and hold (~300ms) picks up, so the rail can still scroll.
+  // Press and hold (~300ms) picks an entry up on every pointer type — the
+  // cursor flips to the grabbing hand at that moment, never on mere movement.
+  // Mouse movement during the hold neither triggers nor cancels the pickup
+  // (the long press still completes, at the cursor's current position); on
+  // touch, early movement converts the gesture to a scroll instead.
   //
   // The rendered DOM order never changes during a drag; slot geometry is
   // frozen at pickup and a fixed-position indicator line / target highlight
@@ -1217,6 +1219,10 @@ export function ServerRail({
       // classified as a scroll rather than a long-press drag.
       let manualScroll = false;
       let lastScrollY = e.clientY;
+      // Latest pointer position, so a long press that fires after the pointer
+      // has wandered picks up at the cursor, not at the press point.
+      let lastX = e.clientX;
+      let lastY = e.clientY;
 
       const clear = () => {
         if (longPressTimer.current !== null) {
@@ -1242,6 +1248,8 @@ export function ServerRail({
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
         if (dragActive.current === null) {
+          lastX = ev.clientX;
+          lastY = ev.clientY;
           // Touch gesture that committed to scrolling: pan the rail manually.
           // Entries carry `touch-action: none` (the ONLY reliable way to keep
           // Chrome from claiming the drag as a pan and killing it with
@@ -1254,13 +1262,13 @@ export function ServerRail({
             lastScrollY = ev.clientY;
             return;
           }
+          // Mouse movement neither picks up (only the long press does) nor
+          // cancels the pending long press.
+          if (isMouse) return;
           const s = startPos.current;
           if (!s) return;
           const dist = Math.hypot(ev.clientX - s.x, ev.clientY - s.y);
-          if (isMouse) {
-            // Mouse: drag starts as soon as the pointer commits to moving.
-            if (dist > 6) beginDrag(source, ev.clientX, ev.clientY);
-          } else if (dist > 10) {
+          if (dist > 10) {
             // Touch: movement before the long-press fires is a scroll — hand
             // the rest of the gesture to the manual panner above.
             if (longPressTimer.current !== null) {
@@ -1325,12 +1333,11 @@ export function ServerRail({
       window.addEventListener("pointercancel", onCancel);
       window.addEventListener("contextmenu", onContextMenu, true);
 
-      if (!isMouse) {
-        longPressTimer.current = window.setTimeout(
-          () => beginDrag(source, e.clientX, e.clientY),
-          300,
-        );
-      }
+      // Press-and-hold pickup — the ONLY trigger, on every pointer type.
+      // Guarded: a touch gesture that converted to a scroll cleared the timer.
+      longPressTimer.current = window.setTimeout(() => {
+        if (dragActive.current === null) beginDrag(source, lastX, lastY);
+      }, 300);
     },
     [beginDrag, persistLayout],
   );
@@ -1339,10 +1346,12 @@ export function ServerRail({
   const draggable = items.length > 1;
   const shouldSuppressClick = useCallback(() => didDragRef.current, []);
 
-  // While an entry is picked up, carry the grabbing cursor globally (the
-  // pointer crosses many elements mid-drag). At rest, entries show the
-  // normal link cursor — the old grab-on-hover hand suggested a drag
-  // affordance before anything was picked up, which confused people.
+  // While an entry is picked up, carry the grabbing cursor globally as a
+  // fallback (the full-viewport overlay below is what makes the flip visible
+  // in Chromium; this covers other engines and any hit-test edge cases). At
+  // rest, entries show the normal link cursor — the old grab-on-hover hand
+  // suggested a drag affordance before anything was picked up, which
+  // confused people.
   useEffect(() => {
     if (!reordering) return;
     const prev = document.body.style.cursor;
@@ -1647,6 +1656,20 @@ export function ServerRail({
           x={dragPos.x}
           y={dragPos.y}
         />
+      )}
+
+      {/* While an entry is held, a full-viewport layer carries the grabbing
+          cursor. This is what makes the cursor actually flip at pickup:
+          Chromium does not re-evaluate a style-only cursor change while a
+          mouse button is down and the pointer is stationary (so the body
+          cursor set in the effect above is invisible until something else
+          forces it) — but a NEW element appearing under the pointer forces
+          the recompute. It also blocks hover states beneath the drag. It
+          must NOT be pointer-events-none (hit-test-transparent elements
+          don't contribute a cursor); the gesture's listeners live on window,
+          so events bubbling through it are still seen. */}
+      {reordering && (
+        <div data-rail-drag-overlay className="fixed inset-0 z-[298] cursor-grabbing" aria-hidden />
       )}
 
       {/* Insertion indicator: where a gap drop would land. */}

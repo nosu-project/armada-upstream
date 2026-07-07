@@ -146,14 +146,16 @@ function firePointer(
 }
 
 /** Mouse-drag the element at anchor `from` and drop at viewport y `toY`. */
-function mouseDrag(fromAnchor: string, toY: number) {
+async function mouseDrag(fromAnchor: string, toY: number) {
   const el = document.querySelector(`[data-rail-anchor="${fromAnchor}"]`);
   expect(el, `element with anchor ${fromAnchor}`).toBeTruthy();
   const anchored = Array.from(document.querySelectorAll("[data-rail-anchor]"));
   const startY = slotCenter(anchored.indexOf(el!));
   firePointer(el!, "pointerdown", { x: 36, y: startY });
-  // Cross the 6px movement threshold to pick up…
-  firePointer(window, "pointermove", { x: 36, y: startY + 8 });
+  // Hold through the long-press threshold (~300ms) to pick up…
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 350));
+  });
   // …drag to the target…
   firePointer(window, "pointermove", { x: 36, y: toY });
   // …and drop.
@@ -189,49 +191,49 @@ describe("ServerRail drag wiring", () => {
     return () => restoreGeometry();
   });
 
-  it("drops one server onto another to create a folder", () => {
+  it("drops one server onto another to create a folder", async () => {
     renderRail();
     // Slots (DOM order): 0=A, 1=B, 2=C.
-    mouseDrag(`item:${RELAY_A}`, slotCenter(1)); // middle of B → combine
+    await mouseDrag(`item:${RELAY_A}`, slotCenter(1)); // middle of B → combine
     expect(config.railLayout).toEqual([
       { type: "folder", id: expect.any(String), name: "", keys: [RELAY_B, RELAY_A] },
       { type: "item", key: RELAY_C },
     ]);
   });
 
-  it("drops a server onto a collapsed folder to move it inside", () => {
+  it("drops a server onto a collapsed folder to move it inside", async () => {
     config.railLayout = [
       { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B] },
       { type: "item", key: RELAY_C },
     ];
     renderRail();
     // Slots (DOM order): 0=folder f (collapsed), 1=C.
-    mouseDrag(`item:${RELAY_C}`, slotCenter(0)); // middle of the folder → into it
+    await mouseDrag(`item:${RELAY_C}`, slotCenter(0)); // middle of the folder → into it
     expect(config.railLayout).toEqual([
       { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B, RELAY_C] },
     ]);
   });
 
-  it("accepts a drop near the folder's edge, not just its center", () => {
+  it("accepts a drop near the folder's edge, not just its center", async () => {
     config.railLayout = [
       { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B] },
       { type: "item", key: RELAY_C },
     ];
     renderRail();
-    mouseDrag(`item:${RELAY_C}`, SLOT_TOP + 2); // 2px into the folder's rect
+    await mouseDrag(`item:${RELAY_C}`, SLOT_TOP + 2); // 2px into the folder's rect
     expect(config.railLayout).toEqual([
       { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B, RELAY_C] },
     ]);
   });
 
-  it("drops between entries to reorder", () => {
+  it("drops between entries to reorder", async () => {
     renderRail();
     // Drop A into the gap just above C (below B's center, above C's top).
-    mouseDrag(`item:${RELAY_A}`, SLOT_TOP + 2 * PITCH - 6);
+    await mouseDrag(`item:${RELAY_A}`, SLOT_TOP + 2 * PITCH - 6);
     expect(config.railOrder).toEqual([RELAY_B, RELAY_A, RELAY_C]);
   });
 
-  it("drags an item out of an expanded folder to dissolve a 2-item folder", () => {
+  it("drags an item out of an expanded folder to dissolve a 2-item folder", async () => {
     config.railLayout = [
       { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B] },
       { type: "item", key: RELAY_C },
@@ -239,12 +241,79 @@ describe("ServerRail drag wiring", () => {
     config.railOpenFolders = ["f"];
     renderRail();
     // Slots (DOM order): 0=folder header, 1=A (child), 2=B (child), 3=C.
-    mouseDrag(`item:${RELAY_A}`, SLOT_TOP + 4 * PITCH); // below everything → end
+    await mouseDrag(`item:${RELAY_A}`, SLOT_TOP + 4 * PITCH); // below everything → end
     expect(config.railLayout).toEqual([
       { type: "item", key: RELAY_B },
       { type: "item", key: RELAY_C },
       { type: "item", key: RELAY_A },
     ]);
+  });
+
+  it("mouse press-and-hold picks up: cursor flips to grabbing, drop applies", async () => {
+    renderRail();
+    const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
+    firePointer(el, "pointerdown", { x: 36, y: slotCenter(0) });
+    // No movement — the long-press threshold (~300ms) alone fires the pickup…
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    // …and the entry reads as held: the global grabbing cursor plus the
+    // full-viewport cursor overlay (what actually flips the cursor in
+    // Chromium while the button is down).
+    expect(document.body.style.cursor).toBe("grabbing");
+    expect(document.querySelector("[data-rail-drag-overlay]")).toBeTruthy();
+    firePointer(window, "pointermove", { x: 36, y: slotCenter(1) });
+    firePointer(window, "pointerup", { x: 36, y: slotCenter(1) });
+    expect(document.body.style.cursor).toBe("");
+    expect(document.querySelector("[data-rail-drag-overlay]")).toBeNull();
+    expect(config.railLayout).toEqual([
+      { type: "folder", id: expect.any(String), name: "", keys: [RELAY_B, RELAY_A] },
+      { type: "item", key: RELAY_C },
+    ]);
+  });
+
+  it("mouse movement alone never picks up, and doesn't cancel the hold", async () => {
+    renderRail();
+    const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
+    firePointer(el, "pointerdown", { x: 36, y: slotCenter(0) });
+    // Move well past any distance threshold before the long press fires…
+    firePointer(window, "pointermove", { x: 36, y: slotCenter(2) });
+    expect(document.body.style.cursor).toBe(""); // …no pickup from movement…
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    // …but the hold still completes, picking up at the cursor's position
+    // (over C, not at the press point over A).
+    expect(document.body.style.cursor).toBe("grabbing");
+    firePointer(window, "pointerup", { x: 36, y: slotCenter(2) });
+    expect(config.railLayout).toEqual([
+      { type: "item", key: RELAY_B },
+      { type: "folder", id: expect.any(String), name: "", keys: [RELAY_C, RELAY_A] },
+    ]);
+  });
+
+  it("a quick mouse drag released before the long press changes nothing", () => {
+    renderRail();
+    const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
+    firePointer(el, "pointerdown", { x: 36, y: slotCenter(0) });
+    firePointer(window, "pointermove", { x: 36, y: slotCenter(1) });
+    firePointer(window, "pointerup", { x: 36, y: slotCenter(1) });
+    expect(document.body.style.cursor).toBe("");
+    expect(config.railLayout).toEqual([]); // nothing persisted
+  });
+
+  it("mouse press-and-hold released in place is a layout no-op", async () => {
+    renderRail();
+    const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
+    firePointer(el, "pointerdown", { x: 36, y: slotCenter(0) });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    firePointer(window, "pointerup", { x: 36, y: slotCenter(0) });
+    expect(document.body.style.cursor).toBe("");
+    // Dropping back where it started must not fold anything or reorder.
+    expect(config.railLayout.filter((n) => n.type === "folder")).toEqual([]);
+    expect(config.railOrder).toEqual([RELAY_A, RELAY_B, RELAY_C]);
   });
 
   it("touch long-press picks up, claims touchmove from the browser, and drops", async () => {
