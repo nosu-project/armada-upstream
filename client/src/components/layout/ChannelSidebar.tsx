@@ -73,14 +73,16 @@ function ChannelLink({
         onClick={onNavigate}
         className={({ isActive }) =>
           cn(
-            // Chart-rule HUD entry: a glowing left gutter-tick marks state
-            // instead of a full-bleed grey hover block. Raked left padding
-            // echoes the console's diagonal.
-            "gutter-tick flex items-center gap-2 pl-4 pr-2 py-1.5 text-sm transition-colors",
-            "text-muted-foreground hover:text-foreground",
-            // Unread channels read brighter even when not selected.
-            !isActive && hasUnread && "text-foreground font-medium",
-            isActive && "is-active text-foreground font-medium",
+            // Slack-style selection: the active channel sits on a filled
+            // primary rectangle with the house cut-corner chamfer. Inactive
+            // rows are transparent with a subtle hover wash.
+            "flex items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors",
+            !isActive && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
+            // Unread (but not selected) channels read brighter + bold, matching
+            // Slack. This is now visually distinct from the active rectangle.
+            !isActive && hasUnread && "text-foreground font-semibold",
+            // Active/navigated channel: primary-filled chamfered rectangle.
+            isActive && "clip-corner-lg bg-primary text-primary-foreground font-medium",
           )}
       >
         <Icon className="size-4 shrink-0" />

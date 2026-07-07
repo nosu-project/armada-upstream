@@ -481,9 +481,9 @@ function ChannelRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "gutter-tick w-full flex items-center gap-2 pl-4 pr-2 py-1.5 text-sm transition-colors text-left",
-        "text-muted-foreground hover:text-foreground",
-        active && "is-active text-foreground font-medium",
+        "w-full flex items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
+        !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
+        active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
       )}
     >
       {icon}
@@ -509,9 +509,9 @@ function MemberRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "gutter-tick w-full flex items-center gap-2 pl-4 pr-2 py-1.5 text-sm transition-colors text-left",
-        "text-muted-foreground hover:text-foreground",
-        active && "is-active text-foreground font-medium",
+        "w-full flex items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
+        !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
+        active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
       )}
     >
       <span
