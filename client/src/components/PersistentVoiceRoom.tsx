@@ -277,6 +277,24 @@ function makePlaceBar(
       <MobileCallBar shellRef={shellRef} exiting={exiting}>
         {mobile}
       </MobileCallBar>
+      {slots.length === 0 && (
+        // Desktop fallback: the current route registered no call-bar slot
+        // (home, settings, or a route transition's slot gap), so float the
+        // panel bottom-left — the call must keep visible presence + controls
+        // everywhere, not just on pages with a channel sidebar. The entry
+        // delay (with fill-mode-backwards holding it invisible) swallows the
+        // one-frame gap while switching between two slot-owning pages.
+        <div
+          className={cn(
+            "fixed bottom-3 left-3 z-40 w-80 max-w-[calc(100vw-1.5rem)] max-sidebar:hidden",
+            exiting
+              ? "animate-out fade-out-0 slide-out-to-bottom-2 duration-200 fill-mode-forwards"
+              : "animate-in fade-in-0 slide-in-from-bottom-2 duration-200 delay-150 fill-mode-backwards",
+          )}
+        >
+          {desktop ?? mobile}
+        </div>
+      )}
       {slots.map((el, i) =>
         createPortal(
           <div
@@ -303,16 +321,15 @@ function makePlaceBar(
 type PlaceStage = (stage: React.ReactNode) => React.ReactNode;
 
 /**
- * Build the place-stage renderer: portal the call stage into every registered
- * top-of-chat slot (in practice the single chat surface matching the active
- * call). Returns null when no slot is registered yet.
+ * Build the place-stage renderer: portal the call stage into the stable host
+ * element owned by CallProvider. The host is reparented into whichever
+ * top-of-chat slot is registered (or parked detached when none is), so the
+ * stage stays MOUNTED for the whole call — unmounting it on navigation used to
+ * pause every remote video via adaptiveStream and lose screenshares outright
+ * on the E2EE Concord path, along with the focus/theater state.
  */
-function makePlaceStage(slots: HTMLElement[]): PlaceStage {
-  return (stage) => (
-    <>
-      {slots.map((el, i) => createPortal(stage, el, `call-stage-slot-${i}`))}
-    </>
-  );
+function makePlaceStage(host: HTMLElement): PlaceStage {
+  return (stage) => createPortal(stage, host, "call-stage");
 }
 
 /**
@@ -687,7 +704,7 @@ export default function PersistentVoiceRoom({
   call,
   onLeave,
   slots,
-  stageSlots,
+  stageHost,
   stageOpen,
   exiting,
   shellRef,
@@ -695,13 +712,14 @@ export default function PersistentVoiceRoom({
   call: ActiveCall;
   onLeave: () => void;
   slots: HTMLElement[];
-  stageSlots: HTMLElement[];
+  /** Stable stage host element (owned + reparented by CallProvider). */
+  stageHost: HTMLElement;
   stageOpen: boolean;
   exiting: boolean;
   shellRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const placeBar = useMemo(() => makePlaceBar(slots, exiting, shellRef), [slots, exiting, shellRef]);
-  const placeStage = useMemo(() => makePlaceStage(stageSlots), [stageSlots]);
+  const placeStage = useMemo(() => makePlaceStage(stageHost), [stageHost]);
 
   if (call.concord) {
     return (

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { CallContext, type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
@@ -101,6 +101,27 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     return () => setStageSlots((prev) => prev.filter((s) => s !== el));
   }, []);
 
+  // A stable, call-lifetime host element for the call stage. The stage portals
+  // into THIS element for the whole call; the element itself is *reparented*
+  // into whichever page slot is currently registered (and parked detached when
+  // none is). Reparenting — instead of portaling into each slot directly —
+  // keeps CallStage mounted across navigation, so video subscriptions, the
+  // focused tile, theater mode, and the screenshare-appeared tracking all
+  // survive leaving the room UI (a remount used to pause remote video via
+  // adaptiveStream and drop it entirely on the E2EE Concord path).
+  const stageHost = useMemo(() => {
+    const el = document.createElement("div");
+    el.style.display = "contents";
+    return el;
+  }, []);
+
+  useEffect(() => {
+    const target = stageSlots.length > 0 ? stageSlots[stageSlots.length - 1] : null;
+    if (target) target.appendChild(stageHost);
+    else stageHost.remove();
+  }, [stageSlots, stageHost]);
+  useEffect(() => () => stageHost.remove(), [stageHost]);
+
   const toggleStage = useCallback(() => setStageOpen((o) => !o), []);
 
   // Equality-guarded so the room's frequent ActiveSpeakersChanged reports only
@@ -154,7 +175,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
               call={activeCall}
               onLeave={leaveCall}
               slots={slots}
-              stageSlots={stageSlots}
+              stageHost={stageHost}
               stageOpen={stageOpen}
               exiting={exiting}
               shellRef={shellRef}
