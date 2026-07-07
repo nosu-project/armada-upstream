@@ -1,6 +1,10 @@
+import { Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { cn } from "@/lib/utils";
+
+import type { ImetaEncryption } from "@/lib/imeta";
 
 interface VideoPlayerProps {
   src: string;
@@ -8,15 +12,22 @@ interface VideoPlayerProps {
   poster?: string;
   /** Pixel dimensions from the imeta `dim` field, e.g. "1280x720". */
   dim?: string;
+  /** MIME type of the video (used as the decrypted Blob's type). */
+  mime?: string;
+  /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
+  encryption?: ImetaEncryption;
   className?: string;
 }
 
 /**
  * Inline chat video player. Uses native controls but reserves the correct
- * aspect ratio from imeta `dim` to prevent layout shifts.
+ * aspect ratio from imeta `dim` to prevent layout shifts. Encrypted
+ * (Concord/Vector) attachments are AES-GCM ciphertext on Blossom, so the src
+ * is fetched + decrypted to an object URL before it reaches the <video>.
  */
-export function VideoPlayer({ src, poster, dim, className }: VideoPlayerProps) {
+export function VideoPlayer({ src, poster, dim, mime, encryption, className }: VideoPlayerProps) {
   const [failed, setFailed] = useState(false);
+  const resolved = useResolvedMediaSrc({ url: src, encryption, mime });
 
   const aspectRatio = useMemo(() => {
     const match = dim?.match(/^(\d+)x(\d+)$/);
@@ -28,7 +39,7 @@ export function VideoPlayer({ src, poster, dim, className }: VideoPlayerProps) {
     return "16 / 9";
   }, [dim]);
 
-  if (failed) {
+  if (failed || resolved.status === "error") {
     return (
       <a
         href={src}
@@ -48,15 +59,21 @@ export function VideoPlayer({ src, poster, dim, className }: VideoPlayerProps) {
       style={{ aspectRatio }}
       onClick={(e) => e.stopPropagation()}
     >
-      <video
-        src={src}
-        poster={poster}
-        controls
-        preload="metadata"
-        playsInline
-        className="w-full h-full object-contain"
-        onError={() => setFailed(true)}
-      />
+      {resolved.status === "ready" ? (
+        <video
+          src={resolved.src}
+          poster={poster}
+          controls
+          preload="metadata"
+          playsInline
+          className="w-full h-full object-contain"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        </div>
+      )}
     </div>
   );
 }

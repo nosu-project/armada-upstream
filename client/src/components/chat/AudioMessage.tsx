@@ -1,12 +1,17 @@
 import { Pause, Play } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { formatTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
+
+import type { ImetaEncryption } from "@/lib/imeta";
 
 interface AudioMessageProps {
   src: string;
   mime?: string;
+  /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
+  encryption?: ImetaEncryption;
   /** Space-separated 0–100 amplitude samples from the imeta `waveform` field. */
   waveform?: string;
   /** Duration in seconds from the imeta `duration` field. */
@@ -49,7 +54,7 @@ function toBars(waveform: string | undefined): number[] {
  * playback progress, and a duration label. Used for voice messages and
  * other audio attachments.
  */
-export function AudioMessage({ src, mime, waveform, duration, className }: AudioMessageProps) {
+export function AudioMessage({ src, mime, encryption, waveform, duration, className }: AudioMessageProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -58,9 +63,16 @@ export function AudioMessage({ src, mime, waveform, duration, className }: Audio
     return Number.isFinite(parsed) ? parsed : 0;
   });
 
+  // Encrypted (Concord/Vector) attachments are AES-GCM ciphertext on Blossom:
+  // fetch + decrypt to an object URL before handing anything to <audio>.
+  // Plain URLs resolve immediately to themselves.
+  const resolved = useResolvedMediaSrc({ url: src, encryption, mime });
+
   const bars = useMemo(() => toBars(waveform), [waveform]);
   const progress = mediaDuration > 0 ? currentTime / mediaDuration : 0;
 
+  // The <audio> element only mounts once the src is resolved, so re-attach
+  // listeners when the resolve state changes.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -85,7 +97,7 @@ export function AudioMessage({ src, mime, waveform, duration, className }: Audio
       audio.removeEventListener("durationchange", onDur);
       audio.removeEventListener("loadedmetadata", onDur);
     };
-  }, []);
+  }, [resolved.status]);
 
   const togglePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -104,6 +116,21 @@ export function AudioMessage({ src, mime, waveform, duration, className }: Audio
     audio.currentTime = ratio * mediaDuration;
   };
 
+  // Decrypt failure (bad key, blob gone): fall back to a plain link.
+  if (resolved.status === "error") {
+    return (
+      <a
+        href={src}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-primary hover:underline break-all"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {src}
+      </a>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -112,9 +139,11 @@ export function AudioMessage({ src, mime, waveform, duration, className }: Audio
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      <audio ref={audioRef} preload="metadata" className="hidden">
-        {mime ? <source src={src} type={mime} /> : <source src={src} />}
-      </audio>
+      {resolved.status === "ready" && (
+        <audio ref={audioRef} preload="metadata" className="hidden">
+          {mime ? <source src={resolved.src} type={mime} /> : <source src={resolved.src} />}
+        </audio>
+      )}
 
       <button
         type="button"

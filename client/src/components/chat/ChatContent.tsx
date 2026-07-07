@@ -79,7 +79,7 @@ type ContentToken =
   | { type: "text"; value: string }
   | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string }
   | { type: "image-gallery"; urls: ImageRef[] }
-  | { type: "media-embed"; url: string }
+  | { type: "media-embed"; url: string; encryption?: ImetaEncryption; mime?: string }
   | { type: "link-embed"; url: string }
   | { type: "inline-link"; url: string }
   | { type: "mention"; pubkey: string }
@@ -283,8 +283,10 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
 
           // Non-image media URLs (video, audio) — render inline at their position.
           // Match by extension, or by an imeta-declared audio/video MIME (covers
-          // extension-less upload URLs like blossom sha256 filenames).
-          const imetaMime = imetaMimeByUrl.get(url);
+          // extension-less upload URLs like blossom sha256 filenames). Like
+          // image-embed, the token carries the imeta decryption params + MIME so
+          // encrypted (Concord/Vector) blobs decrypt before playback.
+          const imetaMime = inlineImetaMime ?? imetaMimeByUrl.get(url);
           const isImetaMedia = imetaMime?.startsWith("audio/") || imetaMime?.startsWith("video/");
           if (EMBED_MEDIA_URL_REGEX.test(url) || isImetaMedia) {
             if (out.length > 0) {
@@ -293,7 +295,12 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
                 prev.value = prev.value.replace(/\s+$/, "");
               }
             }
-            out.push({ type: "media-embed", url });
+            out.push({
+              type: "media-embed",
+              url,
+              encryption: inlineImeta?.encryption,
+              mime: imetaMime,
+            });
             lastIndex = index + fullMatch.length;
             const leadingWs = segment.substring(lastIndex).match(/^\s+/);
             if (leadingWs) lastIndex += leadingWs[0].length;
@@ -424,8 +431,8 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         if (mime?.startsWith("image/")) {
           result.push({ type: "image-embed", url, encryption: entry.encryption, mime });
           renderedUrls.add(url);
-        } else if (entry.mime?.startsWith("audio/") || entry.mime?.startsWith("video/")) {
-          result.push({ type: "media-embed", url });
+        } else if (mime?.startsWith("audio/") || mime?.startsWith("video/")) {
+          result.push({ type: "media-embed", url, encryption: entry.encryption, mime });
           renderedUrls.add(url);
         }
       }
@@ -651,7 +658,11 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
       case "media-embed": {
         if (inQuote) return inlineLink(key, token.url);
         const imeta = imetaMap.get(token.url);
-        const mime = imeta?.mime ?? "";
+        const mime = token.mime ?? imeta?.mime ?? "";
+        // Encrypted (Concord/Vector) attachments must be fetched + decrypted
+        // before the <audio>/<video> element can play them. Fall back to the
+        // imeta entry for tokens created by pure extension match.
+        const encryption = token.encryption ?? imeta?.encryption;
         const isXdc = mime === "application/x-webxdc"
           || /\.xdc(\?[^\s]*)?$/i.test(token.url);
         if (isXdc) {
@@ -666,13 +677,23 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             <AudioMessage
               key={key}
               src={token.url}
-              mime={imeta?.mime}
+              mime={token.mime ?? imeta?.mime}
+              encryption={encryption}
               waveform={waveform}
               duration={duration}
             />
           );
         }
-        return <VideoPlayer key={key} src={token.url} poster={imeta?.thumbnail} dim={imeta?.dim} />;
+        return (
+          <VideoPlayer
+            key={key}
+            src={token.url}
+            poster={imeta?.thumbnail}
+            dim={imeta?.dim}
+            mime={token.mime ?? imeta?.mime}
+            encryption={encryption}
+          />
+        );
       }
       case "nevent-embed": {
         if (disableNoteEmbeds || inQuote) {

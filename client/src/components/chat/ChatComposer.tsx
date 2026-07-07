@@ -555,16 +555,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       const tags = await uploadFile(uploadableFile);
       const url = tags[0][1];
 
+      // For encrypted uploads the server's NIP-94 `m`/`x`/`size`/`dim` all
+      // describe the ciphertext; overwrite `m` with the real MIME (image,
+      // video, or audio) so the receive side classifies + decrypts correctly.
+      if (encryption && originalMime) {
+        const mTag = tags.find((t) => t[0] === "m");
+        if (mTag) mTag[1] = originalMime;
+        else tags.push(["m", originalMime]);
+      }
+
       if (isImage) {
         const hasTag = (name: string) => tags.some((t) => t[0] === name);
-        // For encrypted uploads the server's NIP-94 `m`/`x`/`size`/`dim` all
-        // describe the ciphertext; overwrite `m` with the real image MIME and
-        // attach the plaintext-derived dim/blurhash so the embed renders right.
-        if (encryption) {
-          const mTag = tags.find((t) => t[0] === "m");
-          if (mTag) mTag[1] = originalMime;
-          else tags.push(["m", originalMime]);
-        }
+        // Attach the plaintext-derived dim/blurhash so the embed renders right.
         if (dimTag && !hasTag("dim")) tags.push(["dim", dimTag]);
         if (blurhashTag && !hasTag("blurhash")) tags.push(["blurhash", blurhashTag]);
       }
@@ -957,35 +959,58 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         "audio/ogg;codecs=opus": ".ogg",
       };
       const ext = extMap[recording.mimeType] ?? ".webm";
-      const file = new File([recording.blob], `voice-message-${Date.now()}${ext}`, {
+      let file = new File([recording.blob], `voice-message-${Date.now()}${ext}`, {
         type: recording.mimeType,
       });
+
+      // Concord: encrypt the voice blob client-side like any other attachment,
+      // so Blossom only holds ciphertext; the key/nonce ride in the imeta.
+      let encryption: (ImetaEncryption & { ox: string }) | undefined;
+      if (encryptAttachments) {
+        const enc = await encryptFileForUpload(file);
+        file = enc.file;
+        encryption = { algorithm: "aes-gcm", key: enc.key, nonce: enc.nonce, ox: enc.originalHash };
+      }
 
       const uploadTags = await uploadFile(file);
       const audioUrl = uploadTags[0][1];
 
       const tags = buildMessageTags(audioUrl);
-      // Replace the basic imeta tag with one carrying waveform + duration.
+      // Replace the basic imeta tag with one carrying waveform + duration
+      // (and, for encrypted uploads, the AES-GCM decryption params).
       const imetaIndex = tags.findIndex((t) => t[0] === "imeta" && t.includes(`url ${audioUrl}`));
-      const imetaTag = [
-        "imeta",
+      const imetaFields = [
         `url ${audioUrl}`,
         `m ${recording.mimeType}`,
         `waveform ${recording.waveform.join(" ")}`,
         `duration ${Math.round(recording.duration)}`,
       ];
+      if (encryption) {
+        imetaFields.push(
+          `encryption-algorithm ${encryption.algorithm}`,
+          `decryption-key ${encryption.key}`,
+          `decryption-nonce ${encryption.nonce}`,
+          `ox ${encryption.ox}`,
+        );
+      }
+      const imetaTag = ["imeta", ...imetaFields];
       if (imetaIndex >= 0) {
         tags[imetaIndex] = imetaTag;
       } else {
         tags.push(imetaTag);
       }
 
-      await createEvent({
-        kind: KIND_GROUP_CHAT,
-        content: audioUrl,
-        tags,
-        relay: relayUrl,
-      });
+      if (sendOverride) {
+        // Delegated send path (Concord/DMs): the caller seals + publishes.
+        await sendOverride(audioUrl, tags);
+      } else {
+        await createEvent({
+          kind: KIND_GROUP_CHAT,
+          content: audioUrl,
+          tags,
+          relay: relayUrl,
+        });
+      }
 
       onCancelReply?.();
       onSent?.();
@@ -994,7 +1019,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } finally {
       setIsPublishingVoice(false);
     }
-  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, onCancelReply, onSent, toast]);
+  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, encryptAttachments, onCancelReply, onSent, toast]);
 
   const handleStartRecording = useCallback(async () => {
     try {
@@ -1305,8 +1330,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 {!pickerOpen && <TooltipContent>Emoji / GIF</TooltipContent>}
               </Tooltip>
 
-              {/* Mic when empty, send when there's something to send (Signal-style) */}
-              {mode === "post" && !hasContent && !sendOverride && voiceRecorder.isSupported ? (
+              {/* Mic when empty, send when there's something to send (Signal-style).
+                  Available in group mode AND delegated-send mode (Concord/DMs) —
+                  handleStopAndSendVoice routes through sendOverride when set. */}
+              {mode === "post" && !hasContent && voiceRecorder.isSupported ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
