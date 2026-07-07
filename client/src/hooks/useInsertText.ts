@@ -25,7 +25,7 @@ interface InsertAtCursorParams {
  * React state authoritative after the splice.
  */
 export function useInsertText(
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>,
+  textareaRef: React.RefObject<HTMLTextAreaElement | HTMLInputElement | null>,
   _content: string,
   setContent: (value: string) => void,
 ) {
@@ -53,8 +53,8 @@ export function useInsertText(
       const textarea = textareaRef.current;
       if (textarea) {
         const current = textarea.value;
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
+        const start = textarea.selectionStart ?? current.length;
+        const end = textarea.selectionEnd ?? current.length;
         const newContent = current.slice(0, start) + emoji + current.slice(end);
         setContent(newContent);
         requestAnimationFrame(() => {

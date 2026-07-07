@@ -132,6 +132,12 @@ export interface SetUserStatusInput {
   link?: string;
   /** Status type / `d` tag. Defaults to "general". */
   type?: UserStatusType;
+  /**
+   * NIP-30 `["emoji", shortcode, url]` tags for custom emojis referenced in
+   * the content (see `collectEmojiTags`), so `:shortcode:` renders for
+   * viewers who don't have the emoji in their own collection.
+   */
+  emojiTags?: string[][];
 }
 
 /**
@@ -146,11 +152,14 @@ export function useSetUserStatus(): UseMutationResult<NostrEvent, Error, SetUser
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ content, link, type = 'general' }: SetUserStatusInput) => {
+    mutationFn: async ({ content, link, type = 'general', emojiTags }: SetUserStatusInput) => {
       const trimmed = content.trim();
       const tags: string[][] = [['d', type]];
       if (trimmed && link?.trim()) {
         tags.push(['r', link.trim()]);
+      }
+      if (trimmed && emojiTags?.length) {
+        tags.push(...emojiTags);
       }
 
       const event = await publish({

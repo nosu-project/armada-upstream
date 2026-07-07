@@ -32,14 +32,14 @@ const MIRROR_PROPS = [
 ] as const;
 
 /**
- * Returns the pixel {top, left} of a character position within a textarea,
- * relative to the textarea element's top-left corner. Uses a hidden mirror
- * element that clones the textarea's layout-affecting styles.
+ * Returns the pixel {top, left} of a character position within a textarea or
+ * single-line input, relative to the element's top-left corner. Uses a hidden
+ * mirror element that clones the element's layout-affecting styles.
  */
-export function getCaretCoordinates(textarea: HTMLTextAreaElement, position: number): { top: number; left: number } {
+export function getCaretCoordinates(element: HTMLTextAreaElement | HTMLInputElement, position: number): { top: number; left: number } {
   const mirror = document.createElement("div");
 
-  const style = window.getComputedStyle(textarea);
+  const style = window.getComputedStyle(element);
 
   for (const prop of MIRROR_PROPS) {
     mirror.style[prop as string] = style.getPropertyValue(
@@ -47,15 +47,18 @@ export function getCaretCoordinates(textarea: HTMLTextAreaElement, position: num
     );
   }
 
+  const isInput = element instanceof HTMLInputElement;
+
   mirror.style.position = "absolute";
   mirror.style.visibility = "hidden";
-  mirror.style.whiteSpace = "pre-wrap";
-  mirror.style.wordWrap = "break-word";
+  // Inputs never wrap; textareas wrap like pre-wrap.
+  mirror.style.whiteSpace = isInput ? "pre" : "pre-wrap";
+  mirror.style.wordWrap = isInput ? "normal" : "break-word";
   mirror.style.overflow = "hidden";
 
   document.body.appendChild(mirror);
 
-  mirror.textContent = textarea.value.substring(0, position);
+  mirror.textContent = element.value.substring(0, position);
 
   const marker = document.createElement("span");
   marker.textContent = "\u200b"; // zero-width space
@@ -65,8 +68,8 @@ export function getCaretCoordinates(textarea: HTMLTextAreaElement, position: num
   const markerRect = marker.getBoundingClientRect();
 
   const coords = {
-    top: markerRect.top - mirrorRect.top - textarea.scrollTop,
-    left: markerRect.left - mirrorRect.left - textarea.scrollLeft,
+    top: markerRect.top - mirrorRect.top - element.scrollTop,
+    left: markerRect.left - mirrorRect.left - element.scrollLeft,
   };
 
   document.body.removeChild(mirror);

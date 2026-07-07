@@ -15,7 +15,8 @@ interface EmojiData {
 }
 
 interface EmojiShortcodeAutocompleteProps {
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  /** The textarea or single-line input the autocomplete is attached to. */
+  textareaRef: React.RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
   content: string;
   onInsertEmoji: (params: { start: number; end: number; replacement: string }) => void;
   /** Called when a custom NIP-30 emoji is selected so the caller can track the emoji tag. */
@@ -144,12 +145,12 @@ export function EmojiShortcodeAutocomplete({
   const results = useMemo(() => searchEmojis(query, customEmojis), [query, customEmojis]);
 
   // Detect :shortcode query at cursor
-  const detectShortcode = useCallback((text?: string, cursorPos?: number) => {
+  const detectShortcode = useCallback((text?: string, cursorPos?: number | null) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    const cursor = cursorPos ?? textarea.selectionStart;
     const value = text ?? textarea.value;
+    const cursor = cursorPos ?? textarea.selectionStart ?? value.length;
 
     let colonPos = -1;
     for (let i = cursor - 1; i >= 0; i--) {

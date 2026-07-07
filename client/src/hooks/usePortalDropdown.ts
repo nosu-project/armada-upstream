@@ -13,8 +13,8 @@ interface DropdownBottomPosition {
 }
 
 interface UsePortalDropdownOptions {
-  /** Ref to the textarea the dropdown is anchored to. */
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  /** Ref to the textarea (or single-line input) the dropdown is anchored to. */
+  textareaRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
   /** Whether the dropdown is currently visible. */
   isOpen: boolean;
   /** Callback to close the dropdown (e.g. on scroll/resize). */

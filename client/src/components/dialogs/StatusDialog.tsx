@@ -1,14 +1,18 @@
 import { Loader2, Smile, SmilePlus } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 
+import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
 import { Button } from "@/components/ui/button";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useCustomEmojis } from "@/hooks/useCustomEmojis";
+import { useInsertText } from "@/hooks/useInsertText";
 import { toast } from "@/hooks/useToast";
 import { useSetUserStatus, useUserStatus } from "@/hooks/useUserStatus";
+import { collectEmojiTags } from "@/lib/customEmoji";
 
 /** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
 const LazyEmojiPicker = lazy(() =>
@@ -34,10 +38,15 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
   const { user } = useCurrentUser();
   const { data } = useUserStatus(user?.pubkey);
   const { mutateAsync: setStatus, isPending } = useSetUserStatus();
+  const { emojis: customEmojis } = useCustomEmojis();
 
   const [content, setContent] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Same insertion helpers the chat composer uses (caret splice + focus restore).
+  const setClampedContent = useCallback((value: string) => setContent(value.slice(0, MAX_LEN)), []);
+  const { insertAtCursor, insertEmoji } = useInsertText(inputRef, content, setClampedContent);
 
   // Hydrate from the current status whenever the dialog opens.
   useEffect(() => {
@@ -47,25 +56,12 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
     }
   }, [open, data?.status?.content]);
 
-  /** Insert an emoji at the caret (or append), then restore focus. */
-  const insertEmoji = (emoji: string) => {
-    const input = inputRef.current;
-    const start = input?.selectionStart ?? content.length;
-    const end = input?.selectionEnd ?? content.length;
-    const next = (content.slice(0, start) + emoji + content.slice(end)).slice(0, MAX_LEN);
-    setContent(next);
-    setPickerOpen(false);
-    requestAnimationFrame(() => {
-      if (!inputRef.current) return;
-      inputRef.current.focus();
-      const caret = Math.min(start + emoji.length, next.length);
-      inputRef.current.setSelectionRange(caret, caret);
-    });
-  };
-
   const save = async (next: string) => {
     try {
-      await setStatus({ content: next });
+      await setStatus({
+        content: next,
+        emojiTags: collectEmojiTags(next, customEmojis),
+      });
       toast({
         title: next.trim() ? "Status updated" : "Status cleared",
       });
@@ -81,7 +77,18 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Set a status">
+      <ChromeDialogContent
+        title="Set a status"
+        // The shortcode-autocomplete dropdown portals to document.body (to
+        // escape the dialog's transform); don't let taps on it count as an
+        // outside interaction that would close the dialog.
+        onInteractOutside={(e) => {
+          const target = e.target as Element | null;
+          if (target?.closest?.("[data-autocomplete-dropdown]")) {
+            e.preventDefault();
+          }
+        }}
+      >
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <Smile className="size-6" />
@@ -114,11 +121,17 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
                 id="user-status"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="e.g. 🎧 Heads down"
+                placeholder="e.g. 🎧 Heads down or :shortcode:"
                 autoComplete="off"
                 maxLength={MAX_LEN}
                 autoFocus
                 className="pr-10 bg-background/40 border-transparent"
+              />
+              {/* Same `:shortcode` autocomplete as the chat composer (native + custom emojis). */}
+              <EmojiShortcodeAutocomplete
+                textareaRef={inputRef}
+                content={content}
+                onInsertEmoji={insertAtCursor}
               />
               <Popover open={pickerOpen} onOpenChange={setPickerOpen} modal>
                 <PopoverTrigger asChild>
@@ -140,8 +153,14 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
                 >
                   <Suspense fallback={<div className="h-[360px]" />}>
                     <LazyEmojiPicker
+                      customEmojis={customEmojis}
                       onSelect={(selection) => {
-                        if (selection.type === "native") insertEmoji(selection.emoji);
+                        if (selection.type === "native") {
+                          insertEmoji(selection.emoji);
+                        } else {
+                          insertEmoji(`:${selection.shortcode}:`);
+                        }
+                        setPickerOpen(false);
                       }}
                     />
                   </Suspense>

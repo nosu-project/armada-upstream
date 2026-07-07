@@ -43,6 +43,7 @@ import { useUploadFile } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
+import { collectEmojiTags } from "@/lib/customEmoji";
 import { encryptFileForUpload } from "@/lib/encryptedMedia";
 import { IMETA_MEDIA_URL_REGEX, IMETA_MEDIA_URL_TEST_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
@@ -699,19 +700,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
 
     // NIP-30 emoji tags for custom emojis referenced in content
-    if (customEmojis.length > 0) {
-      const emojiMap = new Map(customEmojis.map((e) => [e.shortcode, e.url]));
-      const shortcodeRegex = /:([a-zA-Z0-9_-]+):/g;
-      const usedEmojis = new Set<string>();
-      let emojiMatch;
-      while ((emojiMatch = shortcodeRegex.exec(finalContent)) !== null) {
-        const shortcode = emojiMatch[1];
-        if (emojiMap.has(shortcode) && !usedEmojis.has(shortcode)) {
-          usedEmojis.add(shortcode);
-          tags.push(["emoji", shortcode, emojiMap.get(shortcode)!]);
-        }
-      }
-    }
+    tags.push(...collectEmojiTags(finalContent, customEmojis));
 
     // NIP-92 imeta tags. Uploaded attachments are matched by their EXACT URL —
     // never by extension regex — because Blossom servers name content-addressed
