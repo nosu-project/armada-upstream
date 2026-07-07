@@ -34,6 +34,29 @@ import type { NostrEvent } from "@nostrify/nostrify";
 const EMPTY_FOLD: VoicePresenceFold = { present: [], claims: new Map() };
 
 /**
+ * Shared presence memory, keyed by the channel's current wrap address (one map
+ * of author → latest entry per channel+epoch). Presence is ephemeral — never
+ * stored on relays — so a freshly-mounted subscription starts blind and waits
+ * up to a full heartbeat (30s) to re-learn who is in the call. Sharing the
+ * latest-entry map across hook instances lets a new subscriber (the call room
+ * mounted on join) seed instantly from what another instance (the sidebar
+ * roster, which was necessarily mounted to click "join") already learned —
+ * without it, every remote tile rendered "Unverified" and media keys stayed
+ * withheld for the opening seconds of a call. Stale entries are pruned at
+ * recompute time, so the maps stay bounded by live-ish participants.
+ */
+const sharedLatest = new Map<string, Map<string, VoicePresenceEntry>>();
+
+function latestFor(currentPk: string): Map<string, VoicePresenceEntry> {
+  let map = sharedLatest.get(currentPk);
+  if (!map) {
+    map = new Map();
+    sharedLatest.set(currentPk, map);
+  }
+  return map;
+}
+
+/**
  * Live voice presence for one V2 channel (CORD-07 §4): ephemeral kind-23313
  * rumors in 21059 wraps at the channel's current address, sealed under the
  * channel key — relays and brokers never learn who is in a call. Presence is
@@ -52,15 +75,27 @@ export function useVoicePresence2(
   const currentPk = channel?.isVoice ? channel.current.group.pk : undefined;
 
   useEffect(() => {
-    latest.current = new Map();
     setFold(EMPTY_FOLD);
-    if (!community || !channel || !channelIdHex || !currentPk) return;
+    if (!community || !channel || !channelIdHex || !currentPk) {
+      latest.current = new Map();
+      return;
+    }
+    // Seed from the shared per-channel memory (see `sharedLatest`) so a
+    // freshly-mounted subscriber starts from everything already learned.
+    latest.current = latestFor(currentPk);
     const controller = new AbortController();
     const group = channel.current.group;
     const epoch = channel.current.epoch;
 
     const recompute = () => {
-      const next = foldVoicePresence([...latest.current.values()], Date.now());
+      const now = Date.now();
+      // Prune long-stale entries so the shared map stays bounded. Anything a
+      // pruned entry could out-rank (latest-wins) is even older, so dropping
+      // it never lets an older presence re-assert.
+      for (const [author, entry] of latest.current) {
+        if (now - entry.ms > VOICE_STALE_MS) latest.current.delete(author);
+      }
+      const next = foldVoicePresence([...latest.current.values()], now);
       setFold((prev) => {
         if (
           prev.present.length === next.present.length &&
@@ -95,6 +130,10 @@ export function useVoicePresence2(
         // not ours / malformed
       }
     };
+
+    // Publish the seeded view immediately — don't wait for the first live
+    // event to fold what the shared memory already knows.
+    recompute();
 
     for (const url of community.relays) {
       void (async () => {

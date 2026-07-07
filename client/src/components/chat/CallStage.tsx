@@ -1,10 +1,12 @@
 import {
   useParticipants,
+  useRoomContext,
   useSpeakingParticipants,
   useTracks,
   VideoTrack,
 } from "@livekit/components-react";
 import type { TrackReference } from "@livekit/components-react";
+import type { NostrMetadata } from "@nostrify/nostrify";
 import type { Participant, RemoteParticipant } from "livekit-client";
 import { Track } from "livekit-client";
 import { Maximize2, Minimize2, MicOff, Monitor, ScreenShare, Shrink, Volume2, VolumeX, X } from "lucide-react";
@@ -117,6 +119,54 @@ function participantTileKey(participant: Participant): string {
 const nameplateClass =
   "absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-xs text-white max-w-[calc(100%-0.75rem)]";
 
+/** How long an unclaimed Concord identity reads as "Verifying…" before "Unverified". */
+const VERIFY_GRACE_MS = 15_000;
+
+/**
+ * The name to render for a participant, folding in Concord's verification race
+ * (CORD-07 §4): a participant's LiveKit connection and their signed presence
+ * claim travel over independent channels (the SFU vs the Nostr relays), so a
+ * just-joined participant is briefly unclaimed — and labeling that instant
+ * "Unverified" reads as an integrity warning when nothing is wrong yet. While
+ * the grace window is open the tile says "Verifying…"; only an identity that
+ * stays unclaimed (or contested) past it earns "Unverified". The window is
+ * anchored at the later of the participant's join and our own — a fresh viewer
+ * has to rewarm its own presence fold too — so it's stable across tile
+ * remounts (grid ↔ spotlight, camera on/off) and can't be reset remotely.
+ */
+function useTileDisplayName(participant: Participant): {
+  pubkey: string;
+  displayName: string;
+  metadata: NostrMetadata | undefined;
+} {
+  const room = useRoomContext();
+  const { pubkey, verified } = useVoiceIdentity()(participant.identity);
+  const author = useAuthor(verified ? pubkey : undefined);
+  const metadata = author.data?.metadata;
+  const scopedName = useScopedDisplayName(pubkey, metadata);
+
+  // Fallback anchor for the (transient) window before joinedAt is populated.
+  const mountedAt = useRef(Date.now());
+  const anchor =
+    Math.max(participant.joinedAt?.getTime() ?? 0, room.localParticipant.joinedAt?.getTime() ?? 0) ||
+    mountedAt.current;
+  const deadline = anchor + VERIFY_GRACE_MS;
+  const [, setTick] = useState(0);
+  const inGrace = !verified && Date.now() < deadline;
+  // Re-render when the grace window lapses so "Verifying…" flips to "Unverified".
+  useEffect(() => {
+    if (!inGrace) return;
+    const timer = setTimeout(() => setTick((n) => n + 1), Math.max(0, deadline - Date.now()) + 50);
+    return () => clearTimeout(timer);
+  }, [inGrace, deadline]);
+
+  return {
+    pubkey,
+    displayName: verified ? scopedName : inGrace ? "Verifying…" : "Unverified",
+    metadata,
+  };
+}
+
 /**
  * A dropdown anchored on a remote participant's tile nameplate with a
  * playback-volume slider (0–200%), à la Discord. Applied live via LiveKit's
@@ -206,11 +256,7 @@ function VideoTile({
   onToggleFocus: () => void;
 }) {
   const participant = trackRef.participant;
-  const { pubkey, verified } = useVoiceIdentity()(participant.identity);
-  const author = useAuthor(pubkey);
-  const metadata = author.data?.metadata;
-  const scopedName = useScopedDisplayName(pubkey, metadata);
-  const displayName = verified ? scopedName : "Unverified";
+  const { pubkey, displayName, metadata } = useTileDisplayName(participant);
   const shape = getAvatarShape(metadata);
   const isScreenShare = trackRef.source === Track.Source.ScreenShare;
   // A placeholder (no track) means the participant has the source but the track
@@ -311,11 +357,7 @@ function AvatarTile({
   focused: boolean;
   onToggleFocus: () => void;
 }) {
-  const { pubkey, verified } = useVoiceIdentity()(participant.identity);
-  const author = useAuthor(pubkey);
-  const metadata = author.data?.metadata;
-  const scopedName = useScopedDisplayName(pubkey, metadata);
-  const displayName = verified ? scopedName : "Unverified";
+  const { pubkey, displayName, metadata } = useTileDisplayName(participant);
   const shape = getAvatarShape(metadata);
   const hasCustomShape = !!shape;
   const isLocal = participant.isLocal;
