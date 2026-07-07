@@ -65,6 +65,11 @@ mac:
       arch: [x64, arm64]
   # No hardened runtime / notarization unless signing is configured.
   hardenedRuntime: false
+  # macOS TCC requires these usage strings in Info.plist; without them the
+  # process is killed the first time getUserMedia touches the mic/camera.
+  extendInfo:
+    NSMicrophoneUsageDescription: Armada uses the microphone for voice calls.
+    NSCameraUsageDescription: Armada uses the camera for video calls.
 
 # Stable, predictable artifact names for the CI upload step.
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}

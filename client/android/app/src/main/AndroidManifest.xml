@@ -86,6 +86,15 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Restart the notification service after device reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Voice/video calls (LiveKit via WebView getUserMedia). Capacitor's
+         BridgeWebChromeClient grants the WebView's onPermissionRequest for
+         audio/video capture only if the matching Android permission is
+         declared here (it also drives the runtime prompt). Without
+         RECORD_AUDIO the mic is silently denied and voice never works. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <!-- Let the user exempt Armada from battery optimization so the persistent
          relay connections survive Doze and the service can restart on boot
          (Android 15+). Only requested when background notifications are on. -->
@@ -101,4 +110,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <!-- Mic/camera are used for calls but not required to install/run. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 </manifest>

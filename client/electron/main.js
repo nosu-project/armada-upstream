@@ -336,6 +336,48 @@ function installDisplayMediaHandler() {
   );
 }
 
+// ── Permissions (microphone/camera for voice) ───────────────────────────────
+//
+// Electron's default is to grant renderer permission requests, but we set an
+// explicit handler so the policy is deliberate: media (mic/camera for LiveKit
+// voice), notifications, fullscreen, clipboard and pointer lock are allowed
+// for our own app:// origin only; everything else is denied. On macOS the OS
+// additionally gates mic/camera behind TCC — the Info.plist usage strings for
+// that live in electron-builder.yml (extendInfo).
+
+const ALLOWED_PERMISSIONS = new Set([
+  "media", // getUserMedia (microphone + camera)
+  "display-capture", // getDisplayMedia (screen share)
+  "notifications",
+  "fullscreen",
+  "clipboard-read",
+  "clipboard-sanitized-write",
+  "pointerLock",
+]);
+
+function isAppOrigin(url) {
+  try {
+    return new URL(url).origin === ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
+function installPermissionHandlers() {
+  session.defaultSession.setPermissionRequestHandler(
+    (webContents, permission, callback, details) => {
+      const requestingUrl = details?.requestingUrl || webContents?.getURL() || "";
+      callback(isAppOrigin(requestingUrl) && ALLOWED_PERMISSIONS.has(permission));
+    },
+  );
+  // Synchronous check (e.g. navigator.permissions.query, mediaDevices checks).
+  session.defaultSession.setPermissionCheckHandler(
+    (_webContents, permission, requestingOrigin) => {
+      return isAppOrigin(requestingOrigin) && ALLOWED_PERMISSIONS.has(permission);
+    },
+  );
+}
+
 // ── IPC from the renderer (preload bridge) ──────────────────────────────────
 
 function installIpc() {
@@ -357,6 +399,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
     registerAppProtocol();
+    installPermissionHandlers();
     installIpc();
     installDisplayMediaHandler();
     createTray();
