@@ -106,9 +106,11 @@ function HomeRedirect() {
   const syncedServer = groupList?.servers.find((url) => !PLATFORM_RELAYS.includes(url));
   const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0] ?? syncedServer;
   if (!firstServer) {
-    // No servers configured (standalone/rogue build): fall back to the mesh
-    // where it exists, otherwise the welcome screen to add a server.
-    return <Navigate to={mesh.available ? "/mesh" : "/welcome"} replace />;
+    // Signed in but no server yet (fresh account, or a standalone/rogue build
+    // with no pinned relay). The mesh is the home where it exists (Android);
+    // otherwise land on the main app shell (/dms) — which renders the server
+    // rail with its "+" add-server button — NOT the logged-out join screen.
+    return <Navigate to={mesh.available ? "/mesh" : "/dms"} replace />;
   }
   return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
 }
