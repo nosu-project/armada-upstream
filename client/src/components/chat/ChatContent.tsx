@@ -21,7 +21,7 @@ import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
 import { parseImetaMap } from "@/lib/imeta";
 import { splitInlineCode, splitMarkdownBlocks } from "@/lib/markdown";
-import { EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
+import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
@@ -168,6 +168,21 @@ function isOnlyEmojisOrCustom(text: string, emojiMap: Map<string, string>): bool
 /** Kinds whose imeta tags describe attached media for the content body. */
 const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 1111, 1222, 1244, 3300]);
 
+/** Matches audio file extensions in a URL (drives AudioMessage vs VideoPlayer). */
+const AUDIO_EXT_URL_REGEX = new RegExp(`\\.(${AUDIO_EXTS})(\\?[^\\s]*)?$`, "i");
+
+/**
+ * Treat `application/octet-stream` (and empty) as "no MIME info": Blossom
+ * servers commonly report it for ciphertext/unknown blobs, and passing it
+ * through breaks playback — `<source type="application/octet-stream">` is
+ * rejected outright, and a decrypted Blob typed octet-stream won't play as a
+ * media src in Firefox. Callers fall back to extension-derived MIME instead.
+ */
+function usableMime(m: string | undefined): string | undefined {
+  if (!m || m.startsWith("application/octet-stream")) return undefined;
+  return m;
+}
+
 /**
  * Rich message content renderer. Tokenizes the event content and renders:
  * URLs (inline images/galleries, video and audio players, link preview
@@ -191,18 +206,22 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     const imetaMimeByUrl = new Map<string, string>();
     for (const [u, entry] of imetaByUrl) {
       const safe = sanitizeUrl(u);
-      if (safe && entry.mime) imetaMimeByUrl.set(safe, entry.mime);
+      const mime = usableMime(entry.mime);
+      if (safe && mime) imetaMimeByUrl.set(safe, mime);
     }
 
     // Resolve the effective MIME for an imeta URL: explicit `m`, else inferred
-    // from the URL extension, else the `name` field's extension.
+    // from the URL extension, else the `name` field's extension. An
+    // uninformative `m` (application/octet-stream) is skipped so the
+    // extension can win — see usableMime.
     const imageMimeFor = (entry: { mime?: string; url: string; name?: string }): string | undefined => {
-      if (entry.mime) return entry.mime;
+      const explicit = usableMime(entry.mime);
+      if (explicit) return explicit;
       const fromUrl = extOfUrl(entry.url);
-      if (fromUrl) return mimeFromExt(fromUrl);
+      const urlMime = fromUrl ? usableMime(mimeFromExt(fromUrl)) : undefined;
+      if (urlMime) return urlMime;
       const fromName = entry.name ? entry.name.split(".").pop()?.toLowerCase() : undefined;
-      if (fromName) return mimeFromExt(fromName);
-      return undefined;
+      return fromName ? usableMime(mimeFromExt(fromName)) : undefined;
     };
 
     // Tokenize one plain-text segment (already free of markdown code spans):
@@ -658,7 +677,14 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
       case "media-embed": {
         if (inQuote) return inlineLink(key, token.url);
         const imeta = imetaMap.get(token.url);
-        const mime = token.mime ?? imeta?.mime ?? "";
+        // Effective MIME: token/imeta `m` (ignoring uninformative
+        // octet-stream), else derived from the URL extension. This types the
+        // decrypted Blob and the <source>, both of which refuse to play as
+        // application/octet-stream.
+        const ext = extOfUrl(token.url);
+        const extMime = ext ? usableMime(mimeFromExt(ext)) : undefined;
+        const mediaMime = usableMime(token.mime) ?? usableMime(imeta?.mime) ?? extMime;
+        const mime = mediaMime ?? "";
         // Encrypted (Concord/Vector) attachments must be fetched + decrypted
         // before the <audio>/<video> element can play them. Fall back to the
         // imeta entry for tokens created by pure extension match.
@@ -668,8 +694,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         if (isXdc) {
           return <XdcAttachment key={key} url={token.url} imeta={imeta} />;
         }
-        const isAudio = mime.startsWith("audio/")
-          || /\.(mp3|wav|ogg|flac|m4a|aac|opus)(\?[^\s]*)?$/i.test(token.url);
+        const isAudio = mime.startsWith("audio/") || AUDIO_EXT_URL_REGEX.test(token.url);
         if (isAudio) {
           const waveform = imeta ? getImetaField(event.tags, token.url, "waveform") : undefined;
           const duration = imeta ? getImetaField(event.tags, token.url, "duration") : undefined;
@@ -677,7 +702,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             <AudioMessage
               key={key}
               src={token.url}
-              mime={token.mime ?? imeta?.mime}
+              mime={mediaMime}
               encryption={encryption}
               waveform={waveform}
               duration={duration}
@@ -690,7 +715,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             src={token.url}
             poster={imeta?.thumbnail}
             dim={imeta?.dim}
-            mime={token.mime ?? imeta?.mime}
+            mime={mediaMime}
             encryption={encryption}
           />
         );

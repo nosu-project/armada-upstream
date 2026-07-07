@@ -713,31 +713,38 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
     }
 
-    // NIP-92 imeta tags for media URLs in content
-    const mediaUrlMatches = finalContent.matchAll(new RegExp(IMETA_MEDIA_URL_REGEX.source, "gi"));
+    // NIP-92 imeta tags. Uploaded attachments are matched by their EXACT URL —
+    // never by extension regex — because Blossom servers name content-addressed
+    // blobs after the MIME type's canonical extension (audio/mpeg → `.mpga`),
+    // which our extension lists may not cover. Missing the imeta here means no
+    // inline render and, for encrypted uploads, a permanently undecryptable
+    // blob (the key/nonce only ship inside the imeta).
     const processedUrls = new Set<string>();
+    for (const [url, fileTags] of uploadedFileGroups) {
+      if (!finalContent.includes(url)) continue;
+      processedUrls.add(url);
+      const fields = fileTags.map((tag) => `${tag[0]} ${tag[1]}`);
+      // Append AES-GCM decryption params for client-encrypted attachments
+      // (Concord), matching Vector / 0xChat's imeta format so members and
+      // Vector can decrypt the Blossom ciphertext.
+      const enc = attachmentEncryption.current.get(url);
+      if (enc) {
+        fields.push(`encryption-algorithm ${enc.algorithm}`);
+        fields.push(`decryption-key ${enc.key}`);
+        fields.push(`decryption-nonce ${enc.nonce}`);
+        fields.push(`ox ${enc.ox}`);
+      }
+      tags.push(["imeta", ...fields]);
+    }
+
+    // Typed/pasted media URLs (not from an upload in this composer session)
+    // still get a basic extension-derived imeta.
+    const mediaUrlMatches = finalContent.matchAll(new RegExp(IMETA_MEDIA_URL_REGEX.source, "gi"));
     for (const match of mediaUrlMatches) {
       const url = match[0];
       if (processedUrls.has(url)) continue;
       processedUrls.add(url);
-
-      const fileTags = uploadedFileGroups.get(url);
-      if (fileTags) {
-        const fields = fileTags.map((tag) => `${tag[0]} ${tag[1]}`);
-        // Append AES-GCM decryption params for client-encrypted attachments
-        // (Concord), matching Vector / 0xChat's imeta format so members and
-        // Vector can decrypt the Blossom ciphertext.
-        const enc = attachmentEncryption.current.get(url);
-        if (enc) {
-          fields.push(`encryption-algorithm ${enc.algorithm}`);
-          fields.push(`decryption-key ${enc.key}`);
-          fields.push(`decryption-nonce ${enc.nonce}`);
-          fields.push(`ox ${enc.ox}`);
-        }
-        tags.push(["imeta", ...fields]);
-      } else {
-        tags.push(["imeta", `url ${url}`, `m ${mimeFromExt(match[1].toLowerCase())}`]);
-      }
+      tags.push(["imeta", `url ${url}`, `m ${mimeFromExt(match[1].toLowerCase())}`]);
     }
 
     return tags;

@@ -4,8 +4,10 @@ export const IMAGE_EXTS = 'jpg|jpeg|png|gif|webp|svg|avif';
 /** Video extensions rendered as players. */
 export const VIDEO_EXTS = 'mp4|webm|mov|qt|avi|mkv|flv';
 
-/** Audio extensions rendered as players. */
-export const AUDIO_EXTS = 'mp3|wav|ogg|flac|m4a|aac|opus';
+/** Audio extensions rendered as players. Includes the mime-db-first synonyms
+ *  Blossom servers pick when naming content-addressed blobs from the upload's
+ *  Content-Type (audio/mpeg → `.mpga`, audio/ogg → `.oga`, audio/webm → `.weba`). */
+export const AUDIO_EXTS = 'mp3|mpga|wav|ogg|oga|flac|m4a|aac|opus|weba';
 
 /** All media extensions (image + video + audio + webxdc). */
 export const ALL_MEDIA_EXTS = `${IMAGE_EXTS}|${VIDEO_EXTS}|${AUDIO_EXTS}|xdc`;
@@ -70,12 +72,15 @@ export function mimeFromExt(ext: string): string {
     case 'mkv':  return 'video/x-matroska';
     case 'flv':  return 'video/x-flv';
     case 'mp3':  return 'audio/mpeg';
+    case 'mpga': return 'audio/mpeg';
     case 'wav':  return 'audio/wav';
     case 'ogg':  return 'audio/ogg';
+    case 'oga':  return 'audio/ogg';
     case 'flac': return 'audio/flac';
     case 'm4a':  return 'audio/mp4';
     case 'aac':  return 'audio/aac';
     case 'opus': return 'audio/opus';
+    case 'weba': return 'audio/webm';
     case 'xdc':  return 'application/x-webxdc';
     default:     return 'application/octet-stream';
   }
