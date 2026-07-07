@@ -1,4 +1,4 @@
-import { CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
+import { Bell, BellOff, CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -38,6 +38,7 @@ import { useGroupMembership, useJoinGroup, useLeaveGroup } from "@/hooks/useGrou
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useHeaderOverflow } from "@/hooks/useHeaderOverflow";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
+import { channelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useCalendarEvents } from "@/hooks/useCalendarEvents";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
@@ -118,6 +119,13 @@ export function GroupPage() {
   const { removeUser, putUser, deleteGroup } = useGroupModeration(relayUrl ?? "", groupId ?? "");
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const { data: userGroupList } = useUserGroupList();
+  const { mutedChannels, isCommunityMuted, toggleChannelMute, toggleCommunityMute } = useMutes();
+  // Individual mute states (not the cascaded isChannelMuted view): the ⋮ menu
+  // shows "Mute channel" and "Mute server" side by side, so each item must
+  // reflect only its own scope — a muted server must not flip the channel item
+  // to "Unmute channel" (toggling it would add a pointless channel mute).
+  const channelMuted = Boolean(relayUrl && groupId && mutedChannels.has(channelMuteKey(relayUrl, groupId)));
+  const serverMuted = Boolean(relayUrl && isCommunityMuted(relayUrl));
   const { activeCall, joinCall } = useCall();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -260,11 +268,10 @@ export function GroupPage() {
   // NIP-29 relays generally only accept writes from members (relay29 always
   // does), so gate the composer on membership.
   const canWrite = Boolean(user) && isMember;
-  // The ⋮ channel-info menu renders for admins/members, and also whenever a
-  // pins/events action has overflowed into it (so a non-member still reaches
-  // the collapsed toggle).
-  const showChannelMenu =
-    isAdmin || Boolean(user && isMember) || pinsCollapsed || eventsCollapsed;
+  // The ⋮ channel-info menu renders for any logged-in user (identity + mute
+  // actions), and also whenever a pins/events action has overflowed into it
+  // (so a logged-out visitor still reaches the collapsed toggle).
+  const showChannelMenu = Boolean(user) || pinsCollapsed || eventsCollapsed;
   // Membership is a TRI-STATE: while the group details or the membership query
   // are still resolving and we don't yet have a positive membership signal, the
   // member-vs-not answer is UNKNOWN — not "not a member". Surfacing the "join to
@@ -529,7 +536,25 @@ export function GroupPage() {
                         Events
                       </DropdownMenuItem>
                     )}
-                    {(isAdmin || (user && isMember)) && <DropdownMenuSeparator />}
+                    {user && <DropdownMenuSeparator />}
+                  </>
+                )}
+                {user && (
+                  <>
+                    <DropdownMenuItem
+                      className="px-3 py-2"
+                      onClick={() => toggleChannelMute(relayUrl, groupId)}
+                    >
+                      {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                      {channelMuted ? "Unmute channel" : "Mute channel"}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="px-3 py-2"
+                      onClick={() => toggleCommunityMute(relayUrl)}
+                    >
+                      {serverMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                      {serverMuted ? "Unmute server" : "Mute server"}
+                    </DropdownMenuItem>
                   </>
                 )}
                 {user && (

@@ -1,4 +1,4 @@
-import { Hash, IdCard, Link2, MoreVertical, Trash2, Volume2 } from "lucide-react";
+import { Bell, BellOff, Hash, IdCard, Link2, MoreVertical, Trash2, Volume2 } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
 
@@ -18,6 +18,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutes } from "@/hooks/useMutes";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
@@ -38,6 +39,8 @@ export function ServerPage() {
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const relayUrl = server ? routeParamToRelay(server) : undefined;
   const [profileOpen, setProfileOpen] = useState(false);
+  const { isCommunityMuted, toggleCommunityMute } = useMutes();
+  const serverMuted = Boolean(relayUrl && isCommunityMuted(relayUrl));
 
   const { data: groups, isLoading, isError, relayInfo } = useRelayGroups(relayUrl);
 
@@ -175,6 +178,15 @@ export function ServerPage() {
                   <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setProfileOpen(true)}>
                     <IdCard className="size-4" />
                     Server identity
+                  </DropdownMenuItem>
+                )}
+                {user && (
+                  <DropdownMenuItem
+                    className="gap-3 px-3 py-2.5"
+                    onClick={() => toggleCommunityMute(relayUrl)}
+                  >
+                    {serverMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                    {serverMuted ? "Unmute server" : "Mute server"}
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={handleCopyLink}>

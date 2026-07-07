@@ -40,7 +40,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useMutes } from "@/hooks/useMutes";
+import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
@@ -315,6 +315,7 @@ export function ConcordV2Page() {
   const { communityId, channelId: routeChannelId } = useParams<{ communityId: string; channelId: string }>();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
+  const { mutedChannels, isCommunityMuted, toggleCommunityMute, toggleConcordChannelMute } = useMutes();
   const lastChannelKey = communityId ? `c2:${communityId}` : "";
 
   const baseCommunity = useCommunity2(communityId);
@@ -359,6 +360,15 @@ export function ConcordV2Page() {
       (c) => c.name,
     );
   }, [channels, channelIdHex, config.lastChannelByServer, lastChannelKey]);
+
+  // Individual mute states for the ⋮ menu. Like GroupPage, the side-by-side
+  // "Mute channel" / "Mute community" items each reflect only their own scope
+  // (no cascade), so a muted community doesn't flip the channel item.
+  const channelMuted = Boolean(
+    community && channel &&
+    mutedChannels.has(concordChannelMuteKey("c2", community.idHex, channel.idHex)),
+  );
+  const communityMuted = Boolean(community && isCommunityMuted(`c2:${community.idHex}`));
 
   useEffect(() => {
     if (!lastChannelKey || !channel) return;
@@ -835,6 +845,27 @@ export function ConcordV2Page() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-48 p-2">
+                    {community && (
+                      <>
+                        <DropdownMenuItem
+                          className="gap-3 px-3 py-2.5"
+                          disabled={!channel}
+                          onClick={() => {
+                            if (channel) toggleConcordChannelMute("c2", community.idHex, channel.idHex);
+                          }}
+                        >
+                          {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                          {channelMuted ? "Unmute channel" : "Mute channel"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="gap-3 px-3 py-2.5"
+                          onClick={() => toggleCommunityMute(`c2:${community.idHex}`)}
+                        >
+                          {communityMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                          {communityMuted ? "Unmute community" : "Mute community"}
+                        </DropdownMenuItem>
+                      </>
+                    )}
                     {canManageRoles && (
                       <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setRolesOpen(true)}>
                         <Shield className="size-4" />
