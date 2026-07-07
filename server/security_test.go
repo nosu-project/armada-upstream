@@ -35,7 +35,7 @@ func TestPubkeyFromIdentity(t *testing.T) {
 	if got := pubkeyFromIdentity(pk + "-abcd1234"); got != pk {
 		t.Errorf("group/DM identity: got %q, want %q", got, pk)
 	}
-	// A fully-random Concord identity has no embedded valid pubkey and must be
+	// An identity without an embedded valid pubkey must be
 	// returned unchanged (and later skipped by participantsEvent).
 	rand := "0011223344556677"
 	if got := pubkeyFromIdentity(rand); got != rand {

@@ -1,9 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { CallContext, type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
+import { CallContext, type ActiveCall } from "@/contexts/CallContext";
 import { cn } from "@/lib/utils";
-import { bytesToHex } from "@noble/hashes/utils.js";
 
 /**
  * The LiveKit half of the stack (the connected room, its bars, E2EE, RNNoise)
@@ -48,21 +47,6 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setActiveCall({ relayUrl, groupId: roomId, dmPeer: peer });
   }, []);
 
-  const joinConcordCall = useCallback((ctx: ConcordVoiceContext) => {
-    if (exitTimer.current) {
-      clearTimeout(exitTimer.current);
-      exitTimer.current = null;
-    }
-    setExiting(false);
-    // relayUrl/groupId are unused for the Concord path (the broker + room id are
-    // derived inside ConcordVoiceRoom); set sentinel values for the remount key.
-    setActiveCall({
-      relayUrl: ctx.voiceServer,
-      groupId: bytesToHex(ctx.channel.id),
-      concord: ctx,
-    });
-  }, []);
-
   // Trigger the exit animation, then tear down the room once it finishes. The
   // LiveKit connection lives in PersistentVoiceRoom, so we keep it mounted for
   // the brief slide-out before unmounting (which disconnects). The leave chirp
@@ -101,7 +85,6 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         activeCall,
         joinCall,
         joinDmCall,
-        joinConcordCall,
         leaveCall,
         registerCallBarSlot,
         registerCallStageSlot,
@@ -129,11 +112,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           <Suspense fallback={null}>
             {/* `key` remounts the connection only when switching rooms. */}
             <PersistentVoiceRoom
-              key={
-                activeCall.concord
-                  ? `concord|${bytesToHex(activeCall.concord.channel.id)}|${activeCall.concord.channel.epoch}`
-                  : `${activeCall.relayUrl}|${activeCall.groupId}`
-              }
+              key={`${activeCall.relayUrl}|${activeCall.groupId}`}
               call={activeCall}
               onLeave={leaveCall}
               slots={slots}

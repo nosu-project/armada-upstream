@@ -2,7 +2,6 @@ import { Mic, MicOff, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -12,13 +11,10 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
-  getPreferredConcordVoiceServer,
   getPreferredMicId,
   getPreferredSpeakerId,
   rememberVoiceDevice,
-  setPreferredConcordVoiceServer,
 } from "@/lib/voiceDevices";
-import { CONCORD_VOICE_SERVERS } from "@/lib/platform";
 
 /** Whether this browser can route audio output to a chosen device. */
 const supportsSpeakerSelection =
@@ -43,7 +39,6 @@ export function VoiceDeviceSettings() {
   const [micId, setMicId] = useState<string>(() => getPreferredMicId() ?? "default");
   const [speakerId, setSpeakerId] = useState<string>(() => getPreferredSpeakerId() ?? "default");
   const [permissionError, setPermissionError] = useState<string | null>(null);
-  const [concordServer, setConcordServer] = useState<string>(() => getPreferredConcordVoiceServer());
 
   // Mic-test state.
   const [testing, setTesting] = useState(false);
@@ -313,35 +308,6 @@ export function VoiceDeviceSettings() {
           </Button>
         </div>
       )}
-
-      {/* Voice server (advanced). The blind LiveKit broker your client
-          uses to START a call in an empty channel; once anyone's in a call,
-          everyone converges on them, so this only matters for cold-starting or
-          running your own SFU. */}
-      <div className="space-y-2.5">
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Voice server
-          </label>
-        </div>
-        <Input
-          value={concordServer}
-          placeholder={CONCORD_VOICE_SERVERS[0] ?? "https://your-armada-host"}
-          onChange={(e) => setConcordServer(e.target.value)}
-          onBlur={() => {
-            setPreferredConcordVoiceServer(concordServer);
-            setConcordServer(getPreferredConcordVoiceServer());
-          }}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          className="bg-background/40 border-transparent font-mono text-sm"
-        />
-        <p className="text-xs text-muted-foreground leading-snug">
-          Used to start a Concord voice call. When others are already in a call,
-          you join wherever they are. Leave blank for this app&apos;s default.
-        </p>
-      </div>
     </div>
   );
 }

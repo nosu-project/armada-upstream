@@ -8,10 +8,10 @@ import (
 )
 
 // Anti-replay cache for one-shot authorization events (NIP-98 LiveKit token
-// grants and Concord voice grants). Both kinds of grant are short-lived
+// grants). Grants are short-lived
 // (validated within a ±60s freshness window) and must be single-use: without
-// this, anyone who observes a signed grant — a logging proxy, a malicious
-// broker, a shared network — can replay it within the window to mint their own
+// this, anyone who observes a signed grant — a logging proxy, a shared
+// network — can replay it within the window to mint their own
 // LiveKit JWT. NIP-98 explicitly recommends tracking seen event ids.
 //
 // We remember each grant's event id until just past its freshness window and

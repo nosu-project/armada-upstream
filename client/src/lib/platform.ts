@@ -96,49 +96,19 @@ export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "w
   .filter((url: string | undefined): url is string => Boolean(url));
 
 /**
- * Default Concord voice servers: blind LiveKit token brokers (https origins)
- * a new Concord community is seeded with. A member joins voice through the
- * first that answers the capability probe. The broker authorizes by
- * channel-key-possession proof (not membership), so it learns nothing about the
- * community.
- *
- * Resolution order when `VITE_CONCORD_VOICE_SERVERS` is unset:
- *   - Hosted build (PLATFORM_RELAYS non-empty): armada's own relay hosts the
- *     broker endpoint, so the platform relays' HTTP origins are the natural
- *     default.
- *   - Non-hosted build (APK / Electron / dev, PLATFORM_RELAYS empty): there is
- *     no platform relay to host a broker, so default to the public Armada
- *     instance at `https://armada.dreamith.to`.
- * Operators can override with `VITE_CONCORD_VOICE_SERVERS` (comma-separated
- * https origins) or set it empty to disable Concord voice.
- */
-const DEFAULT_PUBLIC_CONCORD_VOICE_SERVER = "https://armada.dreamith.to";
-export const CONCORD_VOICE_SERVERS: string[] = (
-  import.meta.env.VITE_CONCORD_VOICE_SERVERS ??
-  (PLATFORM_RELAYS.length > 0
-    ? PLATFORM_RELAYS.map((url) => relayToHttpUrl(url)).join(",")
-    : DEFAULT_PUBLIC_CONCORD_VOICE_SERVER)
-)
-  .split(",")
-  .map((s: string) => s.trim())
-  .filter((s: string) => Boolean(s));
-
-/**
  * Default LiveKit-capable NIP-29 relay(s) to host **DM** voice rooms, when none
  * of the user's own DM/platform relays speak the NIP-29 LiveKit extension.
  *
- * DM voice (unlike Concord's blind broker) runs over a relay's NIP-29 LiveKit
+ * DM voice runs over a relay's NIP-29 LiveKit
  * token endpoint. On a hosted build the platform relay already hosts it; on a
  * non-hosted build (APK / Electron / dev, `PLATFORM_RELAYS` empty) there's no
- * such relay among the default app relays, so — mirroring the Concord voice
- * fallback — default to the public Armada instance (`wss://armada.dreamith.to`)
+ * such relay among the default app relays, so
+ * default to the public Armada instance (`wss://armada.dreamith.to`)
  * so 1:1 calls work out of the box. Operators can override with
  * `VITE_DM_VOICE_RELAYS` (comma-separated ws/wss URLs) or set it empty to
  * disable the fallback.
  */
-const DEFAULT_PUBLIC_DM_VOICE_RELAY = DEFAULT_PUBLIC_CONCORD_VOICE_SERVER
-  .replace(/^https:\/\//i, "wss://")
-  .replace(/^http:\/\//i, "ws://");
+const DEFAULT_PUBLIC_DM_VOICE_RELAY = "wss://armada.dreamith.to";
 export const DM_VOICE_RELAYS: string[] = (
   import.meta.env.VITE_DM_VOICE_RELAYS ??
   (PLATFORM_RELAYS.length > 0 ? PLATFORM_RELAYS.join(",") : DEFAULT_PUBLIC_DM_VOICE_RELAY)

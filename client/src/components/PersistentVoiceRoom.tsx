@@ -8,10 +8,8 @@ import {
   AudioPresets,
   ConnectionState,
   DisconnectReason,
-  ExternalE2EEKeyProvider,
   LocalAudioTrack,
   ParticipantEvent,
-  Room,
   RoomEvent,
   Track,
   VideoPresets,
@@ -30,17 +28,14 @@ import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useGroup } from "@/hooks/useGroup";
 import { useLivekitToken } from "@/hooks/useLivekit";
-import { useConcordVoiceToken } from "@/concord-v1/hooks/useConcordVoiceToken";
-import { useConcordVoiceHeartbeat } from "@/concord-v1/hooks/useConcordVoice";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
-import { type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
+import { type ActiveCall } from "@/contexts/CallContext";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
 import { getAudioProcessing, getPreferredCameraId, getPreferredMicId } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
-import { voiceMediaKey } from "@/concord-v1/lib/voice";
 import { cn } from "@/lib/utils";
 import { nip19 } from "nostr-tools";
 
@@ -86,8 +81,7 @@ function CallSoundEffects() {
 
 /**
  * Applies the user's RNNoise noise-cancellation preference to the published mic
- * track. Mounted inside the `LiveKitRoom` (so it covers both NIP-29 and Concord
- * rooms, which share `VoiceRoomShell`). The processor must be attached to the
+ * track. Mounted inside the `LiveKitRoom`. The processor must be attached to the
  * `LocalAudioTrack` after it's published — `audioCaptureDefaults` only carries
  * browser constraints, not track processors — and re-attached whenever the mic
  * track is (re)published (initial join, unmute, device switch via restartTrack).
@@ -114,7 +108,7 @@ function MicNoiseProcessor() {
 }
 
 /**
- * Audio encoding defaults shared by both room types. LiveKit already defaults to
+ * Audio encoding defaults. LiveKit already defaults to
  * the `music` preset (48 kbps) with RED + DTX for mono; we bump to
  * `musicHighQuality` (96 kbps) for noticeably crisper voice and assert RED
  * (redundant audio, resilient to packet loss) + DTX (don't transmit silence)
@@ -285,14 +279,11 @@ function makePlaceStage(slots: HTMLElement[]): PlaceStage {
 /**
  * The connected LiveKit room + its UI bars. Given a token, server url, room
  * options, and labels, renders the room context and the mobile/desktop bars.
- * Shared by the NIP-29 and Concord voice paths; only the token source, E2EE,
- * and labeling differ (computed by the wrappers).
  */
 function VoiceRoomShell({
   serverUrl,
   token,
   options,
-  room,
   onDisconnected,
   placeBar,
   placeStage,
@@ -303,14 +294,12 @@ function VoiceRoomShell({
   serverUrl: string;
   token: string;
   options: RoomOptions;
-  /** Pre-constructed Room (used for the E2EE-enabled Concord path). */
-  room?: Room;
   onDisconnected: (reason?: DisconnectReason) => void;
   placeBar: PlaceBar;
   placeStage: PlaceStage;
   stageOpen: boolean;
   label: React.ReactNode;
-  /** Server scope for display names (NIP-29 relay url; undefined for DM/Concord). */
+  /** Server scope for display names (NIP-29 relay url; undefined for DM). */
   scopeRelayUrl?: string;
 }) {
   const mobileBar = (
@@ -332,7 +321,6 @@ function VoiceRoomShell({
     <LiveKitRoom
       serverUrl={serverUrl}
       token={token}
-      room={room}
       connect
       audio
       video={false}
@@ -432,136 +420,9 @@ function Nip29VoiceRoom({
 }
 
 /**
- * Concord (serverless, E2E) voice room: token from a blind broker (authorized
- * by channel-key-possession proof, not membership) and media encrypted
- * end-to-end with a per-epoch key the SFU never sees. The SFU forwards
- * ciphertext it cannot decode.
- */
-function ConcordVoiceRoom({
-  ctx,
-  onLeave,
-  placeBar,
-  placeStage,
-  stageOpen,
-}: {
-  ctx: ConcordVoiceContext;
-  onLeave: () => void;
-  placeBar: PlaceBar;
-  placeStage: PlaceStage;
-  stageOpen: boolean;
-}) {
-  const { community, channel, voiceServer } = ctx;
-  const { data: tokenData, error, isLoading } = useConcordVoiceToken(community, channel, voiceServer, true);
-
-  // Announce voice presence over sealed kind-3306 while we're in the room, so
-  // other members see us in voice (and we age out on disconnect). The broker we
-  // joined through rides the announcement as the rendezvous hint, so members on
-  // other hosts converge here. Active once a token is in hand; the relay never
-  // learns this — it's sealed under the channel key.
-  useConcordVoiceHeartbeat(community, channel, tokenData ? voiceServer : undefined);
-
-  // Build the E2EE-enabled Room once. The media key is derived from the channel
-  // epoch key, so every member computes the same one and the SFU only ever
-  // forwards ciphertext. The key provider + worker are constructed up front and
-  // the key is set + E2EE enabled in an effect (both are async).
-  const room = useMemo(() => {
-    const keyProvider = new ExternalE2EEKeyProvider();
-    const worker = new Worker(new URL("livekit-client/e2ee-worker", import.meta.url), {
-      type: "module",
-    });
-    const opts: RoomOptions = {
-      adaptiveStream: true,
-      dynacast: true,
-      e2ee: { keyProvider, worker },
-      audioCaptureDefaults: (() => {
-        const micId = getPreferredMicId();
-        const processing = getAudioProcessing();
-        return {
-          ...(micId ? { deviceId: micId } : {}),
-          noiseSuppression: processing.noiseSuppression,
-          echoCancellation: processing.echoCancellation,
-          autoGainControl: processing.autoGainControl,
-        };
-      })(),
-      videoCaptureDefaults: (() => {
-        const cameraId = getPreferredCameraId();
-        return {
-          ...(cameraId ? { deviceId: cameraId } : {}),
-          resolution: VideoPresets.h720.resolution,
-        };
-      })(),
-      publishDefaults: {
-        ...audioPublishDefaults,
-        videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
-        screenShareEncoding: VideoPresets.h1080.encoding,
-      },
-    };
-    const r = new Room(opts);
-    return { room: r, keyProvider, worker };
-    // Rebuild only when the channel/epoch changes (component remounts via key anyway).
-  }, []);
-
-  // Apply the derived media key and enable E2EE, then clean up on unmount.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const mediaKey = voiceMediaKey(channel);
-        // setKey takes a raw ArrayBuffer; hand it a fresh copy of the 32 bytes.
-        const buf = mediaKey.slice().buffer;
-        await room.keyProvider.setKey(buf);
-        if (!cancelled) await room.room.setE2EEEnabled(true);
-      } catch (err) {
-        console.warn("failed to enable Concord voice E2EE", err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      room.worker.terminate();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room]);
-
-  const handleDisconnected = useCallback(
-    (reason?: DisconnectReason) => {
-      if (reason !== undefined && reason !== DisconnectReason.CLIENT_INITIATED) {
-        console.warn("concord voice disconnected", { reason: DisconnectReason[reason] ?? reason });
-      }
-      onLeave();
-    },
-    [onLeave],
-  );
-
-  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
-  if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
-
-  const label = (
-    <span className="flex items-center gap-1 min-w-0">
-      <span className="text-muted-foreground/70 truncate">{community.name}</span>
-      <span className="shrink-0">#{channel.name}</span>
-    </span>
-  );
-
-  return (
-    <VoiceRoomShell
-      serverUrl={tokenData.url}
-      token={tokenData.token}
-      options={{}}
-      room={room.room}
-      onDisconnected={handleDisconnected}
-      placeBar={placeBar}
-      placeStage={placeStage}
-      stageOpen={stageOpen}
-      label={label}
-    />
-  );
-}
-
-/**
  * The persistent voice room. Mounted (lazily) by `CallProvider` — which lives
  * in the never-unmounting MainLayout — so the LiveKit connection survives
- * navigation between channels and servers. Dispatches to the NIP-29 or Concord
- * variant.
+ * navigation between channels and servers.
  *
  * The call UI renders in two places: a fixed bottom bar on mobile, and — when a
  * channel sidebar registers a slot — portaled above the account pill on desktop.
@@ -586,17 +447,6 @@ export default function PersistentVoiceRoom({
   const placeBar = useMemo(() => makePlaceBar(slots, exiting, shellRef), [slots, exiting, shellRef]);
   const placeStage = useMemo(() => makePlaceStage(stageSlots), [stageSlots]);
 
-  if (call.concord) {
-    return (
-      <ConcordVoiceRoom
-        ctx={call.concord}
-        onLeave={onLeave}
-        placeBar={placeBar}
-        placeStage={placeStage}
-        stageOpen={stageOpen}
-      />
-    );
-  }
   return (
     <Nip29VoiceRoom
       call={call}

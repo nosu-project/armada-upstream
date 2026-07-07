@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Per-IP rate limiting for the LiveKit/Concord token + webhook endpoints.
+// Per-IP rate limiting for the LiveKit token + webhook endpoints.
 //
 // Each request to a token endpoint performs a secp256k1 signature verification
 // (CPU-bound) before any authorization decision, so an unauthenticated client

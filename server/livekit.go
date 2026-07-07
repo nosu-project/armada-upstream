@@ -47,11 +47,6 @@ func setupLivekit() {
 	// shares the loopback IP), so it is intentionally not limited here.
 	router.HandleFunc("/livekit/webhook", handleLivekitWebhook)
 
-	// Concord voice: a blind, community-agnostic LiveKit broker for serverless
-	// E2E communities. Authorizes by channel-key-possession proof, not NIP-29
-	// membership; gated on the same LiveKit config as the NIP-29 endpoints.
-	setupConcordVoice()
-
 	// Serve kind 39004 (participants) queries from the in-memory room state.
 	relay.QueryEvents = append(relay.QueryEvents, func(ctx context.Context, filter nostr.Filter) (chan *nostr.Event, error) {
 		ch := make(chan *nostr.Event, 1)
@@ -87,19 +82,19 @@ func setupLivekit() {
 // `https://localhost`, and the Electron desktop shell — whose browser `Origin`
 // is NOT the relay's public origin. A hard-coded single allowed origin silently
 // breaks those clients: the WebView blocks the cross-origin response, the
-// capability/token `fetch` rejects, and voice (group, DM, and Concord) appears
+// capability/token `fetch` rejects, and voice (group and DM) appears
 // unavailable on the APK/desktop even though the relay is healthy.
 //
 // So reflect the request's Origin instead (echo it back with `Vary: Origin`).
-// This is safe here because auth lives in the `Authorization` header (NIP-98 /
-// Concord grant), never in cookies — the responses carry no ambient-credential
+// This is safe here because auth lives in the `Authorization` header (NIP-98),
+// never in cookies — the responses carry no ambient-credential
 // risk a permissive origin could exploit. Requests without an Origin (curl,
 // server-to-server) fall back to the relay's public origin.
 func corsHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", allowedOrigin(r))
 	w.Header().Set("Vary", "Origin")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Concord-Identity")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 }
 
 // allowedOrigin returns the origin to echo in Access-Control-Allow-Origin: the
@@ -240,10 +235,10 @@ func parseDMRoomID(roomId string) (a, b string, ok bool) {
 }
 
 // pubkeyFromIdentity extracts the Nostr pubkey from a LiveKit participant
-// identity. Group/DM identities are "<64-hex-pubkey>-<random-suffix>"; Concord
-// identities are fully random (no embedded pubkey). It returns the leading
-// 64-hex segment only when it is a valid pubkey, otherwise the identity
-// unchanged — participantsEvent must not assume the result is a valid pubkey.
+// identity. Group/DM identities are "<64-hex-pubkey>-<random-suffix>". It
+// returns the leading 64-hex segment only when it is a valid pubkey, otherwise
+// the identity unchanged — participantsEvent must not assume the result is a
+// valid pubkey.
 func pubkeyFromIdentity(identity string) string {
 	if i := strings.IndexByte(identity, '-'); i == 64 && nostr.IsValid32ByteHex(identity[:64]) {
 		return identity[:64]
@@ -350,9 +345,9 @@ func participantsEvent(groupId string) *nostr.Event {
 
 	tags := nostr.Tags{nostr.Tag{"d", groupId}}
 	for pubkey := range participants {
-		// Skip identities whose leading segment isn't a valid pubkey (e.g.
-		// fully-random Concord identities). The relay signs this event, so it
-		// must not vouch for a malformed "pubkey".
+		// Skip identities whose leading segment isn't a valid pubkey. The
+		// relay signs this event, so it must not vouch for a malformed
+		// "pubkey".
 		if !nostr.IsValid32ByteHex(pubkey) {
 			continue
 		}

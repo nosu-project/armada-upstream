@@ -6,7 +6,6 @@
  */
 
 import {
-  CONCORD_VOICE_SERVERS,
   DEFAULT_AUTO_GAIN_CONTROL,
   DEFAULT_ECHO_CANCELLATION,
   DEFAULT_NOISE_SUPPRESSION,
@@ -18,7 +17,6 @@ const SPEAKER_KEY = "armada:voice:speakerDeviceId";
 const CAMERA_KEY = "armada:voice:cameraDeviceId";
 const PROCESSING_KEY = "armada:voice:processing";
 const VOLUME_KEY = "armada:voice:userVolumes";
-const CONCORD_VOICE_SERVER_KEY = "armada:voice:concordServer";
 
 function read(key: string): string | undefined {
   try {
@@ -144,34 +142,6 @@ export function rememberUserVolume(pubkey: string, volume: number): void {
     if (volume === 1) delete all[pubkey];
     else all[pubkey] = volume;
     localStorage.setItem(VOLUME_KEY, JSON.stringify(all));
-  } catch {
-    // localStorage unavailable — ignore.
-  }
-}
-
-/**
- * The user's preferred Concord voice server (blind LiveKit broker, https
- * origin). This is a CLIENT setting, not community state: it's only used to pick
- * a server when *starting* a call in an empty channel. Once anyone is in voice,
- * their broker (carried on presence) is the rendezvous point and overrides this.
- * Defaults to the deployment's first platform broker.
- */
-export function getPreferredConcordVoiceServer(): string {
-  try {
-    const v = localStorage.getItem(CONCORD_VOICE_SERVER_KEY);
-    if (v && v.trim()) return v.trim().replace(/\/+$/, "");
-  } catch {
-    // ignore
-  }
-  return (CONCORD_VOICE_SERVERS[0] ?? "").replace(/\/+$/, "");
-}
-
-/** Persist (or clear, with empty) the preferred Concord voice server. */
-export function setPreferredConcordVoiceServer(origin: string): void {
-  try {
-    const v = origin.trim().replace(/\/+$/, "");
-    if (v) localStorage.setItem(CONCORD_VOICE_SERVER_KEY, v);
-    else localStorage.removeItem(CONCORD_VOICE_SERVER_KEY);
   } catch {
     // localStorage unavailable — ignore.
   }

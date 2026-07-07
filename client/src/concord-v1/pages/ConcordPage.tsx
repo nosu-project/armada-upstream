@@ -1,11 +1,9 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { ChevronLeft, Hash, Headphones, Loader2, LogOut, MoreVertical, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { ChevronLeft, Hash, Loader2, LogOut, MoreVertical, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
-import { CallStageSlot } from "@/components/chat/CallStageSlot";
-import { AppStageSlot } from "@/components/chat/AppStage";
-import { ChannelNavContext } from "@/contexts/ChannelNavContext";
+import { AppStageSlot } from "@/components/chat/AppStage";import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
@@ -15,7 +13,6 @@ import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
-import { VoicePresence } from "@/components/VoicePresence";
 import { InviteConcordDialog } from "@/concord-v1/components/InviteConcordDialog";
 import { ConcordSettingsDialog } from "@/concord-v1/components/ConcordSettingsDialog";
 import { ConcordRolesDialog } from "@/concord-v1/components/ConcordRolesDialog";
@@ -45,8 +42,6 @@ import { useConcordTyping, useConcordTypingPublisher } from "@/concord-v1/hooks/
 import { useConcordRosterActions, concordMembers } from "@/concord-v1/hooks/useConcordRoster";
 import { useConcordDissolved } from "@/concord-v1/hooks/useConcordRoster";
 import { useConcordTransport } from "@/concord-v1/hooks/useConcordTransport";
-import { useConcordVoiceServer } from "@/concord-v1/hooks/useConcordVoice";
-import { useConcordVoicePresence } from "@/concord-v1/hooks/useConcordVoice";
 import { useSendConcordMessage } from "@/concord-v1/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
@@ -182,25 +177,17 @@ function ConcordSidebarFooter() {
 }
 
 /**
- * A channel row in the Concord sidebar. Shows a voice presence stack + a
- * Volume2 icon when members are in this channel's voice room (live kind-3306),
- * mirroring the NIP-29 channel list.
+ * A channel row in the Concord sidebar, mirroring the NIP-29 channel list.
  */
 function ConcordChannelRow({
-  community,
   channel,
   active,
   onSelect,
 }: {
-  community: Community;
   channel: Channel;
   active: boolean;
   onSelect: () => void;
 }) {
-  const { data: presence } = useConcordVoicePresence(community, channel);
-  const pubkeys = (presence ?? []).map((p) => p.pubkey);
-  const inVoice = pubkeys.length > 0;
-  const Icon = inVoice ? Volume2 : Hash;
   return (
     <button
       type="button"
@@ -213,9 +200,8 @@ function ConcordChannelRow({
         active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
       )}
     >
-      <Icon className={cn("size-4 shrink-0", inVoice && !active && "text-success")} />
+      <Hash className="size-4 shrink-0" />
       <span className="truncate flex-1 min-w-0">{channel.name}</span>
-      {inVoice && <VoicePresence participants={pubkeys} max={2} className="text-[0px]" />}
     </button>
   );
 }
@@ -342,14 +328,6 @@ export function ConcordPage() {
   const { createChannel, isAddingChannel } = useConcordActions();
   const { leave, isLeaving, dissolve } = useConcordCommunityActions(community, communityId);
   const { data: dissolved } = useConcordDissolved(community);
-  const { joinConcordCall, activeCall } = useCall();
-  const { data: voiceServer } = useConcordVoiceServer(community, channel);
-  const hasVoice = Boolean(voiceServer);
-  const { data: voicePresence } = useConcordVoicePresence(community, channel);
-  const voicePubkeys = useMemo(() => (voicePresence ?? []).map((p) => p.pubkey), [voicePresence]);
-  const inThisVoice = Boolean(
-    activeCall?.concord && channel && bytesToHex(activeCall.concord.channel.id) === bytesToHex(channel.id),
-  );
   const navigateTo = useNavigate();
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState("");
@@ -497,11 +475,6 @@ export function ConcordPage() {
     }
   };
 
-  const handleJoinVoice = () => {
-    if (!community || !channel || !voiceServer) return;
-    joinConcordCall({ community, channel, voiceServer });
-  };
-
   /** Map the shared MemberList's role-string action onto Concord's grant model. */
   const handleSetRole = (pubkey: string, roles: string[]) => {
     setAdmin({ member: pubkey, admin: roles.includes("admin") }).catch(() => {});
@@ -577,7 +550,6 @@ export function ConcordPage() {
           return (
             <ConcordChannelRow
               key={idHex}
-              community={community}
               channel={c}
               active={active}
               onSelect={() => {
@@ -622,26 +594,6 @@ export function ConcordPage() {
           <Hash className="size-5 text-muted-foreground shrink-0" />
           <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
           <div className="ml-auto flex items-center gap-0.5">
-            {hasVoice && voicePubkeys.length > 0 && (
-              <VoicePresence participants={voicePubkeys} className="mr-1" />
-            )}
-            {user && hasVoice && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn("size-8", inThisVoice && "text-success")}
-                    aria-label={inThisVoice ? "In voice" : "Join voice"}
-                    disabled={inThisVoice}
-                    onClick={handleJoinVoice}
-                  >
-                    {inThisVoice ? <Headphones className="size-4" /> : <Phone className="size-4" />}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{inThisVoice ? "In voice" : "Join voice"}</TooltipContent>
-              </Tooltip>
-            )}
             {user && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -727,10 +679,6 @@ export function ConcordPage() {
             )}
           </div>
         </header>
-
-        {/* Top-of-chat call stage portal target (active when this channel is
-            the one in encrypted voice). */}
-        <CallStageSlot active={inThisVoice} />
 
         {/* Top-of-chat app stage (YouTube watchalong, webxdc) for this channel. */}
         {community && channel && (

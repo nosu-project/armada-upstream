@@ -9,8 +9,8 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-// Shared machinery for the LiveKit token endpoints (NIP-29 group/DM and Concord
-// voice). The three handlers differ only in how they authorize the caller and
+// Shared machinery for the LiveKit token endpoints (NIP-29 group and DM
+// voice). The handlers differ only in how they authorize the caller and
 // build the participant identity; the auth-event parsing, freshness/anti-replay
 // checks, OPTIONS/CORS preamble, and JSON response are identical and live here.
 
@@ -27,7 +27,7 @@ func preflight(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // writeTokenResponse mints a LiveKit JWT for the identity/room and writes it as
-// the JSON body all three token endpoints share. On a minting failure it logs
+// the JSON body the token endpoints share. On a minting failure it logs
 // with `what` for context and writes a 500.
 func writeTokenResponse(w http.ResponseWriter, identity, room, what string) {
 	jwt, err := mintLivekitToken(identity, room)
@@ -44,13 +44,13 @@ func writeTokenResponse(w http.ResponseWriter, identity, room, what string) {
 }
 
 // parseAuthGrant decodes an `Authorization: <scheme> <base64-event>` header into
-// a verified kind-27235 auth event, applying every check the two grant schemes
-// share: scheme prefix, base64/JSON decode, kind, signature, the ±60s freshness
+// a verified kind-27235 auth event, applying every check the grant scheme
+// requires: scheme prefix, base64/JSON decode, kind, signature, the ±60s freshness
 // window, the `u`-tag (must equal expectedURL) and `method`-tag (must match the
 // request method), and finally single-use anti-replay on the computed id.
 //
-// `bind`, if non-nil, runs caller-specific authorization (group membership, DM
-// participant, or room-key binding) on the otherwise-valid event and must
+// `bind`, if non-nil, runs caller-specific authorization (group membership or
+// DM participant) on the otherwise-valid event and must
 // return true to accept. It is invoked *before* the anti-replay check so a
 // grant that fails the binding does not burn a replay-cache slot — preserving
 // the "only consume the id for an accepted grant" guarantee.

@@ -79,8 +79,8 @@ build-apk:
   variables:
     ANDROID_SDK_ROOT: /opt/android-sdk
     ANDROID_HOME: /opt/android-sdk
-    # Non-hosted client: no baked-in relays (the user adds servers). Concord
-    # voice falls back to the public instance (https://armada.dreamith.to) via
+    # Non-hosted client: no baked-in relays (the user adds servers). DM voice
+    # falls back to the public instance (wss://armada.dreamith.to) via
     # platform.ts. NEVER pin ws://localhost here — it's meaningless on a phone.
     VITE_PLATFORM_RELAYS: ""
   before_script:
