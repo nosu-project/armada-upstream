@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.19.2] - 2026-07-07
+
+Small quality-of-life update: mute a community or channel straight from its
+header menu (handy on touch screens), plus two Android fixes — text-selection
+controls no longer render as black boxes, and a one-time prompt helps you
+exempt Armada from battery optimization so notifications keep working.
+
+### Added
+- Mute options in the channel and community header ⋮ menus, so muting no
+  longer requires a right-click
+- Android app: a one-time prompt to allow background usage when battery
+  optimization would otherwise cut off notifications
+
+### Fixed
+- Android app: black boxes no longer appear behind the text-selection toolbar
+  and selection handles
+
 ## [0.19.1] - 2026-07-07
 
 Fixes voice and video calls on the Android app and the desktop app: both now
