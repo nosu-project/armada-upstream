@@ -391,6 +391,14 @@ export function ConcordV2Page() {
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelVoice, setNewChannelVoice] = useState(false);
+
+  // Close the inline create-channel form when switching communities — the
+  // user's MANAGE_CHANNELS permission doesn't carry over.
+  useEffect(() => {
+    setCreatingChannel(false);
+    setNewChannelName("");
+    setNewChannelVoice(false);
+  }, [communityId]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);

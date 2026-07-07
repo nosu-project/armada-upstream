@@ -156,6 +156,10 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
 
+  // Close the create-channel dialog when switching servers — its context (and
+  // the user's permission to create) doesn't carry over to the new server.
+  useEffect(() => setCreateOpen(false), [relayUrl]);
+
   // Don't let skeletons run for the full connect/timeout window (which can be
   // 8–16s on a slow or AUTH-gated relay) — that reads as a hang. Show skeletons
   // briefly, then switch to an explicit "Connecting…" message.

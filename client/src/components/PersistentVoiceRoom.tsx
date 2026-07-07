@@ -281,7 +281,10 @@ function makePlaceBar(
         createPortal(
           <div
             className={cn(
-              "px-1 pb-1",
+              // Hidden below the sidebar breakpoint: on mobile the fixed
+              // MobileCallBar is the voice UI; showing this copy too (e.g. in
+              // the channel-list drawer) would duplicate it.
+              "px-1 pb-1 max-sidebar:hidden",
               exiting
                 ? "animate-out fade-out-0 slide-out-to-bottom-2 duration-200 fill-mode-forwards"
                 : "animate-in fade-in-0 slide-in-from-bottom-2 duration-300",
