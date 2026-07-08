@@ -6,6 +6,7 @@ import {
   useParticipants,
 } from "@livekit/components-react";
 import { ConnectionState, LocalAudioTrack, Track } from "livekit-client";
+import type { Participant } from "livekit-client";
 import {
   Check,
   ChevronDown,
@@ -25,6 +26,7 @@ import {
 
 import "@livekit/components-styles";
 
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useCallback, useState } from "react";
@@ -37,7 +39,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { VolumeSliderRow } from "@/components/VoiceUserContextMenu";
+import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { useUserVolume } from "@/hooks/useUserVolume";
+import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
+import { getAvatarShape } from "@/lib/avatarShape";
 import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
 import {
   getAudioProcessing,
@@ -101,8 +109,14 @@ function DeviceSelectGroup({
   );
 }
 
-/** A gear button opening a mic (and, when supported, speaker) device picker. */
-function DeviceMenu() {
+/**
+ * The call/audio settings gear: mic/speaker/camera device pickers, audio
+ * processing toggles, and per-participant volume controls. Shown on both the
+ * desktop (stacked) bar and the compact mobile bar — the single call settings
+ * entry point, à la Discord. `className` sizes the trigger to match the bar
+ * it's placed in.
+ */
+function DeviceMenu({ className }: { className?: string }) {
   const { localParticipant } = useLocalParticipant();
   const [processing, setProcessing] = useState<AudioProcessingPrefs>(() => getAudioProcessing());
 
@@ -154,14 +168,14 @@ function DeviceMenu() {
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="icon" className="size-8 shrink-0" aria-label="Audio settings">
+            <Button variant="outline" size="icon" className={cn("size-8 shrink-0", className)} aria-label="Audio settings">
               <Settings2 className="size-3.5" />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent>Audio settings</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="end" className="max-w-72">
+      <DropdownMenuContent align="end" className="max-w-72 max-h-[70vh] overflow-y-auto">
         <DeviceSelectGroup kind="audioinput" label="Microphone" icon={<Mic className="size-3.5" />} />
         {supportsSpeakerSelection && (
           <>
@@ -191,8 +205,63 @@ function DeviceMenu() {
             />
           </label>
         ))}
+        <ParticipantVolumeGroup />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * One remote participant's per-user volume control inside the Audio settings
+ * menu: avatar + name + the shared mute-toggle/volume slider (`VolumeSliderRow`,
+ * backed by the per-pubkey `useUserVolume` store, so changes apply to live
+ * audio immediately via the room's `UserVolumeApplier`). The local participant
+ * is skipped by the caller (no local playback of your own audio to adjust).
+ */
+function ParticipantVolumeRow({ participant }: { participant: Participant }) {
+  const resolveIdentity = useVoiceIdentity();
+  const { pubkey, verified } = resolveIdentity(participant.identity);
+  const author = useAuthor(verified ? pubkey : undefined);
+  const metadata = author.data?.metadata;
+  const scopedName = useScopedDisplayName(pubkey, metadata);
+  const name = verified ? scopedName : "Unverified";
+  const [volume, setVolume] = useUserVolume(pubkey);
+
+  return (
+    // Keep the menu open while dragging the slider / toggling mute.
+    <div className="px-2 py-1.5" onPointerDown={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
+          <AvatarImage src={metadata?.picture} alt={name} />
+          <AvatarFallback className="bg-success/20 text-success text-[9px]">
+            {name[0]?.toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+        <span className="truncate text-sm">{name}</span>
+      </div>
+      <VolumeSliderRow volume={volume} apply={setVolume} displayName={name} />
+    </div>
+  );
+}
+
+/**
+ * The "Participants" section of the Audio settings menu: a per-user volume
+ * control for every *remote* participant. Gives mobile (and desktop) a
+ * discoverable path to per-participant volume from the one call/audio settings
+ * button, à la Discord — no separate participants button needed.
+ */
+function ParticipantVolumeGroup() {
+  const participants = useParticipants();
+  const remotes = participants.filter((p) => !p.isLocal && p.identity);
+  if (remotes.length === 0) return null;
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel className="text-xs">Participants</DropdownMenuLabel>
+      {remotes.map((p) => (
+        <ParticipantVolumeRow key={p.sid || p.identity} participant={p} />
+      ))}
+    </>
   );
 }
 
@@ -364,13 +433,22 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   if (compact) {
     // Mobile: a single compact row. The roster/tiles live in the expandable
     // call stage (toggled from the header count), so the bar stays small.
+    // The control cluster is a single `shrink-0` group and the header is the
+    // only flexible child, so the header truncates instead of the controls
+    // overflowing — otherwise a long channel label pushes the rightmost
+    // controls (the audio-settings gear, hangup) past the `clip-corner-lg`
+    // clip edge and they vanish (intermittently, depending on label width and
+    // whether screenshare is available). min-w-0 lets the header shrink fully.
     return (
       <div className="flex items-center gap-1.5 px-2 py-1.5 min-h-12">
         <div className="flex-1 min-w-0">{headerEl}</div>
-        {micBtn}
-        {cameraBtn}
-        {supportsScreenShare && screenShareBtn}
-        {hangupBtn}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {micBtn}
+          {cameraBtn}
+          {supportsScreenShare && screenShareBtn}
+          <DeviceMenu className="size-9" />
+          {hangupBtn}
+        </div>
       </div>
     );
   }
