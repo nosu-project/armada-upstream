@@ -347,7 +347,13 @@ export function GroupPage() {
         onClose={() => setChannelsOpen(false)}
         underlay={
           <>
-            <ServerRail onNavigate={() => setChannelsOpen(false)} />
+            {/* The rail navigates to *other* servers/communities, so it must
+                NOT close this server's channel list on click: that slides the
+                chat pane back in for a frame before the route changes — the
+                "flash of the previous chat" glitch. The ChannelSidebar below
+                (same-server channel taps) does close it. (DMsPage omits the
+                rail prop for the same reason.) */}
+            <ServerRail />
             <ChannelSidebar
               relayUrl={relayUrl}
               onNavigate={() => setChannelsOpen(false)}

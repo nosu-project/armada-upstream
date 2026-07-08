@@ -641,7 +641,13 @@ export function ConcordPage() {
         onClose={() => setChannelsOpen(false)}
         underlay={
           <>
-            <ServerRail onNavigate={() => setChannelsOpen(false)} />
+            {/* The rail only ever navigates to *other* servers/communities, so
+                it must NOT close this community's channel list on click: doing
+                so slides this community's chat pane back in for a frame before
+                the route changes — the "flash of the previous chat" glitch. The
+                destination governs its own reveal state. (DMsPage omits the prop
+                for the same reason.) */}
+            <ServerRail />
             {channelList(() => setChannelsOpen(false), "flex-1 sidebar:flex-none")}
           </>
         }
