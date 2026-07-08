@@ -1541,6 +1541,16 @@ export function ServerRail({
               onClick={onNavigate}
               className="group relative flex items-center justify-center shrink-0"
             >
+              {/* Active marker: the same neon blade the community buttons use
+                  (see `inner`), so DMs/Mesh signal the active route identically.
+                  Driven by aria-current=page rather than an isActive prop. */}
+              <span
+                className={cn(
+                  "absolute -left-2 w-[3px] bg-primary transition-all",
+                  "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                  "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                )}
+              />
               <span
                 className={cn(
                   "relative block size-12 transition-all duration-150",
@@ -1577,6 +1587,16 @@ export function ServerRail({
               onClick={onNavigate}
               className="group relative flex items-center justify-center shrink-0"
             >
+              {/* Active marker: the same neon blade the community buttons use
+                  (see `inner`), so DMs/Mesh signal the active route identically.
+                  Driven by aria-current=page rather than an isActive prop. */}
+              <span
+                className={cn(
+                  "absolute -left-2 w-[3px] bg-primary transition-all",
+                  "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                  "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                )}
+              />
               <span
                 className={cn(
                   "relative block size-12 transition-all duration-150",
