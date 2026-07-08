@@ -2,7 +2,13 @@ import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { queryChannelRumors } from "@/concord-v2/lib/rumorStore";
+import { openChatBatch, type OpenedChat } from "@/concord-v2/lib/chat";
+import {
+  ackPendingWraps,
+  peekPendingWraps,
+  queryChannelRumors,
+  writeRumors,
+} from "@/concord-v2/lib/rumorStore";
 import { KIND_MESSAGE } from "@/concord-v2/lib/kinds";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import {
@@ -10,6 +16,8 @@ import {
   markConcord2Read,
   type Concord2ReadMap,
 } from "@/concord-v2/lib/readState2";
+
+import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Per-channel unread summary (mirrors NIP-29's `GroupUnread`). */
 export interface Concord2Unread {
@@ -21,6 +29,56 @@ export interface Concord2Unread {
 
 /** How many newest cached rumors to inspect per channel when scanning. */
 const SCAN_LIMIT = 60;
+
+/**
+ * Decrypt any wraps the native service parked for these channels and write the
+ * recovered rumors to the store, returning them grouped by channel so the
+ * caller can fold them into its scan without racing the fire-and-forget store
+ * write.
+ *
+ * The native service subscribes to EVERY channel's streams but can't decrypt
+ * (no stream keys), so it parks raw wraps. Historically the only drains were
+ * the channel timeline / control plane queryFns — i.e. a wrap for a channel
+ * that was never OPENED sat as ciphertext forever, and a push-notified message
+ * never lit the in-app badge. Draining here (the badge scan runs every 5s for
+ * every community mounted on the rail) closes that gap. Peek+ack semantics:
+ * only wraps that actually decoded are acknowledged; an aborted or key-less
+ * decode leaves them parked (issue #19).
+ */
+async function drainParkedWraps(channels: ChannelV2[]): Promise<Map<string, OpenedChat[]>> {
+  const openedByChannel = new Map<string, OpenedChat[]>();
+  try {
+    const byPk = new Map<string, ChannelV2>();
+    for (const c of channels) for (const s of c.streams) byPk.set(s.group.pk, c);
+    if (byPk.size === 0) return openedByChannel;
+
+    const parked = await peekPendingWraps([...byPk.keys()]);
+    if (parked.length === 0) return openedByChannel;
+
+    const wrapsByChannel = new Map<ChannelV2, NostrEvent[]>();
+    for (const wrap of parked) {
+      const channel = byPk.get(wrap.pubkey);
+      if (!channel) continue;
+      const list = wrapsByChannel.get(channel);
+      if (list) list.push(wrap);
+      else wrapsByChannel.set(channel, [wrap]);
+    }
+
+    const acked: string[] = [];
+    for (const [channel, wraps] of wrapsByChannel) {
+      const opened = await openChatBatch(wraps, channel);
+      if (opened.length === 0) continue;
+      writeRumors(opened);
+      openedByChannel.set(channel.idHex, opened);
+      const openedWrapIds = new Set(opened.map((o) => o.wrapId));
+      acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
+    }
+    ackPendingWraps(acked);
+  } catch {
+    // Best-effort — the wraps stay parked for the next scan or channel open.
+  }
+  return openedByChannel;
+}
 
 /**
  * The TanStack Query key for a user's persisted V2 read-state map. Shared
@@ -81,16 +139,25 @@ export function useConcord2Unread(channels: ChannelV2[]): {
   const { data: byChannel = {} } = useQuery<Record<string, Concord2Unread>>({
     queryKey: ["concord2-unread", pubkey, channelSig, readMap],
     queryFn: async () => {
+      // Surface push-delivered messages first: decrypt whatever the native
+      // service parked for these channels so they both light badges NOW and
+      // are already in the store when their channel opens.
+      const drained = await drainParkedWraps(channels);
+
       const next: Record<string, Concord2Unread> = {};
       await Promise.all(
         channelIds.map(async (idHex) => {
           const lastRead = readMap[idHex] ?? 0;
-          let rumors;
+          let rumors: Array<Pick<OpenedChat, "kind" | "author" | "createdAt" | "tags">>;
           try {
             rumors = await queryChannelRumors(idHex, { limit: SCAN_LIMIT });
           } catch {
-            return;
+            rumors = [];
           }
+          // Fold freshly-drained rumors in directly rather than racing the
+          // fire-and-forget store write.
+          const extra = drained.get(idHex);
+          if (extra) rumors = [...rumors, ...extra];
           let latest = 0;
           let mention = false;
           for (const r of rumors) {

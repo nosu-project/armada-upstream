@@ -30,7 +30,7 @@ import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /** Query key for a channel's RAW opened-event set (all chat-plane kinds). */
-const channelKey = (channelIdHex: string | null) => ["concord2", "channel", channelIdHex] as const;
+export const channelKey = (channelIdHex: string | null) => ["concord2", "channel", channelIdHex] as const;
 const statusKey = (channelIdHex: string | null) => ["concord2", "msg-status", channelIdHex] as const;
 const deletedKey = (channelIdHex: string | null) => ["concord2", "msg-deleted", channelIdHex] as const;
 
@@ -60,7 +60,7 @@ function channelFilter(channel: ChannelV2, extra?: Partial<NostrFilter>): NostrF
 }
 
 /** Upsert opened events into the raw set, deduped by rumor id, sorted by ms. */
-function upsert(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedChat[] {
+export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedChat[] {
   const byId = new Map<string, OpenedChat>();
   for (const m of old ?? []) byId.set(m.rumorId, m);
   let changed = false;
@@ -73,6 +73,9 @@ function upsert(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedCh
   if (!changed && old) return old;
   return [...byId.values()].sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1));
 }
+
+/** Local shorthand. */
+const upsert = upsertOpenedChat;
 
 /**
  * Backfill wraps from the relays with `until` pagination and per-relay cursors

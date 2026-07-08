@@ -46,6 +46,7 @@ import { toast } from "@/hooks/useToast";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useCommunityPlaneSync2 } from "@/concord-v2/hooks/useCommunityPlaneSync2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useGuestbook2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useModeration2 } from "@/concord-v2/hooks/useModeration2";
@@ -347,6 +348,11 @@ export function ConcordV2Page() {
 
   // Per-channel unread badges, computed purely from the local rumor cache.
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels);
+
+  // Live-sync the whole community's chat plane (every channel, not just the
+  // open one) so messages render instantly on channel switch and badges light
+  // as they arrive.
+  useCommunityPlaneSync2(baseCommunity, channels);
 
   // Authenticate the connection as this community's per-channel stream keys
   // (control/guestbook/dissolved keys are registered app-wide in MainLayout).
