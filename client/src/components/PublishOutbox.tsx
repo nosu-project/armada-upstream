@@ -7,6 +7,8 @@ import {
   markQueuedPublishFailure,
   removeQueuedPublish,
 } from "@/lib/publishOutbox";
+import { publishLive } from "@/lib/publishLive";
+import { notifyPublishConfirmed } from "@/lib/publishConfirm";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
 
 function isOffline(): boolean {
@@ -33,11 +35,21 @@ export function PublishOutbox() {
       for (const item of due) {
         try {
           if (item.relay) {
-            await nostr.relay(item.relay).event(item.event, { signal: AbortSignal.timeout(timeoutRef.current) });
+            // Liveness-gated: a retry that reuses the same severed socket would
+            // buffer into the void and time out again (backing off toward 5min).
+            // publishLive forces a fresh connection when the socket isn't open.
+            await publishLive(nostr, item.relay, item.event, {
+              signal: AbortSignal.timeout(timeoutRef.current),
+              timeoutMs: timeoutRef.current,
+            });
           } else {
             await nostr.event(item.event, { signal: AbortSignal.timeout(timeoutRef.current) });
           }
           removeQueuedPublish(item.id);
+          // A delayed delivery must reconcile back to the UI so a message the
+          // composer already marked "failed"/"pending" flips to "sent" instead
+          // of looking eaten. Keyed by event id; useGroupMessages/DMs listen.
+          notifyPublishConfirmed(item.event.id);
         } catch (error) {
           markQueuedPublishFailure(item.id, error);
         }

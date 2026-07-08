@@ -6,6 +6,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useSendStatusMap } from "@/hooks/useSendStatusMap";
 import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { onPublishConfirmed } from "@/lib/publishConfirm";
 import { nip29SnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 import { useWireScopes } from "@/wire/useWireScopes";
 
@@ -314,6 +315,12 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
 
   /** Confirm a message delivered (clears its pending/failed status). */
   const markSent = useCallback((id: string) => setStatus(id, undefined), [setStatus]);
+
+  // A delayed outbox delivery (retry after a severed socket) confirms here so a
+  // message left "pending"/"failed" flips to "sent" instead of looking eaten.
+  // `markSent` is a no-op for ids this room doesn't track, so listening
+  // unconditionally is safe.
+  useEffect(() => onPublishConfirmed(markSent), [markSent]);
 
   /** Mark a message as failed to send (offers retry in the UI). */
   const markFailed = useCallback((id: string) => setStatus(id, "failed"), [setStatus]);
