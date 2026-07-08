@@ -61,7 +61,21 @@ const LazyEmojiPicker = lazy(() => import("@/components/chat/EmojiPicker").then(
 /** NIP-88 poll kind. */
 const KIND_POLL = 1068;
 
-const MAX_CHARS = 2000;
+// Plain NIP-29 group chat has no relay-side content cap worth worrying about
+// (khatru's default MaxMessageSize is ~500KB per websocket frame). The real
+// hard ceiling comes from Concord (CORD-01/02): every message is NIP-44
+// encrypted TWICE — once into the signed seal, again into the outer wrap —
+// and NIP-44 plaintext is hard-capped at 65,535 bytes PER LAYER (NIP-44
+// §Limitations). The outer wrap is the tighter layer: its "plaintext" is the
+// JSON-serialized seal, which already contains the inner layer's base64
+// ciphertext (bigger than the raw rumor) plus the seal's own signature/tags.
+// Worst case a character costs up to 3 UTF-8 bytes before encryption padding
+// and base64 (~1.33x) expansion; 5,000 characters stays an order of magnitude
+// below the 65KB wrap ceiling even through both encryption layers, leaving
+// generous headroom for reply/quote/mention tags stacked on top. 2.5x the
+// prior 2,000-char limit — comfortably higher without meaningfully eating
+// into that margin.
+const MAX_CHARS = 5000;
 
 /** MIME types accepted via paste/drag-and-drop (matches the file picker). */
 const ACCEPTED_PASTE_RE = /^(image|video|audio)\//;
