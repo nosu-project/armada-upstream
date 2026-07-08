@@ -178,6 +178,7 @@ export function useTransport2(
       isLoading,
       canWrite,
       canModerate,
+      isRumor: true,
       loadOlder,
       hasMore,
       isLoadingOlder,

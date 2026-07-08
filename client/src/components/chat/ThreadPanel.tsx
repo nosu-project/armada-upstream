@@ -1,14 +1,32 @@
-import { Loader2, MessagesSquare, X } from "lucide-react";
+import { Braces, Copy, Link2, Loader2, MessagesSquare, X } from "lucide-react";
+import { nip19 } from "nostr-tools";
+import { useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
+import { DittoIcon } from "@/components/brand/DittoIcon";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { writeClipboardText } from "@/lib/clipboard";
+import { dittoEventUrl } from "@/lib/dittoUrl";
 
 import type { ChatMsg, ChatTransport, MessageReactions } from "@/components/chat/transport";
 
@@ -17,50 +35,129 @@ function ThreadMessage({
   event,
   reactions,
   canReact,
+  isRumor = false,
 }: {
   event: ChatMsg;
   reactions?: MessageReactions;
   canReact: boolean;
+  /**
+   * Whether this message is an unsigned rumor (Concord sealed chat event). Drives
+   * the right-click context menu: rumors offer "View event JSON" (a dialog with
+   * the rumor, pretty-printed), signed events offer the relay off-ramps.
+   */
+  isRumor?: boolean;
 }) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(event.pubkey, metadata);
   const when = new Date(event.created_at * 1000);
 
+  const [jsonOpen, setJsonOpen] = useState(false);
+  // A rumor has no signature; strip the synthetic empty `sig` the transport
+  // adds for rendering so the JSON view reflects the true rumor shape.
+  const rumorJson = isRumor
+    ? JSON.stringify((({ sig: _sig, ...rest }) => rest)(event), null, 2)
+    : null;
+
   return (
-    <div className="group/threadmsg relative flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors">
-      <ProfilePreviewCard pubkey={event.pubkey}>
-        <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <Avatar shape={getAvatarShape(metadata)} className="size-9 cursor-pointer transition-opacity hover:opacity-90">
-            <AvatarImage src={metadata?.picture} alt={displayName} />
-            <AvatarFallback className="bg-primary/20 text-primary text-sm">
-              {displayName[0]?.toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
-        </button>
-      </ProfilePreviewCard>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2">
+    <>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div className="group/threadmsg relative flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors">
           <ProfilePreviewCard pubkey={event.pubkey}>
-            <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
-              {displayName}
+            <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <Avatar shape={getAvatarShape(metadata)} className="size-9 cursor-pointer transition-opacity hover:opacity-90">
+                <AvatarImage src={metadata?.picture} alt={displayName} />
+                <AvatarFallback className="bg-primary/20 text-primary text-sm">
+                  {displayName[0]?.toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
             </button>
           </ProfilePreviewCard>
-          <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
-            {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-          </span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2">
+              <ProfilePreviewCard pubkey={event.pubkey}>
+                <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
+                  {displayName}
+                </button>
+              </ProfilePreviewCard>
+              <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
+                {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+              </span>
+            </div>
+            <ChatContent event={event} className="text-[15px]" />
+            {reactions && reactions.tallies.length > 0 && (
+              <ReactionBar tallies={reactions.tallies} canReact={canReact} onReact={reactions.react} />
+            )}
+          </div>
+          {canReact && reactions && (
+            <div className="absolute right-1.5 top-1 opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity">
+              <ReactionPicker onReact={reactions.react} />
+            </div>
+          )}
         </div>
-        <ChatContent event={event} className="text-[15px]" />
-        {reactions && reactions.tallies.length > 0 && (
-          <ReactionBar tallies={reactions.tallies} canReact={canReact} onReact={reactions.react} />
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem onSelect={() => writeClipboardText(event.content).catch(() => undefined)}>
+          <Copy className="mr-2 size-4" /> Copy text
+        </ContextMenuItem>
+        {!isRumor && (
+          <ContextMenuItem
+            onSelect={() => {
+              try {
+                writeClipboardText(
+                  `nostr:${nip19.neventEncode({ id: event.id, author: event.pubkey })}`,
+                ).catch(() => undefined);
+              } catch {
+                writeClipboardText(event.id).catch(() => undefined);
+              }
+            }}
+          >
+            <Link2 className="mr-2 size-4" /> Copy message ID
+          </ContextMenuItem>
         )}
-      </div>
-      {canReact && reactions && (
-        <div className="absolute right-1.5 top-1 opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity">
-          <ReactionPicker onReact={reactions.react} />
-        </div>
-      )}
-    </div>
+        {!isRumor && dittoEventUrl(event) && (
+          <ContextMenuItem
+            onSelect={() => {
+              const href = dittoEventUrl(event);
+              if (href) window.open(href, "_blank", "noopener,noreferrer");
+            }}
+          >
+            <DittoIcon className="mr-2 size-4" /> View on Ditto
+          </ContextMenuItem>
+        )}
+        {rumorJson !== null && (
+          <ContextMenuItem onSelect={() => setJsonOpen(true)}>
+            <Braces className="mr-2 size-4" /> View event JSON
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+    {rumorJson !== null && (
+      <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Event JSON</DialogTitle>
+            <DialogDescription>
+              The raw, unsigned rumor for this message.
+            </DialogDescription>
+          </DialogHeader>
+          <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
+            {rumorJson}
+          </pre>
+          <div className="flex justify-end">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => writeClipboardText(rumorJson).catch(() => undefined)}
+            >
+              <Copy className="mr-2 size-4" /> Copy JSON
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    )}
+    </>
   );
 }
 
@@ -101,6 +198,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   const replies = transport.threadRepliesFor?.(root.id) ?? [];
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   const reactionsFor = transport.reactionsFor;
+  const isRumor = transport.isRumor ?? false;
 
   return (
     <aside className="flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome">
@@ -117,7 +215,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable space-y-1">
-        <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} canReact={canWrite} />
+        <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} canReact={canWrite} isRumor={isRumor} />
         <div className="flex items-center gap-2 px-3 py-1">
           <div className="h-px flex-1 bg-border/60" />
           {!isLoading && (
@@ -135,7 +233,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           </div>
         ) : (
           replies.map((reply) => (
-            <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} canReact={canWrite} />
+            <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} canReact={canWrite} isRumor={isRumor} />
           ))
         )}
       </div>

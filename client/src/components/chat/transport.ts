@@ -79,6 +79,15 @@ export interface ChatTransport {
   /** Whether the current user may moderate (delete others' messages, pin, …). */
   canModerate: boolean;
 
+  /**
+   * Whether this transport's messages are unsigned rumors (Concord's sealed
+   * chat events) rather than relay-addressable signed events. Drives the
+   * per-message context menu: rumors offer "View event JSON" instead of the
+   * "Copy message ID" / "View on Ditto" off-ramps (which reference a
+   * relay-addressable event id that doesn't exist for a rumor).
+   */
+  isRumor?: boolean;
+
   // ── Optional capabilities (control hidden when undefined) ────────────────
 
   /** Backfill older history; resolves to the number of messages prepended. */
