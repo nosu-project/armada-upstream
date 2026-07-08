@@ -110,33 +110,39 @@ export function ChannelSidebarView({
         className={cn(
           "relative pl-5 pr-3 pb-3 flex",
           "pt-[calc(1.25rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
-          titleIcon ? "gap-2" : "flex-col",
-          // With a mobile banner the title anchors to the bottom of the block
-          // (over the scrim); on desktop (>= sidebar) it centers as before, as
-          // does every no-banner sidebar.
-          banner
-            ? titleIcon
-              ? "items-end sidebar:items-center"
-              : "justify-end sidebar:justify-center"
-            : titleIcon
-              ? "items-center"
-              : "justify-center",
+          // Alignment is IDENTICAL with or without a banner so the title (and
+          // therefore the divider + Channels section below) sits at the exact
+          // same vertical position — the mobile banner is a pure absolute
+          // background that doesn't participate in flow or alignment, so it can
+          // never nudge the header down.
+          titleIcon ? "items-center gap-2" : "flex-col justify-center",
         )}
       >
-        {/* Mobile-only banner background (desktop uses the block above). */}
+        {/* Mobile-only banner background (desktop uses the block above). These
+            layers are absolutely positioned, so they don't affect the header's
+            height or the title's alignment. */}
         {banner && (
-          <div className="sidebar:hidden">
-            <div className="absolute inset-0 overflow-hidden">{banner}</div>
+          <>
+            <div className="sidebar:hidden absolute inset-0 overflow-hidden">{banner}</div>
             {/* Bottom-anchored scrim so the title reads on any banner. */}
             <div
               aria-hidden
-              className="absolute inset-x-0 bottom-0 h-2/3 pointer-events-none bg-gradient-to-t from-[hsl(var(--chrome))] via-[hsl(var(--chrome)/0.7)] to-transparent"
+              className="sidebar:hidden absolute inset-x-0 bottom-0 h-2/3 pointer-events-none bg-gradient-to-t from-[hsl(var(--chrome))] via-[hsl(var(--chrome)/0.7)] to-transparent"
             />
-          </div>
+          </>
         )}
         {titleIcon && <div className="relative shrink-0">{titleIcon}</div>}
         <div className="relative min-w-0">
-          <h2 className="font-semibold truncate leading-tight tracking-wide text-sm">{title}</h2>
+          {/* Reserve a constant primary-line height (= the size-5 title
+              icon/avatar) so the header block — and therefore the divider and
+              Channels section below — sits at the exact same vertical position
+              whether or not the community/server has an icon. Without this
+              floor, an icon (taller than the text line) grows the header and
+              pushes everything down. The h2 stays block so `truncate` works;
+              the flex wrapper only vertically centers it in the reserved line. */}
+          <div className="flex items-center min-h-5">
+            <h2 className="min-w-0 font-semibold truncate leading-tight tracking-wide text-sm">{title}</h2>
+          </div>
           {subtitle && (
             <span className="block text-[11px] text-muted-foreground truncate leading-tight">{subtitle}</span>
           )}
