@@ -560,6 +560,23 @@ public class NotificationRelayService extends Service {
         final Runnable resubscribeRunnable = () -> {
             if (!closed && ws != null) sendReqs(ws);
         };
+        // Coalesces the REQ re-send that follows AUTH acks (#49): the user +
+        // every Concord V2 stream key each get their own OK, so an auth round
+        // used to trigger one full sendReqs PER OK — dozens of duplicate REQ
+        // bursts per challenge. One re-send shortly after the burst settles
+        // covers them all.
+        boolean authResendPending = false;
+        final Runnable authResendRunnable = () -> {
+            authResendPending = false;
+            if (!closed && ws != null) sendReqs(ws);
+        };
+
+        /** Re-send REQs shortly, collapsing a burst of AUTH OKs into one round. */
+        void scheduleAuthResend() {
+            if (authResendPending) return;
+            authResendPending = true;
+            handler.postDelayed(authResendRunnable, 300);
+        }
 
         RelayConnection(String relayUrl) {
             this.relayUrl = relayUrl;
@@ -577,10 +594,13 @@ public class NotificationRelayService extends Service {
                 @Override
                 public void onOpen(WebSocket webSocket, Response response) {
                     if (BuildConfig.DEBUG) Log.d(TAG, "WS open: " + relayUrl);
-                    // A fresh socket session: CLOSED-resubscribe backoff starts over.
+                    // A fresh socket session: CLOSED-resubscribe backoff starts
+                    // over, and a pending auth re-send belongs to the old session.
                     handler.post(() -> {
                         subRetryBackoffMs = INITIAL_BACKOFF_MS;
                         handler.removeCallbacks(resubscribeRunnable);
+                        authResendPending = false;
+                        handler.removeCallbacks(authResendRunnable);
                     });
                     sendReqs(webSocket);
                 }
@@ -895,14 +915,15 @@ public class NotificationRelayService extends Service {
                 // AUTH ack (["OK", <event-id>, true/false, msg]). On success,
                 // and only when the id matches a kind-22242 we sent (the user's
                 // or a Concord V2 stream key's), the matching connection
-                // re-sends its REQs.
+                // re-sends its REQs — coalesced into one round after the OK
+                // burst settles (see scheduleAuthResend).
                 String okId = msg.optString(1);
                 boolean ok = msg.optBoolean(2, false);
                 if (BuildConfig.DEBUG) Log.d(TAG, "OK from " + relayUrl + " ok=" + ok + " " + msg.optString(3));
                 for (RelayConnection rc : connections) {
                     if (!rc.relayUrl.equals(relayUrl) || rc.ws == null) continue;
                     if (ok && rc.pendingAuthIds.remove(okId)) {
-                        rc.sendReqs(rc.ws);
+                        rc.scheduleAuthResend();
                     }
                 }
                 return;
