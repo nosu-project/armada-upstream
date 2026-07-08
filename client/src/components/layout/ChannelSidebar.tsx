@@ -19,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useLivekitParticipants, useRelayLivekitSupport } from "@/hooks/useLivekit";
 import { useMutes } from "@/hooks/useMutes";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
@@ -193,6 +194,11 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
     return () => clearTimeout(t);
   }, [relayUrl]);
 
+  // Cache hits resolve within a frame or two, so an ungated skeleton flashes for
+  // a nanosecond (reads as a glitch). Only reveal the loading UI once loading
+  // has lasted long enough to be worth a placeholder; a fast load shows nothing.
+  const showLoadingUi = useDelayedFlag(isLoading);
+
   const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
   const { byGroup } = useRelayUnread(relayUrl, groupIds);
 
@@ -237,7 +243,11 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
         </>
       }
     >
-      {isLoading && !skeletonExpired ? (
+      {isLoading && !showLoadingUi ? (
+        // Loading, but not long enough yet to warrant any placeholder — render
+        // nothing so a fast cache hit doesn't flash a skeleton.
+        null
+      ) : isLoading && !skeletonExpired ? (
         <div className="space-y-2 px-2 py-1">
           {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-7 w-full" />

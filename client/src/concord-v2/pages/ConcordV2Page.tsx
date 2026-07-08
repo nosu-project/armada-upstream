@@ -40,6 +40,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
@@ -338,6 +339,11 @@ export function ConcordV2Page() {
     return { ...baseCommunity, name: folded.metadata.name || baseCommunity.name };
   }, [baseCommunity, folded]);
   const channels = useChannels2(baseCommunity);
+  // Only show channel skeletons if there's nothing to render yet AND that has
+  // lasted long enough to be worth a placeholder. On a cache hit the bundle
+  // resolves within a frame or two, so the skeleton would otherwise flash for a
+  // nanosecond — which reads as a glitch. Delay it so fast loads show nothing.
+  const showChannelSkeleton = useDelayedFlag(!community || channels.length === 0);
 
   // Per-channel unread badges, computed purely from the local rumor cache.
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels);
@@ -732,11 +738,13 @@ export function ConcordV2Page() {
       }
     >
       {!community || channels.length === 0 ? (
-        <div className="space-y-2 px-2 py-1">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-7 w-full" />
-          ))}
-        </div>
+        showChannelSkeleton ? (
+          <div className="space-y-2 px-2 py-1">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-7 w-full" />
+            ))}
+          </div>
+        ) : null
       ) : (
         channels.map((c) => {
           const inCall = Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex);

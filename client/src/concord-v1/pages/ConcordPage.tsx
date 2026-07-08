@@ -50,6 +50,7 @@ import { useConcordDissolved } from "@/concord-v1/hooks/useConcordRoster";
 import { useConcordTransport } from "@/concord-v1/hooks/useConcordTransport";
 import { useSendConcordMessage } from "@/concord-v1/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
@@ -286,6 +287,11 @@ export function ConcordPage() {
       }),
     };
   }, [baseCommunity, folded, seededIcon, seededBanner]);
+  // Only show channel skeletons if the community bundle is still missing AND has
+  // been for long enough to warrant a placeholder — on a cache hit it resolves
+  // within a frame or two, so an ungated skeleton flashes for a nanosecond
+  // (reads as a glitch). Delay it so fast loads show nothing.
+  const showChannelSkeleton = useDelayedFlag(!community);
   const [channelIdHex, setChannelIdHex] = useState<string | null>(routeChannelId ?? null);
 
   // A deep-link to a specific channel (e.g. tapping a notification, which routes
@@ -607,11 +613,13 @@ export function ConcordPage() {
       }
     >
       {!community ? (
-        <div className="space-y-2 px-2 py-1">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-7 w-full" />
-          ))}
-        </div>
+        showChannelSkeleton ? (
+          <div className="space-y-2 px-2 py-1">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-7 w-full" />
+            ))}
+          </div>
+        ) : null
       ) : (
         community.channels.map((c) => {
           const idHex = bytesToHex(c.id);
