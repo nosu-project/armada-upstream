@@ -129,7 +129,7 @@ function Nip29ChatMessage({
 function ComposerSkeleton() {
   return (
     <div
-      className="relative shrink-0 pb-[env(safe-area-inset-bottom,0px)] sidebar:pb-1"
+      className="relative shrink-0 pb-[var(--safe-area-inset-bottom-capped,0px)] sidebar:pb-1"
       aria-hidden
     >
       <div className="p-2">

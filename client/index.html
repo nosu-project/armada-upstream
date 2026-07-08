@@ -9,10 +9,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#100b15" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- Standalone/home-screen behavior comes from manifest.json alone
+         (display: standalone). Deliberately NO legacy apple-mobile-web-app-*
+         meta tags: with apple-mobile-web-app-capable + black-translucent
+         present, iOS (observed on iOS 26 / iPhone 16 Pro) takes the legacy
+         home-screen layout path and sizes the standalone webview to
+         screen-minus-status-bar while anchoring it at the top, leaving a
+         dead ~62pt letterbox band below the page that no in-page CSS can
+         remove. Manifest-only (Ditto's config) sizes the window correctly. -->
     <title>Armada</title>
+    <!-- Stamped per build (armada-build-stamp Vite plugin); lets a device's
+         running bundle be identified when debugging stale-PWA issues. -->
+    <meta name="build" content="__BUILD_STAMP__" />
     <meta name="description" content="A sovereign harbor on the open relays — NIP-29 servers, channels, and voice. Your keys, your fleet." />
 
     <!-- Open Graph / social -->
@@ -28,6 +36,13 @@
     <meta name="twitter:description" content="A sovereign harbor on the open relays. Your keys, your fleet." />
     <meta name="twitter:image" content="/og.png" />
 
+    <script>
+      // Mark home-screen (standalone PWA) launches on <html> before first
+      // paint so CSS can scroll-lock the shell (see index.css).
+      if (window.matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches || window.navigator.standalone === true) {
+        document.documentElement.classList.add("standalone");
+      }
+    </script>
     <script src="/theme.js"></script>
   </head>
   <body>

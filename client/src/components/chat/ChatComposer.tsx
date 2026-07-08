@@ -1044,7 +1044,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   return (
     <div
-      className="relative shrink-0 pb-[env(safe-area-inset-bottom,0px)] sidebar:pb-1"
+      className="relative shrink-0 pb-[var(--safe-area-inset-bottom-capped,0px)] sidebar:pb-1"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
