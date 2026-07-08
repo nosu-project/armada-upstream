@@ -4,7 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
-## [0.21.0] - 2026-07-08
+## [0.21.1] - 2026-07-08
+
+A reliability release focused on the Android app. Invite and share links now
+point at the real site instead of an internal address, so they open correctly
+for other people. Connections recover cleanly after dropping — messaging,
+notifications, and voice no longer stay broken until you restart the app — and
+joining a community that can't be reached now gives a clear error instead of
+silently failing.
+
+### Fixed
+- Invite and share links (community invites, server/channel links, and signer
+  pairing) now use the public site address, so they work when opened by others
+- Messaging and notifications recover automatically after a connection drops,
+  instead of staying broken until the app is restarted
+- Joining or previewing a community that can't be reached now shows a clear
+  error, and creating an invite over an unreachable connection warns you
+- Signing in with a remote signer no longer times out prematurely on relays
+  that require authentication
+- More reliable message and notification delivery on relays with stricter limits
+
+
 
 Messaging sync is overhauled so chat stays consistent everywhere. Messages now
 arrive live in every channel of a server — not just the one you have open — and
