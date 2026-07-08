@@ -32,6 +32,11 @@ interface ChannelSidebarViewProps {
    */
   addChannelDisabled?: boolean;
   /**
+   * Content rendered ABOVE the "Channels" section label (e.g. Concord's
+   * "@ Mentions" nav item). Sits at the top of the scroll region.
+   */
+  preChannels?: ReactNode;
+  /**
    * Inline content under the "Channels" label (e.g. a create-channel form).
    * Concord renders its add form here; NIP-29 leaves it empty (it uses a dialog).
    */
@@ -60,6 +65,7 @@ export function ChannelSidebarView({
   onAddChannel,
   addChannelOpen,
   addChannelDisabled,
+  preChannels,
   channelsHeaderExtra,
   children,
   footer,
@@ -155,6 +161,7 @@ export function ChannelSidebarView({
 
       {/* Channels */}
       <div className="flex-1 overflow-y-auto px-1 pt-[11px] pb-2 space-y-0.5">
+        {preChannels}
         <div className="flex items-center justify-between pl-4 pr-2 py-1">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Channels

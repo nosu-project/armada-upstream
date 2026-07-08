@@ -1,4 +1,4 @@
-import { ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MoreVertical, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { AtSign, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MoreVertical, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -54,6 +54,7 @@ import { useRoles2 } from "@/concord-v2/hooks/useRoles2";
 import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
 import { useConcord2Unread, type Concord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
+import { useConcord2Mentions } from "@/concord-v2/hooks/useConcord2Mentions";
 import { useTyping2, useTypingPublisher2 } from "@/concord-v2/hooks/useTyping2";
 import { resolveVoiceBroker, useVoiceBroker2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
 import type { VoicePresenceFold } from "@/concord-v2/lib/voice";
@@ -317,6 +318,77 @@ function ChannelRow2({
 }
 
 /**
+ * The community-wide "@ Mentions" pane: every cached kind-9 message that
+ * p-tags the current user, across all channels, newest-first — read purely
+ * from the local decrypted rumor cache. Each message is grouped under a header
+ * that jumps to its source channel; the rows reuse the shared `ChatMessage`
+ * shell (read-only — no react/reply/delete in this aggregate view).
+ */
+function MentionsView({
+  channels,
+  mentions,
+  isLoading,
+  onSelectChannel,
+}: {
+  channels: ChannelV2[];
+  mentions: ChatMsg[];
+  isLoading: boolean;
+  onSelectChannel: (idHex: string) => void;
+}) {
+  const nameByChannel = useMemo(() => {
+    const m = new Map<string, ChannelV2>();
+    for (const c of channels) m.set(c.idHex, c);
+    return m;
+  }, [channels]);
+
+  if (mentions.length === 0) {
+    return (
+      <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+        {isLoading ? "Loading mentions…" : "No mentions yet. When someone @-mentions you, it'll show up here."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col py-2">
+      {mentions.map((msg) => {
+        const channelIdHex = msg.tags.find((t) => t[0] === "channel")?.[1] ?? "";
+        const ch = nameByChannel.get(channelIdHex);
+        return (
+          <div key={msg.id} className="pb-1">
+            <button
+              type="button"
+              onClick={() => channelIdHex && onSelectChannel(channelIdHex)}
+              disabled={!ch}
+              className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:pointer-events-none"
+            >
+              {ch?.isVoice ? (
+                <Volume2 className="size-3 shrink-0" />
+              ) : ch?.isPrivate ? (
+                <Lock className="size-3 shrink-0" />
+              ) : (
+                <Hash className="size-3 shrink-0" />
+              )}
+              <span className="truncate">{ch?.name ?? "unknown channel"}</span>
+            </button>
+            <MentionMessage event={msg} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A single read-only mention row (unsigned rumor → "View event JSON" menu). */
+const MentionMessage = memo(function MentionMessage({ event }: { event: ChatMsg }) {
+  const rumor = useMemo(() => {
+    const { sig: _sig, ...rest } = event;
+    return rest;
+  }, [event]);
+  return <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} />;
+});
+
+/**
  * A Concord V2 community — CORD-01..06 Private Streams over interchangeable
  * relays, no host, no `#z` tags: every plane is kind-1059 traffic at derived
  * stream addresses. Lives at `/c/:communityId`, rehydrated from the
@@ -349,6 +421,17 @@ export function ConcordV2Page() {
   // (which the wire keeps fed for every channel of every community).
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels);
 
+  // Community-wide "@ Mentions" — every cached kind-9 that p-tags the user,
+  // across all channels, served from the local rumor cache only.
+  const { mentions, isLoading: mentionsLoading } = useConcord2Mentions(channels);
+  // The "@ Mentions" item lights up like a channel does: it's "unread" when
+  // ANY channel has an unread mention (same read-state the channel rows use),
+  // so opening the channel that mentioned you clears both together.
+  const hasUnreadMention = useMemo(
+    () => Object.values(unreadByChannel).some((u) => u.mention),
+    [unreadByChannel],
+  );
+
   // Authenticate the connection as this community's per-channel stream keys
   // (control/guestbook/dissolved keys are registered app-wide in MainLayout).
   useRegisterChannelStreamKeys2(communityId);
@@ -360,10 +443,20 @@ export function ConcordV2Page() {
   useEffect(() => {
     if (routeChannelId) setChannelIdHex(routeChannelId);
   }, [routeChannelId]);
+  // Which pane the main area shows: the selected channel's chat, or the
+  // community-wide "@ Mentions" list. Selecting a channel returns to chat.
+  const [view, setView] = useState<"channel" | "mentions">("channel");
+  useEffect(() => {
+    if (routeChannelId) setView("channel");
+  }, [routeChannelId]);
+  const selectChannel = useCallback((idHex: string) => {
+    setChannelIdHex(idHex);
+    setView("channel");
+  }, []);
   // Let `#channel-name` hashtags in chat jump to that local channel.
   const navChannels = useMemo(
-    () => channels.map((c) => ({ name: c.name, go: () => setChannelIdHex(c.idHex) })),
-    [channels],
+    () => channels.map((c) => ({ name: c.name, go: () => selectChannel(c.idHex) })),
+    [channels, selectChannel],
   );
   const channelNav = useChannelNavValue(navChannels);
 
@@ -594,7 +687,7 @@ export function ConcordV2Page() {
     if (!name || !community) return;
     try {
       const { channelIdHex: created } = await createChannel({ name, voice: newChannelVoice });
-      setChannelIdHex(created);
+      selectChannel(created);
       setNewChannelName("");
       setNewChannelVoice(false);
       setCreatingChannel(false);
@@ -666,6 +759,38 @@ export function ConcordV2Page() {
       onAddChannel={user && community && canManageChannels ? () => setCreatingChannel((v) => !v) : undefined}
       addChannelOpen={creatingChannel}
       footer={<SidebarFooter2 />}
+      preChannels={
+        user && community ? (
+          <button
+            type="button"
+            onClick={() => {
+              setView("mentions");
+              onNavigate?.();
+            }}
+            className={cn(
+              "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left clip-corner-lg",
+              view === "mentions"
+                ? "bg-primary text-primary-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+              // Unread (but not selected) mentions read brighter + bold, matching
+              // an unread channel row.
+              view !== "mentions" && hasUnreadMention && "text-foreground font-semibold",
+            )}
+            aria-current={view === "mentions"}
+          >
+            <AtSign className="size-4 shrink-0" />
+            <span className="truncate flex-1 min-w-0">Mentions</span>
+            {view !== "mentions" && hasUnreadMention ? (
+              <span
+                className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                aria-label="You have unread mentions"
+              >
+                @
+              </span>
+            ) : null}
+          </button>
+        ) : undefined
+      }
       channelsHeaderExtra={
         creatingChannel ? (
           <form
@@ -754,12 +879,12 @@ export function ConcordV2Page() {
               key={c.idHex}
               community={community}
               channel={c}
-              active={Boolean(channel && channel.idHex === c.idHex)}
+              active={Boolean(view === "channel" && channel && channel.idHex === c.idHex)}
               inCall={inCall}
               speaking={inCall ? speakingPubkeys : undefined}
               unread={unreadByChannel[c.idHex]}
               onSelect={() => {
-                setChannelIdHex(c.idHex);
+                selectChannel(c.idHex);
                 onNavigate?.();
               }}
               onJoinVoice={handleJoinVoice}
@@ -801,16 +926,25 @@ export function ConcordV2Page() {
               <ChevronLeft className="size-5" />
             </Button>
 
-            {/* Desktop / wide: "# channel-name" */}
+            {/* Desktop / wide: "# channel-name" (or "@ Mentions"). */}
             <div className="hidden sidebar:flex items-center gap-1.5 min-w-0">
-              {channel?.isVoice ? (
-                <Volume2 className="size-5 text-muted-foreground shrink-0" />
-              ) : channel?.isPrivate ? (
-                <Lock className="size-5 text-muted-foreground shrink-0" />
+              {view === "mentions" ? (
+                <>
+                  <AtSign className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Mentions</h1>
+                </>
               ) : (
-                <Hash className="size-5 text-muted-foreground shrink-0" />
+                <>
+                  {channel?.isVoice ? (
+                    <Volume2 className="size-5 text-muted-foreground shrink-0" />
+                  ) : channel?.isPrivate ? (
+                    <Lock className="size-5 text-muted-foreground shrink-0" />
+                  ) : (
+                    <Hash className="size-5 text-muted-foreground shrink-0" />
+                  )}
+                  <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
+                </>
               )}
-              <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
             </div>
 
             {/* Mobile: community avatar + name large, channel muted below */}
@@ -825,14 +959,23 @@ export function ConcordV2Page() {
               <div className="min-w-0 flex flex-col">
                 <span className="font-semibold text-base leading-tight truncate">{community?.name ?? "…"}</span>
                 <span className="text-xs text-muted-foreground leading-tight truncate flex items-center gap-0.5">
-                  {channel?.isVoice ? (
-                    <Volume2 className="size-3 shrink-0" />
-                  ) : channel?.isPrivate ? (
-                    <Lock className="size-3 shrink-0" />
+                  {view === "mentions" ? (
+                    <>
+                      <AtSign className="size-3 shrink-0" />
+                      Mentions
+                    </>
                   ) : (
-                    <Hash className="size-3 shrink-0" />
+                    <>
+                      {channel?.isVoice ? (
+                        <Volume2 className="size-3 shrink-0" />
+                      ) : channel?.isPrivate ? (
+                        <Lock className="size-3 shrink-0" />
+                      ) : (
+                        <Hash className="size-3 shrink-0" />
+                      )}
+                      {channel?.name ?? "…"}
+                    </>
                   )}
-                  {channel?.name ?? "…"}
                 </span>
               </div>
             </button>
@@ -954,48 +1097,61 @@ export function ConcordV2Page() {
 
           <div className="relative flex flex-1 min-h-0">
             <div className="flex-1 min-w-0 flex flex-col">
-              <MessageTimeline
-                key={channel?.idHex ?? "none"}
-                transport={transport}
-                handleRef={timelineRef}
-                className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
-                emptyState={
-                  <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-                    No messages yet. Say something — only members can read it.
-                  </p>
-                }
-                renderMessage={(msg, continuation) => (
-                  <ChatMessage2
-                    key={msg.id}
-                    event={msg}
-                    reactions={reactionsFor(msg.id)}
-                    replies={transport.threadRepliesFor?.(msg.id) ?? EMPTY_REPLIES}
-                    continuation={continuation}
-                    canWrite={transport.canWrite}
-                    canModerate={transport.canModerate}
-                    sendStatus={transport.sendStatusFor?.(msg.id)}
-                    active={activeId === msg.id}
-                    onToggleActive={toggleActive}
-                    onOpenThread={onOpenThreadCb}
-                    onDelete={transport.deleteMessage}
-                    onRetry={transport.retry}
-                    onDiscard={transport.discard}
+              {view === "mentions" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable">
+                  <MentionsView
+                    channels={channels}
+                    mentions={mentions}
+                    isLoading={mentionsLoading}
+                    onSelectChannel={selectChannel}
                   />
-                )}
-              />
+                </div>
+              ) : (
+                <>
+                  <MessageTimeline
+                    key={channel?.idHex ?? "none"}
+                    transport={transport}
+                    handleRef={timelineRef}
+                    className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
+                    emptyState={
+                      <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+                        No messages yet. Say something — only members can read it.
+                      </p>
+                    }
+                    renderMessage={(msg, continuation) => (
+                      <ChatMessage2
+                        key={msg.id}
+                        event={msg}
+                        reactions={reactionsFor(msg.id)}
+                        replies={transport.threadRepliesFor?.(msg.id) ?? EMPTY_REPLIES}
+                        continuation={continuation}
+                        canWrite={transport.canWrite}
+                        canModerate={transport.canModerate}
+                        sendStatus={transport.sendStatusFor?.(msg.id)}
+                        active={activeId === msg.id}
+                        onToggleActive={toggleActive}
+                        onOpenThread={onOpenThreadCb}
+                        onDelete={transport.deleteMessage}
+                        onRetry={transport.retry}
+                        onDiscard={transport.discard}
+                      />
+                    )}
+                  />
 
-              {typingPubkeys.length > 0 && <TypingIndicator pubkeys={typingPubkeys} />}
-              {channel && (
-                <ChatComposer
-                  relayUrl="dm"
-                  groupId={channel.idHex}
-                  messages={[]}
-                  mentionPubkeys={memberPubkeys}
-                  placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
-                  sendOverride={handleSend}
-                  onTyping={publishTyping}
-                  encryptAttachments
-                />
+                  {typingPubkeys.length > 0 && <TypingIndicator pubkeys={typingPubkeys} />}
+                  {channel && (
+                    <ChatComposer
+                      relayUrl="dm"
+                      groupId={channel.idHex}
+                      messages={[]}
+                      mentionPubkeys={memberPubkeys}
+                      placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
+                      sendOverride={handleSend}
+                      onTyping={publishTyping}
+                      encryptAttachments
+                    />
+                  )}
+                </>
               )}
             </div>
 

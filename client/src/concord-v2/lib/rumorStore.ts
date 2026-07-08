@@ -178,6 +178,30 @@ export async function queryChannelRumors(
   return events.map((ev) => storedToOpenedChat(ev, channelIdHex));
 }
 
+/**
+ * Read cached kind-9 messages across a community's channels that p-tag `pubkey`
+ * — the "@ Mentions" view, purely local (no relay, no decrypt). Both `p` and
+ * `channel` are in {@link QUERYABLE_TAGS}, so the filter is index-backed. Each
+ * message's own `channel` binding tag recovers its channel id for the row.
+ */
+export async function queryMentionRumors(
+  channelIdsHex: string[],
+  pubkey: string,
+  opts: { limit: number; signal?: AbortSignal },
+): Promise<OpenedChat[]> {
+  if (channelIdsHex.length === 0 || !pubkey) return [];
+  const filter = {
+    kinds: [9],
+    "#p": [pubkey],
+    "#channel": channelIdsHex,
+    limit: opts.limit,
+  };
+  const events = await rumorStore().query([filter], { signal: opts.signal });
+  return events.map((ev) =>
+    storedToOpenedChat(ev, ev.tags.find((t) => t[0] === "channel")?.[1] ?? ""),
+  );
+}
+
 /** How many chat rumors are cached for a channel. */
 export async function countChannelRumors(channelIdHex: string): Promise<number> {
   const { count } = await rumorStore().count([{ kinds: CHAT_KINDS, "#channel": [channelIdHex] }]);
