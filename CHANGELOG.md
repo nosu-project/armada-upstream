@@ -4,6 +4,36 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.20.0] - 2026-07-08
+
+This release overhauls mobile navigation and polish: swipe-to-dismiss on image
+lightboxes, smoother community/channel switching on mobile, a redesigned DM
+sidebar that matches the community layout, improved iOS PWA behaviour, and
+a richer thread panel with context menus, message deletion, and collapsing of
+consecutive replies. Voice calls gain per-participant volume controls.
+
+### Added
+- Swipe down to dismiss image lightboxes (banner/avatar previews and in-chat images)
+- Per-participant volume control in the mobile call's audio settings
+- Thread panel: right-click context menu with Copy link, Delete message, and View event JSON
+- Thread panel: consecutive replies from the same author now collapse into a compact view, matching the main timeline
+
+### Changed
+- DM list sidebar redesigned to match the community layout (Messages sub-header, divider, consistent header height)
+- DM and Mesh rail buttons now show the same active indicator blade as communities
+- Mobile: tapping a community or server now lands on the channel list instead of the last-viewed channel
+- Redirects after login now go to synced servers rather than the join screen
+- Community banner on mobile is now a header background instead of a stacked block
+
+### Fixed
+- Mobile swipe glitches when switching communities and servers
+- Channel list and sidebar header no longer flash or shift when switching communities
+- iOS standalone PWA: fixed bottom gap and scroll-lock pinned correctly to `<html>`
+- iOS theater-mode call: status bar area now clears correctly when closing the call stage
+- Kick in voice calls now takes effect immediately for active participants
+- Service worker cache now rotates per deploy, preventing stale assets after updates
+- Community creation now snapshots the correct set of relay hints
+
 ## [0.19.3] - 2026-07-07
 
 GIF search now uses a new provider for more reliable results, and signing in
