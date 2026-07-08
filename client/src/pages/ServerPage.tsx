@@ -25,6 +25,7 @@ import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { writeClipboardText } from "@/lib/clipboard";
+import { shareOrigin } from "@/lib/shareOrigin";
 import { pickDefaultChannel } from "@/lib/utils";
 
 /**
@@ -112,7 +113,7 @@ export function ServerPage() {
 
   const handleCopyLink = () => {
     if (!relayUrl) return;
-    const link = `${window.location.origin}/s/${relayToRouteParam(relayUrl)}`;
+    const link = `${shareOrigin()}/s/${relayToRouteParam(relayUrl)}`;
     writeClipboardText(link).then(
       () => toast({ title: "Copied link" }),
       () => toast({ title: "Copy failed", variant: "destructive" }),

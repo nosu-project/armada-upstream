@@ -28,6 +28,7 @@ import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
 import { relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
+import { shareOrigin } from "@/lib/shareOrigin";
 
 import type { Nip29Group } from "@/lib/nip29";
 
@@ -152,7 +153,7 @@ function ChannelLink({
         </ContextMenuItem>
         <ContextMenuItem
           onSelect={() => {
-            const url = `${window.location.origin}/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`;
+            const url = `${shareOrigin()}/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`;
             writeClipboardText(url).catch(() => undefined);
           }}
         >

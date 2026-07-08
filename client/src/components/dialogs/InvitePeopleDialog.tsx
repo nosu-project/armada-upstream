@@ -12,6 +12,7 @@ import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import { relayToRouteParam } from "@/lib/platform";
 import { canShare, share as nativeShare } from "@/lib/share";
+import { shareOrigin } from "@/lib/shareOrigin";
 
 import type { Nip29Group } from "@/lib/nip29";
 
@@ -30,7 +31,7 @@ function randomInviteCode(): string {
 /** Build the shareable join URL for a group + invite code. */
 function buildInviteUrl(relayUrl: string, groupId: string, code: string): string {
   const path = `/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(groupId)}?code=${encodeURIComponent(code)}`;
-  return `${window.location.origin}${path}`;
+  return `${shareOrigin()}${path}`;
 }
 
 /**

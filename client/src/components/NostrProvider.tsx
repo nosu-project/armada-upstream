@@ -157,6 +157,72 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     }
   };
 
+  /**
+   * Reset a relay's NIP-42 state whenever its underlying WebSocket (re)opens
+   * (#45): a reconnected socket is a brand-new, UNAUTHENTICATED session, but
+   * NRelay1 (through @nostrify/nostrify 0.54.0, see soapbox-pub/nostrify#31)
+   * carries the previous session's auth bookkeeping across reconnects —
+   * `authRetriedSubs`/`authRetriedEvents` still contain ids that already used
+   * their single auth-retry, so an auth-gating relay's first `CLOSED:
+   * auth-required` PERMANENTLY deletes the subscription, and `authPromise`
+   * may still be the settled promise of the dead session. On top of that, our
+   * own per-relay AUTH cooldown could swallow the new connection's one and
+   * only challenge during a reconnect storm, and the remembered stream-key
+   * challenge is a stale nonce.
+   *
+   * Clearing all of it on every socket open makes a reconnect behave exactly
+   * like a first connection: the fresh challenge signs immediately (no
+   * cooldown), gated subs get their auth-retry back, and the stream keys
+   * re-authenticate off the NEW challenge when it arrives.
+   */
+  const watchSocketReopen = (relay: NRelay1, url: string) => {
+    const internals = relay as unknown as {
+      authRetriedSubs?: Set<string>;
+      authRetriedEvents?: Set<string>;
+      authPromise?: Promise<void>;
+      socket: NRelay1["socket"];
+    };
+    const onOpen = () => {
+      internals.authRetriedSubs?.clear();
+      internals.authRetriedEvents?.clear();
+      internals.authPromise = undefined;
+      authCacheRef.current.delete(url);
+      authCooldownRef.current.delete(url);
+      authInFlightRef.current.delete(url);
+      const entry = openRelaysRef.current.get(url);
+      if (entry) entry.challenge = undefined; // the old socket's nonce is dead
+    };
+    const attach = (socket: NRelay1["socket"]) => {
+      try {
+        (socket as unknown as {
+          addEventListener(type: string, listener: () => void): void;
+        }).addEventListener("open", onOpen);
+      } catch {
+        // No listener support — reconnects fall back to nostrify's behavior.
+      }
+    };
+    // websocket-ts re-emits "open" on every automatic reconnect of the same
+    // Websocket instance, but NRelay1.wake() REPLACES `relay.socket` outright
+    // after an idle close — intercept the assignment so the replacement socket
+    // is watched too.
+    let currentSocket = relay.socket;
+    attach(currentSocket);
+    try {
+      Object.defineProperty(relay, "socket", {
+        configurable: true,
+        enumerable: true,
+        get: () => currentSocket,
+        set: (socket: NRelay1["socket"]) => {
+          currentSocket = socket;
+          attach(socket);
+        },
+      });
+    } catch {
+      // Non-configurable in some exotic runtime — reconnects of the ORIGINAL
+      // socket are still covered by the listener above.
+    }
+  };
+
 
   // The pool MUST be constructed before the signer memo: a bunker (NIP-46)
   // signer is built with `NUser.fromBunkerLogin(login, pool)`, so the pool has
@@ -239,6 +305,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         });
         const existing = openRelaysRef.current.get(url);
         openRelaysRef.current.set(url, { relay, challenge: existing?.challenge });
+        watchSocketReopen(relay, url);
         return relay;
       },
       reqRouter(filters: NostrFilter[]): Map<string, NostrFilter[]> {

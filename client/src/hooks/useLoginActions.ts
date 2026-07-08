@@ -1,4 +1,5 @@
 import { useNostr } from "@nostrify/react";
+import { Capacitor } from "@capacitor/core";
 import {
   NLogin,
   type NLoginType,
@@ -54,6 +55,17 @@ export function useLoginActions() {
     // Relay URLs used for NIP-46 nostrconnect communication. App relays come
     // first (remote signers are usually reachable through public relays),
     // then the internal platform/user servers as fallback rendezvous points.
+    //
+    // The list is FROZEN into the signer pairing for the lifetime of the
+    // session (#48), so relays the signer can never reach must not enter it:
+    //   - loopback relays are only reachable from THIS machine, never from a
+    //     remote signer (a stale ws://localhost:5577 pairing had Amber retry
+    //     it on every sign for weeks);
+    //   - on a native build (secure WebView origin) non-wss relays are also
+    //     unusable on OUR side (mixed content), so they'd be rendezvous
+    //     points only the signer could reach — dead weight at best.
+    // Non-loopback ws:// LAN relays stay on the web build: an air-gapped LAN
+    // deployment with a LAN signer is a supported setup.
     getRelayUrls(): string[] {
       const appRelays = config.appRelays
         .map(normalizeRelayUrl)
@@ -61,7 +73,22 @@ export function useLoginActions() {
       const added = config.addedRelays
         .map(normalizeRelayUrl)
         .filter((url): url is string => Boolean(url));
-      return [...new Set([...appRelays, ...PLATFORM_RELAYS, ...added])];
+      const all = [...new Set([...appRelays, ...PLATFORM_RELAYS, ...added])];
+      const usable = all.filter((url) => {
+        try {
+          const host = new URL(url).hostname;
+          const loopback =
+            host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".localhost");
+          if (loopback) return false;
+        } catch {
+          return false;
+        }
+        if (Capacitor.isNativePlatform()) return /^wss:\/\//i.test(url);
+        return true;
+      });
+      // Never hand back an empty list: a loopback-only dev config still needs
+      // SOME rendezvous attempt (and the QR shows the user what's wrong).
+      return usable.length > 0 ? usable : all;
     },
     // Log out the current user
     async logout(): Promise<void> {

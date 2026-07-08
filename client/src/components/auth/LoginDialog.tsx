@@ -23,6 +23,7 @@ import {
 } from '@/hooks/useLoginActions';
 import { getNsecCredential } from '@/lib/credentialManager';
 import { APP_NAME } from '@/lib/platform';
+import { shareOrigin } from '@/lib/shareOrigin';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface LoginDialogProps {
@@ -59,7 +60,11 @@ const connectStatusLabel = (status: NostrConnectStatus | null): string => {
  * QR / progress / error view inside the same dialog.
  */
 const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onSignupClick }) => {
-  const shareOrigin = window.location.origin;
+  // The nostrconnect callback the signer app redirects back to. On the web
+  // that's this deployment; on the APK the WebView's own origin is unreachable
+  // from the signer's browser, so use the public deployment — its verified App
+  // Link reopens the app (#44).
+  const callbackOrigin = shareOrigin();
   const [isLoading, setIsLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [loginInput, setLoginInput] = useState('');
@@ -111,13 +116,13 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
     const isMobileDevice = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     const uri = generateNostrConnectURI(params, {
       name: APP_NAME,
-      callback: isMobileDevice ? `${shareOrigin}/remoteloginsuccess` : undefined,
+      callback: isMobileDevice ? `${callbackOrigin}/remoteloginsuccess` : undefined,
     });
     setNostrConnectParams(params);
     setNostrConnectUri(uri);
     setConnectError(null);
     return uri;
-  }, [login, shareOrigin]);
+  }, [login, callbackOrigin]);
 
   // Start listening for connection (async) - runs once after params are set.
   //

@@ -24,6 +24,8 @@ import {
   type InviteList,
 } from "@/concord-v2/lib/invite";
 import { KIND_INVITE_LIST } from "@/concord-v2/lib/kinds";
+import { toast } from "@/hooks/useToast";
+import { shareOrigin } from "@/lib/shareOrigin";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { capRelays } from "@/concord-v2/lib/types";
 
@@ -207,6 +209,23 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       if (!user || !community) throw new Error("Not ready.");
       if (!user.signer.nip44) throw new Error("This signer can't mint invite links (NIP-44 unsupported).");
 
+      // Warn (don't refuse — localhost/LAN quickstarts are a supported flow)
+      // when the invite will embed relays that secure platforms can't reach:
+      // Android/desktop builds run on a secure origin where ws:// is blocked
+      // as mixed content, so an all-ws:// community is dead for them (#47).
+      const insecure = community.relays.filter((url) => !/^wss:\/\//i.test(url));
+      if (insecure.length > 0) {
+        const fatal = insecure.length === community.relays.length;
+        toast({
+          title: fatal ? "This invite won't work on mobile" : "Some relays won't work on mobile",
+          description:
+            `${insecure.join(", ")} ${insecure.length === 1 ? "is" : "are"} not wss:// — ` +
+            `mobile and desktop apps can't connect to insecure relays` +
+            (fatal ? ", so members joining from them won't be able to participate at all." : "."),
+          variant: fatal ? "destructive" : undefined,
+        });
+      }
+
       const token = mintToken();
       const link = mintLinkSigner();
       const bundle = buildBundle({ expiresAtMs, label });
@@ -219,7 +238,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
         throw new Error("No relay accepted the invite bundle.");
       }
 
-      const url = buildInviteUrl(window.location.origin, link.pk, token, community.relays);
+      const url = buildInviteUrl(shareOrigin(), link.pk, token, community.relays);
 
       // The creator's private bookkeeping (the merge key is the token).
       await updateInviteList({

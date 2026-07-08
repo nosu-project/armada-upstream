@@ -533,16 +533,33 @@ public class NotificationRelayService extends Service {
         final String subDirect = "ad-" + Long.toHexString(System.nanoTime() + 1);
         final String subConcord = "ac-" + Long.toHexString(System.nanoTime() + 2);
         final String subDm = "am-" + Long.toHexString(System.nanoTime() + 3);
-        // Prefix for one-shot kind-0 profile lookups (sub id = prefix + pubkey).
+        // Prefix for one-shot kind-0 profile lookups. The sub id embeds only a
+        // TRUNCATED key (see shortKey) so it stays within NIP-01's customary
+        // 64-char subscription-id cap — strfry-family relays reject longer ids
+        // with "invalid subscription id length" (#50). The full pubkey/groupId
+        // is recovered through the lookup maps below, not the sub id.
         final String profilePrefix = "ap-" + Long.toHexString(System.nanoTime() + 4) + "-";
-        // Prefix for one-shot kind-39000 group-metadata lookups (sub id = prefix + groupId).
+        // Prefix for one-shot kind-39000 group-metadata lookups.
         final String groupPrefix = "ah-" + Long.toHexString(System.nanoTime() + 5) + "-";
         final String subConcord2 = "a2-" + Long.toHexString(System.nanoTime() + 6);
+        // One-shot lookup sub id → the full pubkey / group id it was issued
+        // for. Entries are removed when the lookup resolves; capped clears
+        // protect against relays that never answer.
+        final Map<String, String> profileLookups = new HashMap<>();
+        final Map<String, String> groupLookups = new HashMap<>();
         // ids of the kind-22242s we sent and haven't seen an OK for. NIP-42
         // allows several AUTHs per connection (the user + every Concord V2
         // stream key), so this is a set; a relay's OK for some other event
         // can't trigger a REQ re-send.
         final Set<String> pendingAuthIds = new HashSet<>();
+        // Backoff for relay-initiated CLOSED resubscribes (#49): a relay that
+        // drops a standing sub (restart, transient error, rate limit) earns a
+        // DELAYED re-REQ with a growing gap, never an instant retry loop.
+        // Reset when a fresh socket session opens.
+        long subRetryBackoffMs = INITIAL_BACKOFF_MS;
+        final Runnable resubscribeRunnable = () -> {
+            if (!closed && ws != null) sendReqs(ws);
+        };
 
         RelayConnection(String relayUrl) {
             this.relayUrl = relayUrl;
@@ -560,6 +577,11 @@ public class NotificationRelayService extends Service {
                 @Override
                 public void onOpen(WebSocket webSocket, Response response) {
                     if (BuildConfig.DEBUG) Log.d(TAG, "WS open: " + relayUrl);
+                    // A fresh socket session: CLOSED-resubscribe backoff starts over.
+                    handler.post(() -> {
+                        subRetryBackoffMs = INITIAL_BACKOFF_MS;
+                        handler.removeCallbacks(resubscribeRunnable);
+                    });
                     sendReqs(webSocket);
                 }
 
@@ -677,7 +699,7 @@ public class NotificationRelayService extends Service {
                 f.put("kinds", new JSONArray().put(0));
                 f.put("authors", new JSONArray().put(pubkey));
                 f.put("limit", 1);
-                ws.send(reqMessage(profilePrefix + pubkey, f));
+                ws.send(reqMessage(profileSubId(pubkey), f));
             } catch (JSONException e) {
                 if (BuildConfig.DEBUG) Log.w(TAG, "Failed to build profile REQ", e);
             }
@@ -695,10 +717,32 @@ public class NotificationRelayService extends Service {
                 f.put("kinds", new JSONArray().put(39000));
                 f.put("#d", new JSONArray().put(groupId));
                 f.put("limit", 1);
-                ws.send(reqMessage(groupPrefix + groupId, f));
+                ws.send(reqMessage(groupSubId(groupId), f));
             } catch (JSONException e) {
                 if (BuildConfig.DEBUG) Log.w(TAG, "Failed to build group-name REQ", e);
             }
+        }
+
+        /**
+         * The sub id for a one-shot profile lookup, registered in
+         * {@link #profileLookups} so the full pubkey can be recovered. Embeds
+         * only a truncated key: relays commonly cap subscription ids at 64
+         * chars and reject longer ones outright, so `prefix + full 64-hex
+         * pubkey` (~84 chars) meant those relays' notifications never fired (#50).
+         */
+        String profileSubId(String pubkey) {
+            String subId = profilePrefix + shortKey(pubkey);
+            if (profileLookups.size() > 512) profileLookups.clear();
+            profileLookups.put(subId, pubkey);
+            return subId;
+        }
+
+        /** Group-metadata analogue of {@link #profileSubId}. */
+        String groupSubId(String groupId) {
+            String subId = groupPrefix + shortKey(groupId);
+            if (groupLookups.size() > 512) groupLookups.clear();
+            groupLookups.put(subId, groupId);
+            return subId;
         }
 
         void closeSub(String subId) {
@@ -726,9 +770,24 @@ public class NotificationRelayService extends Service {
             handler.postDelayed(reconnectRunnable, delay);
         }
 
+        /**
+         * Re-send this connection's standing REQs after a relay-initiated
+         * CLOSED (#49), with an exponential per-connection delay (1s → 5min)
+         * so a relay that keeps dropping the sub can never be hammered in a
+         * tight loop. Never used for `auth-required` CLOSEDs — those re-send
+         * through the AUTH → OK path instead.
+         */
+        void scheduleResubscribe() {
+            if (closed || ws == null) return;
+            handler.removeCallbacks(resubscribeRunnable);
+            handler.postDelayed(resubscribeRunnable, subRetryBackoffMs);
+            subRetryBackoffMs = Math.min(subRetryBackoffMs * 2, MAX_BACKOFF_MS);
+        }
+
         void close() {
             closed = true;
             handler.removeCallbacks(reconnectRunnable);
+            handler.removeCallbacks(resubscribeRunnable);
             if (ws != null) {
                 try { ws.close(1000, "service reconfigured"); } catch (Exception ignored) {}
                 ws = null;
@@ -748,6 +807,17 @@ public class NotificationRelayService extends Service {
         req.put(subId);
         req.put(filter);
         return req.toString();
+    }
+
+    /**
+     * Truncate a hex pubkey / group id for embedding in a subscription id.
+     * 24 hex chars keep concurrent lookups distinct for all practical
+     * purposes while the whole sub id stays well under the 64-char cap many
+     * relays enforce (#50); the full value is recovered via the per-connection
+     * lookup maps, never parsed back out of the sub id.
+     */
+    private static String shortKey(String value) {
+        return value.length() <= 24 ? value : value.substring(0, 24);
     }
 
     private void onRelayMessage(String text, String relayUrl) {
@@ -787,7 +857,38 @@ public class NotificationRelayService extends Service {
                 return;
             }
             if ("CLOSED".equals(type)) {
-                Log.w(TAG, "CLOSED from " + relayUrl + " sub=" + msg.optString(1) + " reason=" + msg.optString(2));
+                String sub = msg.optString(1);
+                String reason = msg.optString(2);
+                Log.w(TAG, "CLOSED from " + relayUrl + " sub=" + sub + " reason=" + reason);
+                // A one-shot profile/group lookup the relay rejected (bad sub
+                // id, auth wall, filter policy): resolve its waiters like an
+                // empty EOSE so the notification fires name-less instead of
+                // hanging on the timeout.
+                String pk = profilePubkeyForSub(sub);
+                if (pk != null) {
+                    closeProfileSub(relayUrl, sub);
+                    resolveProfile(pk, bestProfile.get(pk));
+                    return;
+                }
+                String gid = groupIdForSub(sub);
+                if (gid != null) {
+                    closeProfileSub(relayUrl, sub);
+                    resolveGroupName(gid, (String) null);
+                    return;
+                }
+                // A standing subscription the relay dropped. `auth-required`
+                // is NOT retried from here — the AUTH → OK path re-sends every
+                // REQ once authentication lands, and without an auth path a
+                // blind re-REQ is an unwinnable retry storm (#49). Everything
+                // else (relay restart, transient error, rate limit) earns a
+                // DELAYED resubscribe with per-connection exponential backoff.
+                if (reason.startsWith("auth-required:")) return;
+                for (RelayConnection rc : connections) {
+                    if (rc.relayUrl.equals(relayUrl)) {
+                        rc.scheduleResubscribe();
+                        break;
+                    }
+                }
                 return;
             }
             if ("OK".equals(type)) {
@@ -840,15 +941,14 @@ public class NotificationRelayService extends Service {
 
     /**
      * If {@code sub} is one of our one-shot profile lookups, return the pubkey
-     * it was issued for; otherwise null. Matches against each connection's
-     * per-connection profile prefix.
+     * it was issued for; otherwise null. Recovered from each connection's
+     * lookup map (the sub id itself only carries a truncated key, #50).
      */
     private String profilePubkeyForSub(String sub) {
         if (sub == null || sub.isEmpty()) return null;
         for (RelayConnection rc : connections) {
-            if (sub.startsWith(rc.profilePrefix)) {
-                return sub.substring(rc.profilePrefix.length());
-            }
+            String pk = rc.profileLookups.get(sub);
+            if (pk != null) return pk;
         }
         return null;
     }
@@ -856,6 +956,8 @@ public class NotificationRelayService extends Service {
     private void closeProfileSub(String relayUrl, String sub) {
         for (RelayConnection rc : connections) {
             if (rc.relayUrl.equals(relayUrl)) {
+                rc.profileLookups.remove(sub);
+                rc.groupLookups.remove(sub);
                 rc.closeSub(sub);
                 return;
             }
@@ -917,7 +1019,9 @@ public class NotificationRelayService extends Service {
         // Close any profile subs still open for this pubkey on the other relays
         // we broadcast to, so they don't linger.
         for (RelayConnection rc : connections) {
-            rc.closeSub(rc.profilePrefix + pubkey);
+            String subId = rc.profilePrefix + shortKey(pubkey);
+            rc.profileLookups.remove(subId);
+            rc.closeSub(subId);
         }
         List<ProfileCallback> waiters = pendingProfiles.remove(pubkey);
         if (waiters == null) return;
@@ -957,14 +1061,14 @@ public class NotificationRelayService extends Service {
 
     /**
      * If {@code sub} is one of our one-shot group-name lookups, return the group
-     * id it was issued for; otherwise null.
+     * id it was issued for; otherwise null. Recovered from each connection's
+     * lookup map (the sub id itself only carries a truncated id, #50).
      */
     private String groupIdForSub(String sub) {
         if (sub == null || sub.isEmpty()) return null;
         for (RelayConnection rc : connections) {
-            if (sub.startsWith(rc.groupPrefix)) {
-                return sub.substring(rc.groupPrefix.length());
-            }
+            String gid = rc.groupLookups.get(sub);
+            if (gid != null) return gid;
         }
         return null;
     }

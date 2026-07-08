@@ -9,6 +9,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { fetchCreatorDmRelays } from "@/lib/creatorRelays";
 import { APP_RELAYS } from "@/lib/platform";
+import { unusableRelaysReason } from "@/lib/relayUsability";
 import { toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord-v2/lib/communityList";
 import { mintCommunity } from "@/concord-v2/lib/community";
 import {
@@ -152,6 +153,11 @@ export function useCommunityActions2() {
   const preview = useMutation<InvitePreview2, Error, { invite: ParsedInviteLink }>({
     mutationFn: async ({ invite }) => {
       const bundle = await resolveBundle(nostr, invite, APP_RELAYS);
+      // Fail loudly when this platform can't reach ANY of the community's
+      // relays (#47) — e.g. a ws://-only dev community opened on the APK,
+      // where mixed content silently blocks every connection.
+      const unusable = unusableRelaysReason(bundle.relays);
+      if (unusable) throw new Error(unusable);
       return {
         communityId: bundle.community_id,
         name: bundle.name,
@@ -166,6 +172,8 @@ export function useCommunityActions2() {
     mutationFn: async ({ invite }) => {
       if (!user) throw new Error("Sign in to join an encrypted community.");
       const bundle = await resolveBundle(nostr, invite, APP_RELAYS);
+      const unusable = unusableRelaysReason(bundle.relays);
+      if (unusable) throw new Error(unusable);
       const entry = bundleToEntry(bundle);
       await updateList({ type: "add", entry });
       queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });

@@ -22,6 +22,7 @@ import { publicInviteKey, publicInviteLocator, publicInviteSigner } from "@/conc
 import { buildInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
 import { KIND_APPLICATION_SPECIFIC } from "@/concord-v1/lib/kinds";
 import { random32, type Community } from "@/concord-v1/lib/types";
+import { shareOrigin } from "@/lib/shareOrigin";
 
 /** Path the invite link lands on (consumed client-side; the fragment never hits the relay). */
 export const INVITE_URL_PATH = "/invite";
@@ -29,12 +30,13 @@ export const INVITE_URL_PATH = "/invite";
 /**
  * The shareable invite link's base (`<origin>/invite`). Derives from the actual
  * deployment origin so the link resolves to *this* app (a fixed placeholder host
- * like `armada.invite` does not exist and 404s). Falls back to a bare path when
+ * like `armada.invite` does not exist and 404s) — except on native builds, where
+ * the runtime origin is the WebView's own localhost and the public deployment
+ * is used instead (#44, see shareOrigin). Falls back to a bare path when
  * there's no `window` (SSR/tests).
  */
 export function inviteUrlBase(): string {
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  return `${origin}${INVITE_URL_PATH}`;
+  return `${shareOrigin()}${INVITE_URL_PATH}`;
 }
 const MAX_URL_RELAYS = 32;
 const TAG_VERSION = "v";
