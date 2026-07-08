@@ -903,27 +903,54 @@ function ConversationList({
   return (
     <aside
       className={cn(
-        "relative flex flex-col min-w-0 shrink-0 bg-chrome safe-area-top",
+        // No `safe-area-top` here: the status-bar inset lives in the header's
+        // top padding (mirroring a community's ChannelSidebarView), so the
+        // title/divider line up with a community sidebar. Adding it here too
+        // would double the inset on mobile.
+        "relative flex flex-col min-w-0 shrink-0 bg-chrome",
         className,
       )}
     >
-      <header className="relative pl-5 pr-3 pt-5 pb-3 flex flex-col justify-center shrink-0">
-        <h1 className="font-semibold truncate leading-tight tracking-wide text-sm pr-8">Direct Messages</h1>
-        <div className="absolute right-3 bottom-3 flex items-center gap-0.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="New message"
-            className="size-8 touch:size-10"
-            onClick={onCompose}
-          >
-            <Plus className="size-5" />
-          </Button>
+      <header className="relative pl-5 pr-3 pb-3 pt-[calc(1.25rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] flex flex-col justify-center shrink-0">
+        {/* Reserve a constant primary-line height (min-h-5) so this header sits
+            at the exact same vertical position — and the divider below lines up
+            — with a community's channel sidebar, whose title row reserves the
+            same floor for an optional avatar/icon (see ChannelSidebarView). */}
+        <div className="flex items-center min-h-5">
+          <h1 className="min-w-0 font-semibold truncate leading-tight tracking-wide text-sm">Direct Messages</h1>
         </div>
       </header>
 
+      {/* Divider between the header and the conversation list. */}
+      <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
+
+      {/* "Messages" section label + new-message action, formatted exactly like
+          the "Channels" sub-header on a community sidebar (ChannelSidebarView):
+          the uppercase label with the "+" that creates a new chat. */}
+      <div className="px-1 pt-[11px] shrink-0">
+        <div className="flex items-center justify-between pl-4 pr-2 py-1">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Messages
+          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-5"
+                aria-label="New message"
+                onClick={onCompose}
+              >
+                <Plus className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>New message</TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+
       {/* Search conversations by contact name or last message. */}
-      <div className="px-3 pb-2 shrink-0">
+      <div className="px-3 pb-2 pt-1 shrink-0">
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
           <Input
@@ -934,9 +961,6 @@ function ConversationList({
           />
         </div>
       </div>
-
-      {/* Divider between the header and the conversation list. */}
-      <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
 
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5" onScroll={handleListScroll}>
         {!dmSupported ? (
