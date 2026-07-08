@@ -1,4 +1,4 @@
-import { Braces, Copy, Link2, Loader2, MessagesSquare, X } from "lucide-react";
+import { Braces, Copy, Link2, Loader2, MessagesSquare, Trash2, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useState } from "react";
 
@@ -13,6 +13,7 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -23,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -35,18 +37,25 @@ function ThreadMessage({
   event,
   reactions,
   canReact,
+  canModerate = false,
   isRumor = false,
+  onDelete,
 }: {
   event: ChatMsg;
   reactions?: MessageReactions;
   canReact: boolean;
+  /** Whether the current user may delete others' messages (moderation). */
+  canModerate?: boolean;
   /**
    * Whether this message is an unsigned rumor (Concord sealed chat event). Drives
    * the right-click context menu: rumors offer "View event JSON" (a dialog with
    * the rumor, pretty-printed), signed events offer the relay off-ramps.
    */
   isRumor?: boolean;
+  /** Delete this message (own always; others' require moderation). Hidden when absent. */
+  onDelete?: (event: ChatMsg) => void;
 }) {
+  const { user } = useCurrentUser();
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(event.pubkey, metadata);
@@ -58,6 +67,11 @@ function ThreadMessage({
   const rumorJson = isRumor
     ? JSON.stringify((({ sig: _sig, ...rest }) => rest)(event), null, 2)
     : null;
+
+  // The author can delete their own message; moderators can delete anyone's
+  // (mirrors ChatMessage's gating). The transport decides how.
+  const isOwn = user?.pubkey === event.pubkey;
+  const canDelete = Boolean(onDelete) && (isOwn || canModerate);
 
   return (
     <>
@@ -131,6 +145,17 @@ function ThreadMessage({
             <Braces className="mr-2 size-4" /> View event JSON
           </ContextMenuItem>
         )}
+        {canDelete && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              className="text-destructive focus:text-destructive"
+              onSelect={() => onDelete?.(event)}
+            >
+              <Trash2 className="mr-2 size-4" /> Delete message
+            </ContextMenuItem>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
     {rumorJson !== null && (
@@ -199,6 +224,8 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   const reactionsFor = transport.reactionsFor;
   const isRumor = transport.isRumor ?? false;
+  const canModerate = transport.canModerate;
+  const onDelete = transport.deleteMessage;
 
   return (
     <aside className="flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome">
@@ -215,7 +242,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable space-y-1">
-        <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} canReact={canWrite} isRumor={isRumor} />
+        <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} />
         <div className="flex items-center gap-2 px-3 py-1">
           <div className="h-px flex-1 bg-border/60" />
           {!isLoading && (
@@ -233,7 +260,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           </div>
         ) : (
           replies.map((reply) => (
-            <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} canReact={canWrite} isRumor={isRumor} />
+            <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} />
           ))
         )}
       </div>
