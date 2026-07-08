@@ -16,7 +16,7 @@ import { writeClipboardText } from "@/lib/clipboard";
 import { tryNpubEncode } from "@/lib/safeNip19";
 
 /**
- * The mute-toggle + 0–200% volume slider row used inside voice user menus
+ * The mute-toggle + 0–100% volume slider row used inside voice user menus
  * (the call-stage nameplate dropdown and the right-click context menu).
  */
 export function VolumeSliderRow({
@@ -42,7 +42,7 @@ export function VolumeSliderRow({
       <Slider
         value={[volume]}
         min={0}
-        max={2}
+        max={1}
         step={0.05}
         aria-label={`Volume for ${displayName}`}
         onValueChange={([v]) => apply(v)}
