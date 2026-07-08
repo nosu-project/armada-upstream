@@ -50,6 +50,7 @@ import { useConcordDissolved } from "@/concord-v1/hooks/useConcordRoster";
 import { useConcordTransport } from "@/concord-v1/hooks/useConcordTransport";
 import { useSendConcordMessage } from "@/concord-v1/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
@@ -78,7 +79,7 @@ function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
   const url = useDecryptedCommunityImage(banner);
   if (!url) return null;
   return (
-    <div className="h-20 w-full shrink-0 overflow-hidden">
+    <div className="size-full overflow-hidden">
       <img src={url} alt="" className="size-full object-cover" />
     </div>
   );
@@ -286,6 +287,11 @@ export function ConcordPage() {
       }),
     };
   }, [baseCommunity, folded, seededIcon, seededBanner]);
+  // Only show channel skeletons if the community bundle is still missing AND has
+  // been for long enough to warrant a placeholder — on a cache hit it resolves
+  // within a frame or two, so an ungated skeleton flashes for a nanosecond
+  // (reads as a glitch). Delay it so fast loads show nothing.
+  const showChannelSkeleton = useDelayedFlag(!community);
   const [channelIdHex, setChannelIdHex] = useState<string | null>(routeChannelId ?? null);
 
   // A deep-link to a specific channel (e.g. tapping a notification, which routes
@@ -389,8 +395,25 @@ export function ConcordPage() {
   const [membersVisible, setMembersVisible] = useState(true);
   /** Mobile: whether the member sheet is open. */
   const [membersOpen, setMembersOpen] = useState(false);
-  /** Mobile: whether the channel-list drawer is open. */
-  const [channelsOpen, setChannelsOpen] = useState(false);
+  // Mobile: landing on the community root (no channel in the URL) shows the
+  // channel list, not a chat pane — selecting a community should let you pick a
+  // channel, not auto-dive into one. A deep link with a channel opens chat
+  // directly. (On desktop the SwipeReveal is inert — both panes always show.)
+  const [channelsOpen, setChannelsOpen] = useState(!routeChannelId);
+  // This page instance is reused across community switches (the route pattern
+  // is stable), so the initial state above only applies to the first mount.
+  // Reset the reveal state to match the destination route *during render* (not
+  // in a post-paint effect): switching community navigates to its root
+  // (no channel), so `channelsOpen` must already be `true` on the first render
+  // after the route change. A lagging effect would paint one frame of the
+  // (stale) chat pane first — the "flash of the previous chat" glitch. A deep
+  // link with a channel opens chat directly.
+  const [navKey, setNavKey] = useState(`${communityId}\u0000${routeChannelId ?? ""}`);
+  const curNavKey = `${communityId}\u0000${routeChannelId ?? ""}`;
+  if (navKey !== curNavKey) {
+    setNavKey(curNavKey);
+    setChannelsOpen(!routeChannelId);
+  }
   // Slack-style threads: the root message whose thread panel is open (and
   // whether to focus its reply composer on open).
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
@@ -590,11 +613,13 @@ export function ConcordPage() {
       }
     >
       {!community ? (
-        <div className="space-y-2 px-2 py-1">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-7 w-full" />
-          ))}
-        </div>
+        showChannelSkeleton ? (
+          <div className="space-y-2 px-2 py-1">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-7 w-full" />
+            ))}
+          </div>
+        ) : null
       ) : (
         community.channels.map((c) => {
           const idHex = bytesToHex(c.id);
@@ -624,7 +649,13 @@ export function ConcordPage() {
         onClose={() => setChannelsOpen(false)}
         underlay={
           <>
-            <ServerRail onNavigate={() => setChannelsOpen(false)} />
+            {/* The rail only ever navigates to *other* servers/communities, so
+                it must NOT close this community's channel list on click: doing
+                so slides this community's chat pane back in for a frame before
+                the route changes — the "flash of the previous chat" glitch. The
+                destination governs its own reveal state. (DMsPage omits the prop
+                for the same reason.) */}
+            <ServerRail />
             {channelList(() => setChannelsOpen(false), "flex-1 sidebar:flex-none")}
           </>
         }

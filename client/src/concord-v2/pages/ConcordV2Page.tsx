@@ -40,6 +40,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
@@ -98,7 +99,7 @@ function Banner2({ banner }: { banner: ImagePointer | undefined }) {
     <>
       <button
         type="button"
-        className="h-20 w-full shrink-0 overflow-hidden cursor-zoom-in"
+        className="size-full overflow-hidden cursor-zoom-in"
         aria-label="View banner"
         onClick={() => setOpen(true)}
       >
@@ -338,6 +339,11 @@ export function ConcordV2Page() {
     return { ...baseCommunity, name: folded.metadata.name || baseCommunity.name };
   }, [baseCommunity, folded]);
   const channels = useChannels2(baseCommunity);
+  // Only show channel skeletons if there's nothing to render yet AND that has
+  // lasted long enough to be worth a placeholder. On a cache hit the bundle
+  // resolves within a frame or two, so the skeleton would otherwise flash for a
+  // nanosecond — which reads as a glitch. Delay it so fast loads show nothing.
+  const showChannelSkeleton = useDelayedFlag(!community || channels.length === 0);
 
   // Per-channel unread badges, computed purely from the local rumor cache.
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels);
@@ -353,7 +359,6 @@ export function ConcordV2Page() {
   useEffect(() => {
     if (routeChannelId) setChannelIdHex(routeChannelId);
   }, [routeChannelId]);
-
   // Let `#channel-name` hashtags in chat jump to that local channel.
   const navChannels = useMemo(
     () => channels.map((c) => ({ name: c.name, go: () => setChannelIdHex(c.idHex) })),
@@ -476,7 +481,25 @@ export function ConcordV2Page() {
   const [rolesOpen, setRolesOpen] = useState(false);
   const [membersVisible, setMembersVisible] = useState(true);
   const [membersOpen, setMembersOpen] = useState(false);
-  const [channelsOpen, setChannelsOpen] = useState(false);
+  // Mobile: landing on the community root (no channel in the URL) shows the
+  // channel list, not a chat pane — selecting a community should let you pick a
+  // channel, not auto-dive into one. A deep link with a channel opens chat
+  // directly. (On desktop the SwipeReveal is inert — both panes always show.)
+  const [channelsOpen, setChannelsOpen] = useState(!routeChannelId);
+  // This page instance is reused across community switches (the route pattern
+  // is stable), so the initial state above only applies to the first mount.
+  // Reset the reveal state to match the destination route *during render* (not
+  // in a post-paint effect): switching community navigates to its root
+  // (no channel), so `channelsOpen` must already be `true` on the first render
+  // after the route change. A lagging effect would paint one frame of the
+  // (stale) chat pane first — the "flash of the previous chat" glitch. A deep
+  // link with a channel opens chat directly.
+  const [navKey, setNavKey] = useState(`${communityId}\u0000${routeChannelId ?? ""}`);
+  const curNavKey = `${communityId}\u0000${routeChannelId ?? ""}`;
+  if (navKey !== curNavKey) {
+    setNavKey(curNavKey);
+    setChannelsOpen(!routeChannelId);
+  }
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
@@ -715,11 +738,13 @@ export function ConcordV2Page() {
       }
     >
       {!community || channels.length === 0 ? (
-        <div className="space-y-2 px-2 py-1">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-7 w-full" />
-          ))}
-        </div>
+        showChannelSkeleton ? (
+          <div className="space-y-2 px-2 py-1">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-7 w-full" />
+            ))}
+          </div>
+        ) : null
       ) : (
         channels.map((c) => {
           const inCall = Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex);
@@ -752,7 +777,13 @@ export function ConcordV2Page() {
         onClose={() => setChannelsOpen(false)}
         underlay={
           <>
-            <ServerRail onNavigate={() => setChannelsOpen(false)} />
+            {/* The rail only ever navigates to *other* servers/communities, so
+                it must NOT close this community's channel list on click: doing
+                so slides this community's chat pane back in for a frame before
+                the route changes — the "flash of the previous chat" glitch. The
+                destination governs its own reveal state. (DMsPage omits the prop
+                for the same reason.) */}
+            <ServerRail />
             {channelList(() => setChannelsOpen(false), "flex-1 sidebar:flex-none")}
           </>
         }

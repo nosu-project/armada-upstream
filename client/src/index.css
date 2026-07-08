@@ -30,6 +30,14 @@
     --radius-chrome: 0.1875rem; /* 3px */
     --top-bar-height: 3rem;
     --bottom-nav-height: 3.25rem;
+    /* Capped bottom safe-area inset for persistent bottom chrome (composer,
+     * sidebar footers, the server rail). The raw iOS home-indicator inset
+     * (34px) plus the base gaps reads as a void under the chrome; capping the
+     * inset contribution at 20px keeps the chrome clear of the indicator pill
+     * without over-padding. On platforms with no bottom inset (Android APK,
+     * desktop) this resolves to 0. Use the raw .safe-area-bottom where full
+     * clearance is wanted (e.g. scrollable content ends). */
+    --safe-area-inset-bottom-capped: min(var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)), 1.25rem);
   }
 }
 
@@ -81,6 +89,36 @@
   }
 
   html, body, #root {
+    height: 100%;
+  }
+
+  /*
+   * iOS home-screen PWA (html.standalone, set by an inline script in
+   * index.html). WebKit can leave the layout viewport scrolled after the
+   * on-screen keyboard dismisses: the whole app stays shifted up, exposing a
+   * dead band of document backdrop above the home indicator that no
+   * padding/height rule can remove. Pin the shell in a fixed, non-scrollable
+   * box so the document can never scroll.
+   *
+   * The pin lives on <html>, NOT <body>: Radix (dropdowns, popovers, tooltips)
+   * portals its `position: fixed` content into <body>. When <body> itself is
+   * `position: fixed`, iOS WebKit drops the rest of the body subtree (#root —
+   * the whole app) from paint the moment such a portal mounts, so opening the
+   * 3-dot menu blanks the page behind the popover. Fixing <html> instead
+   * leaves <body> in normal flow, so portaled popovers render over the app.
+   *
+   * Deliberately NOT `100dvh`: standalone dvh can over-report the visible
+   * frame and push bottom chrome off-screen (see the abandoned
+   * fix/ios-padding+other-stuff attempts).
+   */
+  html.standalone {
+    position: fixed;
+    inset: 0;
+    height: auto;
+    overflow: hidden;
+  }
+  html.standalone body,
+  html.standalone #root {
     height: 100%;
   }
 
@@ -227,9 +265,13 @@
     padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
   }
   /* Like safe-area-bottom, but always keeps a base gap so content never sits
-   * flush against the screen edge (the home-indicator inset is added on top). */
+   * flush against the screen edge. The raw iOS home-indicator inset (~34px) is
+   * far more than bottom chrome needs to clear the indicator, and stacking the
+   * full inset on top of the base gap leaves a big empty void under footers/
+   * composers. Cap the inset contribution so the total stays tight while still
+   * clearing the indicator. */
   .pb-safe {
-    padding-bottom: calc(0.75rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    padding-bottom: calc(0.75rem + var(--safe-area-inset-bottom-capped));
   }
 
   /* Top of the mobile content, just below the fixed top bar + its inset. */

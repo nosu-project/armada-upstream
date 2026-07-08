@@ -90,21 +90,59 @@ export function ChannelSidebarView({
         className,
       )}
     >
-      {banner}
+      {/* Desktop: the banner is its own block above the header (the sidebar is
+          a persistent column that doesn't touch the top screen edge). */}
+      {banner && <div className="hidden sidebar:block h-20 shrink-0 overflow-hidden">{banner}</div>}
       {/* Header — aligned with the channel rows' text gutter below (container
           px-1 + row pl-4 = pl-5 here) so the grid lines up. The header reaches
           the top screen edge on mobile, so it carries the status-bar safe-area
-          inset on top of its base top padding (0 on desktop). */}
+          inset on top of its base top padding (0 on desktop).
+
+          On MOBILE a community banner (when present) fills this header block as
+          its BACKGROUND — from the top screen edge down to the divider below —
+          so the divider, title and "Channels" sub-header keep the exact same
+          position whether or not a server/community has a banner. That keeps
+          the layout from jumping vertically as you navigate between them. The
+          title sits at the bottom over a scrim so it stays legible on top of
+          any image. On desktop the banner is a separate block above (see
+          above), so the header behaves normally. */}
       <div
         className={cn(
-          "pl-5 pr-3 pb-3 flex",
+          "relative pl-5 pr-3 pb-3 flex",
           "pt-[calc(1.25rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
+          // Alignment is IDENTICAL with or without a banner so the title (and
+          // therefore the divider + Channels section below) sits at the exact
+          // same vertical position — the mobile banner is a pure absolute
+          // background that doesn't participate in flow or alignment, so it can
+          // never nudge the header down.
           titleIcon ? "items-center gap-2" : "flex-col justify-center",
         )}
       >
-        {titleIcon}
-        <div className="min-w-0">
-          <h2 className="font-semibold truncate leading-tight tracking-wide text-sm">{title}</h2>
+        {/* Mobile-only banner background (desktop uses the block above). These
+            layers are absolutely positioned, so they don't affect the header's
+            height or the title's alignment. */}
+        {banner && (
+          <>
+            <div className="sidebar:hidden absolute inset-0 overflow-hidden">{banner}</div>
+            {/* Bottom-anchored scrim so the title reads on any banner. */}
+            <div
+              aria-hidden
+              className="sidebar:hidden absolute inset-x-0 bottom-0 h-2/3 pointer-events-none bg-gradient-to-t from-[hsl(var(--chrome))] via-[hsl(var(--chrome)/0.7)] to-transparent"
+            />
+          </>
+        )}
+        {titleIcon && <div className="relative shrink-0">{titleIcon}</div>}
+        <div className="relative min-w-0">
+          {/* Reserve a constant primary-line height (= the size-5 title
+              icon/avatar) so the header block — and therefore the divider and
+              Channels section below — sits at the exact same vertical position
+              whether or not the community/server has an icon. Without this
+              floor, an icon (taller than the text line) grows the header and
+              pushes everything down. The h2 stays block so `truncate` works;
+              the flex wrapper only vertically centers it in the reserved line. */}
+          <div className="flex items-center min-h-5">
+            <h2 className="min-w-0 font-semibold truncate leading-tight tracking-wide text-sm">{title}</h2>
+          </div>
           {subtitle && (
             <span className="block text-[11px] text-muted-foreground truncate leading-tight">{subtitle}</span>
           )}

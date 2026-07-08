@@ -1521,7 +1521,7 @@ export function ServerRail({
         // rail; widens to the full desktop rail at the `sidebar:` breakpoint.
         "flex flex-col items-center gap-4 sidebar:gap-5 w-[60px] sidebar:w-[72px] shrink-0 overflow-y-auto bg-chrome-deep select-none",
         "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
-        "pb-[calc(0.75rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]",
+        "pb-[calc(0.75rem+var(--safe-area-inset-bottom-capped,0px))]",
         // Lock scrolling while dragging so the rail doesn't fight the gesture.
         reordering && "overflow-hidden",
         className,
@@ -1541,6 +1541,16 @@ export function ServerRail({
               onClick={onNavigate}
               className="group relative flex items-center justify-center shrink-0"
             >
+              {/* Active marker: the same neon blade the community buttons use
+                  (see `inner`), so DMs/Mesh signal the active route identically.
+                  Driven by aria-current=page rather than an isActive prop. */}
+              <span
+                className={cn(
+                  "absolute -left-2 w-[3px] bg-primary transition-all",
+                  "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                  "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                )}
+              />
               <span
                 className={cn(
                   "relative block size-12 transition-all duration-150",
@@ -1577,6 +1587,16 @@ export function ServerRail({
               onClick={onNavigate}
               className="group relative flex items-center justify-center shrink-0"
             >
+              {/* Active marker: the same neon blade the community buttons use
+                  (see `inner`), so DMs/Mesh signal the active route identically.
+                  Driven by aria-current=page rather than an isActive prop. */}
+              <span
+                className={cn(
+                  "absolute -left-2 w-[3px] bg-primary transition-all",
+                  "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                  "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                )}
+              />
               <span
                 className={cn(
                   "relative block size-12 transition-all duration-150",

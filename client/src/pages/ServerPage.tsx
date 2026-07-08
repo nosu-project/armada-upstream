@@ -18,13 +18,14 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useMutes } from "@/hooks/useMutes";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { writeClipboardText } from "@/lib/clipboard";
-import { cn, pickDefaultChannel } from "@/lib/utils";
+import { pickDefaultChannel } from "@/lib/utils";
 
 /**
  * Server home (drill-down level 1). On mobile the server rail + channel list
@@ -40,6 +41,7 @@ export function ServerPage() {
   const relayUrl = server ? routeParamToRelay(server) : undefined;
   const [profileOpen, setProfileOpen] = useState(false);
   const { isCommunityMuted, toggleCommunityMute } = useMutes();
+  const isDesktop = useIsDesktop();
   const serverMuted = Boolean(relayUrl && isCommunityMuted(relayUrl));
 
   const { data: groups, isLoading, isError, relayInfo } = useRelayGroups(relayUrl);
@@ -48,20 +50,23 @@ export function ServerPage() {
     return <Navigate to="/" replace />;
   }
 
-  // Discord-style: landing on a server opens the room you last had open there
-  // (or a "general"/first channel), rather than dumping you on a channel list.
+  // Desktop (Discord-style): landing on a server opens the room you last had
+  // open there (or a "general"/first channel), because the channel list stays
+  // visible in the sidebar beside the chat — you never lose sight of it.
+  //
+  // Mobile is a single-pane drill-down: auto-diving into a channel would skip
+  // the channel list entirely and drop you straight into chat. So on mobile we
+  // stop here and show the channel list; tapping a channel opens the chat (and
+  // backing out returns here). Only auto-redirect on desktop.
   //
   // Redirect SYNCHRONOUSLY (render a <Navigate replace>) the instant a default
   // channel is known — including on the very first render when `groups` is
   // already seeded from the IndexedDB cache. Doing this in render instead of a
   // post-paint `useEffect` avoids painting ServerPage's channel list first and
-  // then swapping it for GroupPage: on mobile that showed as the channel list
-  // sliding in, immediately followed by the chat sliding in on top of it (two
-  // transitions + a double ChannelSidebar mount). Now there's a single
-  // transition — GroupPage's chat slide-in. `replace` keeps the bare server URL
-  // out of history.
+  // then swapping it for GroupPage. `replace` keeps the bare server URL out of
+  // history.
   const defaultChannel =
-    groups && groups.length > 0
+    isDesktop && groups && groups.length > 0
       ? pickDefaultChannel(
           groups,
           config.lastChannelByServer[relayUrl],
@@ -118,24 +123,15 @@ export function ServerPage() {
     <ServerScopeProvider relayUrl={relayUrl}>
       <ServerRail />
       {/*
-        Channel list. Desktop: always a fixed-width sidebar next to the welcome
-        pane. Mobile: it fills the screen — but ONLY once we know this server has
-        no default channel to redirect into (loading finished with zero groups).
-        While groups are still loading we're about to redirect into a channel, so
-        painting the full-screen channel list here would flash it in and then
-        immediately swap it for the chat (the jumpy double-slide). Hide it on
-        mobile during load and show a plain background matching GroupPage so the
-        redirect is seamless.
+        Channel list. Desktop: a fixed-width sidebar next to the welcome pane.
+        Mobile: it fills the screen and is where landing on a server stops (we
+        no longer auto-dive into a channel on mobile), so show it right away —
+        including its own loading skeleton — rather than a blank background.
       */}
       <ChannelSidebar
         relayUrl={relayUrl}
-        className={cn(
-          "flex-1 sidebar:flex-none",
-          isLoading && "hidden sidebar:flex",
-        )}
+        className="flex-1 sidebar:flex-none"
       />
-      {/* Mobile loading placeholder: neutral background, no channel-list flash. */}
-      {isLoading && <div className="flex-1 sidebar:hidden bg-background" />}
 
       {/* Welcome / server info pane — desktop only. */}
       <main className="hidden sidebar:block flex-1 min-w-0 overflow-y-auto">

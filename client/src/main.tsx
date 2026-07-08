@@ -13,6 +13,17 @@ if (Capacitor.isNativePlatform()) {
   document.documentElement.classList.add("native");
 }
 
+// iOS home-screen PWAs can leave the layout viewport scrolled after the
+// on-screen keyboard dismisses (WebKit bug): the whole app stays shifted up,
+// leaving a dead band above the home indicator. The shell is scroll-locked in
+// CSS (html.standalone, set in index.html); snap back on focus loss as well in
+// case WebKit still nudges the visual viewport.
+if (document.documentElement.classList.contains("standalone")) {
+  window.addEventListener("focusout", () => {
+    window.scrollTo(0, 0);
+  });
+}
+
 createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
     <App />

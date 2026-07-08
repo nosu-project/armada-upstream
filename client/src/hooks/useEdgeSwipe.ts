@@ -1,14 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-/**
- * How far from the left edge (px) an OPEN drag may start. This is wide on
- * purpose: on Android the OS reserves the very edge for its own gesture nav, so
- * a swipe that starts a little *inside* the chat (past the OS strip) still needs
- * to reveal the list. A clearly-horizontal rightward move is required to claim
- * it (see {@link CLAIM_THRESHOLD} / the dx-vs-dy test), so the wide zone doesn't
- * fight vertical scrolling.
- */
-const EDGE_ZONE = 64;
 /** Min horizontal travel (px) before we claim the gesture from the scroller. */
 const CLAIM_THRESHOLD = 10;
 /** Fraction of the pane width past which a release commits. */
@@ -40,14 +31,37 @@ export interface UseEdgeSwipeOptions {
 }
 
 /**
+ * True if the pointer starts inside an ancestor (up to `boundary`) that can
+ * still scroll horizontally to the right. A rightward swipe there should scroll
+ * that element (code blocks, tile rows), not reveal the list.
+ */
+function startsInRightwardScroller(
+  target: EventTarget | null,
+  boundary: HTMLElement,
+): boolean {
+  let el = target instanceof HTMLElement ? target : null;
+  while (el && el !== boundary) {
+    if (el.scrollWidth > el.clientWidth) {
+      const style = getComputedStyle(el);
+      const canScrollX = /(auto|scroll)/.test(style.overflowX);
+      // Room to scroll further right → let the element consume the swipe.
+      if (canScrollX && el.scrollLeft > 0) return true;
+    }
+    el = el.parentElement;
+  }
+  return false;
+}
+
+/**
  * Discord-style horizontal "swipe back/forward" gesture. Tracks a horizontal
  * drag and reports a live `dragX` (progress toward the target) the caller maps
  * onto a `translateX`. On release it either commits (`onCommit`) or springs
  * back.
  *
- * - `direction: "open"` engages only when the touch starts within
- *   {@link EDGE_ZONE}px of the left edge and the finger moves right — so it
- *   never fights vertical scrolling or in-message horizontal gestures.
+ * - `direction: "open"` engages on a rightward drag starting anywhere on the
+ *   chat pane (reveal the list). The `dx`-vs-`dy` claim test keeps it from
+ *   fighting vertical scrolling, and a right-scrollable ancestor (code block,
+ *   tile row) is left to consume the swipe instead.
  * - `direction: "close"` engages on a leftward drag from anywhere, used to
  *   bring a fully-revealed chat back over the list.
  */
@@ -85,12 +99,14 @@ export function useEdgeSwipe({
       if (!enabled) return;
       if (e.pointerType === "mouse") return;
       const x = e.clientX;
-      // Opening must start near the left edge; closing can start anywhere.
-      if (direction === "open" && x > EDGE_ZONE) {
+      const el = e.currentTarget as HTMLElement;
+      // Opening can start anywhere on the pane; it's the drag length/direction
+      // that reveals the list, not where it began. Bail only if the drag starts
+      // inside something that can itself scroll right (code block, tile row).
+      if (direction === "open" && startsInRightwardScroller(e.target, el)) {
         rejected.current = true;
         return;
       }
-      const el = e.currentTarget as HTMLElement;
       widthRef.current = el.getBoundingClientRect().width || 1;
       startX.current = x;
       startY.current = e.clientY;

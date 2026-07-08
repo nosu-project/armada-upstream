@@ -546,7 +546,14 @@ export function CallStage({
   const grid = fitGrid(tiles.length, gridSize.width, gridSize.height, GRID_GAP);
 
   const header = (
-    <div className="flex items-center gap-2 px-3 py-2 shrink-0">
+    <div
+      className="flex items-center gap-2 px-3 py-2 shrink-0"
+      style={
+        theater
+          ? { paddingTop: "calc(0.5rem + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)))" }
+          : undefined
+      }
+    >
       <span className="text-sm font-medium truncate min-w-0 flex-1">{callLabel}</span>
       {focused && (
         <button

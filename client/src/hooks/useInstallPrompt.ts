@@ -21,7 +21,7 @@ interface BeforeInstallPromptEvent extends Event {
 export function useInstallPrompt() {
   const [prompt, setPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(
-    () => window.matchMedia("(display-mode: standalone)").matches,
+    () => window.matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches,
   );
 
   useEffect(() => {
