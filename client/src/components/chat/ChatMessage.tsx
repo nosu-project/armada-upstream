@@ -1,4 +1,4 @@
-import { AlertCircle, Copy, Link2, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
+import { AlertCircle, Braces, Copy, Link2, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
@@ -17,6 +17,13 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
@@ -216,6 +223,14 @@ export interface ChatMessageProps {
   onToggleActive?: (id: string) => void;
   /** Render compactly as a continuation of the previous same-author message. */
   continuation?: boolean;
+  /**
+   * When set, this message is an unsigned rumor (e.g. a Concord V2 sealed chat
+   * event) rather than a relay-addressable signed event. The context menu then
+   * offers "View event JSON" (a dialog with this object, pretty-printed) instead
+   * of the "Copy message ID" / "View on Ditto" off-ramps, which reference a
+   * relay-addressable event id that doesn't exist for a rumor.
+   */
+  rumor?: unknown;
 }
 
 /**
@@ -266,6 +281,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   active = false,
   onToggleActive,
   continuation = false,
+  rumor,
 }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
@@ -295,6 +311,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // deletes from a single misclick.
   const [deleteArmed, setDeleteArmed] = useState(false);
   const disarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Raw-event JSON viewer (rumor context menu).
+  const [jsonOpen, setJsonOpen] = useState(false);
+  const rumorJson = rumor === undefined ? null : JSON.stringify(rumor, null, 2);
 
   const disarmDelete = useCallback(() => {
     if (disarmTimer.current) clearTimeout(disarmTimer.current);
@@ -511,6 +531,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   );
 
   return (
+    <>
     <ContextMenu>
       <ContextMenuTrigger className="block">
         <MessageRow
@@ -568,7 +589,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         <ContextMenuItem onSelect={() => writeClipboardText(event.content).catch(() => undefined)}>
           <Copy className="mr-2 size-4" /> Copy text
         </ContextMenuItem>
-        {!identityOverride && (
+        {!identityOverride && !rumor && (
           <ContextMenuItem
             onSelect={() => {
               try {
@@ -583,7 +604,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
             <Link2 className="mr-2 size-4" /> Copy message ID
           </ContextMenuItem>
         )}
-        {!identityOverride && dittoEventUrl(event) && (
+        {!identityOverride && !rumor && dittoEventUrl(event) && (
           <ContextMenuItem
             onSelect={() => {
               const href = dittoEventUrl(event);
@@ -591,6 +612,11 @@ const ChatMessageInner = memo(function ChatMessageInner({
             }}
           >
             <DittoIcon className="mr-2 size-4" /> View on Ditto
+          </ContextMenuItem>
+        )}
+        {rumorJson !== null && (
+          <ContextMenuItem onSelect={() => setJsonOpen(true)}>
+            <Braces className="mr-2 size-4" /> View event JSON
           </ContextMenuItem>
         )}
         {canDelete && !isEditing && (
@@ -606,5 +632,30 @@ const ChatMessageInner = memo(function ChatMessageInner({
         )}
       </ContextMenuContent>
     </ContextMenu>
+    {rumorJson !== null && (
+      <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Event JSON</DialogTitle>
+            <DialogDescription>
+              The raw, unsigned rumor for this message.
+            </DialogDescription>
+          </DialogHeader>
+          <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
+            {rumorJson}
+          </pre>
+          <div className="flex justify-end">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => writeClipboardText(rumorJson).catch(() => undefined)}
+            >
+              <Copy className="mr-2 size-4" /> Copy JSON
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    )}
+    </>
   );
 });
