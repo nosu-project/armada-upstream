@@ -321,19 +321,20 @@ function ChannelRow2({
  * The community-wide "@ Mentions" pane: every cached kind-9 message that
  * p-tags the current user, across all channels, newest-first — read purely
  * from the local decrypted rumor cache. Each message is grouped under a header
- * that jumps to its source channel; the rows reuse the shared `ChatMessage`
- * shell (read-only — no react/reply/delete in this aggregate view).
+ * naming its source channel; clicking a mention jumps to that message in its
+ * channel. The rows reuse the shared `ChatMessage` shell (read-only — no
+ * react/reply/delete in this aggregate view).
  */
 function MentionsView({
   channels,
   mentions,
   isLoading,
-  onSelectChannel,
+  onJump,
 }: {
   channels: ChannelV2[];
   mentions: ChatMsg[];
   isLoading: boolean;
-  onSelectChannel: (idHex: string) => void;
+  onJump: (channelIdHex: string, messageId: string) => void;
 }) {
   const nameByChannel = useMemo(() => {
     const m = new Map<string, ChannelV2>();
@@ -356,12 +357,7 @@ function MentionsView({
         const ch = nameByChannel.get(channelIdHex);
         return (
           <div key={msg.id} className="pb-1">
-            <button
-              type="button"
-              onClick={() => channelIdHex && onSelectChannel(channelIdHex)}
-              disabled={!ch}
-              className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:pointer-events-none"
-            >
+            <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
               {ch?.isVoice ? (
                 <Volume2 className="size-3 shrink-0" />
               ) : ch?.isPrivate ? (
@@ -370,8 +366,11 @@ function MentionsView({
                 <Hash className="size-3 shrink-0" />
               )}
               <span className="truncate">{ch?.name ?? "unknown channel"}</span>
-            </button>
-            <MentionMessage event={msg} />
+            </div>
+            <MentionMessage
+              event={msg}
+              onJump={ch ? () => onJump(channelIdHex, msg.id) : undefined}
+            />
           </div>
         );
       })}
@@ -379,13 +378,44 @@ function MentionsView({
   );
 }
 
-/** A single read-only mention row (unsigned rumor → "View event JSON" menu). */
-const MentionMessage = memo(function MentionMessage({ event }: { event: ChatMsg }) {
+/**
+ * A single read-only mention row (unsigned rumor → "View event JSON" menu).
+ * The row is a button that jumps to the message in its channel; the inner
+ * `ChatMessage`'s own controls (context menu, links) stop propagation so they
+ * still work, and text remains selectable.
+ */
+const MentionMessage = memo(function MentionMessage({
+  event,
+  onJump,
+}: {
+  event: ChatMsg;
+  onJump?: () => void;
+}) {
   const rumor = useMemo(() => {
     const { sig: _sig, ...rest } = event;
     return rest;
   }, [event]);
-  return <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} />;
+  return (
+    <div
+      role={onJump ? "button" : undefined}
+      tabIndex={onJump ? 0 : undefined}
+      onClick={onJump ? () => onJump() : undefined}
+      onKeyDown={
+        onJump
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onJump();
+              }
+            }
+          : undefined
+      }
+      className={cn("clip-corner-lg", onJump && "cursor-pointer hover:bg-foreground/5 transition-colors")}
+      aria-label={onJump ? "Jump to this message" : undefined}
+    >
+      <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} />
+    </div>
+  );
 });
 
 /**
@@ -453,6 +483,19 @@ export function ConcordV2Page() {
     setChannelIdHex(idHex);
     setView("channel");
   }, []);
+  // A pending "jump to message" target set by clicking a mention: switch to its
+  // channel, then scroll+highlight it once that channel's timeline has loaded
+  // it (an effect below fires when the message appears in `allMessages`).
+  const [jumpTarget, setJumpTarget] = useState<{ channelIdHex: string; messageId: string } | null>(null);
+  const timelineRef = useRef<MessageTimelineHandle | null>(null);
+  const jumpToMention = useCallback(
+    (channelIdHex: string, messageId: string) => {
+      setJumpTarget({ channelIdHex, messageId });
+      selectChannel(channelIdHex);
+      setChannelsOpen(false);
+    },
+    [selectChannel],
+  );
   // Let `#channel-name` hashtags in chat jump to that local channel.
   const navChannels = useMemo(
     () => channels.map((c) => ({ name: c.name, go: () => selectChannel(c.idHex) })),
@@ -503,6 +546,21 @@ export function ConcordV2Page() {
 
   const { transport: baseTransport, reactionsFor, allMessages } = useTransport2(community, channel, canWrite, canModerateMessages);
   const { mutateAsync: send } = useSendMessage2(community, channel);
+
+  // Fulfil a pending mention jump: once the target channel is active AND its
+  // timeline has loaded the target message, scroll+highlight it, then clear
+  // the target. `scrollToMessage` is a no-op if the row isn't mounted yet, so
+  // we retry as `allMessages` grows (backfill) until it lands or the channel
+  // changes out from under us.
+  useEffect(() => {
+    if (!jumpTarget || view !== "channel") return;
+    if (channel?.idHex !== jumpTarget.channelIdHex) return;
+    if (!allMessages.some((m) => m.id === jumpTarget.messageId)) return;
+    const id = jumpTarget.messageId;
+    const t = setTimeout(() => timelineRef.current?.scrollToMessage(id), 60);
+    setJumpTarget(null);
+    return () => clearTimeout(t);
+  }, [jumpTarget, view, channel?.idHex, allMessages]);
 
   // Mark the open channel read up to its newest message while it's on screen —
   // immediately and again on tab refocus (mirrors GroupChat's NIP-29 behavior).
@@ -657,8 +715,6 @@ export function ConcordV2Page() {
     () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),
     [canWrite, openThread],
   );
-
-  const timelineRef = useRef<MessageTimelineHandle | null>(null);
 
   const moderation = useModeration2(community, memberPubkeys);
 
@@ -1103,7 +1159,7 @@ export function ConcordV2Page() {
                     channels={channels}
                     mentions={mentions}
                     isLoading={mentionsLoading}
-                    onSelectChannel={selectChannel}
+                    onJump={jumpToMention}
                   />
                 </div>
               ) : (
