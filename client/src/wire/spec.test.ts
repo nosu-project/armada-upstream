@@ -100,7 +100,7 @@ describe("buildWireSpec", () => {
 
     expect(spec.subs).toHaveLength(1);
     expect(spec.subs[0].filters).toEqual([
-      { kinds: [3300, 3305], "#z": ["z1", "z2", "z3"] },
+      { kinds: [3300, 3302, 3305], "#z": ["z1", "z2", "z3"] },
     ]);
     expect(spec.v1ByZ.get("z1")).toBe("chan1");
     expect(spec.v1ByZ.get("z3")).toBe("chan2");

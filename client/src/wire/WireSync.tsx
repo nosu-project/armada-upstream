@@ -19,8 +19,11 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
+import { fetchRelayInfoDoc } from "@/hooks/useRelayInfo";
 import { readFolded } from "@/lib/foldedCache";
+import { buildRelayGroups, KIND_GROUP_METADATA } from "@/lib/nip29";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { PLATFORM_RELAYS, normalizeRelayUrl } from "@/lib/platform";
 import { emitWireScopes } from "@/wire/bus";
 import { ingestWireEvents } from "@/wire/ingest";
 import { buildWireSpec, type WireSpec } from "@/wire/spec";
@@ -114,6 +117,95 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
 }
 
 /**
+ * Every NIP-29 group the user can see, as `{ id, relay }` — discovered PER
+ * SERVER, not from the kind-10009 `groups` list.
+ *
+ * This is the crux of the wire's NIP-29 coverage. A user's 10009 list holds the
+ * SERVERS they added (`r` tags) but frequently NO explicit joined-`group`
+ * entries — channels are discovered per-relay from the relay-signed kind-39000
+ * directory (see useRelayGroups), exactly as the channel list does. If the wire
+ * subscribed only to `groupList.groups` it would open ZERO `#h` subscriptions
+ * for such servers and their timelines would never ingest (empty servers).
+ *
+ * So we enumerate the same servers the rail shows (PLATFORM_RELAYS +
+ * config.addedRelays) and, per relay, read the group ids from:
+ *   - the relay-PROVENANCE-scoped kind-39000 metadata already in the store
+ *     (instant, and the common case after a first visit), and
+ *   - a bounded live directory read (relay-key-authored) to pick up channels
+ *     not yet cached.
+ * The union feeds buildWireSpec's `groups`, so the wire holds one `#h` filter
+ * per host covering every channel on it.
+ */
+function useWireNip29Groups(): Array<{ id: string; relay: string }> {
+  const { nostr } = useNostr();
+  const { config } = useAppContext();
+  const eventStore = useEventStore();
+
+  const servers = useMemo(() => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const url of [...PLATFORM_RELAYS, ...config.addedRelays]) {
+      const relay = normalizeRelayUrl(url);
+      if (relay && !seen.has(relay)) {
+        seen.add(relay);
+        out.push(relay);
+      }
+    }
+    return out;
+  }, [config.addedRelays]);
+
+  const serversKey = servers.join(",");
+
+  const query = useQuery<Array<{ id: string; relay: string }>>({
+    queryKey: ["wire", "nip29-groups", serversKey],
+    enabled: servers.length > 0,
+    // Relay-signed, rarely-changing directory data. Re-read periodically to
+    // pick up newly-created channels; the channel-list UI invalidates on real
+    // changes, but the wire keeps its own quiet refresh.
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+    queryFn: async ({ signal }) => {
+      const store = await eventStore;
+      const perRelay = await Promise.all(
+        servers.map(async (relay) => {
+          // The relay's own signing key (kind-39000 is authored by it). Best
+          // effort — a broken NIP-11 endpoint must not block the others.
+          let selfKey: string | undefined;
+          try {
+            const info = await Promise.race([
+              fetchRelayInfoDoc(relay, signal).catch(() => undefined),
+              new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2_000)),
+            ]);
+            selfKey = info?.self || info?.pubkey;
+          } catch {
+            selfKey = undefined;
+          }
+
+          // Cache-first from the store (scoped by the relay's key so channels
+          // from same-key relays don't bleed). Then a bounded live read.
+          const cached = selfKey
+            ? await store.query([{ kinds: [KIND_GROUP_METADATA], authors: [selfKey], limit: 500 }])
+            : [];
+          let live: NostrEvent[] = [];
+          try {
+            live = await nostr.relay(relay).query(
+              [{ kinds: [KIND_GROUP_METADATA], ...(selfKey ? { authors: [selfKey] } : {}), limit: 500 }],
+              { signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) },
+            );
+          } catch {
+            // Best effort; the cached metadata still yields the known channels.
+          }
+          return buildRelayGroups([...cached, ...live], relay).map((g) => ({ id: g.id, relay }));
+        }),
+      );
+      return perRelay.flat();
+    },
+  });
+
+  return query.data ?? [];
+}
+
+/**
  * THE funnel. One component owns all standing ingestion:
  *
  *   - builds the wire spec (minimal relays + filters — the same information
@@ -138,18 +230,34 @@ export function WireSync() {
   const { data: followData } = useFollowList();
   const { data: concordData } = useConcordList();
   const concord2 = useWireConcord2Channels();
+  const nip29Groups = useWireNip29Groups();
+
+  // NIP-29 groups to subscribe to: the per-server directory discovery (the
+  // primary source — see useWireNip29Groups) UNIONed with the kind-10009
+  // `groups` list (which additionally carries private/closed channels the open
+  // directory hides). De-duplicated by relay+id.
+  const groups = useMemo(() => {
+    const byKey = new Map<string, { id: string; relay: string }>();
+    for (const g of nip29Groups) {
+      if (g.id && g.relay) byKey.set(`${g.relay}\u0000${g.id}`, g);
+    }
+    for (const g of groupList?.groups ?? []) {
+      if (g.id && g.relay) byKey.set(`${g.relay}\u0000${g.id}`, { id: g.id, relay: g.relay });
+    }
+    return [...byKey.values()];
+  }, [nip29Groups, groupList?.groups]);
 
   const spec: WireSpec = useMemo(
     () =>
       buildWireSpec({
         pubkey: user?.pubkey,
-        groups: groupList?.groups ?? [],
+        groups,
         dmRelays: effectiveDmRelays(config),
         dmFollows: followData?.pubkeys ?? [],
         concord1: buildConcordSubs(concordData?.list),
         concord2,
       }),
-    [user?.pubkey, groupList, config, followData?.pubkeys, concordData, concord2],
+    [user?.pubkey, groups, config, followData?.pubkeys, concordData, concord2],
   );
 
   // The ingest path reads the spec lazily so long-lived subscriptions always

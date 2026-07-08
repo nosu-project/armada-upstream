@@ -180,7 +180,16 @@ async function backfillStore(
     }
     active = next;
   }
-  return { oldest, newest, events: collected, exhausted: active.length === 0 && !failed, failed };
+  // `exhausted` means we verifiably reached the bottom: every relay ran to a
+  // short/empty page AFTER we'd seen history. An all-empty run (no events
+  // collected at all) is INCONCLUSIVE — a relay answering empty before NIP-42
+  // AUTH completes, or a stale `until` cursor past the relay's data — and must
+  // NOT seal the channel as exhausted, or a notification-only room (1 message,
+  // no history yet) gets permanently stuck with just that message. Treat an
+  // all-empty run like a failure so a later poll retries it.
+  const reachedBottom = active.length === 0 && !failed;
+  const exhausted = reachedBottom && collected.length > 0;
+  return { oldest, newest, events: collected, exhausted, failed: failed || (reachedBottom && collected.length === 0) };
 }
 
 /** The moderation context resolved from the community's control fold. */
@@ -232,6 +241,12 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   const cursor = useRef<Map<string, { newest?: number; oldest?: number; exhausted: boolean }>>(new Map());
   const initialLoadedRef = useRef<string | null>(null);
   const lastBackfillRef = useRef(0);
+  // Whether this channel's first load has settled — the store read AND (if the
+  // store was empty) the relay backfill that decrypts history. Until it flips,
+  // an empty timeline shows the skeleton, not "no messages". It flips in every
+  // queryFn branch (warm read, backfill-settled, and throttle-skip) so it can
+  // never deadlock the skeleton. Reset on channel change.
+  const [firstLoadDone, setFirstLoadDone] = useState(false);
 
   useEffect(() => {
     windowLimitRef.current = WINDOW_SIZE;
@@ -239,10 +254,23 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     setIsLoadingOlder(false);
     initialLoadedRef.current = null;
     lastBackfillRef.current = 0;
+    setFirstLoadDone(false);
     // Hydrate the in-memory cursor from the persisted one for this channel.
     if (channelIdHex) {
       void readChannelCursor(channelIdHex).then((c) => {
-        if (c) cursor.current.set(channelIdHex, { newest: c.newest, oldest: c.oldest, exhausted: c.exhausted });
+        if (!c) return;
+        // Heal a POISONED cursor: `exhausted` with `oldest === 0` means it was
+        // sealed without ever paging down (an all-empty backfill run — e.g. a
+        // relay that answered empty before NIP-42 AUTH). Clearing `exhausted`
+        // lets the backfill retry so a notification-only room finally pulls its
+        // history instead of showing just the one delivered message.
+        const poisoned = c.exhausted && !c.oldest;
+        cursor.current.set(channelIdHex, {
+          newest: c.newest,
+          oldest: c.oldest,
+          exhausted: poisoned ? false : c.exhausted,
+        });
+        if (poisoned) void clearChannelExhausted(channelIdHex);
       });
     }
   }, [channelIdHex]);
@@ -382,16 +410,26 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 
       // Relay backfill is throttled: a wire-bus invalidation re-reads the
       // store (cheap, instant) without re-paging relays on every message.
+      // `firstLoadDone` gates the loading skeleton — it must flip in EVERY
+      // branch (including the throttled skip, which means a backfill already
+      // ran this channel-session) so an empty channel can never hang on the
+      // skeleton forever.
       const dueForBackfill = Date.now() - lastBackfillRef.current >= BACKFILL_MIN_INTERVAL_MS;
       const maybeBackfill = () => {
-        if (!dueForBackfill) return Promise.resolve();
+        if (!dueForBackfill) {
+          if (!signal.aborted) setFirstLoadDone(true);
+          return Promise.resolve();
+        }
         lastBackfillRef.current = Date.now();
-        return backfillAndRefresh();
+        return backfillAndRefresh().finally(() => {
+          if (!signal.aborted) setFirstLoadDone(true);
+        });
       };
 
       if (existing && existing.length > 0) {
         // Warm: paint what we have; heal in the background.
         initialLoadedRef.current = channelIdHex;
+        setFirstLoadDone(true);
         void (async () => {
           if (signal.aborted) return;
           queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore());
@@ -402,6 +440,11 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 
       const local = await composeFromStore();
       initialLoadedRef.current = channelIdHex;
+      // If the store already had messages, we're done loading now. If it was
+      // empty, stay in the loading state until the backfill settles (below) —
+      // an empty store read is NOT authoritative for V2, since history is
+      // decrypted by the backfill, not the wire's live `since` window.
+      if (local.length > 0 && !signal.aborted) setFirstLoadDone(true);
       void maybeBackfill().catch(() => undefined);
       return local;
     },
@@ -481,7 +524,19 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   return {
     /** The folded, moderated timeline + reaction tallies. */
     folded,
-    isLoading: query.isLoading,
+    // Loading until the react-query load settles, OR (cold visit) the rumor
+    // store hydrated empty and the first relay backfill hasn't landed yet —
+    // keeps the skeleton up instead of a premature "no messages" empty state.
+    // Loading skeleton gate — see useConcordChannel for the full rationale.
+    // Hold the skeleton while empty AND a load is genuinely in progress (query
+    // fetching, or fetched-once with the backfill not yet settled). Never force
+    // it while the query is idle-and-never-fetched (channel not resolved), so
+    // we can't hang on a skeleton for a query that isn't running.
+    isLoading:
+      query.isLoading ||
+      ((query.data?.length ?? 0) === 0 &&
+        (query.isFetching || query.isFetched) &&
+        !firstLoadDone),
     loadOlder,
     hasMore,
     isLoadingOlder,

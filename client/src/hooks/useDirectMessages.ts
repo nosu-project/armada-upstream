@@ -666,8 +666,13 @@ export function useDirectMessages(peer: string | undefined) {
   // decrypt cache; see timelineSnapshot.ts).
   const threadSnapshotScope = self && peer ? dmThreadSnapshotScope(self, peer) : undefined;
   const threadPullRef = useRef(0);
+  // Whether this thread's first store read has settled. Until it has, an empty
+  // read reads as LOADING, not "no messages". Keyed off the local READ (always
+  // runs), not the throttled relay pull (which can be skipped, hanging it).
+  const [firstLoadDone, setFirstLoadDone] = useState(false);
   useEffect(() => {
     threadPullRef.current = 0;
+    setFirstLoadDone(false);
   }, [self, peer, relayKey]);
 
   const query = useQuery<DecryptedDM[]>({
@@ -705,8 +710,11 @@ export function useDirectMessages(peer: string | undefined) {
       // 2. THROTTLED BACKGROUND refresh: query the relays for newer DMs, merge
       //    into the cache, stream their decrypts in. NOT awaited; skipped
       //    within the pull window so wire-bus invalidations stay local-only.
+      //    `firstLoadDone` (the skeleton gate) flips when this pull settles, or
+      //    immediately if throttle-skipped (a recent pull already ran).
       const pullDue = Date.now() - threadPullRef.current >= PULL_MIN_INTERVAL_MS;
       if (pullDue) threadPullRef.current = Date.now();
+      if (!pullDue && !signal.aborted) setFirstLoadDone(true);
       void (async () => {
         if (!pullDue || signal.aborted) return;
         try {
@@ -736,9 +744,15 @@ export function useDirectMessages(peer: string | undefined) {
           );
         } catch {
           // Best-effort background refresh; the local-first result already rendered.
+        } finally {
+          if (!signal.aborted) setFirstLoadDone(true);
         }
       })();
 
+      // If the store already had rows, loading is done. If it was empty, the
+      // pull's `finally` flips the gate once it settles — an empty store read
+      // isn't authoritative, since thread history arrives via the pull.
+      if (localPlaceholders.length > 0 && !signal.aborted) setFirstLoadDone(true);
       return localPlaceholders;
     },
     staleTime: 10_000,
@@ -1050,7 +1064,15 @@ export function useDirectMessages(peer: string | undefined) {
 
   return {
     messages: query.data ?? [],
-    isLoading: query.isLoading,
+    // Loading until react-query settles, OR (cold visit) the store hydrated
+    // empty and the first relay pull hasn't landed — keeps the thread skeleton
+    // up instead of a premature empty state.
+    // Loading skeleton gate — see useConcordChannel for the full rationale.
+    isLoading:
+      query.isLoading ||
+      ((query.data?.length ?? 0) === 0 &&
+        (query.isFetching || query.isFetched) &&
+        !firstLoadDone),
     error: query.error,
     send: send.mutateAsync,
     isSending: send.isPending,

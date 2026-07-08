@@ -1,6 +1,6 @@
 import { normalizeRelayUrl } from "@/lib/platform";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
-import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
+import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 
 import type { ConcordSub } from "@/concord-v1/lib/concordNotifications";
@@ -114,7 +114,7 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     }
   }
   for (const [relay, zs] of zsByRelay) {
-    add(relay, { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": [...zs].sort() });
+    add(relay, { kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_DELETE], "#z": [...zs].sort() });
   }
 
   // ── Concord V2: merged wrap-author filter per community relay ────────────

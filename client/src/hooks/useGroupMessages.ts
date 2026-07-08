@@ -103,6 +103,11 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   const cursorRef = useRef<number | undefined>(undefined);
   const loadingRef = useRef(false);
   const lastPullRef = useRef(0);
+  // Whether this room's first store read has settled. Until it has, an empty
+  // read reads as LOADING (skeleton), not an authoritative "no messages yet".
+  // Keyed off the local READ (always runs in the queryFn), not the throttled
+  // network pull (which can be skipped, deadlocking the skeleton).
+  const [firstLoadDone, setFirstLoadDone] = useState(false);
 
   // Which relay the currently-rendered `query.data` belongs to. Used by
   // `placeholderData` below to decide whether the previous room's messages are
@@ -120,6 +125,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     lastPullRef.current = 0;
     setHasMore(true);
     cursorRef.current = undefined;
+    setFirstLoadDone(false);
   }, [relayUrl, groupId]);
 
   const query = useQuery<NostrEvent[]>({
@@ -150,6 +156,8 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       // Throttled background top-up: the newest relay page, for history the
       // wire's since-window never covered. NOT awaited (never gates paint);
       // the pool mirrors results into the store; merged append-only here.
+      // `firstLoadDone` (the loading-skeleton gate) flips when this pull settles
+      // — or immediately if it's throttled-skipped (a recent pull already ran).
       const now = Date.now();
       if (now - lastPullRef.current >= PULL_MIN_INTERVAL_MS) {
         lastPullRef.current = now;
@@ -171,8 +179,14 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
             );
           } catch {
             // Best-effort; the store-hydrated result already rendered.
+          } finally {
+            if (!signal.aborted) setFirstLoadDone(true);
           }
         })();
+      } else if (!signal.aborted) {
+        // Pull throttled-skipped: a recent pull already settled, so an empty
+        // timeline is authoritative now (don't hang on the skeleton).
+        setFirstLoadDone(true);
       }
 
       // Seed the cursor from local history so scroll-up backfill works even
@@ -180,6 +194,11 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       if (cursorRef.current === undefined && local.length > 0) {
         cursorRef.current = paginationCursor(local);
       }
+      // If the store already had messages, loading is done immediately. If it
+      // was empty, the pull's `finally` (above) flips the gate once it settles —
+      // an empty store read isn't authoritative, since NIP-29 history arrives
+      // via this pull, not the wire's live `since` window.
+      if (local.length > 0 && !signal.aborted) setFirstLoadDone(true);
       return local;
     },
     enabled: Boolean(relayUrl && groupId),
@@ -324,5 +343,17 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     [status, insertOptimistic, markSent, markFailed, removeOptimistic, loadOlder, hasMore, isLoadingOlder],
   );
 
-  return { ...query, ...helpers };
+  // Effective loading: the react-query load, OR a first cold visit where the
+  // store hydrated empty and the first network top-up hasn't settled yet. This
+  // keeps the timeline on its skeleton (not the "no messages yet" empty state)
+  // until we've actually heard back from the relay — the wire may not have
+  // ingested this room's history yet on a fresh app start.
+  // Loading skeleton gate — see useConcordChannel for the full rationale. Hold
+  // the skeleton while empty AND a load is genuinely in progress; never force
+  // it while the query is idle-and-never-fetched.
+  const isLoading =
+    query.isLoading ||
+    ((query.data?.length ?? 0) === 0 && (query.isFetching || query.isFetched) && !firstLoadDone);
+
+  return { ...query, ...helpers, isLoading };
 }

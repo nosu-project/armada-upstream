@@ -7,24 +7,20 @@ import { useConcordChannelEpochs } from "@/concord-v1/hooks/useConcordRekey";
 import { useConcordRoster } from "@/concord-v1/hooks/useConcordRoster";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
-import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { useRotatorSecretKey } from "@/concord-v1/hooks/useRotatorSecretKey";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatus, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
-import { channelPseudonym } from "@/concord-v1/lib/derive";
 import { channelWire, type ChannelWire } from "@/concord-v1/lib/wire";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { concordSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
+import { useWireScopes } from "@/wire/useWireScopes";
 import {
-  openVerifiedInner,
   type OpenedMessage,
 } from "@/concord-v1/lib/envelope";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_REACTION } from "@/concord-v1/lib/kinds";
 import { canActOnMember, Permissions } from "@/concord-v1/lib/roles";
 import type { Channel, Community } from "@/concord-v1/lib/types";
 
-import { App as CapacitorApp } from "@capacitor/app";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -48,17 +44,6 @@ function statusKey(channelIdHex: string | null) {
  */
 function deletedKey(channelIdHex: string | null) {
   return ["concord", "msg-deleted", channelIdHex] as const;
-}
-
-/** The held epoch keys for a channel: every retained epoch, newest first. */
-function readEpochKeys(channel: Channel): Array<{ epoch: bigint; key: Uint8Array }> {
-  const keys = channel.epochKeys.length ? channel.epochKeys : [{ epoch: channel.epoch, key: channel.key }];
-  return [...keys].sort((a, b) => (a.epoch > b.epoch ? -1 : a.epoch < b.epoch ? 1 : 0));
-}
-
-/** The set of `#z` pseudonyms to subscribe/query for a v1 channel (one per held epoch). */
-function channelPseudonyms(channel: Channel): string[] {
-  return readEpochKeys(channel).map((ek) => bytesToHex(channelPseudonym(ek.key, channel.id, ek.epoch)));
 }
 
 /** The append-plane kinds the message timeline folds (messages + edits + deletes). */
@@ -408,12 +393,19 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   // batcher anyway, so the resolving `composeFromStore` includes them.
   const initialLoadedRef = useRef<string | null>(null);
 
+  // Whether this channel's first store read has settled. Until it has, an empty
+  // read reads as LOADING (skeleton), not "no messages". Keyed off the local
+  // READ (always runs), not the fire-and-forget relay backfill (which would
+  // hang the skeleton if it were the gate).
+  const [firstLoadDone, setFirstLoadDone] = useState(false);
+
   // Reset the window to the newest page whenever the channel changes.
   useEffect(() => {
     windowLimitRef.current = WINDOW_SIZE;
     setHasMore(true);
     setIsLoadingOlder(false);
     initialLoadedRef.current = null;
+    setFirstLoadDone(false);
   }, [channelIdHex]);
 
   // Re-read immediately when the held epoch set changes (a rekey was caught up),
@@ -426,216 +418,19 @@ export function useConcordChannelMessages(community: Community | undefined, chan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epochSig]);
 
-  // Live subscription for new messages — the same streaming `req()` NIP-29 chat
-  // uses (useGroupMessages), so a member's message lands in the UI the instant
-  // the relay forwards it instead of waiting for the 15s poll. Each arriving
-  // sealed outer is opened incrementally (binding triad + moderation enforced)
-  // and upserted into the existing query cache by message id; the periodic poll
-  // remains a backstop for missed events / reconnection.
-  useEffect(() => {
-    if (!community || !channel || !channelIdHex || !wire || wire.addresses.length === 0) return;
-    const w = wire;
-    const relays = community.relays;
-    const controller = new AbortController();
-    const since = Math.floor(Date.now() / 1000) - 5;
-
-    /** Fold a batch of sealed outers into the cached timeline (assumes ready). */
-    const fold = async (events: NostrEvent[]) => {
-      if (events.length === 0) return;
-      const { messages: opened, deletes } = await openMessages(w, events, moderation);
-      if (opened.length === 0 && deletes.size === 0) return;
-      queryClient.setQueryData<OpenedMessage[]>(queryKey, (old = []) => {
-        const byId = new Map<string, OpenedMessage>();
-        for (const m of old) byId.set(m.messageId, m);
-        let changed = false;
-        for (const m of opened) {
-          if (moderation.banned.has(m.author)) continue;
-          const existing = byId.get(m.messageId);
-          // Skip if we already have an identical copy (the relay echoes our own
-          // optimistic send and re-forwards on reconnect); upsert otherwise.
-          if (existing && existing.content === m.content && existing.ms === m.ms) continue;
-          byId.set(m.messageId, m);
-          changed = true;
-        }
-        // Honor self-delete / authorized moderation-hide arriving live.
-        for (const [id, deleters] of deletes) {
-          const msg = byId.get(id);
-          if (!msg) continue;
-          if (deleters.has(msg.author) || [...deleters].some((d) => moderation.canHide(d, msg.author))) {
-            byId.delete(id);
-            changed = true;
-          }
-        }
-        if (!changed) return old;
-        // Clear optimistic "pending"/"failed" for anything the relay echoed back.
-        const confirmed = opened.map((m) => m.messageId);
-        if (confirmed.length > 0) {
-          queryClient.setQueryData<ConcordSendStatusMap>(statusKey(channelIdHex), (s = {}) => {
-            let touched = false;
-            const next = { ...s };
-            for (const id of confirmed) if (id in next) { delete next[id]; touched = true; }
-            return touched ? next : s;
-          });
-        }
-        return [...byId.values()].sort((a, b) => a.ms - b.ms);
-      });
-    };
-
-    // Live events that arrive before the initial store decode resolves are
-    // buffered, not dropped, then flushed the instant the timeline is ready — so
-    // a message posted while a fresh channel is still loading appears right after
-    // the history paints, not 1–2s later when the backfill happens to re-read it.
-    const pending: NostrEvent[] = [];
-    let readyTimer: ReturnType<typeof setInterval> | undefined;
-    const isReady = () =>
-      initialLoadedRef.current === channelIdHex ||
-      (queryClient.getQueryData<OpenedMessage[]>(queryKey)?.length ?? 0) > 0;
-
-    const apply = async (events: NostrEvent[]) => {
-      if (events.length === 0) return;
-      if (!isReady()) {
-        pending.push(...events);
-        if (readyTimer === undefined) {
-          readyTimer = setInterval(() => {
-            if (controller.signal.aborted) {
-              clearInterval(readyTimer);
-              readyTimer = undefined;
-              return;
-            }
-            if (isReady()) {
-              clearInterval(readyTimer);
-              readyTimer = undefined;
-              const flush = pending.splice(0, pending.length);
-              void fold(flush);
-            }
-          }, 100);
-        }
-        return;
-      }
-      await fold(events);
-    };
-
-    for (const url of relays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req(
-            [w.filter(MESSAGE_PLANE_KINDS, { since })],
-            { signal: controller.signal },
-          )) {
-            if (msg[0] === "EVENT") await apply([msg[2] as NostrEvent]);
-          }
-        } catch {
-          // Subscription ended (abort or relay closed) — the poll covers gaps.
-        }
-      })();
+  // Live updates come from the wire. WireSync holds the standing per-relay
+  // subscription for the Concord V1 `#z` pseudonyms (kinds 3300/3302/3305),
+  // writes each sealed outer into the shared store, and announces `c1:<idHex>`
+  // on the bus. The Android background service funnels the same sealed outers
+  // in through the wire's APK bridge. So this hook holds NO socket: it just
+  // re-reads the store (via the throttled queryFn) when its channel changes.
+  // The queryFn's own relay backfill is throttled, so a bus invalidation is a
+  // cheap local decode-and-fold, not a network round.
+  useWireScopes((scopes) => {
+    if (channelIdHex && scopes.has(`c1:${channelIdHex}`)) {
+      void queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });
     }
-
-    return () => {
-      controller.abort();
-      if (readyTimer !== undefined) clearInterval(readyTimer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, community, channelIdHex, epochSig, moderation, queryClient]);
-
-  // Android fast path: the background notification service already decrypted the
-  // sealed Concord message to render its notification, and hands us the inner
-  // event directly (via `concordMessage` live / the `concord` drain on resume).
-  // We re-verify it fully here — the service only checked HMAC + channel/epoch
-  // binding, NOT the inner Schnorr signature — then fold it straight in. This is
-  // what makes a tapped notification's message appear the instant the channel
-  // opens, with no second NIP-44 decrypt and no relay round-trip (the previous
-  // path forced a re-decode/refetch, which is the lag you'd see on cold launch).
-  useEffect(() => {
-    if (!isNativeRuntime()) return;
-    if (!community) return;
-    if (!channel || !channelIdHex) return;
-    const byEpoch = new Map<string, { epoch: bigint; key: Uint8Array }>();
-    for (const ek of readEpochKeys(channel)) byEpoch.set(ek.epoch.toString(), ek);
-    for (const ek of caughtUp.data ?? []) byEpoch.set(ek.epoch.toString(), ek);
-    const allEpochKeys = [...byEpoch.values()];
-    if (allEpochKeys.length === 0) return;
-    let cancelled = false;
-
-    // The pseudonyms this channel listens on — only fold inners whose outer `z`
-    // matches one of ours (the service feeds inners for every subscribed channel).
-    const ourZs = new Set(channelPseudonyms(channel));
-
-    /** Verify a decrypted inner + bind/sig-check, then upsert it by message id. */
-    const foldInner = (innerJson: string, z: string, outerId: string) => {
-      if (cancelled || !ourZs.has(z)) return;
-      let inner: NostrEvent;
-      try {
-        inner = JSON.parse(innerJson) as NostrEvent;
-      } catch {
-        return;
-      }
-      let opened: OpenedMessage;
-      try {
-        // Full trust re-established here: select held epoch by `z`, verify the
-        // author's Schnorr signature, enforce the channel/epoch binding triad.
-        opened = openVerifiedInner(inner, z, outerId, channel.id, allEpochKeys);
-      } catch {
-        return; // forged/unbound/undecodable — drop it
-      }
-      if (moderation.banned.has(opened.author)) return;
-      if (opened.kind !== KIND_COMMUNITY_MESSAGE) return; // only chat renders here
-
-      queryClient.setQueryData<OpenedMessage[]>(queryKey, (old = []) => {
-        const existing = old.find((m) => m.messageId === opened.messageId);
-        if (existing && existing.content === opened.content && existing.ms === opened.ms) {
-          return old; // already have an identical copy (e.g. our own echo)
-        }
-        const byId = new Map(old.map((m) => [m.messageId, m]));
-        byId.set(opened.messageId, opened);
-        return [...byId.values()].sort((a, b) => a.ms - b.ms);
-      });
-      // Clear any optimistic pending/failed status the relay/native echoed back.
-      queryClient.setQueryData<ConcordSendStatusMap>(statusKey(channelIdHex), (s = {}) => {
-        if (!(opened.messageId in s)) return s;
-        const next = { ...s };
-        delete next[opened.messageId];
-        return next;
-      });
-    };
-
-    // Resume / cold-open: drain inners buffered while the WebView was down.
-    const drain = () => {
-      ArmadaNotification.drainConcord()
-        .then(({ concord }) => {
-          for (const c of concord ?? []) foldInner(c.inner, c.z, c.outerId);
-        })
-        .catch(() => undefined);
-    };
-    drain();
-
-    let resumeHandle: { remove: () => void } | undefined;
-    CapacitorApp.addListener("appStateChange", ({ isActive }) => {
-      if (isActive) drain();
-    })
-      .then((h) => {
-        if (cancelled) h.remove();
-        else resumeHandle = h;
-      })
-      .catch(() => undefined);
-
-    // Live: a Concord message decrypted while the app is open.
-    let handle: { remove: () => void } | undefined;
-    ArmadaNotification.addListener("concordMessage", ({ inner, z, outerId }) =>
-      foldInner(inner, z, outerId),
-    )
-      .then((h) => {
-        if (cancelled) h.remove();
-        else handle = h;
-      })
-      .catch(() => undefined);
-
-    return () => {
-      cancelled = true;
-      handle?.remove();
-      resumeHandle?.remove();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelIdHex, epochSig, moderation, queryClient]);
+  });
 
   const query = useQuery({
     queryKey,
@@ -781,6 +576,7 @@ export function useConcordChannelMessages(community: Community | undefined, chan
         // Warm: paint what we have NOW; heal from the store + relays in the
         // background (the durable read can't gate the paint).
         initialLoadedRef.current = channelIdHex;
+        setFirstLoadDone(true);
         void (async () => {
           if (signal.aborted) return;
           queryClient.setQueryData<OpenedMessage[]>(queryKey, await composeFromStore());
@@ -789,11 +585,18 @@ export function useConcordChannelMessages(community: Community | undefined, chan
         return existing;
       }
 
-      // Cold: nothing in memory yet. The durable store read IS the first paint;
-      // then continue the relay backfill in the background.
+      // Cold: nothing in memory yet. The durable store read IS the first paint.
       const local = await composeFromStore();
       initialLoadedRef.current = channelIdHex;
-      void backfillAndRefresh().catch(() => undefined);
+      // If the store already had messages, loading is done. If it was empty,
+      // stay loading until the relay backfill settles — an empty store read is
+      // not authoritative, since history is decrypted by the backfill below.
+      if (local.length > 0 && !signal.aborted) setFirstLoadDone(true);
+      void backfillAndRefresh()
+        .catch(() => undefined)
+        .finally(() => {
+          if (!signal.aborted) setFirstLoadDone(true);
+        });
       return local;
     },
   });
@@ -826,7 +629,17 @@ export function useConcordChannelMessages(community: Community | undefined, chan
   // cross-room pollution bug the seed filter above also guards against.
   useTimelineSnapshotWriter(snapshotScope, query.data, !query.isPlaceholderData);
 
-  return { ...query, loadOlder, hasMore, isLoadingOlder };
+  // Loading skeleton gate. Hold the skeleton while the timeline is empty AND a
+  // load is genuinely in progress: the query is fetching, OR it has fetched at
+  // least once and the cold-visit backfill hasn't settled (`!firstLoadDone`).
+  // When the query is IDLE and has NEVER fetched (channel keys not decrypted
+  // yet, so it's disabled), do NOT force the skeleton — that would hang forever
+  // on a query that isn't running; let the empty state show until it enables.
+  const empty = (query.data?.length ?? 0) === 0;
+  const started = query.isFetching || query.isFetched;
+  const isLoading = query.isLoading || (empty && started && !firstLoadDone);
+
+  return { ...query, loadOlder, hasMore, isLoadingOlder, isLoading };
 }
 
 /**
