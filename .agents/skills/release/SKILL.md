@@ -41,12 +41,19 @@ Follow these steps in order. Do NOT skip any step.
 ### Step 1: Pre-flight Checks
 
 ```bash
+git fetch --tags origin    # CRITICAL: sync remote tags before anything else
 git status                 # working tree should be clean (or commit/abort)
 git branch --show-current  # should be main
 cd client && npm run test  # full client suite: tsc + eslint + vitest + build
 cd ../server && go build ./... && go vet ./...   # relay must build
 ```
 
+- **Always `git fetch --tags origin` first.** The version is carried by the git
+  tag, and tags may exist on the remote that you don't have locally (e.g. a
+  previous release tagged from another machine). Skipping this makes
+  `git log <last-tag>..HEAD` report the wrong "latest tag", so you can
+  misidentify the last released version, duplicate already-shipped changelog
+  entries, or pick a version that's already taken. Fetch tags before Step 2.
 - If the working directory has uncommitted changes, ask the user whether to
   commit them first or abort.
 - If not on `main`, warn and ask whether to proceed.
@@ -55,6 +62,9 @@ cd ../server && go build ./... && go vet ./...   # relay must build
   `npm run test` passes before committing.)
 
 ### Step 2: Determine What Changed
+
+Make sure you ran `git fetch --tags origin` in Step 1 first, so the local tag
+list reflects the remote.
 
 ```bash
 # Latest release tag (empty if this is the first release)
