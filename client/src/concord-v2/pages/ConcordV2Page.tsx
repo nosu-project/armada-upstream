@@ -99,7 +99,7 @@ function Banner2({ banner }: { banner: ImagePointer | undefined }) {
     <>
       <button
         type="button"
-        className="h-20 w-full shrink-0 overflow-hidden cursor-zoom-in"
+        className="size-full overflow-hidden cursor-zoom-in"
         aria-label="View banner"
         onClick={() => setOpen(true)}
       >

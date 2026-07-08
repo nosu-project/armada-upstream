@@ -79,7 +79,7 @@ function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
   const url = useDecryptedCommunityImage(banner);
   if (!url) return null;
   return (
-    <div className="h-20 w-full shrink-0 overflow-hidden">
+    <div className="size-full overflow-hidden">
       <img src={url} alt="" className="size-full object-cover" />
     </div>
   );
