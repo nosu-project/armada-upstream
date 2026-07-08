@@ -4,6 +4,19 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.22.0] - 2026-07-08
+
+You can now send longer messages, and very long messages no longer flood the
+timeline. The chat character limit is raised to 5,000, and messages that run
+long are collapsed by default with a "Read more" toggle to expand them.
+
+### Added
+- "Read more" toggle that collapses long messages so they don't dominate the
+  timeline, with a tap to expand and collapse again
+
+### Changed
+- Raised the chat message character limit from 2,000 to 5,000
+
 ## [0.21.1] - 2026-07-08
 
 A reliability release focused on the Android app. Invite and share links now
