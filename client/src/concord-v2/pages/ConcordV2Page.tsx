@@ -482,11 +482,18 @@ export function ConcordV2Page() {
   const [channelsOpen, setChannelsOpen] = useState(!routeChannelId);
   // This page instance is reused across community switches (the route pattern
   // is stable), so the initial state above only applies to the first mount.
-  // Re-open the channel list whenever we navigate to a community root, and
-  // close it when a deep link targets a specific channel.
-  useEffect(() => {
+  // Reset the reveal state to match the destination route *during render* (not
+  // in a post-paint effect): switching community navigates to its root
+  // (no channel), so `channelsOpen` must already be `true` on the first render
+  // after the route change. A lagging effect would paint one frame of the
+  // (stale) chat pane first — the "flash of the previous chat" glitch. A deep
+  // link with a channel opens chat directly.
+  const [navKey, setNavKey] = useState(`${communityId}\u0000${routeChannelId ?? ""}`);
+  const curNavKey = `${communityId}\u0000${routeChannelId ?? ""}`;
+  if (navKey !== curNavKey) {
+    setNavKey(curNavKey);
     setChannelsOpen(!routeChannelId);
-  }, [communityId, routeChannelId]);
+  }
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
@@ -80,18 +80,52 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   // once on mount; never re-armed. Only when entering closed on a touch layout.
   const [enterAnim] = useState(() => swipeEnabled && !open);
 
+  // A gesture-driven reveal/close should animate to its resting position (the
+  // Discord settle). An `open` change from *navigation* (switching
+  // server/community reuses this page instance and flips `open` via a route
+  // effect) must NOT animate — otherwise the chat pane visibly slides across the
+  // screen ("dives into a channel") before landing on the channel list, which
+  // reads as a glitch. We flag the next `open` change as gesture-driven when a
+  // swipe commits, and snap (no transition) for every other `open` change.
+  const gestureCommit = useRef(false);
   // Opening: rightward drag from the left edge of the chat (only when closed).
   const openSwipe = useEdgeSwipe({
     enabled: swipeEnabled && !open,
     direction: "open",
-    onCommit: onReveal,
+    onCommit: () => {
+      gestureCommit.current = true;
+      onReveal();
+    },
   });
   // Closing: leftward drag on the revealed list (only when open).
   const closeSwipe = useEdgeSwipe({
     enabled: swipeEnabled && open,
     direction: "close",
-    onCommit: onClose,
+    onCommit: () => {
+      gestureCommit.current = true;
+      onClose();
+    },
   });
+
+  // Suppress the transform transition for one render whenever `open` flips
+  // without a preceding gesture commit (i.e. navigation). `useLayoutEffect` runs
+  // before paint so the snap applies on the same frame the new `open` lands.
+  const prevOpen = useRef(open);
+  const [snap, setSnap] = useState(false);
+  useLayoutEffect(() => {
+    if (prevOpen.current !== open) {
+      setSnap(!gestureCommit.current);
+      prevOpen.current = open;
+    }
+    gestureCommit.current = false;
+  }, [open]);
+  // Re-enable transitions on the next frame after a snap so subsequent gestures
+  // still animate their settle.
+  useEffect(() => {
+    if (!snap) return;
+    const id = requestAnimationFrame(() => setSnap(false));
+    return () => cancelAnimationFrame(id);
+  }, [snap]);
 
   if (!swipeEnabled) {
     // Desktop: static side-by-side panes.
@@ -132,7 +166,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
         {...(open ? closeSwipe.handlers : {})}
         className={cn(
           "absolute inset-0 flex [contain:layout_paint]",
-          dragging ? "" : "transition-transform duration-200 ease-out",
+          dragging || snap ? "" : "transition-transform duration-200 ease-out",
         )}
         style={{
           transform: `translateX(${underlayShift}%)`,
@@ -154,7 +188,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
         {...openSwipe.handlers}
         className={cn(
           "absolute inset-0 z-10 flex flex-col bg-background shadow-2xl [contain:layout_paint]",
-          dragging ? "" : "transition-transform duration-200 ease-out",
+          dragging || snap ? "" : "transition-transform duration-200 ease-out",
           enterAnim && "animate-in slide-in-from-right duration-200 ease-out",
           // Reserve the fixed mobile call bar's measured height (set on the
           // shell as --call-bar-h while a call is active) so it never covers the
