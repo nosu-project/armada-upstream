@@ -6,9 +6,10 @@ import { defineConfig, type Plugin } from "vite";
 
 /**
  * Stamps each build with a unique id:
- *  - index.html: `__BUILD_STAMP__` placeholders (TEMP debug overlay shows which
- *    build a device is actually running — installed iOS PWAs resume from
- *    memory and can serve a stale cached shell, making deploys appear to fail).
+ *  - index.html: fills the `<meta name="build">` placeholder so a device's
+ *    running bundle can be identified from the DOM when debugging stale-PWA
+ *    issues (installed iOS PWAs resume from memory and can serve a stale cached
+ *    shell, making deploys appear to fail).
  *  - sw.js: rotates the SW cache name every build, so a new deploy changes the
  *    SW bytes (forcing a SW update) and drops the previous shell cache.
  */
