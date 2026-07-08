@@ -8,6 +8,7 @@ import { useSendStatusMap } from "@/hooks/useSendStatusMap";
 import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
 import { nativeGroupTimelineEvents, recordNativeEvent } from "@/lib/nativeEventInbox";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { recordUnreadActivity } from "@/lib/nip29Activity";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { nip29SnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 
@@ -176,6 +177,10 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
           queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) =>
             sortDedupe([...old, ...events]),
           );
+          // Keep the unread badge caches in step with what the timeline just
+          // learned — this poll is also the healing path when the unread
+          // hook's own live tail is on a dead socket.
+          recordUnreadActivity(queryClient, events);
         } catch {
           // Best-effort background refresh; the local-first result already rendered.
         }
@@ -402,6 +407,10 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
             }
             upsertMessage(event);
             setStatus(event.id, undefined);
+            // Fan into the unread badge caches too — the sidebar/rail badge
+            // must light up even if the unread hook's own tail missed this
+            // event (socket died, or it fell in its snapshot↔tail gap).
+            recordUnreadActivity(queryClient, [event]);
           }
         }
       } catch {
@@ -410,7 +419,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     })();
 
     return () => controller.abort();
-  }, [nostr, relayUrl, groupId, upsertMessage, setStatus, removeOptimistic]);
+  }, [nostr, relayUrl, groupId, upsertMessage, setStatus, removeOptimistic, queryClient]);
 
   const helpers = useMemo(
     () => ({

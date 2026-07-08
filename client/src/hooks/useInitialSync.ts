@@ -36,6 +36,13 @@ const KIND_POLL = 1068;
 const TIMELINE_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
 /** How many messages to catch up per channel (mirrors useGroupMessages PAGE_SIZE). */
 const PAGE_SIZE = 50;
+/**
+ * Time cap on catch-up history: only messages newer than this window are
+ * eagerly synced at login. Anything older is reachable via normal scroll-up
+ * pagination once a channel opens — the login gate shouldn't spend its budget
+ * (or the caches) on ancient history.
+ */
+const CATCHUP_WINDOW_SECONDS = 7 * 24 * 60 * 60;
 /** Cap on channels we eagerly catch up, so a user in dozens of groups isn't blocked forever. */
 const MAX_CATCHUP_CHANNELS = 8;
 /** Cap on Concord communities we eagerly catch up. */
@@ -107,11 +114,14 @@ async function catchUpConcordChannel(
 ): Promise<void> {
   const epochKeys = readEpochKeys(channel);
   const zs = channelPseudonyms(channel);
+  // Outer envelope timestamps are real epoch seconds, so the catch-up window
+  // applies to Concord too — older history backfills on demand in-channel.
+  const since = Math.floor(Date.now() / 1000) - CATCHUP_WINDOW_SECONDS;
   const results = await Promise.all(
     community.relays.map((url) =>
       nostr
         .relay(url)
-        .query([{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": zs, limit: 500 }], { signal })
+        .query([{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": zs, since, limit: 500 }], { signal })
         .catch(() => [] as NostrEvent[]),
     ),
   );
@@ -137,9 +147,15 @@ async function catchUpConcordChannel(
   }
   const opened = [...byId.values()].sort((a, b) => a.ms - b.ms);
   if (opened.length === 0) return;
-  queryClient.setQueryData<OpenedMessage[]>(["concord", "channel", bytesToHex(channel.id)], (old) =>
-    old && old.length > 0 ? old : opened,
-  );
+  // Merge (dedupe by messageId) rather than keep-old-if-nonempty, so a cache
+  // primed by an earlier partial read never causes this fresh page to be
+  // dropped — the "logged in but still had to resync the community" bug.
+  queryClient.setQueryData<OpenedMessage[]>(["concord", "channel", bytesToHex(channel.id)], (old) => {
+    if (!old || old.length === 0) return opened;
+    const merged = new Map<string, OpenedMessage>();
+    for (const m of [...old, ...opened]) merged.set(m.messageId, m);
+    return [...merged.values()].sort((a, b) => a.ms - b.ms);
+  });
 }
 
 /**
@@ -300,20 +316,23 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       const channels = groups.slice(0, MAX_CATCHUP_CHANNELS);
       let messageCount = 0;
       if (channels.length > 0) {
+        const since = Math.floor(Date.now() / 1000) - CATCHUP_WINDOW_SECONDS;
         await Promise.all(
           channels.map(async ({ id, relay }) => {
             try {
               const events = await nostr.relay(relay).query(
-                [{ kinds: TIMELINE_KINDS, "#h": [id], limit: PAGE_SIZE }],
+                [{ kinds: TIMELINE_KINDS, "#h": [id], since, limit: PAGE_SIZE }],
                 { signal: stepSignal() },
               );
               if (cancelled || events.length === 0) return;
               messageCount += events.length;
-              const sorted = sortDedupe(events);
               // The relay() wrapper has already mirrored these into IndexedDB;
-              // seed the in-memory cache too so the channel renders instantly.
+              // merge into the in-memory cache too (append-only, dedupe by id)
+              // so the channel renders instantly. Merging — rather than
+              // keep-old-if-nonempty — means a cache pre-seeded by a snapshot
+              // or live event can never cause the fresh page to be dropped.
               queryClient.setQueryData<NostrEvent[]>(["nip29", "messages", relay, id], (old) =>
-                old && old.length > 0 ? old : sorted,
+                sortDedupe([...(old ?? []), ...events]),
               );
             } catch {
               // Best-effort per channel.

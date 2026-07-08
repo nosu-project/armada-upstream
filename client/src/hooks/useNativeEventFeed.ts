@@ -7,6 +7,7 @@ import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { parkPendingWraps } from "@/concord-v2/lib/rumorStore";
 import { recordNativeEvent } from "@/lib/nativeEventInbox";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { recordTimelineEvent, recordUnreadActivity } from "@/lib/nip29Activity";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -16,19 +17,6 @@ const KIND_POLL = 1068;
 
 /** NIP-29 kinds whose wire event the timeline can render directly. */
 const NIP29_TIMELINE_KINDS = new Set<number>([KIND_GROUP_CHAT, KIND_POLL]);
-
-/** First value of an event's `#h` (group id) tag, if any. */
-function groupIdOf(ev: NostrEvent): string | undefined {
-  for (const tag of ev.tags) if (tag[0] === "h" && tag[1]) return tag[1];
-  return undefined;
-}
-
-/** Sort ascending (oldest-first) and de-duplicate a message list by id. */
-function sortDedupe(events: NostrEvent[]): NostrEvent[] {
-  const byId = new Map<string, NostrEvent>();
-  for (const e of events) byId.set(e.id, e);
-  return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
-}
 
 /**
  * Feed raw outer events the native background service already received straight
@@ -72,28 +60,15 @@ export function useNativeEventFeed(): void {
 
     /**
      * Insert a plaintext NIP-29 timeline event directly into every cached
-     * `["nip29","messages",relayUrl,groupId]` entry for its group. The cache is
-     * keyed by (relayUrl, groupId) but the fed event only carries the group id
-     * (`#h`); a NIP-29 group lives on a single host relay, so matching on the
-     * group-id slot of the key targets the right (and only) timeline. No-op if
-     * the group isn't open (no cache entry) — the store write below still keeps
-     * it for when it is. Returns true if any cache entry was touched.
+     * `["nip29","messages",relayUrl,groupId]` entry for its group, and fan it
+     * into the `["nip29","unread",…]` badge caches — a natively-delivered
+     * message must light the channel badge, not just render in the timeline.
+     * No-op on the timeline side if the group isn't open (no cache entry) —
+     * the store write below still keeps it for when it is.
      */
-    const insertNip29 = (ev: NostrEvent): boolean => {
-      const gid = groupIdOf(ev);
-      if (!gid) return false;
-      let touched = false;
-      const entries = queryClient.getQueryCache().findAll({ queryKey: ["nip29", "messages"] });
-      for (const entry of entries) {
-        // queryKey: ["nip29", "messages", relayUrl, groupId]
-        if (entry.queryKey[3] !== gid) continue;
-        queryClient.setQueryData<NostrEvent[]>(entry.queryKey as readonly unknown[], (old = []) => {
-          if (old.some((e) => e.id === ev.id)) return old;
-          touched = true;
-          return sortDedupe([...old, ev]);
-        });
-      }
-      return touched;
+    const insertNip29 = (ev: NostrEvent): void => {
+      recordTimelineEvent(queryClient, ev);
+      recordUnreadActivity(queryClient, [ev]);
     };
 
     /** Ingest a batch of raw outer events: render first, persist after. */
