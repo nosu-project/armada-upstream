@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.21.0] - 2026-07-08
+
+Messaging sync is overhauled so chat stays consistent everywhere. Messages now
+arrive live in every channel of a server — not just the one you have open — and
+unread badges light immediately across the sidebar, server rail, and app icon.
+Servers that looked empty now load their channels reliably, time spent offline
+is caught up on reconnect, and rooms no longer get stuck showing only a single
+message. Unread badges also come to voice/text servers that previously had none.
+
+### Added
+- Unread badges for Concord (V1) servers, shown in the channel list, server rail, and folders
+
+### Changed
+- All chat now syncs through a single unified pipeline, so timelines and unread counts stay in agreement across every view
+- Messages sent to any channel arrive and badge live, without needing to open that channel first
+- Time spent offline is replayed on reconnect (up to 7 days), so you don't miss messages
+
+### Fixed
+- Servers that appeared empty now load their channels and message history
+- Unread badges no longer go stale when messages sync in the background
+- Rooms that received a single message no longer get stuck hiding the rest of their history
+- No longer need to resync a community after logging in
+- Empty timelines show a loading state instead of briefly flashing "no messages yet"
+
 ## [0.20.0] - 2026-07-08
 
 This release overhauls mobile navigation and polish: swipe-to-dismiss on image
