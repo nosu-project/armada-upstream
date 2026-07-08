@@ -1,5 +1,5 @@
 import { nip19 } from "nostr-tools";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { AudioMessage } from "@/components/chat/AudioMessage";
@@ -167,6 +167,19 @@ function isOnlyEmojisOrCustom(text: string, emojiMap: Map<string, string>): bool
 
 /** Kinds whose imeta tags describe attached media for the content body. */
 const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 1111, 1222, 1244, 3300]);
+
+/**
+ * Plain-text length (of the raw content, before tokenizing/rendering) past
+ * which a message defaults to collapsed with a "Read more" control. Picked to
+ * land at roughly one screenful of chat text (~8-10 wrapped lines at typical
+ * viewport widths) rather than an exact character budget — the goal is
+ * "doesn't blow out the timeline", not a precise cutoff. Well below the
+ * composer's MAX_CHARS, so only a minority of longer messages collapse.
+ */
+const COLLAPSE_CHAR_THRESHOLD = 600;
+
+/** Collapsed height (px) for long messages — enough for ~8-10 lines before the fade. */
+const COLLAPSED_MAX_HEIGHT = 224;
 
 /** Matches audio file extensions in a URL (drives AudioMessage vs VideoPlayer). */
 const AUDIO_EXT_URL_REGEX = new RegExp(`\\.(${AUDIO_EXTS})(\\?[^\\s]*)?$`, "i");
@@ -824,7 +837,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     }
   };
 
-  return (
+  const body = (
     <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, isEmojiOnly && "text-4xl leading-tight")}>
       {groupedTokens.map((token, i) => renderToken(token, i, i))}
 
@@ -836,6 +849,73 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
           onNext={goNext}
           onPrev={goPrev}
         />
+      )}
+    </div>
+  );
+
+  // Long-message collapse ("Read more"): only for top-level message bodies —
+  // nested embeds (disableNoteEmbeds, quoted notes) already get their own
+  // fixed-height clamp from the embedding card, and /me action overrides
+  // render inline (a wrapping block div here would break that flow). Gated on
+  // the raw content length rather than the tokenized/rendered output, so it's
+  // cheap to check before doing any of the render work above.
+  const collapsible = !disableNoteEmbeds && contentOverride === undefined
+    && (contentOverride ?? event.content).length > COLLAPSE_CHAR_THRESHOLD;
+
+  if (!collapsible) return body;
+
+  return <CollapsibleContent>{body}</CollapsibleContent>;
+}
+
+/**
+ * Wraps a rendered message body, clamping it to a fixed height with a
+ * fade-out + "Read more" toggle when it overflows. Measures the actual
+ * rendered height (rather than trusting the character-count heuristic that
+ * gated this wrapper) so short-but-tall content (many short lines, a big
+ * embed) still collapses, and long-but-short content (one giant URL) doesn't
+ * show a pointless toggle.
+ */
+function CollapsibleContent({ children }: { children: ReactNode }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(true);
+  const innerRef = useRef<HTMLDivElement>(null);
+
+  const measure = useCallback(() => {
+    const el = innerRef.current;
+    if (el) setOverflowing(el.scrollHeight > COLLAPSED_MAX_HEIGHT + 1);
+  }, []);
+
+  // Re-measure after mount/layout (images, link previews, etc. can resize the
+  // content asynchronously as they load, which changes whether it overflows).
+  const measureRef = useCallback((el: HTMLDivElement | null) => {
+    innerRef.current = el;
+    if (el) requestAnimationFrame(measure);
+  }, [measure]);
+
+  return (
+    <div className="relative">
+      <div
+        ref={measureRef}
+        className={cn("overflow-hidden", !expanded && "transition-[max-height] duration-200")}
+        style={{ maxHeight: expanded ? undefined : COLLAPSED_MAX_HEIGHT }}
+        onLoad={measure}
+      >
+        {children}
+      </div>
+      {!expanded && overflowing && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-6 h-10 bg-gradient-to-t from-background to-transparent" />
+      )}
+      {overflowing && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          className="relative mt-1 text-xs font-semibold text-primary hover:underline"
+        >
+          {expanded ? "Show less" : "Read more"}
+        </button>
       )}
     </div>
   );
