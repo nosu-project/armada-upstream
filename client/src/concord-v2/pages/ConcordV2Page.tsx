@@ -353,7 +353,6 @@ export function ConcordV2Page() {
   useEffect(() => {
     if (routeChannelId) setChannelIdHex(routeChannelId);
   }, [routeChannelId]);
-
   // Let `#channel-name` hashtags in chat jump to that local channel.
   const navChannels = useMemo(
     () => channels.map((c) => ({ name: c.name, go: () => setChannelIdHex(c.idHex) })),
@@ -476,7 +475,18 @@ export function ConcordV2Page() {
   const [rolesOpen, setRolesOpen] = useState(false);
   const [membersVisible, setMembersVisible] = useState(true);
   const [membersOpen, setMembersOpen] = useState(false);
-  const [channelsOpen, setChannelsOpen] = useState(false);
+  // Mobile: landing on the community root (no channel in the URL) shows the
+  // channel list, not a chat pane — selecting a community should let you pick a
+  // channel, not auto-dive into one. A deep link with a channel opens chat
+  // directly. (On desktop the SwipeReveal is inert — both panes always show.)
+  const [channelsOpen, setChannelsOpen] = useState(!routeChannelId);
+  // This page instance is reused across community switches (the route pattern
+  // is stable), so the initial state above only applies to the first mount.
+  // Re-open the channel list whenever we navigate to a community root, and
+  // close it when a deep link targets a specific channel.
+  useEffect(() => {
+    setChannelsOpen(!routeChannelId);
+  }, [communityId, routeChannelId]);
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);

@@ -389,8 +389,18 @@ export function ConcordPage() {
   const [membersVisible, setMembersVisible] = useState(true);
   /** Mobile: whether the member sheet is open. */
   const [membersOpen, setMembersOpen] = useState(false);
-  /** Mobile: whether the channel-list drawer is open. */
-  const [channelsOpen, setChannelsOpen] = useState(false);
+  // Mobile: landing on the community root (no channel in the URL) shows the
+  // channel list, not a chat pane — selecting a community should let you pick a
+  // channel, not auto-dive into one. A deep link with a channel opens chat
+  // directly. (On desktop the SwipeReveal is inert — both panes always show.)
+  const [channelsOpen, setChannelsOpen] = useState(!routeChannelId);
+  // This page instance is reused across community switches (the route pattern
+  // is stable), so the initial state above only applies to the first mount.
+  // Re-open the channel list whenever we navigate to a community root, and
+  // close it when a deep link targets a specific channel.
+  useEffect(() => {
+    setChannelsOpen(!routeChannelId);
+  }, [communityId, routeChannelId]);
   // Slack-style threads: the root message whose thread panel is open (and
   // whether to focus its reply composer on open).
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
