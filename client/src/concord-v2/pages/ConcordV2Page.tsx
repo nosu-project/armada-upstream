@@ -1,4 +1,4 @@
-import { AtSign, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MoreVertical, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { AtSign, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -20,6 +20,7 @@ import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -40,6 +41,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useAuthor } from "@/hooks/useAuthor";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
@@ -55,6 +57,7 @@ import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
 import { useConcord2Unread, type Concord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
 import { useConcord2Mentions } from "@/concord-v2/hooks/useConcord2Mentions";
+import { useConcord2Threads, type Concord2Thread } from "@/concord-v2/hooks/useConcord2Threads";
 import { useTyping2, useTypingPublisher2 } from "@/concord-v2/hooks/useTyping2";
 import { resolveVoiceBroker, useVoiceBroker2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
 import type { VoicePresenceFold } from "@/concord-v2/lib/voice";
@@ -63,6 +66,8 @@ import { completeMemberlist } from "@/concord-v2/lib/guestbook";
 import { badgeOf, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import type { ChannelV2, CommunityV2, ImagePointer } from "@/concord-v2/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
+import { getAvatarShape } from "@/lib/avatarShape";
+import { shortTimeAgo } from "@/lib/formatTime";
 
 import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
@@ -419,6 +424,132 @@ const MentionMessage = memo(function MentionMessage({
 });
 
 /**
+ * The community-wide "Threads" pane: every thread the current user has
+ * participated in (authored the root or a reply), newest-reply first, read
+ * purely from the local rumor cache. Each row shows the thread root plus a
+ * reply summary; clicking it switches to that channel and opens the thread
+ * panel. Unread rows (a newer reply than last opened) light up.
+ */
+function ThreadsView({
+  channels,
+  threads,
+  isLoading,
+  onOpen,
+}: {
+  channels: ChannelV2[];
+  threads: Concord2Thread[];
+  isLoading: boolean;
+  onOpen: (thread: Concord2Thread) => void;
+}) {
+  const nameByChannel = useMemo(() => {
+    const m = new Map<string, ChannelV2>();
+    for (const c of channels) m.set(c.idHex, c);
+    return m;
+  }, [channels]);
+
+  if (threads.length === 0) {
+    return (
+      <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+        {isLoading
+          ? "Loading threads…"
+          : "No threads yet. Threads you start or reply in will show up here."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col py-2">
+      {threads.map((t) => {
+        const ch = nameByChannel.get(t.channelIdHex);
+        return (
+          <div key={t.root.id} className="pb-1">
+            <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
+              {ch?.isVoice ? (
+                <Volume2 className="size-3 shrink-0" />
+              ) : ch?.isPrivate ? (
+                <Lock className="size-3 shrink-0" />
+              ) : (
+                <Hash className="size-3 shrink-0" />
+              )}
+              <span className="truncate">{ch?.name ?? "unknown channel"}</span>
+              {t.hasNew ? (
+                <span
+                  className="ml-1 shrink-0 size-1.5 rounded-full bg-primary"
+                  aria-label="New replies"
+                />
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpen(t)}
+              className={cn(
+                "block w-full text-left clip-corner-lg cursor-pointer hover:bg-foreground/5 transition-colors",
+                t.hasNew && "bg-primary/5",
+              )}
+              aria-label="Open thread"
+            >
+              <ThreadRootPreview event={t.root} />
+              <div className="flex items-center gap-2 pl-[3.875rem] pr-3 pb-1.5 -mt-1">
+                <ThreadReplyAvatars pubkeys={t.participants} />
+                <span
+                  className={cn(
+                    "text-xs font-medium",
+                    t.hasNew ? "text-primary" : "text-muted-foreground",
+                  )}
+                >
+                  {t.replyCount} {t.replyCount === 1 ? "reply" : "replies"}
+                </span>
+                <span className="text-xs text-muted-foreground">· {shortTimeAgo(t.lastReplyAt)}</span>
+              </div>
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The thread root message, read-only (its click is handled by the row wrapper). */
+const ThreadRootPreview = memo(function ThreadRootPreview({ event }: { event: ChatMsg }) {
+  const rumor = useMemo(() => {
+    const { sig: _sig, ...rest } = event;
+    return rest;
+  }, [event]);
+  return (
+    <div className="pointer-events-none">
+      <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} />
+    </div>
+  );
+});
+
+/** A small newest-first avatar stack of the thread's repliers. */
+function ThreadReplyAvatars({ pubkeys }: { pubkeys: string[] }) {
+  const shown = pubkeys.slice(0, 4);
+  if (shown.length === 0) return null;
+  return (
+    <div className="flex -space-x-1.5">
+      {shown.map((pk) => (
+        <ThreadReplyAvatar key={pk} pubkey={pk} />
+      ))}
+    </div>
+  );
+}
+
+function ThreadReplyAvatar({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata;
+  const name = metadata?.name ?? pubkey.slice(0, 8);
+  return (
+    <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-chrome" title={name}>
+      <AvatarImage src={metadata?.picture} alt={name} />
+      <AvatarFallback className="bg-primary/20 text-primary text-[9px] font-semibold uppercase">
+        {name.slice(0, 1)}
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
+/**
  * A Concord V2 community — CORD-01..06 Private Streams over interchangeable
  * relays, no host, no `#z` tags: every plane is kind-1059 traffic at derived
  * stream addresses. Lives at `/c/:communityId`, rehydrated from the
@@ -462,6 +593,16 @@ export function ConcordV2Page() {
     [unreadByChannel],
   );
 
+  // Community-wide "Threads" — threads the user participated in (authored the
+  // root or a reply), newest-reply first, from the local rumor cache only.
+  // Lights up when any has replies newer than the user last opened it.
+  const {
+    threads,
+    isLoading: threadsLoading,
+    hasNew: hasNewThreadReplies,
+    markRead: markThreadRead,
+  } = useConcord2Threads(channels);
+
   // Authenticate the connection as this community's per-channel stream keys
   // (control/guestbook/dissolved keys are registered app-wide in MainLayout).
   useRegisterChannelStreamKeys2(communityId);
@@ -473,9 +614,10 @@ export function ConcordV2Page() {
   useEffect(() => {
     if (routeChannelId) setChannelIdHex(routeChannelId);
   }, [routeChannelId]);
-  // Which pane the main area shows: the selected channel's chat, or the
-  // community-wide "@ Mentions" list. Selecting a channel returns to chat.
-  const [view, setView] = useState<"channel" | "mentions">("channel");
+  // Which pane the main area shows: the selected channel's chat, the
+  // community-wide "@ Mentions" list, or the "Threads" list. Selecting a
+  // channel returns to chat.
+  const [view, setView] = useState<"channel" | "mentions" | "threads">("channel");
   useEffect(() => {
     if (routeChannelId) setView("channel");
   }, [routeChannelId]);
@@ -495,6 +637,19 @@ export function ConcordV2Page() {
       setChannelsOpen(false);
     },
     [selectChannel],
+  );
+  // Opening a thread from the Threads tab: switch to its channel, then open the
+  // thread panel once that channel's transport has the root loaded (an effect
+  // below fires when the root appears in `allMessages`). Marks the thread read.
+  const [pendingThread, setPendingThread] = useState<Concord2Thread | null>(null);
+  const openThreadFromList = useCallback(
+    (thread: Concord2Thread) => {
+      markThreadRead(thread.root.id, thread.lastReplyAt);
+      setPendingThread(thread);
+      selectChannel(thread.channelIdHex);
+      setChannelsOpen(false);
+    },
+    [selectChannel, markThreadRead],
   );
   // Let `#channel-name` hashtags in chat jump to that local channel.
   const navChannels = useMemo(
@@ -698,6 +853,18 @@ export function ConcordV2Page() {
     setThreadRoot(event);
   }, []);
 
+  // Fulfil a pending Threads-tab open: once its channel is active and the
+  // transport has loaded the root, open the thread panel with the freshly
+  // resolved root (so replies bucket correctly), then clear the target.
+  useEffect(() => {
+    if (!pendingThread) return;
+    if (channel?.idHex !== pendingThread.channelIdHex) return;
+    const loaded = allMessages.find((m) => m.id === pendingThread.root.id);
+    if (!loaded) return;
+    openThread(loaded);
+    setPendingThread(null);
+  }, [pendingThread, channel?.idHex, allMessages, openThread]);
+
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {
     if (threadRoot) {
@@ -817,34 +984,61 @@ export function ConcordV2Page() {
       footer={<SidebarFooter2 />}
       preChannels={
         user && community ? (
-          <button
-            type="button"
-            onClick={() => {
-              setView("mentions");
-              onNavigate?.();
-            }}
-            className={cn(
-              "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left clip-corner-lg",
-              view === "mentions"
-                ? "bg-primary text-primary-foreground font-medium"
-                : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
-              // Unread (but not selected) mentions read brighter + bold, matching
-              // an unread channel row.
-              view !== "mentions" && hasUnreadMention && "text-foreground font-semibold",
-            )}
-            aria-current={view === "mentions"}
-          >
-            <AtSign className="size-4 shrink-0" />
-            <span className="truncate flex-1 min-w-0">Mentions</span>
-            {view !== "mentions" && hasUnreadMention ? (
-              <span
-                className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
-                aria-label="You have unread mentions"
-              >
-                @
-              </span>
-            ) : null}
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setView("mentions");
+                onNavigate?.();
+              }}
+              className={cn(
+                "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left clip-corner-lg",
+                view === "mentions"
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+                // Unread (but not selected) mentions read brighter + bold, matching
+                // an unread channel row.
+                view !== "mentions" && hasUnreadMention && "text-foreground font-semibold",
+              )}
+              aria-current={view === "mentions"}
+            >
+              <AtSign className="size-4 shrink-0" />
+              <span className="truncate flex-1 min-w-0">Mentions</span>
+              {view !== "mentions" && hasUnreadMention ? (
+                <span
+                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                  aria-label="You have unread mentions"
+                >
+                  @
+                </span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setView("threads");
+                onNavigate?.();
+              }}
+              className={cn(
+                "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left clip-corner-lg",
+                view === "threads"
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+                // Unread (but not selected) thread replies read brighter + bold.
+                view !== "threads" && hasNewThreadReplies && "text-foreground font-semibold",
+              )}
+              aria-current={view === "threads"}
+            >
+              <MessagesSquare className="size-4 shrink-0" />
+              <span className="truncate flex-1 min-w-0">Threads</span>
+              {view !== "threads" && hasNewThreadReplies ? (
+                <span
+                  className="shrink-0 size-2 rounded-full bg-primary"
+                  aria-label="New thread replies"
+                />
+              ) : null}
+            </button>
+          </>
         ) : undefined
       }
       channelsHeaderExtra={
@@ -982,12 +1176,17 @@ export function ConcordV2Page() {
               <ChevronLeft className="size-5" />
             </Button>
 
-            {/* Desktop / wide: "# channel-name" (or "@ Mentions"). */}
+            {/* Desktop / wide: "# channel-name" (or "@ Mentions" / "Threads"). */}
             <div className="hidden sidebar:flex items-center gap-1.5 min-w-0">
               {view === "mentions" ? (
                 <>
                   <AtSign className="size-5 text-muted-foreground shrink-0" />
                   <h1 className="font-semibold truncate leading-tight">Mentions</h1>
+                </>
+              ) : view === "threads" ? (
+                <>
+                  <MessagesSquare className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Threads</h1>
                 </>
               ) : (
                 <>
@@ -1019,6 +1218,11 @@ export function ConcordV2Page() {
                     <>
                       <AtSign className="size-3 shrink-0" />
                       Mentions
+                    </>
+                  ) : view === "threads" ? (
+                    <>
+                      <MessagesSquare className="size-3 shrink-0" />
+                      Threads
                     </>
                   ) : (
                     <>
@@ -1160,6 +1364,15 @@ export function ConcordV2Page() {
                     mentions={mentions}
                     isLoading={mentionsLoading}
                     onJump={jumpToMention}
+                  />
+                </div>
+              ) : view === "threads" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable">
+                  <ThreadsView
+                    channels={channels}
+                    threads={threads}
+                    isLoading={threadsLoading}
+                    onOpen={openThreadFromList}
                   />
                 </div>
               ) : (
