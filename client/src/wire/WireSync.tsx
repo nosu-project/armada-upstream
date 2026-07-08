@@ -271,30 +271,60 @@ export function WireSync() {
   useEffect(() => {
     if (!user || spec.subs.length === 0) return;
     const controller = new AbortController();
-    const now = Math.floor(Date.now() / 1000);
+
+    // Signal-aware sleep so effect cleanup doesn't leave a retry pending.
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, ms);
+        controller.signal.addEventListener("abort", () => {
+          clearTimeout(t);
+          resolve();
+        }, { once: true });
+      });
 
     for (const { relay, filters } of spec.subs) {
-      const cursor = readCursor(relay);
-      const floor = now - MAX_CURSOR_AGE_SECONDS;
-      const since = Math.max(
-        cursor !== undefined ? cursor - CURSOR_OVERLAP_SECONDS : now - FRESH_LOOKBACK_SECONDS,
-        cursor !== undefined ? floor : 0,
-      );
       void (async () => {
-        try {
-          for await (const msg of nostr.relay(relay).req(
-            filters.map((f) => ({ ...f, since })),
-            { signal: controller.signal },
-          )) {
-            if (msg[0] === "EVENT") {
-              const event = msg[2] as NostrEvent;
-              await ingestWireEvents(sinksRef.current, [event]);
-              writeCursor(relay, event.created_at);
+        // Resubscribe with backoff for the effect's lifetime. NRelay1 keeps
+        // the SOCKET alive across drops, but a relay-initiated CLOSED (an
+        // auth-gating relay rejecting the REQ before AUTH lands, a policy
+        // refusal) terminates the req generator and nothing brings the
+        // subscription back until a spec change or app relaunch — on desktop,
+        // where there is no native-service funnel, that means no live wire
+        // until restart. Each fresh REQ gets a new sub id and with it a fresh
+        // auth-retry from the pool, so the wire heals as soon as AUTH lands.
+        let backoff = 1_000;
+        while (!controller.signal.aborted) {
+          const started = Date.now();
+          // Recompute the resume point each round: the cursor advanced with
+          // everything the previous round ingested.
+          const now = Math.floor(Date.now() / 1000);
+          const cursor = readCursor(relay);
+          const floor = now - MAX_CURSOR_AGE_SECONDS;
+          const since = Math.max(
+            cursor !== undefined ? cursor - CURSOR_OVERLAP_SECONDS : now - FRESH_LOOKBACK_SECONDS,
+            cursor !== undefined ? floor : 0,
+          );
+          try {
+            for await (const msg of nostr.relay(relay).req(
+              filters.map((f) => ({ ...f, since })),
+              { signal: controller.signal },
+            )) {
+              if (msg[0] === "EVENT") {
+                backoff = 1_000;
+                const event = msg[2] as NostrEvent;
+                await ingestWireEvents(sinksRef.current, [event]);
+                writeCursor(relay, event.created_at);
+              }
             }
+          } catch {
+            // Aborted or transport error — handled by the loop condition.
           }
-        } catch {
-          // Subscription ended. NRelay1 reconnects transparently; a spec
-          // change (or app relaunch, from the cursor) resubscribes.
+          if (controller.signal.aborted) break;
+          // A session that lived a while earned a prompt retry; a relay
+          // slamming the door (CLOSED right away) backs off up to 60s.
+          if (Date.now() - started > 60_000) backoff = 1_000;
+          await sleep(backoff + Math.floor(Math.random() * 250));
+          backoff = Math.min(backoff * 2, 60_000);
         }
       })();
     }
