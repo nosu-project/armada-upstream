@@ -52,3 +52,18 @@ export function unusableRelaysReason(relays: string[], protocol: string = pagePr
 export function unusableRelaysHere(relays: string[], protocol: string = pageProtocol()): string[] {
   return relays.filter((url) => !relayUsableHere(url, protocol));
 }
+
+/**
+ * Relay pick for a NEW community: prefer the `wss://` subset so no member is
+ * locked out, regardless of where the CREATOR happens to be running. Usability
+ * here is about every future member's platform, not this page's protocol — a
+ * creator on plain-http dev can open `ws://localhost:5577` just fine, but a
+ * community minted with it is dead on arrival for every APK/https member
+ * (#47). Falls back to the full list only when it contains no `wss://` relay
+ * at all (a deliberate all-local deployment) — creating must not be blocked by
+ * a stray dev relay, just cleaned of it.
+ */
+export function preferPortableRelays(relays: string[]): string[] {
+  const wss = relays.filter((url) => /^wss:\/\//i.test(url));
+  return wss.length > 0 ? wss : relays;
+}

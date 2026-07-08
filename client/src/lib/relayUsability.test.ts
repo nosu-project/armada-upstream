@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { relayUsableHere, unusableRelaysHere, unusableRelaysReason } from "./relayUsability";
+import { preferPortableRelays, relayUsableHere, unusableRelaysHere, unusableRelaysReason } from "./relayUsability";
 
 describe("relayUsableHere", () => {
   it("always accepts wss:// regardless of origin", () => {
@@ -50,5 +50,17 @@ describe("unusableRelaysHere", () => {
     expect(
       unusableRelaysHere(["wss://ok.example.com", "ws://192.168.1.5:5577"], "https:"),
     ).toEqual(["ws://192.168.1.5:5577"]);
+  });
+});
+
+describe("preferPortableRelays", () => {
+  it("drops ws:// relays when a wss:// alternative exists", () => {
+    expect(preferPortableRelays(["ws://localhost:5577", "wss://relay.ditto.pub"])).toEqual([
+      "wss://relay.ditto.pub",
+    ]);
+  });
+
+  it("keeps an all-ws:// list intact (deliberate all-local deployment)", () => {
+    expect(preferPortableRelays(["ws://localhost:5577"])).toEqual(["ws://localhost:5577"]);
   });
 });
