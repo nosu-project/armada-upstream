@@ -1,7 +1,34 @@
+import fs from "node:fs";
 import path from "node:path";
 
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+
+/**
+ * Stamps each build with a unique id:
+ *  - index.html: `__BUILD_STAMP__` placeholders (TEMP debug overlay shows which
+ *    build a device is actually running — installed iOS PWAs resume from
+ *    memory and can serve a stale cached shell, making deploys appear to fail).
+ *  - sw.js: rotates the SW cache name every build, so a new deploy changes the
+ *    SW bytes (forcing a SW update) and drops the previous shell cache.
+ */
+function buildStamp(): Plugin {
+  const stamp = new Date().toISOString().slice(0, 19).replace("T", " ") + "Z";
+  return {
+    name: "armada-build-stamp",
+    transformIndexHtml(html) {
+      return html.replaceAll("__BUILD_STAMP__", stamp);
+    },
+    closeBundle() {
+      // sw.js is copied verbatim from public/ during the bundle write; stamp
+      // it afterwards.
+      const swPath = path.resolve(__dirname, "dist/sw.js");
+      if (fs.existsSync(swPath)) {
+        fs.writeFileSync(swPath, fs.readFileSync(swPath, "utf8").replaceAll("__BUILD_STAMP__", stamp));
+      }
+    },
+  };
+}
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -9,7 +36,7 @@ export default defineConfig({
     host: "::",
     port: 8080,
   },
-  plugins: [react()],
+  plugins: [react(), buildStamp()],
   test: {
     globals: true,
     environment: "jsdom",

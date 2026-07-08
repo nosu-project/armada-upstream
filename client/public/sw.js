@@ -19,7 +19,12 @@
  * The relay push payload: { title, body, icon, badge, data: { url, tag } }.
  */
 
-const CACHE = "armada-shell-v1";
+// Replaced with the real build stamp by the armada-build-stamp Vite plugin.
+// A new deploy therefore changes this file's bytes (the browser re-checks
+// sw.js on navigation, bypassing the HTTP cache) and rotates the cache name,
+// so the activate step below drops the previous deploy's shell cache.
+const BUILD = "__BUILD_STAMP__";
+const CACHE = "armada-shell-" + BUILD;
 
 // App-shell assets to warm on install. Vite hashes JS/CSS so they stay
 // cache-first once cached; index.html is the SPA entry point.
@@ -33,7 +38,9 @@ self.addEventListener("install", (event) => {
   // Take control immediately so push and caching work on first install.
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)),
+    // cache: "reload" bypasses the HTTP cache so a freshly-updated SW can never
+    // precache a stale shell served from heuristic HTTP caching.
+    caches.open(CACHE).then((cache) => cache.addAll(PRECACHE.map((url) => new Request(url, { cache: "reload" })))),
   );
 });
 
