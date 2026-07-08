@@ -3,14 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useEventStore } from "@/hooks/useEventStore";
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { useSendStatusMap } from "@/hooks/useSendStatusMap";
 import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
-import { nativeGroupTimelineEvents, recordNativeEvent } from "@/lib/nativeEventInbox";
-import { ArmadaNotification } from "@/lib/nativeNotifications";
-import { recordUnreadActivity } from "@/lib/nip29Activity";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { nip29SnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
+import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -21,21 +18,17 @@ const KIND_DELETE = 5;
 
 /** Event kinds shown in the group timeline. */
 const TIMELINE_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
-/** Kinds the live subscription watches (timeline + deletions). */
-const LIVE_KINDS = [KIND_GROUP_CHAT, KIND_POLL, KIND_DELETE];
 
 /** How many messages to fetch per page (initial load and each backfill). */
 const PAGE_SIZE = 30;
 
 /**
- * How far back the live subscription's `since` reaches on mount. A few seconds
- * isn't enough: a message that already exists when the group opens (e.g. one
- * that arrived via an Android push and is several seconds/minutes old by the
- * time the user taps it) would fall outside a tiny window and never be replayed
- * by the live `req`. A wider lookback replays it; `sortDedupe` removes overlap
- * with the initial page so there are no duplicates.
+ * Minimum interval between relay top-up pulls for one room. The wire delivers
+ * new messages to the store live; this pull exists to fetch history the wire's
+ * `since` window never covered (first visit, deep offline gaps) and to heal a
+ * dead wire socket — it must NOT fire on every store-change invalidation.
  */
-const LIVE_SINCE_LOOKBACK_SECONDS = 5 * 60;
+const PULL_MIN_INTERVAL_MS = 30_000;
 
 /**
  * Largest gap (seconds) between the cursor message and the next-oldest before
@@ -83,25 +76,20 @@ function paginationCursor(events: NostrEvent[]): number | undefined {
 }
 
 /**
- * Chat messages (kind 9) and polls (kind 1068) for a NIP-29 group, with a
- * live subscription that appends incoming messages into the query cache and
- * scroll-up pagination that backfills older history on demand.
+ * Chat messages (kind 9) and polls (kind 1068) for a NIP-29 group, hydrated
+ * from the shared IndexedDB event store.
  *
- * The full timeline lives in a single TanStack cache entry (oldest-first).
- * - Initial load fetches the newest {@link PAGE_SIZE} messages.
- * - {@link loadOlder} fetches the next older page using an `until` cursor
- *   (Ditto's `useInfiniteQuery` pattern, flattened into one growing list since
- *   chat is bottom-anchored rather than top-anchored).
- * - The live `req` appends new messages as they arrive.
+ * This hook holds NO sockets. The wire (WireSync) owns the standing per-relay
+ * subscription and funnels every incoming event into the store; the wire bus
+ * then announces `nip29:<groupId>` and this hook re-reads. The only network
+ * this hook performs is PULLS: a throttled newest-page top-up (first visit /
+ * deep gaps / dead-socket healing) and explicit scroll-up pagination — both of
+ * which are mirrored into the store by the relay pool's caching layer.
  *
- * Supports optimistic publishing: locally-signed messages can be inserted
- * immediately with a `pending` status (and later reconciled to confirmed when
- * the relay echoes the event back, or marked `failed` for retry). Because we
- * sign locally, the optimistic event shares its final id with the relay echo,
- * so de-duplication is automatic.
- *
- * Ported from Ditto's LiveStreamChat + useInfiniteQuery patterns, targeted at
- * the group's host relay only.
+ * Supports optimistic publishing: locally-signed messages are inserted
+ * immediately with a `pending` status. Because we sign locally, the optimistic
+ * event shares its id with the relay echo (which arrives via the wire), so
+ * de-duplication is automatic.
  */
 export function useGroupMessages(relayUrl: string | undefined, groupId: string | undefined) {
   const { nostr } = useNostr();
@@ -114,6 +102,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   const [hasMore, setHasMore] = useState(true);
   const cursorRef = useRef<number | undefined>(undefined);
   const loadingRef = useRef(false);
+  const lastPullRef = useRef(0);
 
   // Which relay the currently-rendered `query.data` belongs to. Used by
   // `placeholderData` below to decide whether the previous room's messages are
@@ -122,72 +111,72 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   // community's timeline).
   const dataRelayRef = useRef<string | undefined>(relayUrl);
 
-  // Last-known-good localStorage snapshot scope for this room. Read
-  // synchronously as the query's initialData so the previous visit's screenful
-  // paints on the FIRST frame of a cold launch — before the (slow-on-Android)
-  // IndexedDB cold open and the relay refresh, which then merge in on top.
+  // Last-known-good localStorage snapshot scope for this room: a pure READ
+  // CACHE for the first frame of a cold launch (Android IndexedDB cold-opens
+  // in seconds). Never an ingestion source — the store remains authoritative.
   const snapshotScope = relayUrl && groupId ? nip29SnapshotScope(relayUrl, groupId) : undefined;
+
+  useEffect(() => {
+    lastPullRef.current = 0;
+    setHasMore(true);
+    cursorRef.current = undefined;
+  }, [relayUrl, groupId]);
 
   const query = useQuery<NostrEvent[]>({
     queryKey: messagesKey(relayUrl, groupId),
     queryFn: async ({ signal }) => {
       const store = await eventStore;
 
-      // Whatever is already in the cache (the live subscription merges new
-      // messages in via `upsertMessage`, and prior fetches/backfills accumulate
-      // here). We MUST fold this into our return value: a `queryFn` return is an
-      // authoritative overwrite of the cache, so returning a bare local snapshot
-      // would DROP any event the subscription delivered before it had been
-      // mirrored into IndexedDB. Re-runs of this queryFn (cheap `staleTime` +
-      // prop/`enabled` churn during initial load) made that the common case —
-      // the "new message fetched but not shown until you re-focus the group" bug.
+      // Anything already painted (older pagination pages, optimistic sends).
+      // A queryFn return is an authoritative overwrite, so fold it in.
       const existing = queryClient.getQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId)) ?? [];
 
-      // 1. LOCAL-FIRST: resolve from the append-only IndexedDB store immediately
-      //    so `isLoading` reflects only the (fast) local read, never the relay
-      //    round-trip. A refresh / channel switch paints the cached timeline at
-      //    once instead of behind the skeleton. NostrBatcher mirrors every
-      //    `#h`-scoped event the relay returns into this store, so it holds the
-      //    group's history after the first visit. Merge with `existing` so a
-      //    re-run never clobbers subscription-delivered messages, and with the
-      //    native event inbox so a message the Android service received (e.g.
-      //    the one whose notification was just tapped) is in the very first
-      //    result even if the drain ran before this query existed.
+      // The store is the source of truth: the wire writes every incoming
+      // event here before the bus asks us to re-read.
       const cached = await store.query([
-        { kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE },
+        { kinds: TIMELINE_KINDS, "#h": [groupId!], limit: Math.max(PAGE_SIZE, existing.length) },
       ]);
-      const fed = nativeGroupTimelineEvents(groupId!);
-      const local = sortDedupe([...existing, ...cached, ...fed]);
 
-      // 2. BACKGROUND refresh: fetch the newest page from the relay, mirror it
-      //    into the store, and merge into the cache. NOT awaited — the network
-      //    never gates the visible timeline. The merge is append-only (functional
-      //    updater) so it can't drop live-subscription events either.
-      void (async () => {
-        if (signal.aborted) return;
-        try {
-          const events = await nostr.relay(relayUrl!).query(
-            [{ kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE }],
-            { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-          );
-          // A short first page means there's nothing older to backfill.
-          setHasMore(events.length >= PAGE_SIZE);
-          cursorRef.current = paginationCursor(events);
-          if (signal.aborted || events.length === 0) return;
-          queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) =>
-            sortDedupe([...old, ...events]),
-          );
-          // Keep the unread badge caches in step with what the timeline just
-          // learned — this poll is also the healing path when the unread
-          // hook's own live tail is on a dead socket.
-          recordUnreadActivity(queryClient, events);
-        } catch {
-          // Best-effort background refresh; the local-first result already rendered.
-        }
-      })();
+      // Deletions: the store self-applies NIP-09 for same-author deletes, but
+      // NIP-29 moderators delete others' messages — hide anything referenced
+      // by a kind-5 in this group.
+      const deletes = await store.query([{ kinds: [KIND_DELETE], "#h": [groupId!], limit: 200 }]);
+      const deletedIds = new Set(
+        deletes.flatMap((d) => d.tags.filter(([n, v]) => n === "e" && v).map(([, v]) => v)),
+      );
 
-      // Seed the cursor from local history too, so scroll-up backfill works even
-      // before the network refresh lands.
+      const local = sortDedupe([...existing, ...cached]).filter((e) => !deletedIds.has(e.id));
+
+      // Throttled background top-up: the newest relay page, for history the
+      // wire's since-window never covered. NOT awaited (never gates paint);
+      // the pool mirrors results into the store; merged append-only here.
+      const now = Date.now();
+      if (now - lastPullRef.current >= PULL_MIN_INTERVAL_MS) {
+        lastPullRef.current = now;
+        void (async () => {
+          if (signal.aborted) return;
+          try {
+            const events = await nostr.relay(relayUrl!).query(
+              [{ kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE }],
+              { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+            );
+            setHasMore(events.length >= PAGE_SIZE);
+            const cursor = paginationCursor(events);
+            if (cursor !== undefined && (cursorRef.current === undefined || cursor < cursorRef.current)) {
+              cursorRef.current = cursor;
+            }
+            if (signal.aborted || events.length === 0) return;
+            queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) =>
+              sortDedupe([...old, ...events]).filter((e) => !deletedIds.has(e.id)),
+            );
+          } catch {
+            // Best-effort; the store-hydrated result already rendered.
+          }
+        })();
+      }
+
+      // Seed the cursor from local history so scroll-up backfill works even
+      // before any network pull lands.
       if (cursorRef.current === undefined && local.length > 0) {
         cursorRef.current = paginationCursor(local);
       }
@@ -198,47 +187,26 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     // Seed with the last visit's screenful from the synchronous localStorage
     // snapshot, so a cold launch paints the room instantly instead of behind
     // the IndexedDB cold-open skeleton. `initialDataUpdatedAt: 0` marks the
-    // seed already-stale so the local-first queryFn still runs immediately and
-    // merges the durable store + relay refresh on top (append-only, so the
-    // seed can never mask fresher data).
-    //
-    // The native event inbox is folded in SYNCHRONOUSLY: on a notification tap
-    // the Android service has already handed the tapped message to the WebView
-    // (the drain runs at App mount, before this route's lazy chunk finishes
-    // loading), so it must be part of the FIRST frame. Without this it only
-    // arrives via the async paths — the getRoomEvents bridge round-trip or the
-    // queryFn behind the IndexedDB cold-open — and visibly pops in a beat
-    // after the stale snapshot painted.
+    // seed already-stale so the store-hydrating queryFn still runs immediately
+    // and merges on top (append-only, so the seed can never mask fresher data).
     initialData: () => {
       const snap = readTimelineSnapshot<NostrEvent>(snapshotScope);
       // Only seed events that belong to THIS group (every timeline event
-      // carries its `h` tag): a snapshot written by an older client during a
-      // room switch could hold another room's messages (the placeholderData
-      // race — see the snapshot writer below).
+      // carries its `h` tag).
       const own = snap?.filter((e) => e.tags.some(([t, v]) => t === "h" && v === groupId));
-      const seed = own && own.length > 0 ? own : undefined;
-      const fed = groupId ? nativeGroupTimelineEvents(groupId) : [];
-      if (fed.length === 0) return seed;
-      return sortDedupe([...(seed ?? []), ...fed]);
+      return own && own.length > 0 ? own : undefined;
     },
     initialDataUpdatedAt: 0,
-    // Backstop poll. The live `req` delivers new messages instantly on a healthy
-    // socket, but a half-dead socket (one the OS silently severed while the app
-    // was backgrounded on Android) leaves the streaming `for await` blocked with
-    // no error and no event, so live delivery quietly stops and the room falls
-    // behind. A periodic re-read from the relay (local-first, never gates the
-    // paint) heals that gap — every other group/Concord hook already polls.
+    // Healing backstops: the wire owns liveness, but a half-dead socket (one
+    // the OS severed while backgrounded) stalls silently — a periodic re-read
+    // (whose throttled pull tops up from the relay) and a refetch on
+    // focus/reconnect close that gap.
     refetchInterval: 60_000,
-    // Catch up the moment the app returns to the foreground / regains network,
-    // rather than waiting up to a full poll interval — the mobile-critical case
-    // where the live socket died in the background.
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     // Keep showing the previous channel's messages while the next loads, so
-    // switching channels within the SAME community never flashes the skeleton
-    // (cache-first feel). But when switching to a DIFFERENT community, the
-    // previous server's timeline is unrelated and confusing — drop it so the
-    // new room paints blank/loading rather than lingering on the old community.
+    // switching channels within the SAME community never flashes the skeleton.
+    // Switching to a DIFFERENT community drops the unrelated timeline instead.
     placeholderData: (prev) => (dataRelayRef.current === relayUrl ? prev : undefined),
   });
 
@@ -248,14 +216,19 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     dataRelayRef.current = relayUrl;
   }, [relayUrl, query.data]);
 
+  // Wire hydration: when this group's store changes, re-read it. (The queryFn
+  // is a cheap local read; its relay pull is independently throttled.)
+  useWireScopes((scopes) => {
+    if (groupId && scopes.has(`nip29:${groupId}`)) {
+      void queryClient.invalidateQueries({ queryKey: messagesKey(relayUrl, groupId) });
+    }
+  });
+
   // Send-status for optimistic messages (kept in its own cache entry, shared
   // with Concord via useSendStatusMap).
   const { status, setStatus } = useSendStatusMap(statusKey(relayUrl, groupId));
 
   // Keep the localStorage snapshot fresh with the rendered timeline (debounced).
-  // Disabled while the query is showing the PREVIOUS room's messages
-  // (placeholderData during a room switch) so they're never persisted under
-  // this room's scope.
   useTimelineSnapshotWriter(snapshotScope, query.data, !query.isPlaceholderData);
 
   const upsertMessage = useCallback(
@@ -267,35 +240,6 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     },
     [queryClient, relayUrl, groupId],
   );
-
-  // Native (Android) room warmup: pull the background service's rolling
-  // per-room cache for this group — the newest raw events it received over its
-  // own persistent sockets, retained even after the global drain buffer
-  // overflowed or was consumed. One bridge call per room open; every event is
-  // recorded in the session inbox (so later queryFn runs see it) and timeline
-  // kinds are upserted straight into the visible cache.
-  useEffect(() => {
-    if (!relayUrl || !groupId || !isNativeRuntime()) return;
-    let cancelled = false;
-    ArmadaNotification.getRoomEvents({ room: `h:${groupId}` })
-      .then(({ events }) => {
-        if (cancelled) return;
-        for (const json of events) {
-          try {
-            const ev = JSON.parse(json) as NostrEvent;
-            if (!ev || typeof ev.id !== "string" || typeof ev.kind !== "number") continue;
-            recordNativeEvent(ev);
-            if (TIMELINE_KINDS.includes(ev.kind)) upsertMessage(ev);
-          } catch {
-            // malformed line — skip
-          }
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [relayUrl, groupId, upsertMessage]);
 
   /**
    * Fetch the next older page of history (scroll-up pagination). Resolves to
@@ -365,61 +309,6 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     },
     [queryClient, relayUrl, groupId, setStatus],
   );
-
-  // Live subscription for new messages. A relay echo of our own optimistic
-  // event arrives here and clears its pending status (same id).
-  //
-  // NRelay1 owns reconnection: its WebSocket auto-reconnects with backoff and
-  // re-sends every active subscription on reopen, and this `req` iterator stays
-  // alive across that (it only ends on an explicit relay `CLOSED` or our abort).
-  // So we do NOT resubscribe ourselves — doing that on a `CLOSED` from an
-  // AUTH-gated relay (e.g. chat.soapbox.pub) just spins a fresh REQ→AUTH→CLOSED
-  // handshake against the signer. A genuinely dropped/half-dead socket is healed
-  // by the query's 60s poll + refetch-on-resume/reconnect instead.
-  useEffect(() => {
-    if (!relayUrl || !groupId) return;
-    const controller = new AbortController();
-
-    (async () => {
-      try {
-        // `since` reaches back a generous window (not just a few seconds) so a
-        // message that already exists when we open the group — e.g. the one that
-        // triggered an Android notification, received natively and therefore NOT
-        // in the WebView's IndexedDB nor the live stream's future — is still
-        // replayed by this `req` and merged into the timeline. `sortDedupe`
-        // collapses any overlap with the initial background page, so the wider
-        // window is free of duplicates.
-        const since = Math.floor(Date.now() / 1000) - LIVE_SINCE_LOOKBACK_SECONDS;
-        for await (const msg of nostr.relay(relayUrl).req(
-          [{ kinds: LIVE_KINDS, "#h": [groupId], since }],
-          { signal: controller.signal },
-        )) {
-          if (msg[0] === "EVENT") {
-            const event = msg[2] as NostrEvent;
-            if (event.kind === KIND_DELETE) {
-              // NIP-09: drop any referenced messages from the timeline. The
-              // relay already removed them from its store; this updates the
-              // live cache (e.g. another client edited/deleted a message).
-              for (const [name, id] of event.tags) {
-                if (name === "e" && id) removeOptimistic(id);
-              }
-              continue;
-            }
-            upsertMessage(event);
-            setStatus(event.id, undefined);
-            // Fan into the unread badge caches too — the sidebar/rail badge
-            // must light up even if the unread hook's own tail missed this
-            // event (socket died, or it fell in its snapshot↔tail gap).
-            recordUnreadActivity(queryClient, [event]);
-          }
-        }
-      } catch {
-        // Subscription ended (abort or relay closed).
-      }
-    })();
-
-    return () => controller.abort();
-  }, [nostr, relayUrl, groupId, upsertMessage, setStatus, removeOptimistic, queryClient]);
 
   const helpers = useMemo(
     () => ({

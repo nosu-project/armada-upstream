@@ -10,8 +10,6 @@ import {
   type ConcordList,
 } from "@/concord-v1/lib/concord";
 import { channelPseudonym } from "@/concord-v1/lib/derive";
-import { openMemoizedBatch } from "@/concord-v1/lib/decodeCache";
-import { type OpenedMessage } from "@/concord-v1/lib/envelope";
 import { acceptInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import type { Channel, Community } from "@/concord-v1/lib/types";
@@ -80,12 +78,6 @@ const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
   concord: "decrypting community vault",
 };
 
-function sortDedupe(events: NostrEvent[]): NostrEvent[] {
-  const byId = new Map<string, NostrEvent>();
-  for (const e of events) byId.set(e.id, e);
-  return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
-}
-
 /** Held epoch keys for a channel, newest-first (mirrors useConcordChannel). */
 function readEpochKeys(channel: Channel): Array<{ epoch: bigint; key: Uint8Array }> {
   const keys = channel.epochKeys.length ? channel.epochKeys : [{ epoch: channel.epoch, key: channel.key }];
@@ -98,64 +90,31 @@ function channelPseudonyms(channel: Channel): string[] {
 }
 
 /**
- * Fetch + decrypt one Concord channel's newest messages from the community's
- * relays and prime the `["concord","channel",<channelIdHex>]` cache with the
- * opened messages — exactly the shape and read path of useConcordChannelMessages
- * (kinds 3300/3305 over `#z` pseudonyms, opened with openMessageMulti, deletes
- * applied, sorted by ms). Best-effort: a relay miss or undecryptable blob is
- * skipped, never thrown past the caller.
+ * Fetch one Concord channel's newest sealed events from the community's
+ * relays. The relay() wrapper mirrors every returned outer into the shared
+ * IndexedDB store — which is all catch-up needs: the channel hooks (and the
+ * V1 unread scan) hydrate from the store and decrypt on demand. Best-effort:
+ * a relay miss is skipped, never thrown past the caller.
  */
 async function catchUpConcordChannel(
   nostr: ReturnType<typeof useNostr>["nostr"],
-  queryClient: ReturnType<typeof useQueryClient>,
   community: Community,
   channel: Channel,
+  since: number,
   signal: AbortSignal,
 ): Promise<void> {
-  const epochKeys = readEpochKeys(channel);
   const zs = channelPseudonyms(channel);
-  // Outer envelope timestamps are real epoch seconds, so the catch-up window
-  // applies to Concord too — older history backfills on demand in-channel.
-  const since = Math.floor(Date.now() / 1000) - CATCHUP_WINDOW_SECONDS;
-  const results = await Promise.all(
+  await Promise.all(
     community.relays.map((url) =>
       nostr
         .relay(url)
-        .query([{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": zs, since, limit: 500 }], { signal })
+        .query(
+          [{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": zs, since, limit: 500 }],
+          { signal },
+        )
         .catch(() => [] as NostrEvent[]),
     ),
   );
-
-  const byId = new Map<string, OpenedMessage>();
-  const deletes = new Map<string, Set<string>>();
-  // Memoized + chunked open so the catch-up shares the channel hook's
-  // decode-once cache (no double-decrypt) and never freezes the boot UI.
-  const allOpened = await openMemoizedBatch(results.flat(), channel.id, epochKeys, { signal });
-  for (const opened of allOpened) {
-    if (opened.kind === KIND_COMMUNITY_DELETE) {
-      const target = opened.tags.find((t) => t[0] === "e")?.[1];
-      if (!target) continue;
-      let authors = deletes.get(target);
-      if (!authors) deletes.set(target, (authors = new Set()));
-      authors.add(opened.author);
-      continue;
-    }
-    byId.set(opened.messageId, opened);
-  }
-  for (const [id, msg] of byId) {
-    if (deletes.get(id)?.has(msg.author)) byId.delete(id);
-  }
-  const opened = [...byId.values()].sort((a, b) => a.ms - b.ms);
-  if (opened.length === 0) return;
-  // Merge (dedupe by messageId) rather than keep-old-if-nonempty, so a cache
-  // primed by an earlier partial read never causes this fresh page to be
-  // dropped — the "logged in but still had to resync the community" bug.
-  queryClient.setQueryData<OpenedMessage[]>(["concord", "channel", bytesToHex(channel.id)], (old) => {
-    if (!old || old.length === 0) return opened;
-    const merged = new Map<string, OpenedMessage>();
-    for (const m of [...old, ...opened]) merged.set(m.messageId, m);
-    return [...merged.values()].sort((a, b) => a.ms - b.ms);
-  });
 }
 
 /**
@@ -311,7 +270,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       resolve(gId, `${groups.length} ${groups.length === 1 ? "channel" : "channels"}`);
       if (cancelled) return;
 
-      // ── 3. Catch up on messages for joined channels ─────────────────────
+      // ── 3. Warm the store with recent messages for joined channels ──────
       const mId = begin("messages");
       const channels = groups.slice(0, MAX_CATCHUP_CHANNELS);
       let messageCount = 0;
@@ -324,16 +283,11 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                 [{ kinds: TIMELINE_KINDS, "#h": [id], since, limit: PAGE_SIZE }],
                 { signal: stepSignal() },
               );
-              if (cancelled || events.length === 0) return;
+              if (cancelled) return;
               messageCount += events.length;
-              // The relay() wrapper has already mirrored these into IndexedDB;
-              // merge into the in-memory cache too (append-only, dedupe by id)
-              // so the channel renders instantly. Merging — rather than
-              // keep-old-if-nonempty — means a cache pre-seeded by a snapshot
-              // or live event can never cause the fresh page to be dropped.
-              queryClient.setQueryData<NostrEvent[]>(["nip29", "messages", relay, id], (old) =>
-                sortDedupe([...(old ?? []), ...events]),
-              );
+              // The relay() wrapper mirrors these into the shared IndexedDB
+              // store — the single layer every timeline and unread scan
+              // hydrates from. No cache seeding: hooks read the store.
             } catch {
               // Best-effort per channel.
             }
@@ -343,11 +297,11 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       resolve(mId, `${messageCount} cached`);
       if (cancelled) return;
 
-      // ── 4. Catch up on Concord (encrypted communities) ──────────────────
+      // ── 4. Warm the store with recent Concord (V1) traffic ──────────────
       // Concord membership is a self-encrypted list (kind 30078, d=armada/concord)
-      // that carries the room KEYS. Rehydrate each community from its invite and
-      // decrypt the newest messages per channel, priming the same
-      // ["concord","channel",<channelIdHex>] cache useConcordChannelMessages reads.
+      // that carries the room KEYS. Rehydrate each community and pull its
+      // channels' newest sealed events — the relay() wrapper mirrors them into
+      // the shared store, which the channel hooks decrypt on demand.
       if (CONCORD_ENABLED && user.signer.nip44) {
         const cId = begin("concord");
         let communityCount = 0;
@@ -384,10 +338,11 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           }
           communityCount = communities.length;
 
+          const since = Math.floor(Date.now() / 1000) - CATCHUP_WINDOW_SECONDS;
           await Promise.all(
             communities.flatMap((community) =>
               community.channels.map((channel) =>
-                catchUpConcordChannel(nostr, queryClient, community, channel, stepSignal()).catch(
+                catchUpConcordChannel(nostr, community, channel, since, stepSignal()).catch(
                   () => {
                     // Best-effort per channel.
                   },

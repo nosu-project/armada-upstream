@@ -43,7 +43,9 @@ export interface ConcordSub {
 }
 
 /** Every retained epoch key for a channel (newest first), with a safe fallback. */
-function epochKeys(channel: Community["channels"][number]): Array<{ epoch: bigint; key: Uint8Array }> {
+export function channelEpochKeyPairs(
+  channel: Community["channels"][number],
+): Array<{ epoch: bigint; key: Uint8Array }> {
   const keys = channel.epochKeys.length
     ? channel.epochKeys
     : [{ epoch: channel.epoch, key: channel.key }];
@@ -51,14 +53,16 @@ function epochKeys(channel: Community["channels"][number]): Array<{ epoch: bigin
 }
 
 /** The `#z` pseudonyms (one per held epoch) for a channel. */
-function channelZs(channel: Community["channels"][number]): string[] {
-  return epochKeys(channel).map((ek) => bytesToHex(channelPseudonym(ek.key, channel.id, ek.epoch)));
+export function channelZs(channel: Community["channels"][number]): string[] {
+  return channelEpochKeyPairs(channel).map((ek) =>
+    bytesToHex(channelPseudonym(ek.key, channel.id, ek.epoch)),
+  );
 }
 
 /** Per-`z` decrypt material (one per held epoch) for a channel. */
 function channelEpochKeys(channel: Community["channels"][number]): ConcordEpochKey[] {
   const channelId = bytesToHex(channel.id);
-  return epochKeys(channel).map((ek) => ({
+  return channelEpochKeyPairs(channel).map((ek) => ({
     z: bytesToHex(channelPseudonym(ek.key, channel.id, ek.epoch)),
     key: bytesToHex(ek.key),
     channelId,

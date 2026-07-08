@@ -26,6 +26,7 @@ import {
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
+import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -54,6 +55,14 @@ const BACKFILL_EOSE_GRACE_MS = 500;
 const BACKFILL_MAX_PAGES = 20;
 /** Pages per `loadOlder` scroll-up when the local store is exhausted. */
 const LOAD_OLDER_MAX_PAGES = 6;
+
+/**
+ * Minimum interval between relay backfill rounds for one channel. The wire
+ * delivers live wraps to the rumor store; the backfill exists for history the
+ * wire never covered (cold opens, offline gaps) and must not re-run on every
+ * bus-invalidated re-read.
+ */
+const BACKFILL_MIN_INTERVAL_MS = 30_000;
 
 function channelFilter(channel: ChannelV2, extra?: Partial<NostrFilter>): NostrFilter {
   return { kinds: [KIND_WRAP], authors: channel.streams.map((s) => s.group.pk), ...extra };
@@ -222,12 +231,14 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   // be sealed over.
   const cursor = useRef<Map<string, { newest?: number; oldest?: number; exhausted: boolean }>>(new Map());
   const initialLoadedRef = useRef<string | null>(null);
+  const lastBackfillRef = useRef(0);
 
   useEffect(() => {
     windowLimitRef.current = WINDOW_SIZE;
     setHasMore(true);
     setIsLoadingOlder(false);
     initialLoadedRef.current = null;
+    lastBackfillRef.current = 0;
     // Hydrate the in-memory cursor from the persisted one for this channel.
     if (channelIdHex) {
       void readChannelCursor(channelIdHex).then((c) => {
@@ -249,85 +260,16 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epochSig]);
 
-  // Live subscription: new wraps land the moment a relay forwards them. The
-  // decrypted rumors are written to the rumor cache and the newest cursor
-  // advances so a later cold launch resumes from here.
-  useEffect(() => {
-    if (!community || !channel || !channelIdHex) return;
-    const controller = new AbortController();
-    const since = Math.floor(Date.now() / 1000) - 5;
-
-    const pending: NostrEvent[] = [];
-    let readyTimer: ReturnType<typeof setInterval> | undefined;
-    const isReady = () =>
-      initialLoadedRef.current === channelIdHex ||
-      (queryClient.getQueryData<OpenedChat[]>(queryKey)?.length ?? 0) > 0;
-
-    const fold = async (events: NostrEvent[]) => {
-      if (events.length === 0) return;
-      const opened = await openChatBatch(events, channel);
-      if (opened.length === 0) return;
-      writeRumors(opened);
-      // NOTE: live events do NOT advance the persisted `newest` cursor — that
-      // would seal over any not-yet-bridged offline gap below them. Only a
-      // completed backfill bridge advances `newest` (see backfillAndRefresh).
-      queryClient.setQueryData<OpenedChat[]>(queryKey, (old) => upsert(old, opened));
-      // Clear optimistic pending/failed for anything echoed back.
-      queryClient.setQueryData<SendStatusMap>(statusKey(channelIdHex), (s = {}) => {
-        let touched = false;
-        const next = { ...s };
-        for (const m of opened) {
-          if (m.rumorId in next) {
-            delete next[m.rumorId];
-            touched = true;
-          }
-        }
-        return touched ? next : s;
-      });
-    };
-
-    const apply = async (events: NostrEvent[]) => {
-      if (events.length === 0) return;
-      if (!isReady()) {
-        // Buffer until the initial store read resolves, so a live message
-        // can't paint a lonely single row over the loading skeleton.
-        pending.push(...events);
-        readyTimer ??= setInterval(() => {
-          if (controller.signal.aborted) {
-            clearInterval(readyTimer);
-            readyTimer = undefined;
-            return;
-          }
-          if (isReady()) {
-            clearInterval(readyTimer);
-            readyTimer = undefined;
-            void fold(pending.splice(0, pending.length));
-          }
-        }, 100);
-        return;
-      }
-      await fold(events);
-    };
-
-    for (const url of community.relays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req([channelFilter(channel, { since })], {
-            signal: controller.signal,
-          })) {
-            if (msg[0] === "EVENT") await apply([msg[2] as NostrEvent]);
-          }
-        } catch {
-          // Subscription ended — the poll covers gaps.
-        }
-      })();
+  // Live updates come from the wire: WireSync holds the standing kind-1059
+  // subscription for EVERY channel, decrypts with our stream keys, writes the
+  // rumor store, and announces `c2:<idHex>` on the bus. We just re-read.
+  // (Relay backfill inside the queryFn is independently throttled below so a
+  // bus invalidation is a cheap local read, not a network round.)
+  useWireScopes((scopes) => {
+    if (channelIdHex && scopes.has(`c2:${channelIdHex}`)) {
+      void queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });
     }
-    return () => {
-      controller.abort();
-      if (readyTimer !== undefined) clearInterval(readyTimer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, community, channelIdHex, epochSig, queryClient]);
+  });
 
   const query = useQuery<OpenedChat[]>({
     queryKey,
@@ -437,20 +379,30 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       };
 
       const existing = queryClient.getQueryData<OpenedChat[]>(queryKey);
+
+      // Relay backfill is throttled: a wire-bus invalidation re-reads the
+      // store (cheap, instant) without re-paging relays on every message.
+      const dueForBackfill = Date.now() - lastBackfillRef.current >= BACKFILL_MIN_INTERVAL_MS;
+      const maybeBackfill = () => {
+        if (!dueForBackfill) return Promise.resolve();
+        lastBackfillRef.current = Date.now();
+        return backfillAndRefresh();
+      };
+
       if (existing && existing.length > 0) {
         // Warm: paint what we have; heal in the background.
         initialLoadedRef.current = channelIdHex;
         void (async () => {
           if (signal.aborted) return;
           queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore());
-          await backfillAndRefresh();
+          await maybeBackfill();
         })().catch(() => undefined);
         return existing;
       }
 
       const local = await composeFromStore();
       initialLoadedRef.current = channelIdHex;
-      void backfillAndRefresh().catch(() => undefined);
+      void maybeBackfill().catch(() => undefined);
       return local;
     },
   });

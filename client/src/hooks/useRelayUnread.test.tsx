@@ -1,24 +1,21 @@
 /**
  * Regression tests for the NIP-29 unread/badge pipeline — "messages sync but
- * channels never light up / new messages don't appear until a refocus".
+ * channels never light up".
  *
- * The old implementation kept live-tail events in per-instance component state
- * (`useState`), so:
- *   - badge state evaporated on every remount / dependency change;
- *   - the five instances of the hook (server rail ×3, sidebar, OS badge) each
- *     had their own private copy;
- *   - nothing bridged incoming messages into the channel timeline caches, so
- *     the "chat plane" of a community only synced for the one open channel.
- *
- * These tests pin the fixed behavior: all activity lives in the shared query
- * cache and live-tail events fan into both the unread and timeline planes.
+ * Post-wire architecture: badges are derived purely from the shared IndexedDB
+ * event store (which the wire keeps fed) plus the user's read-state; the wire
+ * bus triggers a re-derive the moment a watched group's store changes. The
+ * hook holds no sockets, so badge state can no longer evaporate on remount or
+ * die with a socket.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
+
+import { emitWireScopes, resetWireBus } from "@/wire/bus";
 
 import { useRelayUnread } from "./useRelayUnread";
 
@@ -31,12 +28,26 @@ const OTHER = "a".repeat(64);
 const RELAY = "wss://test.relay";
 
 const h = vi.hoisted(() => ({
-  pool: undefined as unknown,
+  store: { events: [] as unknown[] },
   readState: {} as Record<string, number>,
 }));
 
-vi.mock("@nostrify/react", () => ({
-  useNostr: () => ({ nostr: h.pool }),
+vi.mock("@/hooks/useEventStore", () => ({
+  useEventStore: () =>
+    Promise.resolve({
+      query: async (filters: Array<{ kinds?: number[]; "#h"?: string[]; limit?: number }>) => {
+        const events = h.store.events as NostrEvent[];
+        const out: NostrEvent[] = [];
+        for (const f of filters) {
+          for (const ev of events) {
+            if (f.kinds && !f.kinds.includes(ev.kind)) continue;
+            if (f["#h"] && !ev.tags.some(([n, v]) => n === "h" && f["#h"]!.includes(v))) continue;
+            out.push(ev);
+          }
+        }
+        return out;
+      },
+    }),
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: { pubkey: USER } }),
@@ -49,76 +60,7 @@ vi.mock("@/hooks/useReadState", () => ({
   useReadState: () => ({ readState: h.readState }),
 }));
 
-// ── Fake relay ───────────────────────────────────────────────────────────────
-
-interface Filter {
-  kinds?: number[];
-  "#h"?: string[];
-  since?: number;
-  until?: number;
-  limit?: number;
-}
-
-/**
- * In-memory relay honoring kinds/#h/since/until/limit, with a pushable live
- * `req` stream (`emit` delivers to every open subscription).
- */
-class FakeRelay {
-  events: NostrEvent[] = [];
-  private listeners = new Set<(msg: unknown[]) => void>();
-
-  private match(f: Filter): NostrEvent[] {
-    let evs = this.events.filter(
-      (ev) =>
-        (!f.kinds || f.kinds.includes(ev.kind)) &&
-        (!f["#h"] || ev.tags.some(([n, v]) => n === "h" && f["#h"]!.includes(v))) &&
-        (f.since === undefined || ev.created_at >= f.since) &&
-        (f.until === undefined || ev.created_at <= f.until),
-    );
-    evs = [...evs].sort((a, b) => b.created_at - a.created_at);
-    if (f.limit !== undefined) evs = evs.slice(0, f.limit);
-    return evs;
-  }
-
-  async query(filters: Filter[]): Promise<NostrEvent[]> {
-    const out = new Map<string, NostrEvent>();
-    for (const f of filters) for (const ev of this.match(f)) out.set(ev.id, ev);
-    return [...out.values()];
-  }
-
-  async *req(_filters: Filter[], opts?: { signal?: AbortSignal }): AsyncGenerator<unknown> {
-    const queue: unknown[][] = [];
-    let notify: (() => void) | undefined;
-    const listener = (msg: unknown[]) => {
-      queue.push(msg);
-      notify?.();
-    };
-    this.listeners.add(listener);
-    try {
-      while (!opts?.signal?.aborted) {
-        while (queue.length > 0) yield queue.shift()!;
-        await new Promise<void>((resolve) => {
-          notify = resolve;
-          opts?.signal?.addEventListener("abort", () => resolve(), { once: true });
-        });
-        notify = undefined;
-      }
-    } finally {
-      this.listeners.delete(listener);
-    }
-  }
-
-  /** Deliver a live event to every open subscription. */
-  emit(event: NostrEvent): void {
-    for (const l of this.listeners) l(["EVENT", "sub", event]);
-  }
-
-  async event(): Promise<void> {}
-}
-
-function makePool(relays: Record<string, FakeRelay>) {
-  return { relay: (url: string) => relays[url] };
-}
+afterEach(() => resetWireBus());
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -137,100 +79,68 @@ function msg(group: string, opts: { pubkey?: string; created_at?: number; ptag?:
   };
 }
 
-function wrapper(queryClient: QueryClient) {
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
-}
-
-function setup(relay = new FakeRelay()) {
-  h.pool = makePool({ [RELAY]: relay });
+function setup() {
+  h.store.events = [];
   h.readState = {};
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
-  return { relay, queryClient };
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  return { queryClient, wrapper };
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("useRelayUnread", () => {
-  it("lights the badge from the snapshot query for unseen history", async () => {
-    const { relay, queryClient } = setup();
-    relay.events.push(msg("g1"));
+  it("lights the badge from store history newer than read-state", async () => {
+    const { wrapper } = setup();
+    h.store.events.push(msg("g1"));
 
-    const { result } = renderHook(() => useRelayUnread(RELAY, ["g1", "g2"]), {
-      wrapper: wrapper(queryClient),
-    });
+    const { result } = renderHook(() => useRelayUnread(RELAY, ["g1", "g2"]), { wrapper });
 
     await waitFor(() => expect(result.current.anyUnread).toBe(true));
     expect(result.current.byGroup["g1"]).toBeDefined();
     expect(result.current.byGroup["g2"]).toBeUndefined();
   });
 
-  it("lights the badge from a live-tail event", async () => {
-    const { relay, queryClient } = setup();
+  it("re-derives when the wire announces new activity for a watched group", async () => {
+    const { queryClient, wrapper } = setup();
 
-    const { result } = renderHook(() => useRelayUnread(RELAY, ["g1"]), {
-      wrapper: wrapper(queryClient),
-    });
-    await waitFor(() => expect(result.current).not.toBeUndefined());
+    const { result } = renderHook(() => useRelayUnread(RELAY, ["g1"]), { wrapper });
+    await waitFor(() =>
+      expect(queryClient.getQueryState(["nip29", "unread", RELAY, "g1", USER])?.status).toBe("success"),
+    );
+    expect(result.current.anyUnread).toBe(false);
 
-    relay.emit(msg("g1", { ptag: USER }));
+    // The wire ingests a message into the store, then rings the bus.
+    h.store.events.push(msg("g1", { ptag: USER }));
+    emitWireScopes(["nip29:g1"]);
 
     await waitFor(() => expect(result.current.anyUnread).toBe(true));
     expect(result.current.byGroup["g1"].mention).toBe(true);
   });
 
-  it("keeps live-tail activity across a remount (query cache, not component state)", async () => {
-    const { relay, queryClient } = setup();
+  it("ignores wire announcements for unwatched groups", async () => {
+    const { queryClient, wrapper } = setup();
+    renderHook(() => useRelayUnread(RELAY, ["g1"]), { wrapper });
+    await waitFor(() =>
+      expect(queryClient.getQueryState(["nip29", "unread", RELAY, "g1", USER])?.status).toBe("success"),
+    );
+    const fetches = queryClient.getQueryState(["nip29", "unread", RELAY, "g1", USER])!.dataUpdateCount;
 
-    const first = renderHook(() => useRelayUnread(RELAY, ["g1"]), {
-      wrapper: wrapper(queryClient),
-    });
-    await waitFor(() => expect(first.result.current).not.toBeUndefined());
+    emitWireScopes(["nip29:other-group"]);
+    await new Promise((r) => setTimeout(r, 150));
 
-    // Delivered ONLY over the live tail — the relay's stored history stays
-    // empty, so a refetch alone can never resurface this event.
-    relay.emit(msg("g1"));
-    await waitFor(() => expect(first.result.current.anyUnread).toBe(true));
-    first.unmount();
-
-    // A fresh instance (e.g. the sidebar re-rendering, or another rail icon)
-    // must still see the unread state without the event being re-delivered.
-    const second = renderHook(() => useRelayUnread(RELAY, ["g1"]), {
-      wrapper: wrapper(queryClient),
-    });
-    await waitFor(() => expect(second.result.current.anyUnread).toBe(true));
-  });
-
-  it("fans live-tail messages into the channel's timeline cache (chat-plane sync)", async () => {
-    const { relay, queryClient } = setup();
-    // The channel has been opened before: its timeline cache entry exists.
-    queryClient.setQueryData<NostrEvent[]>(["nip29", "messages", RELAY, "g1"], []);
-
-    renderHook(() => useRelayUnread(RELAY, ["g1"]), { wrapper: wrapper(queryClient) });
-    // Give the tail a beat to open, then deliver.
-    await waitFor(() => expect(relay).toBeDefined());
-    const event = msg("g1");
-    relay.emit(event);
-
-    await waitFor(() => {
-      const timeline = queryClient.getQueryData<NostrEvent[]>(["nip29", "messages", RELAY, "g1"]);
-      expect(timeline?.some((e) => e.id === event.id)).toBe(true);
-    });
+    expect(queryClient.getQueryState(["nip29", "unread", RELAY, "g1", USER])!.dataUpdateCount).toBe(fetches);
   });
 
   it("never counts self-authored messages as unread", async () => {
-    const { relay, queryClient } = setup();
-    relay.events.push(msg("g1", { pubkey: USER }));
+    const { queryClient, wrapper } = setup();
+    h.store.events.push(msg("g1", { pubkey: USER }));
 
-    const { result } = renderHook(() => useRelayUnread(RELAY, ["g1"]), {
-      wrapper: wrapper(queryClient),
-    });
-
-    relay.emit(msg("g1", { pubkey: USER }));
-    // Settle the snapshot query, then confirm nothing lit.
+    const { result } = renderHook(() => useRelayUnread(RELAY, ["g1"]), { wrapper });
     await waitFor(() =>
       expect(queryClient.getQueryState(["nip29", "unread", RELAY, "g1", USER])?.status).toBe("success"),
     );
@@ -238,37 +148,15 @@ describe("useRelayUnread", () => {
   });
 
   it("respects read-state: messages at or before last-read don't count", async () => {
-    const { relay, queryClient } = setup();
+    const { queryClient, wrapper } = setup();
     const ts = Math.floor(Date.now() / 1000);
-    relay.events.push(msg("g1", { created_at: ts }));
+    h.store.events.push(msg("g1", { created_at: ts }));
     h.readState = { [`${RELAY}::g1`]: ts };
 
-    const { result } = renderHook(() => useRelayUnread(RELAY, ["g1"]), {
-      wrapper: wrapper(queryClient),
-    });
-
+    const { result } = renderHook(() => useRelayUnread(RELAY, ["g1"]), { wrapper });
     await waitFor(() =>
       expect(queryClient.getQueryState(["nip29", "unread", RELAY, "g1", USER])?.status).toBe("success"),
     );
     expect(result.current.anyUnread).toBe(false);
-  });
-
-  it("merges refetched snapshots with tail-delivered events (refetch can't clear a badge)", async () => {
-    const { relay, queryClient } = setup();
-
-    const { result } = renderHook(() => useRelayUnread(RELAY, ["g1"]), {
-      wrapper: wrapper(queryClient),
-    });
-    await waitFor(() =>
-      expect(queryClient.getQueryState(["nip29", "unread", RELAY, "g1", USER])?.status).toBe("success"),
-    );
-
-    // Tail-only delivery (not in relay history), then a forced refetch that
-    // returns nothing — the healing poll must not wipe the badge.
-    relay.emit(msg("g1"));
-    await waitFor(() => expect(result.current.anyUnread).toBe(true));
-
-    await queryClient.refetchQueries({ queryKey: ["nip29", "unread", RELAY] });
-    expect(result.current.anyUnread).toBe(true);
   });
 });

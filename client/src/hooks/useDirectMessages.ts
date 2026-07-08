@@ -10,11 +10,9 @@ import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { decryptCached, getRenderedPlaintext, hasRenderedPlaintext, setRenderedPlaintext, type DecryptFn } from "@/hooks/dmRenderCache";
-import { nativeDmEvents, recordNativeEvent } from "@/lib/nativeEventInbox";
-import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { useWireScopes } from "@/wire/useWireScopes";
 import {
   dmConversationsSnapshotScope,
   dmThreadSnapshotScope,
@@ -27,13 +25,12 @@ import type { NostrEvent } from "@nostrify/nostrify";
 export const KIND_DM = 4;
 
 /**
- * How far back the live subscription looks. A push notification can deliver a
- * DM (and the user open the thread) before the live `req` is established; a
- * wider lookback replays it. Matches the NIP-29/Concord rationale; the merge
- * floor / dedupe removes overlap with the initial page. (Was 5s, which dropped
- * push-delivered messages that arrived just before the socket opened.)
+ * Minimum interval between relay top-up pulls. The wire delivers new DMs to
+ * the shared store live; the queryFns' background pulls exist for history the
+ * wire never covered and dead-socket healing — they must not re-fire on every
+ * wire-bus invalidation.
  */
-const LIVE_SINCE_LOOKBACK_SECONDS = 5 * 60;
+const PULL_MIN_INTERVAL_MS = 30_000;
 
 /** How many kind-4 events to request per direction, per relay, per page. */
 export const DM_PAGE_SIZE = 500;
@@ -405,8 +402,10 @@ export function useDMConversations() {
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
+  const lastPullRef = useRef(0);
   useEffect(() => {
     cursorsRef.current = {};
+    lastPullRef.current = 0;
     setHasMore(true);
   }, [user?.pubkey, relayKey, followsKey]);
 
@@ -417,10 +416,10 @@ export function useDMConversations() {
       const pubkey = user!.pubkey;
       const store = await eventStore;
 
-      // 1. LOCAL-FIRST: our own kind-4 set is mirrored into IndexedDB by
-      //    NostrBatcher, so the conversation list paints instantly from cache on
-      //    reload instead of behind a relay round-trip. Received DMs are scoped
-      //    to followed authors (friends-only), matching the relay queries below.
+      // 1. LOCAL-FIRST: the wire funnels every kind-4 into IndexedDB (and
+      //    NostrBatcher mirrors pull results), so the conversation list paints
+      //    instantly from the store. Received DMs are scoped to followed
+      //    authors (friends-only), matching the relay queries below.
       const cachedEvents = await store.query([
         { kinds: [KIND_DM], authors: [pubkey], limit: DM_PAGE_SIZE },
         ...(follows.length > 0
@@ -428,19 +427,17 @@ export function useDMConversations() {
           : []),
       ]);
       const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
-      // Fold in DMs the native Android service received (e.g. the one whose
-      // notification was just tapped) — they may not be in IndexedDB yet.
-      const fed = nativeDmEvents().filter((e) => dmCounterparty(e, pubkey));
-      const local = mergeDmEvents(mergeDmEvents(prev, cachedEvents), fed);
+      const local = mergeDmEvents(prev, cachedEvents);
 
-      // 2. BACKGROUND refresh: query EACH relay individually (not a pooled
-      //    group) for its newest page, merge all in, and seed the per-relay
-      //    cursors so "load older" can page each relay independently. NOT
-      //    awaited — the network never gates the visible list. Merge floor: a
-      //    sparse/empty relay read can never SHRINK the list, and a conversation
-      //    that only exists on one slow relay still gets filled in.
+      // 2. THROTTLED BACKGROUND refresh: query EACH relay individually (not a
+      //    pooled group) for its newest page, merge all in, and seed the
+      //    per-relay cursors so "load older" can page each relay
+      //    independently. NOT awaited — the network never gates the visible
+      //    list. Throttled so wire-bus invalidations stay local-only.
+      const pullDue = Date.now() - lastPullRef.current >= PULL_MIN_INTERVAL_MS;
+      if (pullDue) lastPullRef.current = Date.now();
       void (async () => {
-        if (signal.aborted || relays.length === 0) return;
+        if (!pullDue || signal.aborted || relays.length === 0) return;
         try {
           const { events, cursors } = await queryRelaysDmPage(
             nostr,
@@ -463,20 +460,11 @@ export function useDMConversations() {
       return local;
     },
     staleTime: 15_000,
-    // Seed from the localStorage snapshot (newest event per conversation),
-    // marked already-stale so the local-first queryFn still runs immediately.
-    // The merge floor (mergeDmEvents) is append-only, so the seed can never
-    // shrink or mask fresher data. Natively-received DMs (e.g. the one whose
-    // notification was just tapped — drained into the session inbox at App
-    // mount) are folded in synchronously so they're on the FIRST frame instead
-    // of popping in behind a bridge round-trip or the IndexedDB cold-open.
-    initialData: () => {
-      const snap = readTimelineSnapshot<NostrEvent>(snapshotScope);
-      const pubkey = user?.pubkey;
-      const fed = pubkey ? nativeDmEvents().filter((e) => dmCounterparty(e, pubkey)) : [];
-      if (fed.length === 0) return snap;
-      return mergeDmEvents(snap ?? [], fed);
-    },
+    // Seed from the localStorage snapshot (newest event per conversation) —
+    // a pure first-paint read cache, marked already-stale so the store-reading
+    // queryFn still runs immediately. The merge floor (mergeDmEvents) is
+    // append-only, so the seed can never shrink or mask fresher data.
+    initialData: () => readTimelineSnapshot<NostrEvent>(snapshotScope),
     initialDataUpdatedAt: 0,
     // Backstop the live socket: a backgrounded mobile WebSocket can wedge with
     // no error and no event, silently stalling delivery. A periodic local-first
@@ -503,44 +491,6 @@ export function useDMConversations() {
     return [...newestByPeer.values()].sort((a, b) => a.created_at - b.created_at);
   }, [query.data, user?.pubkey]);
   useTimelineSnapshotWriter(snapshotScope, snapshotItems);
-
-  // Native (Android) DM warmup: pull the background service's rolling "dm"
-  // cache (kind-4 ciphertext it received over its own sockets) once per mount,
-  // record it in the session inbox (the thread queryFn reads it) and merge it
-  // into the conversation list immediately.
-  useEffect(() => {
-    if (!user?.pubkey || !isNativeRuntime()) return;
-    let cancelled = false;
-    ArmadaNotification.getRoomEvents({ room: "dm" })
-      .then(({ events }) => {
-        if (cancelled) return;
-        const parsed: NostrEvent[] = [];
-        for (const json of events) {
-          try {
-            const ev = JSON.parse(json) as NostrEvent;
-            if (ev && typeof ev.id === "string" && ev.kind === KIND_DM) {
-              // Friends-only: only keep DMs authored by the viewer (sent copies)
-              // or by someone they follow. Strangers never enter the list.
-              const author = ev.pubkey;
-              if (author !== user.pubkey && !follows.includes(author)) continue;
-              recordNativeEvent(ev);
-              parsed.push(ev);
-            }
-          } catch {
-            // malformed line — skip
-          }
-        }
-        if (parsed.length === 0) return;
-        queryClient.setQueryData<NostrEvent[]>(
-          ["dm", "conversations", user.pubkey, relayKey, followsKey],
-          (old = []) => mergeDmEvents(old, parsed),
-        );
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.pubkey, relayKey, followsKey, follows, queryClient]);
 
   // Load an older page of conversations: advance each non-exhausted relay's
   // cursor one page and merge. Because each relay pages independently, a dense
@@ -583,44 +533,14 @@ export function useDMConversations() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, user?.pubkey, relayKey, followsKey, hasMore, queryClient]);
 
-  // The live subscription below surfaces new conversations; the
-  // local-first queryFn handles cold-load rendering, so no separate seed effect.
-  // local-first queryFn handles cold-load rendering, so no separate seed effect.
-
-  // Live subscription so new conversations/messages surface without a refetch.
-  useEffect(() => {
-    if (!user?.pubkey) return;
-    const pubkey = user.pubkey;
-    const controller = new AbortController();
-    const since = Math.floor(Date.now() / 1000) - LIVE_SINCE_LOOKBACK_SECONDS;
-
-    (async () => {
-      try {
-        for await (const msg of nostr.group(relays).req(
-          [
-            { kinds: [KIND_DM], authors: [pubkey], since },
-            // Received: only from people the viewer follows (friends-only).
-            ...(follows.length > 0
-              ? [{ kinds: [KIND_DM], authors: follows, "#p": [pubkey], since }]
-              : []),
-          ],
-          { signal: controller.signal },
-        )) {
-          if (msg[0] === "EVENT") {
-            const event = msg[2] as NostrEvent;
-            queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) =>
-              old.some((e) => e.id === event.id) ? old : [...old, event],
-            );
-          }
-        }
-      } catch {
-        // subscription closed
-      }
-    })();
-
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, relayKey, followsKey, queryClient]);
+  // The wire holds the standing DM subscription and funnels every kind-4 into
+  // the shared store; re-read when it announces a change. (The queryFn's relay
+  // pull is independently throttled, so this stays a cheap local read.)
+  useWireScopes((scopes) => {
+    if (user?.pubkey && scopes.has("dm")) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+  });
 
   const self = user?.pubkey ?? "";
 
@@ -745,6 +665,10 @@ export function useDirectMessages(peer: string | undefined) {
   // rows (plaintext at rest — same trust level as the signer's persistent
   // decrypt cache; see timelineSnapshot.ts).
   const threadSnapshotScope = self && peer ? dmThreadSnapshotScope(self, peer) : undefined;
+  const threadPullRef = useRef(0);
+  useEffect(() => {
+    threadPullRef.current = 0;
+  }, [self, peer, relayKey]);
 
   const query = useQuery<DecryptedDM[]>({
     queryKey,
@@ -753,23 +677,18 @@ export function useDirectMessages(peer: string | undefined) {
       const nip04 = user!.signer.nip04!;
       const store = await eventStore;
 
-      // 1. LOCAL-FIRST: read our own kind-4 set from the append-only IndexedDB
-      //    store (mirrored by NostrBatcher), narrow to this peer, and return
-      //    placeholders IMMEDIATELY so the thread structure paints on the first
-      //    frame after a refresh instead of behind the skeleton. Decryption of
-      //    the newest screenful streams in via the plaintext cache. Both
-      //    directions carry an `authors` filter (self for sent, the peer for
-      //    received) so a thread never pulls in a stranger's kind-4 events.
+      // 1. LOCAL-FIRST: read this thread's kind-4 set from the shared store
+      //    (fed by the wire; mirrored pulls land there too), narrow to this
+      //    peer, and return placeholders IMMEDIATELY so the thread structure
+      //    paints on the first frame. Decryption of the newest screenful
+      //    streams in via the plaintext cache. Both directions carry an
+      //    `authors` filter (self for sent, the peer for received) so a thread
+      //    never pulls in a stranger's kind-4 events.
       const localEvents = await store.query([
         { kinds: [KIND_DM], authors: [self!], "#p": [peer!], limit: 1000 },
         { kinds: [KIND_DM], authors: [peer!], "#p": [self!], limit: 1000 },
       ]);
-      // Fold in DMs the native Android service received for this thread (e.g.
-      // a tapped notification's message) — they may not be in IndexedDB yet.
-      const fed = nativeDmEvents();
-      const byId = new Map<string, NostrEvent>();
-      for (const e of [...localEvents, ...fed]) byId.set(e.id, e);
-      const localThread = [...byId.values()].filter((e) => dmCounterparty(e, self!) === peer);
+      const localThread = localEvents.filter((e) => dmCounterparty(e, self!) === peer);
       const prevLocal = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
       const localPlaceholders = mergeDmThread(prevLocal, buildThreadPlaceholders(localThread));
       if (localThread.length > 0) {
@@ -783,11 +702,13 @@ export function useDirectMessages(peer: string | undefined) {
         );
       }
 
-      // 2. BACKGROUND network refresh: query the relays for newer DMs, merge into
-      //    the cache, stream their decrypts in. NOT awaited — the network never
-      //    gates the visible thread.
+      // 2. THROTTLED BACKGROUND refresh: query the relays for newer DMs, merge
+      //    into the cache, stream their decrypts in. NOT awaited; skipped
+      //    within the pull window so wire-bus invalidations stay local-only.
+      const pullDue = Date.now() - threadPullRef.current >= PULL_MIN_INTERVAL_MS;
+      if (pullDue) threadPullRef.current = Date.now();
       void (async () => {
-        if (signal.aborted) return;
+        if (!pullDue || signal.aborted) return;
         try {
           // Recipient-scoped both ways (relays only serve the viewer's own
           // kind-4 set): sent = `authors:[self] #p:[peer]`, received =
@@ -822,24 +743,14 @@ export function useDirectMessages(peer: string | undefined) {
     },
     staleTime: 10_000,
     // Seed with the last visit's decrypted screenful from the localStorage
-    // snapshot so a cold-launched thread paints readable messages on the first
-    // frame. The snapshot rows also prime the plaintext render memo, so the
-    // queryFn's placeholder build keeps them decrypted (mergeDmThread never
-    // downgrades a decrypted row) and `decryptVisible` short-circuits instead
-    // of re-asking the signer.
-    //
-    // Natively-received DMs for this thread (session inbox, drained at App
-    // mount) are folded in synchronously as placeholder rows, so a tapped
-    // notification's message holds its place on the FIRST frame — its
-    // plaintext streams in via the queryFn's eager decrypt — instead of the
-    // whole row popping in a beat after the stale snapshot painted.
+    // snapshot — a pure first-paint read cache. The snapshot rows also prime
+    // the plaintext render memo, so the queryFn's placeholder build keeps them
+    // decrypted (mergeDmThread never downgrades a decrypted row) and
+    // `decryptVisible` short-circuits instead of re-asking the signer.
     initialData: () => {
       const rows = readTimelineSnapshot<DecryptedDM>(threadSnapshotScope);
       if (rows) for (const r of rows) setRenderedPlaintext(r.id, r.content);
-      const fed =
-        self && peer ? nativeDmEvents().filter((e) => dmCounterparty(e, self) === peer) : [];
-      if (fed.length === 0) return rows;
-      return mergeDmThread(rows ?? [], buildThreadPlaceholders(fed));
+      return rows;
     },
     initialDataUpdatedAt: 0,
     // Backstop the live socket (see the conversations query above): heal a
@@ -862,54 +773,13 @@ export function useDirectMessages(peer: string | undefined) {
   }, [query.data]);
   useTimelineSnapshotWriter(threadSnapshotScope, threadSnapshotItems);
 
-  // Live subscription for new messages in this thread.
-  useEffect(() => {
-    if (!self || !peer || !user?.signer.nip04) return;
-    const nip04 = user.signer.nip04;
-    const controller = new AbortController();
-    const since = Math.floor(Date.now() / 1000) - LIVE_SINCE_LOOKBACK_SECONDS;
-
-    (async () => {
-      try {
-        for await (const msg of nostr.group(relays).req(
-          [
-            { kinds: [KIND_DM], authors: [self], "#p": [peer], since },
-            { kinds: [KIND_DM], authors: [peer], "#p": [self], since },
-          ],
-          { signal: controller.signal },
-        )) {
-          if (msg[0] !== "EVENT") continue;
-          const event = msg[2] as NostrEvent;
-          // Only messages in this 1:1 conversation.
-          if (dmCounterparty(event, self) !== peer) continue;
-          const counterparty = event.pubkey === self ? peer : event.pubkey;
-          let content: string;
-          try {
-            content = await decryptCached(counterparty, event, (cp, ct) => nip04.decrypt(cp, ct));
-          } catch (err) {
-            console.warn("DM live decrypt failed", { id: event.id, counterparty, err });
-            continue;
-          }
-          const decrypted: DecryptedDM = {
-            id: event.id,
-            pubkey: event.pubkey,
-            created_at: event.created_at,
-            content,
-          };
-          queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
-            old.some((m) => m.id === decrypted.id)
-              ? old
-              : [...old, decrypted].sort((a, b) => a.created_at - b.created_at),
-          );
-        }
-      } catch {
-        // subscription closed
-      }
-    })();
-
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, self, peer, user?.signer.nip04, relayKey, queryClient]);
+  // The wire funnels this thread's kind-4s into the store; re-read on change.
+  // (The queryFn decrypts the newest rows and its pull is throttled.)
+  useWireScopes((scopes) => {
+    if (self && peer && scopes.has("dm")) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+  });
 
   // Backfill older history for this conversation. Because relays only serve
   // your own DMs (self-scoped filters), we page the global self-DM stream with

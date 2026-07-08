@@ -21,6 +21,7 @@ import { SyncGate } from "@/components/SyncGate";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WebPushNotifications } from "@/components/WebPushNotifications";
+import { WireSync } from "@/wire/WireSync";
 
 import AppRouter from "./AppRouter";
 
@@ -55,6 +56,7 @@ export function App() {
           <NostrProvider>
             <TooltipProvider>
               <ReadStateProvider>
+                <WireSync />
                 <NostrSync />
                 <PublishOutbox />
                 <SyncGate />

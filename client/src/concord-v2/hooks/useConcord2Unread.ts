@@ -2,13 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { openChatBatch, type OpenedChat } from "@/concord-v2/lib/chat";
-import {
-  ackPendingWraps,
-  peekPendingWraps,
-  queryChannelRumors,
-  writeRumors,
-} from "@/concord-v2/lib/rumorStore";
+import { queryChannelRumors } from "@/concord-v2/lib/rumorStore";
 import { KIND_MESSAGE } from "@/concord-v2/lib/kinds";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import {
@@ -16,8 +10,7 @@ import {
   markConcord2Read,
   type Concord2ReadMap,
 } from "@/concord-v2/lib/readState2";
-
-import type { NostrEvent } from "@nostrify/nostrify";
+import { useWireScopes } from "@/wire/useWireScopes";
 
 /** Per-channel unread summary (mirrors NIP-29's `GroupUnread`). */
 export interface Concord2Unread {
@@ -31,56 +24,6 @@ export interface Concord2Unread {
 const SCAN_LIMIT = 60;
 
 /**
- * Decrypt any wraps the native service parked for these channels and write the
- * recovered rumors to the store, returning them grouped by channel so the
- * caller can fold them into its scan without racing the fire-and-forget store
- * write.
- *
- * The native service subscribes to EVERY channel's streams but can't decrypt
- * (no stream keys), so it parks raw wraps. Historically the only drains were
- * the channel timeline / control plane queryFns — i.e. a wrap for a channel
- * that was never OPENED sat as ciphertext forever, and a push-notified message
- * never lit the in-app badge. Draining here (the badge scan runs every 5s for
- * every community mounted on the rail) closes that gap. Peek+ack semantics:
- * only wraps that actually decoded are acknowledged; an aborted or key-less
- * decode leaves them parked (issue #19).
- */
-async function drainParkedWraps(channels: ChannelV2[]): Promise<Map<string, OpenedChat[]>> {
-  const openedByChannel = new Map<string, OpenedChat[]>();
-  try {
-    const byPk = new Map<string, ChannelV2>();
-    for (const c of channels) for (const s of c.streams) byPk.set(s.group.pk, c);
-    if (byPk.size === 0) return openedByChannel;
-
-    const parked = await peekPendingWraps([...byPk.keys()]);
-    if (parked.length === 0) return openedByChannel;
-
-    const wrapsByChannel = new Map<ChannelV2, NostrEvent[]>();
-    for (const wrap of parked) {
-      const channel = byPk.get(wrap.pubkey);
-      if (!channel) continue;
-      const list = wrapsByChannel.get(channel);
-      if (list) list.push(wrap);
-      else wrapsByChannel.set(channel, [wrap]);
-    }
-
-    const acked: string[] = [];
-    for (const [channel, wraps] of wrapsByChannel) {
-      const opened = await openChatBatch(wraps, channel);
-      if (opened.length === 0) continue;
-      writeRumors(opened);
-      openedByChannel.set(channel.idHex, opened);
-      const openedWrapIds = new Set(opened.map((o) => o.wrapId));
-      acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
-    }
-    ackPendingWraps(acked);
-  } catch {
-    // Best-effort — the wraps stay parked for the next scan or channel open.
-  }
-  return openedByChannel;
-}
-
-/**
  * The TanStack Query key for a user's persisted V2 read-state map. Shared
  * across every `useConcord2Unread` call site (the rail icon AND the open
  * community page) so a `markRead` in one instantly updates the other — see
@@ -90,10 +33,14 @@ const readMapKey = (pubkey: string | undefined) => ["concord2-read-map", pubkey]
 
 /**
  * Compute per-channel unread state for a Concord V2 community — purely from the
- * local decrypted rumor cache (IndexedDB). No relay query is made: a channel
- * reads as unread when the newest cached message (kind-9, not authored by the
- * current user) is newer than the persisted last-read timestamp for that
- * channel.
+ * local decrypted rumor cache (IndexedDB), which the wire keeps fed for EVERY
+ * channel (live web subscriptions + the native service's parked wraps, both
+ * decrypted at ingest). No relay query is made: a channel reads as unread when
+ * the newest cached message (kind-9, not authored by the current user) is
+ * newer than the persisted last-read timestamp for that channel.
+ *
+ * Re-derived the moment the wire bus announces a `c2:` change to a watched
+ * channel, with a light poll as a backstop.
  *
  * The read-state map and the derived per-channel unread scan both live in the
  * shared TanStack Query cache (keyed by pubkey, resp. pubkey+channel-set+map)
@@ -130,34 +77,22 @@ export function useConcord2Unread(channels: ChannelV2[]): {
     staleTime: Infinity,
   });
 
-  // Rescan the local cache for unread, comparing against `readMap`. Refetches
-  // whenever the channel set or read map changes, and on a light interval so
-  // badges pick up messages the active channel's live subscription (or the
-  // background push ingest) has written to the cache without an explicit
-  // event. Keyed off `readMap` itself (not just pubkey) so a `markRead` from
-  // ANY mounted instance immediately invalidates this query for ALL of them.
+  // Rescan the local cache for unread, comparing against `readMap`. Keyed off
+  // `readMap` itself (not just pubkey) so a `markRead` from ANY mounted
+  // instance immediately invalidates this query for ALL of them.
   const { data: byChannel = {} } = useQuery<Record<string, Concord2Unread>>({
     queryKey: ["concord2-unread", pubkey, channelSig, readMap],
     queryFn: async () => {
-      // Surface push-delivered messages first: decrypt whatever the native
-      // service parked for these channels so they both light badges NOW and
-      // are already in the store when their channel opens.
-      const drained = await drainParkedWraps(channels);
-
       const next: Record<string, Concord2Unread> = {};
       await Promise.all(
         channelIds.map(async (idHex) => {
           const lastRead = readMap[idHex] ?? 0;
-          let rumors: Array<Pick<OpenedChat, "kind" | "author" | "createdAt" | "tags">>;
+          let rumors;
           try {
             rumors = await queryChannelRumors(idHex, { limit: SCAN_LIMIT });
           } catch {
-            rumors = [];
+            return;
           }
-          // Fold freshly-drained rumors in directly rather than racing the
-          // fire-and-forget store write.
-          const extra = drained.get(idHex);
-          if (extra) rumors = [...rumors, ...extra];
           let latest = 0;
           let mention = false;
           for (const r of rumors) {
@@ -173,8 +108,19 @@ export function useConcord2Unread(channels: ChannelV2[]): {
       return next;
     },
     enabled: !!pubkey && channelIds.length > 0,
-    refetchInterval: 5000,
+    // Backstop poll (cheap local reads); the wire bus below is the fast path.
+    refetchInterval: 15_000,
     staleTime: 0,
+  });
+
+  // Re-scan the moment the wire ingests a rumor for any watched channel.
+  useWireScopes((scopes) => {
+    for (const idHex of channelIds) {
+      if (scopes.has(`c2:${idHex}`)) {
+        void queryClient.invalidateQueries({ queryKey: ["concord2-unread", pubkey] });
+        return;
+      }
+    }
   });
 
   const markRead = useCallback(

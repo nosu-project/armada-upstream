@@ -26,6 +26,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useConcordList, useConcordCommunity } from "@/concord-v1/hooks/useConcordList";
+import { useConcord1Unread } from "@/concord-v1/hooks/useConcord1Unread";
 import { useConcordMetadata } from "@/concord-v1/hooks/useConcordMetadata";
 import { useCommunityImageDescriptors } from "@/concord-v1/hooks/useCommunityImageDescriptors";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
@@ -180,6 +181,8 @@ function Concord1MiniIcon({ communityId, name }: { communityId: string; name: st
   const { icon } = useCommunityImageDescriptors(community, folded);
   const iconUrl = useDecryptedCommunityImage(icon);
   const initial = name.trim().charAt(0).toUpperCase() || "·";
+  const { byChannel } = useConcord1Unread(community);
+  const { isConcordChannelMuted } = useMutes();
   return (
     <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-muted text-success">
       {iconUrl ? (
@@ -187,6 +190,10 @@ function Concord1MiniIcon({ communityId, name }: { communityId: string; name: st
       ) : (
         <span className="text-[9px] font-semibold leading-none">{initial}</span>
       )}
+      <MiniUnreadDot
+        mention={Object.values(byChannel).some((u) => u.mention)}
+        unread={Object.keys(byChannel).some((id) => !isConcordChannelMuted("c1", communityId, id))}
+      />
     </span>
   );
 }
@@ -264,6 +271,24 @@ function Concord2UnreadProbe({
   return null;
 }
 
+function Concord1UnreadProbe({
+  communityId,
+  onChange,
+}: {
+  communityId: string;
+  onChange: (unread: boolean, mention: boolean) => void;
+}) {
+  const community = useConcordCommunity(communityId);
+  const { byChannel } = useConcord1Unread(community);
+  const { isConcordChannelMuted } = useMutes();
+  const unread = Object.keys(byChannel).some(
+    (id) => !isConcordChannelMuted("c1", communityId, id),
+  );
+  const mention = Object.values(byChannel).some((u) => u.mention);
+  useEffect(() => onChange(unread, mention), [unread, mention, onChange]);
+  return null;
+}
+
 function RailItemUnreadProbe({
   item,
   onChange,
@@ -275,7 +300,7 @@ function RailItemUnreadProbe({
   if (item.kind === "concord2") {
     return <Concord2UnreadProbe communityId={item.communityId} onChange={onChange} />;
   }
-  return null; // Concord V1 has no unread model (its rail button shows none either).
+  return <Concord1UnreadProbe communityId={item.communityId} onChange={onChange} />;
 }
 
 /**
@@ -622,6 +647,14 @@ function ConcordButton({
   const { icon } = useCommunityImageDescriptors(community, folded);
   const iconUrl = useDecryptedCommunityImage(icon);
 
+  // Per-channel unread from the wire-fed event store (same model as V2).
+  const { byChannel: c1ByChannel } = useConcord1Unread(community);
+  const { isConcordChannelMuted } = useMutes();
+  const c1AnyUnread = Object.keys(c1ByChannel).some(
+    (id) => !isConcordChannelMuted("c1", communityId, id),
+  );
+  const c1AnyMention = Object.values(c1ByChannel).some((u) => u.mention);
+
   return (
     <ContextMenu>
       <Tooltip>
@@ -679,6 +712,20 @@ function ConcordButton({
                           <span className="text-sm font-semibold">{initials}</span>
                         )}
                       </span>
+                      {/* Unread / mention indicator (hidden while active — you're reading it). */}
+                      {!isActive && c1AnyMention ? (
+                        <span
+                          className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+                          aria-label="You were mentioned"
+                        >
+                          @
+                        </span>
+                      ) : !isActive && c1AnyUnread ? (
+                        <span
+                          className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
+                          aria-label="Unread messages"
+                        />
+                      ) : null}
                     </span>
                   </>
                 </DragSlot>

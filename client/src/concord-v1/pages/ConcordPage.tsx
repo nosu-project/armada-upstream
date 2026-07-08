@@ -14,6 +14,7 @@ import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/M
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { InviteConcordDialog } from "@/concord-v1/components/InviteConcordDialog";
+import { useConcord1Unread, type Concord1Unread } from "@/concord-v1/hooks/useConcord1Unread";
 import { ConcordSettingsDialog } from "@/concord-v1/components/ConcordSettingsDialog";
 import { ConcordRolesDialog } from "@/concord-v1/components/ConcordRolesDialog";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
@@ -185,23 +186,27 @@ function ConcordSidebarFooter() {
 }
 
 /**
- * A channel row in the Concord sidebar, mirroring the NIP-29 channel list.
- * V1 has no unread model, so muting here only affects notifications.
+ * A channel row in the Concord sidebar, mirroring the NIP-29 channel list:
+ * unread channels read brighter + bold, mentions get an "@" pill.
  */
 function ConcordChannelRow({
   communityId,
   channel,
   active,
+  unread,
   onSelect,
 }: {
   communityId: string;
   channel: Channel;
   active: boolean;
+  unread?: Concord1Unread;
   onSelect: () => void;
 }) {
   const { isConcordChannelMuted, toggleConcordChannelMute } = useMutes();
   const channelIdHex = bytesToHex(channel.id);
   const muted = isConcordChannelMuted("c1", communityId, channelIdHex);
+  const hasUnread = Boolean(unread);
+  const hasMention = Boolean(unread?.mention);
   return (
     <ContextMenu>
       <ContextMenuTrigger className="block">
@@ -213,6 +218,9 @@ function ConcordChannelRow({
             // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
             "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
             !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
+            // Unread (but not selected) channels read brighter + bold (Slack).
+            // Muted channels never bold — their unread is deliberately silent.
+            !active && hasUnread && !muted && "text-foreground font-semibold",
             // Muted channels read dimmer (Discord-style).
             !active && muted && "opacity-60",
             active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
@@ -221,6 +229,14 @@ function ConcordChannelRow({
           <Hash className="size-4 shrink-0" />
           <span className="truncate flex-1 min-w-0">{channel.name}</span>
           {muted && <BellOff className="size-3 shrink-0 opacity-60" aria-label="Muted" />}
+          {hasMention ? (
+            <span
+              className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+              aria-label="You were mentioned"
+            >
+              @
+            </span>
+          ) : null}
         </button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
@@ -375,6 +391,26 @@ export function ConcordPage() {
 
   const { transport: baseTransport, reactionsFor, allMessages } = useConcordTransport(community, channel, canWrite, iAmOwner);
   const { mutateAsync: send } = useSendConcordMessage(community, channel);
+
+  // Per-channel unread badges, computed purely from the local event store
+  // (which the wire keeps fed with every channel's sealed outers).
+  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord1Unread(community);
+
+  // Mark the open channel read up to its newest message while it's on screen —
+  // immediately and again on tab refocus (mirrors the NIP-29/V2 behavior).
+  const channelIdForRead = channel ? bytesToHex(channel.id) : undefined;
+  useEffect(() => {
+    if (!user || !channelIdForRead || allMessages.length === 0) return;
+    const latest = allMessages[allMessages.length - 1]?.created_at ?? 0;
+    if (latest <= 0) return;
+    const stamp = () => {
+      if (document.visibilityState === "visible") markChannelRead(channelIdForRead, latest);
+    };
+    stamp();
+    document.addEventListener("visibilitychange", stamp);
+    return () => document.removeEventListener("visibilitychange", stamp);
+  }, [user, channelIdForRead, allMessages, markChannelRead]);
+
   const { createChannel, isAddingChannel } = useConcordActions();
   const { leave, isLeaving, dissolve } = useConcordCommunityActions(community, communityId);
   const { data: dissolved } = useConcordDissolved(community);
@@ -630,6 +666,7 @@ export function ConcordPage() {
               communityId={communityId!}
               channel={c}
               active={active}
+              unread={unreadByChannel[idHex]}
               onSelect={() => {
                 setChannelIdHex(idHex);
                 onNavigate?.();

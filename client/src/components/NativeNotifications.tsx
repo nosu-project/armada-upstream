@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { Capacitor } from "@capacitor/core";
 
-import { useNativeEventFeed } from "@/hooks/useNativeEventFeed";
 import { useNativeNotifications } from "@/hooks/useNativeNotifications";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useToast } from "@/hooks/useToast";
@@ -21,9 +20,8 @@ const BATTERY_NUDGE_KEY = "armada:battery-exemption-nudged";
 /**
  * Headless mount that keeps the native (APK) background notification service
  * configured with the current user, relays, groups and prefs while the app is
- * open, and feeds the events it receives straight into the WebView's store so
- * chat is instantly up to date. No UI — the toggle lives in NotificationSettings.
- * Inert on web/PWA.
+ * open. (Event ingestion from the service lives in the wire — see WireSync.)
+ * No UI — the toggle lives in NotificationSettings. Inert on web/PWA.
  *
  * Also surfaces the Android battery-optimization problem up front: when
  * background notifications are on but Armada isn't exempt from battery
@@ -33,7 +31,6 @@ const BATTERY_NUDGE_KEY = "armada:battery-exemption-nudged";
  */
 export function NativeNotifications() {
   const { enabled } = useNativeNotifications();
-  useNativeEventFeed();
 
   const { user } = useCurrentUser();
   const { toast } = useToast();
