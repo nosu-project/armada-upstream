@@ -5,7 +5,9 @@ import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/
 import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useGuestbookPublisher2 } from "@/concord-v2/hooks/useGuestbook2";
 import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord-v2/lib/guestbook";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { fetchCreatorDmRelays } from "@/lib/creatorRelays";
 import { APP_RELAYS } from "@/lib/platform";
 import { toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord-v2/lib/communityList";
 import { mintCommunity } from "@/concord-v2/lib/community";
@@ -81,6 +83,7 @@ export function bundleToEntry(bundle: InviteBundle): CommunityListEntry {
 export function useCommunityActions2() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const { mutateAsync: updateList } = useUpdateCommunityList2();
   const queryClient = useQueryClient();
 
@@ -91,7 +94,18 @@ export function useCommunityActions2() {
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Name your community first.");
 
-      const { community, generalChannelId } = mintCommunity(trimmed, user.pubkey, APP_RELAYS);
+      // Snapshot the creator's NIP-17 DM relays as the community's home —
+      // inbox relays are curated for sealed, privacy-expecting traffic like
+      // Concord's. Fall back to the user's configured app relays when no DM
+      // relay list is published (and to the deployment defaults if that
+      // list was emptied).
+      const dmRelays = await fetchCreatorDmRelays(nostr, user.pubkey);
+      const relays = dmRelays.length > 0
+        ? dmRelays
+        : config.appRelays.length > 0
+          ? config.appRelays
+          : APP_RELAYS;
+      const { community, generalChannelId } = mintCommunity(trimmed, user.pubkey, relays);
 
       // Genesis: two owner-signed editions, nothing more (CORD-02 §1).
       await publishEdition2(
