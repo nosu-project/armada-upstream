@@ -57,6 +57,7 @@ import { useTyping2, useTypingPublisher2 } from "@/concord-v2/hooks/useTyping2";
 import { resolveVoiceBroker, useVoiceBroker2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
 import type { VoicePresenceFold } from "@/concord-v2/lib/voice";
 import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
+import { completeMemberlist } from "@/concord-v2/lib/guestbook";
 import { badgeOf, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import type { ChannelV2, CommunityV2, ImagePointer } from "@/concord-v2/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
@@ -499,12 +500,21 @@ export function ConcordV2Page() {
 
   const memberPubkeys = useMemo(() => {
     const banned = folded?.banned ?? new Set<string>();
-    const set = new Set<string>();
-    for (const [pk, m] of coalesced) if (m.state === "join" && !banned.has(pk)) set.add(pk);
-    for (const m of allMessages) if (!banned.has(m.pubkey)) set.add(m.pubkey);
+    // Observed authors: newest ms each pubkey was seen publishing. `created_at`
+    // is seconds; the Guestbook fold compares against millisecond kick/leave
+    // times, so scale up. This lets `completeMemberlist` drop a kicked member
+    // whose only presence is stale chat history, while an author still active
+    // AFTER their kick correctly re-enters.
+    const observed = new Map<string, number>();
+    for (const m of allMessages) {
+      const seenMs = m.created_at * 1000;
+      const prev = observed.get(m.pubkey);
+      if (prev === undefined || seenMs > prev) observed.set(m.pubkey, seenMs);
+    }
+    const set = completeMemberlist(coalesced, observed, banned);
     for (const g of roster?.grants ?? []) if (g.roleIds.length > 0 && !banned.has(g.member)) set.add(g.member);
     if (ownerHex) set.add(ownerHex);
-    if (user) set.add(user.pubkey);
+    if (user && !banned.has(user.pubkey)) set.add(user.pubkey);
     return [...set];
   }, [coalesced, allMessages, roster, ownerHex, user, folded]);
 
