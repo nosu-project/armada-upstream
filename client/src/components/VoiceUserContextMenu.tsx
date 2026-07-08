@@ -1,4 +1,4 @@
-import { Copy, Volume2, VolumeX } from "lucide-react";
+import { Copy, MoreVertical, Volume2, VolumeX } from "lucide-react";
 
 import {
   ContextMenu,
@@ -9,11 +9,21 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "@/hooks/useToast";
 import { useUserVolume } from "@/hooks/useUserVolume";
 import { writeClipboardText } from "@/lib/clipboard";
 import { tryNpubEncode } from "@/lib/safeNip19";
+import { cn } from "@/lib/utils";
 
 /**
  * The mute-toggle + 0–100% volume slider row used inside voice user menus
@@ -52,24 +62,20 @@ export function VolumeSliderRow({
 }
 
 /**
- * Right-click menu for a user in a voice call: per-user volume slider, local
- * mute toggle, and copy npub. Volume state lives in the shared per-pubkey
- * store (`useUserVolume`), so the connected room applies changes live and
- * every other control for the same user stays in sync. Used on the call-stage
- * tiles and the sidebar's nested voice roster. Set `showVolume={false}` for
- * the local user (there's no local playback of your own audio to adjust).
+ * The shared body of a voice user's menu — per-user volume slider, local mute
+ * toggle, and copy npub — rendered via whichever primitive the caller passes
+ * (context menu on right-click, dropdown menu on tap/click). Keeping one render
+ * fn means both surfaces stay in lockstep, exactly like MemberList's member
+ * menu. Volume state lives in the shared per-pubkey store (`useUserVolume`), so
+ * the connected room applies changes live and every other control for the same
+ * user stays in sync. Set `showVolume={false}` for the local user (there's no
+ * local playback of your own audio to adjust).
  */
-export function VoiceUserContextMenu({
-  pubkey,
-  displayName,
-  showVolume = true,
-  children,
-}: {
-  pubkey: string;
-  displayName: string;
-  showVolume?: boolean;
-  children: React.ReactNode;
-}) {
+function useVoiceMenuItems(
+  pubkey: string,
+  displayName: string,
+  showVolume: boolean,
+) {
   const [volume, setVolume] = useUserVolume(pubkey);
   const muted = volume === 0;
   const pct = Math.round(volume * 100);
@@ -83,6 +89,67 @@ export function VoiceUserContextMenu({
     );
   };
 
+  return function renderMenuItems({
+    Item,
+    CheckboxItem,
+    Label,
+    Separator,
+  }: {
+    Item: typeof ContextMenuItem | typeof DropdownMenuItem;
+    CheckboxItem: typeof ContextMenuCheckboxItem | typeof DropdownMenuCheckboxItem;
+    Label: typeof ContextMenuLabel | typeof DropdownMenuLabel;
+    Separator: typeof ContextMenuSeparator | typeof DropdownMenuSeparator;
+  }) {
+    return (
+      <>
+        <Label className="flex items-center justify-between gap-2">
+          <span className="truncate">{displayName}</span>
+          {showVolume && (
+            <span className="text-xs text-muted-foreground tabular-nums font-normal">{pct}%</span>
+          )}
+        </Label>
+        {showVolume && (
+          <>
+            {/* Not a menu Item: the slider needs pointer drags, which Radix
+                item semantics would swallow. */}
+            <div className="px-2 pb-2 pt-1">
+              <VolumeSliderRow volume={volume} apply={setVolume} displayName={displayName} />
+            </div>
+            <Separator />
+            <CheckboxItem checked={muted} onSelect={() => setVolume(muted ? 1 : 0)}>
+              Mute
+            </CheckboxItem>
+          </>
+        )}
+        <Item className="gap-2" onSelect={copyNpub}>
+          <Copy className="size-4" />
+          Copy npub
+        </Item>
+      </>
+    );
+  };
+}
+
+/**
+ * Right-click menu for a user in a voice call: per-user volume slider, local
+ * mute toggle, and copy npub. Used on the call-stage tiles and the sidebar's
+ * nested voice roster. On touch devices (where right-click / long-press is
+ * unreliable and invisible), pair this with {@link VoiceUserMenuButton} so the
+ * same actions are reachable by tapping a visible button.
+ */
+export function VoiceUserContextMenu({
+  pubkey,
+  displayName,
+  showVolume = true,
+  children,
+}: {
+  pubkey: string;
+  displayName: string;
+  showVolume?: boolean;
+  children: React.ReactNode;
+}) {
+  const renderMenuItems = useVoiceMenuItems(pubkey, displayName, showVolume);
+
   return (
     <ContextMenu>
       {/* Stop propagation: in the channel sidebar the roster rows sit inside
@@ -92,30 +159,62 @@ export function VoiceUserContextMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-56">
-        <ContextMenuLabel className="flex items-center justify-between gap-2">
-          <span className="truncate">{displayName}</span>
-          {showVolume && (
-            <span className="text-xs text-muted-foreground tabular-nums font-normal">{pct}%</span>
-          )}
-        </ContextMenuLabel>
-        {showVolume && (
-          <>
-            {/* Not a menu Item: the slider needs pointer drags, which Radix
-                item semantics would swallow. */}
-            <div className="px-2 pb-2 pt-1">
-              <VolumeSliderRow volume={volume} apply={setVolume} displayName={displayName} />
-            </div>
-            <ContextMenuSeparator />
-            <ContextMenuCheckboxItem checked={muted} onSelect={() => setVolume(muted ? 1 : 0)}>
-              Mute
-            </ContextMenuCheckboxItem>
-          </>
-        )}
-        <ContextMenuItem className="gap-2" onSelect={copyNpub}>
-          <Copy className="size-4" />
-          Copy npub
-        </ContextMenuItem>
+        {renderMenuItems({
+          Item: ContextMenuItem,
+          CheckboxItem: ContextMenuCheckboxItem,
+          Label: ContextMenuLabel,
+          Separator: ContextMenuSeparator,
+        })}
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/**
+ * A tap/click-triggered version of the voice user menu, rendered as a small
+ * "⋮" button — the discoverable, touch-friendly path to per-user volume and
+ * actions (right-click / long-press is invisible and unreliable on mobile).
+ * Shares its body with {@link VoiceUserContextMenu} so both stay in sync.
+ */
+export function VoiceUserMenuButton({
+  pubkey,
+  displayName,
+  showVolume = true,
+  className,
+}: {
+  pubkey: string;
+  displayName: string;
+  showVolume?: boolean;
+  className?: string;
+}) {
+  const renderMenuItems = useVoiceMenuItems(pubkey, displayName, showVolume);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Actions for ${displayName}`}
+          // Stop propagation so opening the menu from a row nested in another
+          // right-click/click surface doesn't also trigger that surface.
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.stopPropagation()}
+          className={cn(
+            "shrink-0 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/10 data-[state=open]:text-foreground",
+            className,
+          )}
+        >
+          <MoreVertical className="size-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        {renderMenuItems({
+          Item: DropdownMenuItem,
+          CheckboxItem: DropdownMenuCheckboxItem,
+          Label: DropdownMenuLabel,
+          Separator: DropdownMenuSeparator,
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

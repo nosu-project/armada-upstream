@@ -17,6 +17,7 @@ import {
   RoomEvent,
   Track,
   VideoPresets,
+  type RemoteParticipant,
   type RoomOptions,
 } from "livekit-client";
 import { Loader2 } from "lucide-react";
@@ -44,7 +45,7 @@ import { useAvToken2, useVoiceHeartbeat2, useVoicePresence2 } from "@/concord-v2
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
-import { getAudioProcessing, getPreferredCameraId, getPreferredMicId } from "@/lib/voiceDevices";
+import { getAudioProcessing, getPreferredCameraId, getPreferredMicId, getUserVolume, subscribeUserVolumes } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { cn } from "@/lib/utils";
 import { nip19 } from "nostr-tools";
@@ -119,6 +120,39 @@ function RosterReporter() {
   // Clear on room teardown (room switch or leave) so consumers fall back to
   // relay presence instead of showing a stale roster.
   useEffect(() => () => setVoiceRoomPubkeys(null), [setVoiceRoomPubkeys]);
+
+  return null;
+}
+
+/**
+ * Keeps every remote participant's playback volume in sync with the persisted
+ * per-pubkey store, for the whole call — independent of the call stage. The
+ * stage's tiles also re-apply on (re)subscribe, but they only exist while the
+ * stage is mounted; this applier runs even when the stage is closed, so a
+ * volume change made from the audio-settings menu or the sidebar roster
+ * takes effect on live audio immediately. Must render inside `LiveKitRoom`
+ * (and, for Concord, inside the identity-resolver provider).
+ */
+function UserVolumeApplier() {
+  const resolveIdentity = useVoiceIdentity();
+  const participants = useParticipants();
+
+  useEffect(() => {
+    const apply = () => {
+      for (const p of participants) {
+        if (p.isLocal || !p.identity) continue;
+        const { pubkey } = resolveIdentity(p.identity);
+        // The store/UI intent is 0–1 (0–100%). Clamp before handing the value
+        // to LiveKit: with the default room config (webAudioMix off)
+        // `setVolume` maps straight to `HTMLMediaElement.volume`, which throws
+        // outside [0, 1] — guards against stale values from older 0–200% builds.
+        (p as RemoteParticipant).setVolume(Math.min(Math.max(getUserVolume(pubkey), 0), 1));
+      }
+    };
+    apply();
+    // Re-apply whenever any stored volume changes (from any surface).
+    return subscribeUserVolumes(apply);
+  }, [participants, resolveIdentity]);
 
   return null;
 }
@@ -435,6 +469,7 @@ function VoiceRoomShell({
       <MicNoiseProcessor />
       <SpeakingReporter />
       <RosterReporter />
+      <UserVolumeApplier />
       {placeStage(
         <ServerScopeProvider relayUrl={scopeRelayUrl}>
           <CallStage callLabel={label} open={stageOpen} />

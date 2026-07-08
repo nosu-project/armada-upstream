@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { VoiceUserContextMenu } from "@/components/VoiceUserContextMenu";
+import { VoiceUserContextMenu, VoiceUserMenuButton } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { getAvatarShape, shapedAvatarSpeakingStyle } from "@/lib/avatarShape";
@@ -68,8 +68,9 @@ export function VoiceParticipantList({
 
 /**
  * One row of the nested voice roster (green speaking ring while talking).
- * Right-click opens the voice user menu: per-user volume + local mute (for
- * others) and copy npub.
+ * Right-click (desktop) or the trailing "⋮" button (tap-friendly, always
+ * visible on touch) opens the voice user menu: per-user volume + local mute
+ * (for others) and copy npub.
  */
 function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeaking?: boolean }) {
   const author = useAuthor(pubkey);
@@ -87,7 +88,7 @@ function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeakin
 
   return (
     <VoiceUserContextMenu pubkey={pubkey} displayName={name} showVolume={!isSelf}>
-      <div className="flex items-center gap-2 pl-7 pr-2 py-1 text-sm text-muted-foreground">
+      <div className="group/voicerow flex items-center gap-2 pl-7 pr-1 py-1 text-sm text-muted-foreground">
         <div
           className={cn(
             "rounded-full shrink-0 transition-shadow",
@@ -102,7 +103,16 @@ function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeakin
             </AvatarFallback>
           </Avatar>
         </div>
-        <span className={cn("truncate", isSpeaking && "text-success")}>{name}</span>
+        <span className={cn("truncate flex-1 min-w-0", isSpeaking && "text-success")}>{name}</span>
+        {/* Tap/click affordance for the participant menu. Hidden until hover on
+            pointer devices, always visible on touch (where right-click doesn't
+            exist), and pinned open while the menu is up. */}
+        <VoiceUserMenuButton
+          pubkey={pubkey}
+          displayName={name}
+          showVolume={!isSelf}
+          className="size-6 touch:size-7 opacity-0 group-hover/voicerow:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 touch:opacity-100 transition-opacity"
+        />
       </div>
     </VoiceUserContextMenu>
   );
