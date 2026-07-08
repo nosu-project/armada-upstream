@@ -27,10 +27,19 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { shortClockTime } from "@/lib/formatTime";
 import { writeClipboardText } from "@/lib/clipboard";
 import { dittoEventUrl } from "@/lib/dittoUrl";
+import { cn } from "@/lib/utils";
 
 import type { ChatMsg, ChatTransport, MessageReactions } from "@/components/chat/transport";
+
+/**
+ * Consecutive replies from the same author within this window collapse into a
+ * compact continuation (no repeated avatar/name). Matches the main timeline's
+ * `CONTINUATION_WINDOW_SECONDS` in MessageTimeline.
+ */
+const CONTINUATION_WINDOW_SECONDS = 5 * 60;
 
 /** A single message row inside the thread panel (root or reply). */
 function ThreadMessage({
@@ -39,6 +48,7 @@ function ThreadMessage({
   canReact,
   canModerate = false,
   isRumor = false,
+  continuation = false,
   onDelete,
 }: {
   event: ChatMsg;
@@ -52,6 +62,12 @@ function ThreadMessage({
    * the rumor, pretty-printed), signed events offer the relay off-ramps.
    */
   isRumor?: boolean;
+  /**
+   * Render as a compact continuation of the previous same-author reply: hides
+   * the avatar/name/timestamp header (a hover-revealed clock time replaces the
+   * avatar), mirroring the main timeline's continuation collapsing.
+   */
+  continuation?: boolean;
   /** Delete this message (own always; others' require moderation). Hidden when absent. */
   onDelete?: (event: ChatMsg) => void;
 }) {
@@ -77,28 +93,39 @@ function ThreadMessage({
     <>
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="group/threadmsg relative flex items-start gap-3 py-1.5 px-2.5 rounded hover:bg-secondary/40 transition-colors">
-          <ProfilePreviewCard pubkey={event.pubkey}>
-            <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <Avatar shape={getAvatarShape(metadata)} className="size-9 cursor-pointer transition-opacity hover:opacity-90">
-                <AvatarImage src={metadata?.picture} alt={displayName} />
-                <AvatarFallback className="bg-primary/20 text-primary text-sm">
-                  {displayName[0]?.toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
-            </button>
-          </ProfilePreviewCard>
+        <div className={cn(
+          "group/threadmsg relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors",
+          continuation ? "py-0.5" : "py-1.5",
+        )}>
+          {continuation ? (
+            <span className="shrink-0 w-9 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover/threadmsg:opacity-100 transition-opacity tabular-nums select-none">
+              {shortClockTime(event.created_at)}
+            </span>
+          ) : (
+            <ProfilePreviewCard pubkey={event.pubkey}>
+              <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <Avatar shape={getAvatarShape(metadata)} className="size-9 cursor-pointer transition-opacity hover:opacity-90">
+                  <AvatarImage src={metadata?.picture} alt={displayName} />
+                  <AvatarFallback className="bg-primary/20 text-primary text-sm">
+                    {displayName[0]?.toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+              </button>
+            </ProfilePreviewCard>
+          )}
           <div className="flex-1 min-w-0">
-            <div className="flex items-baseline gap-2">
-              <ProfilePreviewCard pubkey={event.pubkey}>
-                <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
-                  {displayName}
-                </button>
-              </ProfilePreviewCard>
-              <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
-                {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-              </span>
-            </div>
+            {!continuation && (
+              <div className="flex items-baseline gap-2">
+                <ProfilePreviewCard pubkey={event.pubkey}>
+                  <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
+                    {displayName}
+                  </button>
+                </ProfilePreviewCard>
+                <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
+                  {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                </span>
+              </div>
+            )}
             <ChatContent event={event} className="text-[15px]" />
             {reactions && reactions.tallies.length > 0 && (
               <ReactionBar tallies={reactions.tallies} canReact={canReact} onReact={reactions.react} />
@@ -259,9 +286,19 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          replies.map((reply) => (
-            <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} />
-          ))
+          replies.map((reply, i) => {
+            // Collapse consecutive same-author replies within a short window into
+            // a compact continuation, mirroring the main timeline. The root never
+            // continues into the first reply (they're separated by the divider).
+            const prev = replies[i - 1];
+            const continuation =
+              !!prev &&
+              prev.pubkey === reply.pubkey &&
+              reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
+            return (
+              <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} />
+            );
+          })
         )}
       </div>
 
