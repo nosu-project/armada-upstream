@@ -10,9 +10,7 @@ Communities gain two new ways to keep up with what matters to you. A Mentions
 view collects every message that @-mentions you across the community's channels
 in one place, and a Threads view lists the threads you're part of, newest reply
 first. Both light up when there's something new, and tapping any entry jumps
-straight to the message in its channel. This release also raises the message
-length limit to 5,000 characters and collapses very long messages behind a
-"Read more" toggle so they don't flood the timeline.
+straight to the message in its channel.
 
 ### Added
 - Mentions view in the community sidebar that gathers every message mentioning
@@ -21,6 +19,14 @@ length limit to 5,000 characters and collapses very long messages behind a
 - Threads view in the community sidebar listing threads you've taken part in,
   ordered by most recent reply, with unread highlighting and a tap to open the
   thread in its channel
+
+## [0.22.0] - 2026-07-08
+
+You can now send longer messages, and very long messages no longer flood the
+timeline. The chat character limit is raised to 5,000, and messages that run
+long are collapsed by default with a "Read more" toggle to expand them.
+
+### Added
 - "Read more" toggle that collapses long messages so they don't dominate the
   timeline, with a tap to expand and collapse again
 
