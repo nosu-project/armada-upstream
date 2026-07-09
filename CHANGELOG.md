@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.25.3] - 2026-07-09
+
+A quieter, more respectful release: removing a relay in Settings now actually
+disconnects it instead of silently reconnecting to a built-in one, and the app
+does far less needless background polling — no more constant refetching of
+member statuses or duplicate catch-up requests on idle channels, and polls now
+pause entirely while the app is in the background. That means less battery and
+data use when you're not actively chatting.
+
+### Changed
+- Greatly reduced background network activity on idle channels, and paused it
+  entirely while the app is in the background, for lower battery and data use
+
+### Fixed
+- Removing a relay in Settings now takes effect instead of reconnecting to a
+  built-in default
+
 ## [0.25.2] - 2026-07-09
 
 Chat images now open in a cinematic gallery: swipe between photos, pinch or
