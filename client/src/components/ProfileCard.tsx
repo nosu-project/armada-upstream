@@ -191,13 +191,16 @@ export function ProfileCard({
         )}
         {editable && (
           <>
+            {/* Hover affordances only — on touch the card is obviously
+                tappable (Plus placeholder when empty) and pencils are
+                redundant clutter. */}
             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-              <span className="opacity-0 group-hover:opacity-100 touch:opacity-100 transition-opacity flex items-center gap-1.5 text-white text-xs font-medium bg-black/50 rounded-full px-3 py-1.5 backdrop-blur-sm">
+              <span className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 text-white text-xs font-medium bg-black/50 rounded-full px-3 py-1.5 backdrop-blur-sm">
                 <Pencil className="size-3.5" /> {metadata.banner ? 'Change banner' : 'Add banner'}
               </span>
             </div>
             {metadata.banner && (
-              <div className="absolute bottom-2 right-2 size-7 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-opacity">
+              <div className="absolute bottom-2 right-2 size-7 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-opacity touch:hidden">
                 <Pencil className="size-3.5 text-muted-foreground" />
               </div>
             )}
@@ -225,15 +228,15 @@ export function ProfileCard({
                     </div>
                     <div
                       className={cn(
-                        'absolute inset-0 bg-black/0 group-hover:bg-black/45 touch:bg-black/30 transition-colors flex items-center justify-center',
+                        'absolute inset-0 bg-black/0 group-hover:bg-black/45 transition-colors flex items-center justify-center',
                         !hasCustomShape && 'rounded-full',
                       )}
                       style={overlayMaskStyle}
                     >
-                      <Pencil className="size-6 text-white opacity-0 group-hover:opacity-100 touch:opacity-100 transition-opacity drop-shadow" />
+                      <Pencil className="size-6 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow" />
                     </div>
                     {metadata.picture && (
-                      <div className="absolute bottom-0 right-0 size-7 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-opacity">
+                      <div className="absolute bottom-0 right-0 size-7 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-opacity touch:hidden">
                         <Pencil className="size-3.5 text-muted-foreground" />
                       </div>
                     )}

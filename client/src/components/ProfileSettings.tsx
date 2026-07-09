@@ -726,9 +726,9 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave }: ProfileSetti
               core profile (card + save) uncluttered. */}
           <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
             <CollapsibleTrigger asChild>
-              <Button type="button" variant="ghost" className="w-full justify-between px-0 h-auto hover:bg-transparent hover:text-foreground">
-                <span className="text-sm font-medium">Advanced</span>
-                <ChevronDown className="size-4 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" strokeWidth={4} />
+              <Button type="button" variant="ghost" className="w-full justify-between px-0 py-1 h-auto text-muted-foreground hover:bg-transparent hover:text-foreground">
+                <span className="text-xs font-medium">Advanced</span>
+                <ChevronDown className="size-3.5 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" strokeWidth={4} />
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-3 space-y-4">
