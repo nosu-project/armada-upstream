@@ -911,12 +911,12 @@ function ConversationList({
         className,
       )}
     >
-      <header className="relative pl-5 pr-3 pb-3 pt-[calc(1.25rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] flex flex-col justify-center shrink-0">
-        {/* Reserve a constant primary-line height (min-h-5) so this header sits
+      <header className="relative pl-4 pr-3 pb-[1.625rem] pt-[calc(1.5rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] flex flex-col justify-center shrink-0">
+        {/* Reserve a constant primary-line height (min-h-6) so this header sits
             at the exact same vertical position — and the divider below lines up
             — with a community's channel sidebar, whose title row reserves the
             same floor for an optional avatar/icon (see ChannelSidebarView). */}
-        <div className="flex items-center min-h-5">
+        <div className="flex items-center min-h-6">
           <h1 className="min-w-0 font-semibold truncate leading-tight tracking-wide text-sm">Direct Messages</h1>
         </div>
       </header>

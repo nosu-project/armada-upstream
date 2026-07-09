@@ -1,5 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { ChevronLeft, Bell, BellOff, Hash, Loader2, LogOut, MoreVertical, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
+import { ChevronDown, ChevronLeft, Bell, BellOff, Hash, Loader2, LogOut, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -21,18 +21,13 @@ import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -73,10 +68,10 @@ const EMPTY_REPLIES: ChatMsg[] = [];
 function CommunityTitleIcon({ icon }: { icon: CommunityImage | undefined }) {
   const url = useDecryptedCommunityImage(icon);
   if (!url) return null;
-  return <img src={url} alt="" className="size-5 rounded object-cover shrink-0" />;
+  return <img src={url} alt="" className="size-6 rounded object-cover shrink-0" />;
 }
 
-/** The community's decrypted GroupRoot banner above the channel-list header.
+/** The community's decrypted GroupRoot banner below the channel-list header.
  *  Renders nothing until decrypted (no layout shift / placeholder box). */
 function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
   const url = useDecryptedCommunityImage(banner);
@@ -448,10 +443,14 @@ export function ConcordPage() {
   useEffect(() => {
     setCreatingChannel(false);
     setNewChannelName("");
+    setCommunityMenuOpen(false);
   }, [communityId]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
+  // The community-name header menu (Discord-style): expands inline below the
+  // header, pushing the channel list down with a height animation.
+  const [communityMenuOpen, setCommunityMenuOpen] = useState(false);
   /** Desktop: whether the member roster pane is shown. */
   const [membersVisible, setMembersVisible] = useState(true);
   /** Mobile: whether the member sheet is open. */
@@ -655,9 +654,115 @@ export function ConcordPage() {
   const channelList = (onNavigate?: () => void, className?: string) => (
     <ChannelSidebarView
       className={className ?? (onNavigate ? "flex-1" : "hidden sidebar:flex")}
-      title={community?.name ?? "…"}
-      titleIcon={<CommunityTitleIcon icon={community?.icon} />}
-      banner={<CommunityBanner banner={community?.banner} />}
+      title={
+        <button
+          type="button"
+          className="group flex w-full items-center gap-1 min-w-0 text-left cursor-pointer rounded outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default"
+          onClick={() => community && setCommunityMenuOpen((v) => !v)}
+          disabled={!community}
+          aria-label="Community menu"
+          aria-expanded={communityMenuOpen}
+        >
+          <CommunityTitleIcon icon={community?.icon} />
+          <span className="flex-1 truncate">{community?.name ?? "…"}</span>
+          {community && (
+            <ChevronDown
+              className={cn(
+                "size-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                communityMenuOpen && "rotate-180",
+              )}
+            />
+          )}
+        </button>
+      }
+      titleExpansion={
+        community ? (
+          <Collapsible open={communityMenuOpen} onOpenChange={setCommunityMenuOpen}>
+            <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+              <div className="mx-2 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
+                {[
+                  {
+                    show: !!user,
+                    icon: <UserPlus className="size-4" />,
+                    label: "Invite people",
+                    onClick: () => setInviteOpen(true),
+                  },
+                  {
+                    show: user && community ? true : false,
+                    icon: <Plus className="size-4" />,
+                    label: "Create channel",
+                    onClick: () => setCreatingChannel(true),
+                  },
+                  {
+                    show: canManageRoles,
+                    icon: <Shield className="size-4" />,
+                    label: "Manage roles",
+                    onClick: () => setRolesOpen(true),
+                  },
+                  {
+                    show: canManageMetadata,
+                    icon: <Settings className="size-4" />,
+                    label: "Community settings",
+                    onClick: () => setSettingsOpen(true),
+                  },
+                  {
+                    show: !!communityId,
+                    icon: communityMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />,
+                    label: communityMuted ? "Unmute community" : "Mute community",
+                    onClick: () => communityId && toggleCommunityMute(`c1:${communityId}`),
+                  },
+                ]
+                  .filter((i) => i.show)
+                  .map((i) => (
+                    <button
+                      key={i.label}
+                      type="button"
+                      className="flex w-full items-center gap-3 px-3 py-2 text-sm text-left transition-colors clip-corner-lg hover:bg-foreground/10"
+                      onClick={() => {
+                        i.onClick();
+                        setCommunityMenuOpen(false);
+                      }}
+                    >
+                      {i.icon}
+                      {i.label}
+                    </button>
+                  ))}
+                {user && (
+                  <>
+                    <div className="mx-1 my-1 h-px bg-border" />
+                    <button
+                      type="button"
+                      disabled={isLeaving}
+                      className="flex w-full items-center gap-3 px-3 py-2 text-sm text-left text-destructive transition-colors clip-corner-lg hover:bg-destructive/10 disabled:opacity-50"
+                      onClick={() => {
+                        handleLeave();
+                        setCommunityMenuOpen(false);
+                      }}
+                    >
+                      <LogOut className="size-4" />
+                      Leave community
+                    </button>
+                    {iAmOwner && (
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-3 px-3 py-2 text-sm text-left text-destructive transition-colors clip-corner-lg hover:bg-destructive/10"
+                        onClick={() => {
+                          handleDissolve();
+                          setCommunityMenuOpen(false);
+                        }}
+                      >
+                        <Trash2 className="size-4" />
+                        Delete community
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        ) : undefined
+      }
+      banner={community?.banner ? <CommunityBanner banner={community.banner} /> : undefined}
       addChannelLabel={user && community ? "Add channel" : undefined}
       onAddChannel={user && community ? () => setCreatingChannel((v) => !v) : undefined}
       addChannelOpen={creatingChannel}
@@ -798,69 +903,24 @@ export function ConcordPage() {
               </TooltipTrigger>
               <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
             </Tooltip>
-            {user && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="size-8 touch:size-10" aria-label="Community actions">
-                    <MoreVertical className="size-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48 p-2">
-                  {communityId && (
-                    <>
-                      <DropdownMenuItem
-                        className="gap-3 px-3 py-2.5"
-                        disabled={!currentChannelIdHex}
-                        onClick={() => {
-                          if (currentChannelIdHex) toggleConcordChannelMute("c1", communityId, currentChannelIdHex);
-                        }}
-                      >
-                        {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                        {channelMuted ? "Unmute channel" : "Mute channel"}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="gap-3 px-3 py-2.5"
-                        onClick={() => toggleCommunityMute(`c1:${communityId}`)}
-                      >
-                        {communityMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                        {communityMuted ? "Unmute community" : "Mute community"}
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                  {canManageRoles && (
-                    <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setRolesOpen(true)}>
-                      <Shield className="size-4" />
-                      Manage roles
-                    </DropdownMenuItem>
-                  )}
-                  {canManageMetadata && (
-                    <DropdownMenuItem
-                      className="gap-3 px-3 py-2.5"
-                      onClick={() => setSettingsOpen(true)}
-                    >
-                      <Settings className="size-4" />
-                      Community settings
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
-                    disabled={isLeaving}
-                    onClick={handleLeave}
+            {user && communityId && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 touch:size-10"
+                    disabled={!currentChannelIdHex}
+                    aria-label={channelMuted ? "Unmute channel" : "Mute channel"}
+                    onClick={() => {
+                      if (currentChannelIdHex) toggleConcordChannelMute("c1", communityId, currentChannelIdHex);
+                    }}
                   >
-                    <LogOut className="size-4" />
-                    Leave community
-                  </DropdownMenuItem>
-                  {iAmOwner && (
-                    <DropdownMenuItem
-                      className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
-                      onClick={handleDissolve}
-                    >
-                      <Trash2 className="size-4" />
-                      Delete community
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                    {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{channelMuted ? "Unmute channel" : "Mute channel"}</TooltipContent>
+              </Tooltip>
             )}
           </div>
         </header>

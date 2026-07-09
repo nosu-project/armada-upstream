@@ -1,4 +1,4 @@
-import { Bell, BellOff, CheckCheck, Hash, Headphones, Link as LinkIcon, Loader2, Lock, RefreshCw, Volume2 } from "lucide-react";
+import { Bell, BellOff, CheckCheck, ChevronDown, Hash, Headphones, Link as LinkIcon, Loader2, Lock, Plus, RefreshCw, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
@@ -9,6 +9,7 @@ import { VoiceParticipantList } from "@/components/VoicePresence";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -180,10 +181,16 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const { registerCallBarSlot } = useCall();
   const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  // The server-name header menu (Discord-style): expands inline below the
+  // header, pushing the channel list down with a height animation.
+  const [serverMenuOpen, setServerMenuOpen] = useState(false);
 
   // Close the create-channel dialog when switching servers — its context (and
   // the user's permission to create) doesn't carry over to the new server.
-  useEffect(() => setCreateOpen(false), [relayUrl]);
+  useEffect(() => {
+    setCreateOpen(false);
+    setServerMenuOpen(false);
+  }, [relayUrl]);
 
   // Don't let skeletons run for the full connect/timeout window (which can be
   // 8–16s on a slow or AUTH-gated relay) — that reads as a hang. Show skeletons
@@ -212,11 +219,84 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
     return registerCallBarSlot(el);
   }, [registerCallBarSlot]);
 
+  const serverName = relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "");
+
   return (
     <ChannelSidebarView
       className={className}
-      title={relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "")}
-      subtitle={relayUrl.replace(/^wss?:\/\//, "").replace(/\/$/, "")}
+      title={
+        <button
+          type="button"
+          className="group flex w-full items-center gap-1 min-w-0 text-left cursor-pointer rounded outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          onClick={() => setServerMenuOpen((v) => !v)}
+          aria-label="Server menu"
+          aria-expanded={serverMenuOpen}
+        >
+          {relayInfo?.icon && (
+            <img src={relayInfo.icon} alt="" className="size-6 rounded object-cover shrink-0" />
+          )}
+          <span className="flex-1 truncate">{serverName}</span>
+          <ChevronDown
+            className={cn(
+              "size-4 shrink-0 text-muted-foreground transition-transform duration-200",
+              serverMenuOpen && "rotate-180",
+            )}
+          />
+        </button>
+      }
+      titleExpansion={
+        <Collapsible open={serverMenuOpen} onOpenChange={setServerMenuOpen}>
+          <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+            <div className="mx-2 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
+              {[
+                {
+                  show: !!user,
+                  icon: <Plus className="size-4" />,
+                  label: "Create channel",
+                  onClick: () => setCreateOpen(true),
+                },
+                {
+                  show: true,
+                  icon: <LinkIcon className="size-4" />,
+                  label: "Copy server link",
+                  onClick: () => {
+                    const url = `${shareOrigin()}/s/${relayToRouteParam(relayUrl)}`;
+                    writeClipboardText(url).catch(() => undefined);
+                  },
+                },
+                {
+                  show: true,
+                  icon: <RefreshCw className="size-4" />,
+                  label: "Refresh channels",
+                  onClick: () => refetch(),
+                },
+              ]
+                .filter((i) => i.show)
+                .map((i) => (
+                  <button
+                    key={i.label}
+                    type="button"
+                    className="flex w-full items-center gap-3 px-3 py-2 text-sm text-left transition-colors clip-corner-lg hover:bg-foreground/10"
+                    onClick={() => {
+                      i.onClick();
+                      setServerMenuOpen(false);
+                    }}
+                  >
+                    {i.icon}
+                    {i.label}
+                  </button>
+                ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      }
+      banner={
+        relayInfo?.banner ? (
+          <div className="size-full overflow-hidden">
+            <img src={relayInfo.banner} alt="" className="size-full object-cover" />
+          </div>
+        ) : undefined
+      }
       badge={
         relayInfo?.limitation?.auth_required ? (
           <Badge variant="secondary" className="mt-0.5 w-fit text-[10px] px-1.5 py-0">AUTH required</Badge>

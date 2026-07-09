@@ -13,7 +13,15 @@ interface ChannelSidebarViewProps {
   subtitle?: ReactNode;
   /** Optional leading icon before the title (e.g. a shield for Concord). */
   titleIcon?: ReactNode;
-  /** Optional full-width banner image rendered above the header (Concord). */
+  /**
+   * Optional inline panel rendered directly below the header and above the
+   * banner/divider (Concord's community menu). Meant to hold a
+   * `CollapsibleContent` whose `CollapsibleTrigger` is the `title`, so the
+   * panel expands inline (pushing the channel list down) with a height
+   * animation rather than floating over the content like a popover.
+   */
+  titleExpansion?: ReactNode;
+  /** Optional full-width banner image rendered below the header (Concord). */
   banner?: ReactNode;
   /** Optional badge shown under the header (e.g. "AUTH required"). */
   badge?: ReactNode;
@@ -59,6 +67,7 @@ export function ChannelSidebarView({
   title,
   subtitle,
   titleIcon,
+  titleExpansion,
   banner,
   badge,
   addChannelLabel,
@@ -96,13 +105,15 @@ export function ChannelSidebarView({
         className,
       )}
     >
-      {/* Desktop: the banner is its own block above the header (the sidebar is
-          a persistent column that doesn't touch the top screen edge). */}
-      {banner && <div className="hidden sidebar:block h-20 shrink-0 overflow-hidden">{banner}</div>}
       {/* Header — aligned with the channel rows' text gutter below (container
-          px-1 + row pl-4 = pl-5 here) so the grid lines up. The header reaches
-          the top screen edge on mobile, so it carries the status-bar safe-area
-          inset on top of its base top padding (0 on desktop).
+          px-1 + row pl-4 = pl-5 here) so the grid lines up. Padding is
+          symmetric (1.25rem top and bottom around the min-h-5 title line), so
+          on desktop the header spans exactly 60px and the divider below sits
+          flush with the bottom edge of the rail's first 48px icon (12px top
+          padding + size-12) and the chat pane's floating header card (mt-3 +
+          h-12). The header reaches the top screen edge on mobile, so it
+          carries the status-bar safe-area inset on top of its base top padding
+          (0 on desktop).
 
           On MOBILE a community banner (when present) fills this header block as
           its BACKGROUND — from the top screen edge down to the divider below —
@@ -110,23 +121,23 @@ export function ChannelSidebarView({
           position whether or not a server/community has a banner. That keeps
           the layout from jumping vertically as you navigate between them. The
           title sits at the bottom over a scrim so it stays legible on top of
-          any image. On desktop the banner is a separate block above (see
-          above), so the header behaves normally. */}
+          any image. On desktop the banner is a separate block below the header
+          (see below), so the header behaves normally. */}
       <div
         className={cn(
-          "relative pl-5 pr-3 pb-3 flex",
-          "pt-[calc(1.25rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
+          "relative pl-3 pr-3 pb-[1.625rem] flex",
+          "pt-[calc(1.5rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
           // Alignment is IDENTICAL with or without a banner so the title (and
           // therefore the divider + Channels section below) sits at the exact
           // same vertical position — the mobile banner is a pure absolute
           // background that doesn't participate in flow or alignment, so it can
           // never nudge the header down.
-          titleIcon ? "items-center gap-2" : "flex-col justify-center",
+          titleIcon ? "items-center gap-1" : "flex-col justify-center",
         )}
       >
-        {/* Mobile-only banner background (desktop uses the block above). These
-            layers are absolutely positioned, so they don't affect the header's
-            height or the title's alignment. */}
+        {/* Mobile-only banner background (desktop uses the block below the
+            header). These layers are absolutely positioned, so they don't
+            affect the header's height or the title's alignment. */}
         {banner && (
           <>
             <div className="sidebar:hidden absolute inset-0 overflow-hidden">{banner}</div>
@@ -139,14 +150,16 @@ export function ChannelSidebarView({
         )}
         {titleIcon && <div className="relative shrink-0">{titleIcon}</div>}
         <div className="relative min-w-0">
-          {/* Reserve a constant primary-line height (= the size-5 title
+          {/* Reserve a constant primary-line height (= the size-6 title
               icon/avatar) so the header block — and therefore the divider and
               Channels section below — sits at the exact same vertical position
-              whether or not the community/server has an icon. Without this
-              floor, an icon (taller than the text line) grows the header and
-              pushes everything down. The h2 stays block so `truncate` works;
-              the flex wrapper only vertically centers it in the reserved line. */}
-          <div className="flex items-center min-h-5">
+              whether or not the community/server has an icon. The floor matches
+              the icon height (24px) rather than the shorter text line, so a
+              text-only title (e.g. a NIP-29 relay with no NIP-11 icon) reserves
+              the same line as an icon'd one and centres identically instead of
+              floating a hair high. The h2 stays block so `truncate` works; the
+              flex wrapper only vertically centers it in the reserved line. */}
+          <div className="flex items-center min-h-6">
             <h2 className="min-w-0 font-semibold truncate leading-tight tracking-wide text-sm">{title}</h2>
           </div>
           {subtitle && (
@@ -155,6 +168,15 @@ export function ChannelSidebarView({
           {badge}
         </div>
       </div>
+
+      {/* Inline, height-animated expansion under the header (Concord's
+          community menu). Rendered here so it pushes the banner/divider/channel
+          list down rather than floating over them. */}
+      {titleExpansion}
+
+      {/* Desktop: the banner is its own block below the header (the sidebar is
+          a persistent column that doesn't touch the top screen edge). */}
+      {banner && <div className="hidden sidebar:block h-20 shrink-0 overflow-hidden">{banner}</div>}
 
       {/* Divider between the header and the channel list. */}
       <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
