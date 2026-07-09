@@ -141,6 +141,14 @@ export function ChannelSidebarView({
         {banner && (
           <>
             <div className="sidebar:hidden absolute inset-0 overflow-hidden">{banner}</div>
+            {/* Top scrim over the status-bar safe area. The banner fills
+                edge-to-edge under the (light-content) status bar; a bright image
+                would otherwise wash out the white clock/battery/signal icons.
+                This darkens exactly the top inset band so they stay legible. */}
+            <div
+              aria-hidden
+              className="sidebar:hidden absolute inset-x-0 top-0 h-[calc(var(--safe-area-inset-top,env(safe-area-inset-top,0px))+0.5rem)] pointer-events-none bg-gradient-to-b from-black/45 to-transparent"
+            />
             {/* Bottom-anchored scrim so the title reads on any banner. */}
             <div
               aria-hidden
