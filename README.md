@@ -92,3 +92,7 @@ the box; other hostnames need HTTPS.
 To run your own NIP-29 relay, LiveKit SFU, and Concord AV broker, see the
 [`armada-relay`](https://gitlab.com/soapbox-pub/armada-relay) repo. Its
 `docker-compose.yml` can optionally build this client from a sibling checkout.
+
+## License
+
+[AGPL-3.0](LICENSE)
