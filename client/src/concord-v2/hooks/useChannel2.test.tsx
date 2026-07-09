@@ -414,4 +414,66 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
       { timeout: 8_000 },
     );
   });
+
+  it("keeps the skeleton up (never flashes 'no messages') while a cold channel backfills", async () => {
+    const chanA = makeChannel();
+    const chanB = makeChannel();
+    const alice = signer();
+    const now = Math.floor(Date.now() / 1000);
+
+    // Channel A has history in the store; channel B has history ONLY on the
+    // relay (cold — never opened this session), so B's store read returns [].
+    writeRumors(await openChatBatch([await wrapChatAt(chanA.channel, alice, "a-msg", now - 100)], chanA.channel));
+    const bWrap = await wrapChatAt(chanB.channel, alice, "b-msg", now - 50);
+    await waitFor(async () => {
+      expect((await queryChannelRumors(chanA.idHex, { limit: 10 })).length).toBe(1);
+    });
+
+    // B's relay is slow, so the window between the empty store read and the
+    // backfill paint is wide — exactly where the flash happened.
+    const relay = new FakeRelay();
+    relay.events = [bWrap];
+    relay.delayMs = 600;
+    h.pool = makePool({ [RELAY]: relay });
+    const community = { idHex: "cc".repeat(32), relays: [RELAY] } as unknown as CommunityV2;
+
+    // Record EVERY render's (isLoading, message-count) so a single transient
+    // "loaded + empty" frame — the flash — can't slip between polls.
+    const frames: Array<{ loading: boolean; count: number; channel: string }> = [];
+    let watched = chanA.idHex;
+
+    const { wrapper } = makeWrapper();
+    const { result, rerender } = renderHook(
+      ({ channel }: { channel: ChannelV2 }) => {
+        const t = useChannelTimeline2(community, channel);
+        frames.push({ loading: t.isLoading, count: t.folded.messages.length, channel: watched });
+        return t;
+      },
+      { wrapper, initialProps: { channel: chanA.channel } },
+    );
+    await waitFor(() => {
+      expect(result.current.folded.messages.map((m) => m.content)).toContain("a-msg");
+    });
+
+    // Switch to the cold channel B; wait until b-msg paints from the backfill.
+    watched = chanB.idHex;
+    frames.length = 0;
+    rerender({ channel: chanB.channel });
+    await waitFor(
+      () => {
+        expect(result.current.folded.messages.map((m) => m.content)).toContain("b-msg");
+      },
+      { timeout: 8_000 },
+    );
+
+    // The invariant: while B was cold-loading, NO render may be simultaneously
+    // not-loading AND empty — that pairing is the "No messages yet" flash.
+    // (Regression: on the switch render `firstLoadDone` still carried channel
+    // A's `true`, and the reset lived in a post-commit effect that raced B's
+    // synchronous queryFn, so B's empty store read opened the isLoading gate
+    // for a frame before the effect reset it.)
+    const flashFrame = frames.find((f) => !f.loading && f.count === 0);
+    expect(flashFrame).toBeUndefined();
+    expect(result.current.folded.messages.map((m) => m.content)).toContain("b-msg");
+  });
 });

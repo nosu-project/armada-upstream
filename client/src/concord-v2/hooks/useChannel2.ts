@@ -247,8 +247,26 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   // store was empty) the relay backfill that decrypts history. Until it flips,
   // an empty timeline shows the skeleton, not "no messages". It flips in every
   // queryFn branch (warm read, backfill-settled, and throttle-skip) so it can
-  // never deadlock the skeleton. Reset on channel change.
-  const [firstLoadDone, setFirstLoadDone] = useState(false);
+  // never deadlock the skeleton.
+  //
+  // Scoped to the channel it was set FOR, and reset SYNCHRONOUSLY during render
+  // on a channel switch — not in the effect below. A channel switch mounts a
+  // new query whose queryFn runs synchronously; on a cold channel it reads the
+  // store empty and returns `[]` immediately, before the reset effect has
+  // flushed. If `firstLoadDone` still carried the previous channel's `true`,
+  // the isLoading gate would open on that empty `[]` and flash "No messages
+  // yet" for a frame until the effect reset it. Reading it through the current
+  // channel makes a carried-over `true` read as false the instant the key
+  // changes, with no render-timing race.
+  const [firstLoadState, setFirstLoadDoneState] = useState<{ channel: string | null; done: boolean }>({
+    channel: channelIdHex,
+    done: false,
+  });
+  const firstLoadDone = firstLoadState.channel === channelIdHex && firstLoadState.done;
+  const setFirstLoadDone = useCallback(
+    (done: boolean) => setFirstLoadDoneState({ channel: channelIdHex, done }),
+    [channelIdHex],
+  );
 
   useEffect(() => {
     windowLimitRef.current = WINDOW_SIZE;
@@ -256,7 +274,6 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     setIsLoadingOlder(false);
     initialLoadedRef.current = null;
     lastBackfillRef.current = 0;
-    setFirstLoadDone(false);
     // Hydrate the in-memory cursor from the persisted one for this channel.
     if (channelIdHex) {
       void readChannelCursor(channelIdHex).then((c) => {

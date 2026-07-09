@@ -369,16 +369,62 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   }, []);
 
   // When Concord V2 registers new stream keys (a community opens, a channel is
-  // added, an epoch rotates), authenticate them on every already-open socket
-  // that has a challenge, so an in-flight V2 REQ starts passing the relay's
-  // kind-1059 auth gate without waiting for another auth-required round-trip.
+  // added, an epoch rotates), authenticate them on every already-open socket.
+  //
+  // Auth-gating relays (ditto-relay's default `AUTH_KINDS=4,1059`) authenticate
+  // a connection's `authors` ONLY at the single NIP-42 challenge they issue per
+  // socket; a stream AUTH replayed on that already-consumed challenge is
+  // ignored. So for a socket that has NOT yet been challenged we just send the
+  // new stream AUTHs (they'll ride the upcoming first challenge, or the relay
+  // challenges on the next gated REQ). But for a socket that ALREADY consumed
+  // its challenge, replay is a no-op at the relay — the newly-registered stream
+  // stays unauthenticated and its kind-1059 backfill silently returns empty
+  // until the process restarts with a fresh socket. To make late registration
+  // behave like a restart WITHOUT one, force a reconnect: closing the UNDERLYING
+  // browser socket (not the websocket-ts wrapper, whose `close()` sets
+  // `closedByUser` and suppresses reconnect) fires a server-style close, so
+  // websocket-ts auto-reconnects, `watchSocketReopen` resets the AUTH
+  // bookkeeping, and the relay re-challenges — at which point the `auth`
+  // callback authenticates the user AND every currently-registered stream key
+  // (including the ones that just arrived).
   useEffect(() => {
-    return onStreamKeysAdded((added) => {
-      for (const [url, entry] of openRelaysRef.current) {
-        sendStreamAuths(entry, url, added);
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    const reconnectChallengedSockets = () => {
+      reconnectTimer = undefined;
+      for (const entry of openRelaysRef.current.values()) {
+        if (!entry.challenge) {
+          // Never challenged yet: the upcoming first challenge will cover the
+          // new keys (the `auth` callback signs the whole registry).
+          continue;
+        }
+        // Already authenticated on a spent challenge — replaying AUTH won't add
+        // the new authors. Reconnect to earn a fresh challenge that will.
+        const underlying = (entry.relay.socket as unknown as {
+          _underlyingWebsocket?: { close(code?: number, reason?: string): void };
+        })._underlyingWebsocket;
+        try {
+          // A non-1000 code reads as an abnormal (server-side) close, so
+          // websocket-ts reconnects instead of treating it as user-closed.
+          underlying?.close(4000, "reauth: new stream keys");
+        } catch {
+          // No underlying socket / already closing — the fresh connect that
+          // follows (or the next gated REQ's challenge) picks up the new keys.
+        }
+      }
+    };
+    const unsubscribe = onStreamKeysAdded(() => {
+      // Opening a community fires several `registerStreamKeys` calls in quick
+      // succession (core keys, per-channel keys, notif-subs). Debounce so the
+      // burst collapses into ONE reconnect per socket instead of a thrash.
+      if (reconnectTimer === undefined) {
+        reconnectTimer = setTimeout(reconnectChallengedSockets, 250);
       }
     });
-    // sendStreamAuths reads only refs; stable for the provider's lifetime.
+    return () => {
+      unsubscribe();
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+    };
+    // Reads only refs; stable for the provider's lifetime.
   }, []);
 
   return (
