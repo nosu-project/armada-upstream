@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.24.0] - 2026-07-08
+
+Replying in community chat now works the way you'd expect. Alongside the
+existing "reply in thread", you can now send a normal inline reply that shows up
+right in the timeline with a "replying to" bar, quoting the original message
+(and a thumbnail if it had an image). This release also fixes replies and other
+messages that could silently fail to send — especially on mobile after the app
+had been backgrounded or the network changed — so what you send actually
+arrives.
+
+### Added
+- Inline replies in community chat: reply to a message and your reply appears
+  in the timeline with a bar quoting the original, distinct from replying in a
+  thread
+
+### Fixed
+- Messages that could silently fail to send after a dropped or stale connection
+  (common on mobile) now reconnect and deliver, and previously stuck messages
+  are marked sent once they go through
+
 ## [0.23.0] - 2026-07-08
 
 Communities gain two new ways to keep up with what matters to you. A Mentions
