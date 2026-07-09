@@ -234,6 +234,38 @@ export async function queryRumorsByChannel(
   return out;
 }
 
+/**
+ * Read cached messages across a community's channels that p-tag `pubkey` — the
+ * "@ Mentions" view, purely local (no relay, no decrypt). Both `p` and
+ * `channel` are in {@link QUERYABLE_TAGS}, so the filter is index-backed. Each
+ * message's own `channel` binding tag recovers its channel id for the row.
+ * Covers kind-9 messages and kind-1111 thread replies (a reply p-tags the
+ * message author, so "replied to you" surfaces here too).
+ *
+ * Deliberately NOT derived from {@link queryRumorsByChannel}: that scan reads
+ * only the newest window of each channel, so a mention older than a busy
+ * channel's window would silently vanish from the tab. This single indexed
+ * filter reaches the newest `limit` mentions across the WHOLE store, however
+ * deep, in one cheap transaction.
+ */
+export async function queryMentionRumors(
+  channelIdsHex: string[],
+  pubkey: string,
+  opts: { limit: number; signal?: AbortSignal },
+): Promise<OpenedChat[]> {
+  if (channelIdsHex.length === 0 || !pubkey) return [];
+  const filter = {
+    kinds: [9, 1111],
+    "#p": [pubkey],
+    "#channel": channelIdsHex,
+    limit: opts.limit,
+  };
+  const events = await rumorStore().query([filter], { signal: opts.signal });
+  return events.map((ev) =>
+    storedToOpenedChat(ev, ev.tags.find((t) => t[0] === "channel")?.[1] ?? ""),
+  );
+}
+
 /** How many chat rumors are cached for a channel. */
 export async function countChannelRumors(channelIdHex: string): Promise<number> {
   const { count } = await rumorStore().count([{ kinds: CHAT_KINDS, "#channel": [channelIdHex] }]);

@@ -15,6 +15,8 @@ import {
   peekPendingWraps,
   queryByStreams,
   queryChannelRumors,
+  queryMentionRumors,
+  queryRumorsByChannel,
   storedToOpenedChat,
   writeOpened,
   writeRumors,
@@ -221,5 +223,35 @@ describe("concord-v2 rumor store", () => {
     const fresh = await import("@/concord-v2/lib/rumorStore");
     const parked = await fresh.peekPendingWraps([control.pk]);
     expect(parked.map((w) => w.id)).toEqual([wrap.id]);
+  });
+
+  it("surfaces a mention buried DEEPER than the per-channel scan window", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const me = signer();
+
+    // The mention is the OLDEST message, buried under 20 newer ones — deeper
+    // than a shallow newest-window scan reaches.
+    const rumors = [
+      chatRumor(idHex, alice, KIND_MESSAGE, "hey @me", 1000, [["p", me.pubkey]]),
+      ...Array.from({ length: 20 }, (_, i) =>
+        chatRumor(idHex, alice, KIND_MESSAGE, `chatter ${i}`, 2000 + i * 1000),
+      ),
+    ];
+    const wraps = await Promise.all(rumors.map((r) => wrapChat(r, channel, alice)));
+    writeRumors(await openChatBatch(wraps, channel));
+    await eventually(() => queryChannelRumors(idHex, { limit: 100 }), (r) => r.length === 21);
+
+    // A newest-window community scan (as used by unread/threads) misses it…
+    const windowed = await queryRumorsByChannel([idHex], { perChannel: 10 });
+    expect(windowed.get(idHex)?.some((r) => r.content === "hey @me")).toBe(false);
+
+    // …but the mentions view must still find it: its own index-backed `#p`
+    // filter reaches the whole store. (Regression: deriving mentions from the
+    // shared per-channel window silently dropped mentions older than a busy
+    // channel's newest page.)
+    const mentions = await queryMentionRumors([idHex], me.pubkey, { limit: 200 });
+    expect(mentions.map((r) => r.content)).toEqual(["hey @me"]);
+    expect(mentions[0].channelIdHex).toBe(idHex);
   });
 });

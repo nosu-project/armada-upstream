@@ -8,24 +8,26 @@ import type { OpenedChat } from "@/concord-v2/lib/chat";
 
 /**
  * How many newest rumors to read per channel for the community-wide derived
- * views (unread badges, threads, mentions). Sized for thread reconstruction
- * (the most demanding consumer); unread only needs the newest, mentions filter
- * further down.
+ * views (unread badges, threads). Sized for thread reconstruction (the most
+ * demanding consumer); unread only needs the newest.
  */
 const PER_CHANNEL = 200;
 
 /**
  * The single shared read of a Concord V2 community's cached rumors, grouped by
- * channel. Every community-wide derived view — unread badges, the Threads tab,
- * the Mentions tab — reads from THIS one query rather than each scanning the
- * store independently.
+ * channel. The community-wide derived views that only need each channel's
+ * newest window — unread badges and the Threads tab — read from THIS one query
+ * rather than each scanning the store independently. (Mentions deliberately do
+ * NOT: a mention older than a busy channel's window must still surface, so
+ * they keep their own index-backed `#p` filter — see `useConcord2Mentions`.)
  *
- * Why this exists: those three views used to each loop every channel with its
- * own `queryChannelRumors`, so a community with N channels issued 3×N IndexedDB
- * transactions, all contending on the single connection with the active
- * channel's own timeline read — the channel-switch stall. Here it is one
- * `query()` (one transaction, one filter per channel) shared across all three,
- * re-run only when the wire actually ingests a rumor for a watched channel.
+ * Why this exists: those views used to each loop every channel with its own
+ * `queryChannelRumors`, so a community with N channels issued a transaction
+ * per channel per view, all contending on the single connection with the
+ * active channel's own timeline read — the channel-switch stall. Here it is
+ * one `query()` (one transaction, one filter per channel) shared across
+ * consumers, re-run only when the wire actually ingests a rumor for a watched
+ * channel.
  *
  * The result is keyed by the channel SET (not any read-state), so opening a
  * channel — which advances read state but changes no rumors — never re-reads
