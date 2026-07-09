@@ -1,4 +1,4 @@
-import { Headphones } from "lucide-react";
+import { Headphones, MicOff } from "lucide-react";
 import type { CSSProperties } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -45,11 +45,14 @@ function ParticipantName({ pubkey }: { pubkey: string }) {
 export function VoiceParticipantList({
   participants,
   speaking,
+  muted,
   className,
 }: {
   participants: readonly string[];
   /** Pubkeys currently speaking (live, from the connected call), if known. */
   speaking?: ReadonlySet<string>;
+  /** Pubkeys currently muted (live, from the connected call), if known. */
+  muted?: ReadonlySet<string>;
   className?: string;
 }) {
   if (participants.length === 0) return null;
@@ -60,7 +63,12 @@ export function VoiceParticipantList({
   return (
     <div className={cn("flex flex-col pb-0.5", className)} aria-label={`${participants.length} in voice`}>
       {sorted.map((pk) => (
-        <VoiceParticipantRow key={pk} pubkey={pk} isSpeaking={speaking?.has(pk) ?? false} />
+        <VoiceParticipantRow
+          key={pk}
+          pubkey={pk}
+          isSpeaking={speaking?.has(pk) ?? false}
+          isMuted={muted?.has(pk) ?? false}
+        />
       ))}
     </div>
   );
@@ -72,7 +80,15 @@ export function VoiceParticipantList({
  * visible on touch) opens the voice user menu: per-user volume + local mute
  * (for others) and copy npub.
  */
-function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeaking?: boolean }) {
+function VoiceParticipantRow({
+  pubkey,
+  isSpeaking,
+  isMuted,
+}: {
+  pubkey: string;
+  isSpeaking?: boolean;
+  isMuted?: boolean;
+}) {
   const author = useAuthor(pubkey);
   const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
@@ -104,6 +120,12 @@ function VoiceParticipantRow({ pubkey, isSpeaking }: { pubkey: string; isSpeakin
           </Avatar>
         </div>
         <span className={cn("truncate flex-1 min-w-0", isSpeaking && "text-success")}>{name}</span>
+        {isMuted && (
+          <MicOff
+            className="size-3.5 shrink-0 text-destructive"
+            aria-label="Muted"
+          />
+        )}
         {/* Tap/click affordance for the participant menu. Hidden until hover on
             pointer devices, always visible on touch (where right-click doesn't
             exist), and pinned open while the menu is up. */}

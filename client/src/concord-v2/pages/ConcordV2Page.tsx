@@ -248,6 +248,7 @@ function ChannelRow2({
   active,
   inCall,
   speaking,
+  muted: mutedVoice,
   unread,
   onSelect,
   onJoinVoice,
@@ -259,6 +260,8 @@ function ChannelRow2({
   inCall: boolean;
   /** Live speaker set (only passed when `inCall`), for roster voice activity. */
   speaking?: ReadonlySet<string>;
+  /** Live muted set (only passed when `inCall`), for the roster mute indicator. */
+  muted?: ReadonlySet<string>;
   unread?: Concord2Unread;
   onSelect: () => void;
   onJoinVoice: (channel: ChannelV2, broker: string | null, fold?: VoicePresenceFold) => void;
@@ -325,7 +328,7 @@ function ChannelRow2({
           </button>
           {/* Discord-style nested voice roster: who's in the call, under the row
               (with live speaking rings while you're in it). */}
-          {channel.isVoice && <VoiceParticipantList participants={participants} speaking={speaking} />}
+          {channel.isVoice && <VoiceParticipantList participants={participants} speaking={speaking} muted={mutedVoice} />}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
@@ -767,7 +770,7 @@ export function ConcordV2Page() {
 
   // Voice (CORD-07): the active channel's live presence + rendezvous broker
   // (both no-op for text channels) power the join button.
-  const { joinConcordCall, activeCall, speakingPubkeys } = useCall();
+  const { joinConcordCall, activeCall, speakingPubkeys, mutedPubkeys } = useCall();
   const activeFold = useVoicePresence2(community, channel);
   const { data: activeBroker } = useVoiceBroker2(channel, activeFold);
   const inThisVoice = Boolean(
@@ -1282,6 +1285,7 @@ export function ConcordV2Page() {
               active={Boolean(view === "channel" && channel && channel.idHex === c.idHex)}
               inCall={inCall}
               speaking={inCall ? speakingPubkeys : undefined}
+              muted={inCall ? mutedPubkeys : undefined}
               unread={unreadByChannel[c.idHex]}
               onSelect={() => {
                 selectChannel(c.idHex);

@@ -87,6 +87,37 @@ function SpeakingReporter() {
 }
 
 /**
+ * Reports the room's muted participants (mic disabled, resolved to pubkeys) up
+ * to the call context, so the sidebar's nested voice roster can show who has
+ * their mic off — only while the viewer is connected to that call (mute state
+ * is only available from the LiveKit room we're in). `useParticipants`
+ * re-renders on the room's `TrackMuted`/`TrackUnmuted` events, so this effect
+ * re-runs as mute state changes. Must render inside `LiveKitRoom` (and, for
+ * Concord, inside the identity-resolver provider). Unverified identities are
+ * skipped, matching the roster/speaking reporters.
+ */
+function MutedReporter() {
+  const { setMutedPubkeys } = useCall();
+  const resolveIdentity = useVoiceIdentity();
+  const participants = useParticipants();
+
+  useEffect(() => {
+    const pubkeys = new Set<string>();
+    for (const p of participants) {
+      if (!p.identity || p.isMicrophoneEnabled) continue;
+      const { pubkey, verified } = resolveIdentity(p.identity);
+      if (verified) pubkeys.add(pubkey);
+    }
+    setMutedPubkeys(pubkeys);
+  }, [participants, resolveIdentity, setMutedPubkeys]);
+
+  // Clear on room teardown (room switch or leave) so no stale icons linger.
+  useEffect(() => () => setMutedPubkeys(new Set()), [setMutedPubkeys]);
+
+  return null;
+}
+
+/**
  * Reports the room's live participant roster (resolved to pubkeys) up to the
  * call context, so the active call's occupancy renders from LiveKit truth
  * everywhere — sidebar rosters, DM headers — instead of relay presence events
@@ -468,6 +499,7 @@ function VoiceRoomShell({
       <CallSoundEffects />
       <MicNoiseProcessor />
       <SpeakingReporter />
+      <MutedReporter />
       <RosterReporter />
       <UserVolumeApplier />
       {placeStage(

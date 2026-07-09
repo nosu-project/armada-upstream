@@ -128,7 +128,7 @@ export function EmojiPicker({ onSelect, customEmojis }: EmojiPickerProps) {
       if (shadowRoot) {
         const style = document.createElement("style");
         style.textContent = [
-          ":host { width: 100% !important; height: min(360px, 55dvh) !important; min-height: 160px !important; border-radius: 0 !important; box-shadow: none !important; }",
+          ":host { width: 100% !important; height: 100% !important; min-height: 0 !important; border-radius: 0 !important; box-shadow: none !important; }",
           "#root { width: 100% !important; background-color: transparent !important; --sidebar-width: 0px !important; }",
           ".scroll { padding-right: var(--padding) !important; }",
           ".sticky { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; background-color: transparent !important; }",
@@ -166,7 +166,7 @@ export function EmojiPicker({ onSelect, customEmojis }: EmojiPickerProps) {
   return (
     <div
       ref={containerRef}
-      className="emoji-mart-wrapper w-full"
+      className="emoji-mart-wrapper flex w-full h-[min(360px,55dvh)] min-h-[220px] max-h-full"
       style={{ isolation: "isolate" }}
       onWheel={(e) => {
         e.stopPropagation();

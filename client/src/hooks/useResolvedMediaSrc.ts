@@ -9,6 +9,10 @@ export interface EncryptedRef {
   url: string;
   encryption?: ImetaEncryption;
   mime?: string;
+  /** NIP-94 `dim` hint ("WxH") — sizes placeholders before load (display only). */
+  dim?: string;
+  /** NIP-94 `blurhash` hint — blur-up placeholder before load (display only). */
+  blurhash?: string;
 }
 
 type State =
