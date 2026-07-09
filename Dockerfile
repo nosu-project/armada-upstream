@@ -5,7 +5,10 @@ COPY package.json package-lock.json* ./
 RUN npm ci --silent
 COPY . .
 ARG VITE_APP_NAME=Armada
-ARG VITE_PLATFORM_RELAYS=ws://localhost:5577
+# Platform relays are empty by default: a standalone web build bakes in no
+# servers and the user adds their own. The armada-relay compose stack overrides
+# this ARG when it builds the client for a self-hosted deployment.
+ARG VITE_PLATFORM_RELAYS=
 ARG VITE_APP_RELAYS=wss://relay.ditto.pub,wss://relay.dreamith.to
 ARG VITE_SEARCH_RELAYS=wss://relay.ditto.pub,wss://relay.dreamith.to
 ARG VITE_DEFAULT_NOISE_SUPPRESSION=true

@@ -44,8 +44,7 @@ Follow these steps in order. Do NOT skip any step.
 git fetch --tags origin    # CRITICAL: sync remote tags before anything else
 git status                 # working tree should be clean (or commit/abort)
 git branch --show-current  # should be main
-cd client && npm run test  # full client suite: tsc + eslint + vitest + build
-cd ../server && go build ./... && go vet ./...   # relay must build
+npm run test               # full client suite: tsc + eslint + vitest + build
 ```
 
 - **Always `git fetch --tags origin` first.** The version is carried by the git
@@ -58,8 +57,8 @@ cd ../server && go build ./... && go vet ./...   # relay must build
   commit them first or abort.
 - If not on `main`, warn and ask whether to proceed.
 - If tests or builds fail, stop and fix before continuing. The release must not
-  contain broken code. (AGENTS.md: verify the relay builds and the client
-  `npm run test` passes before committing.)
+  contain broken code. (AGENTS.md: verify the client `npm run test` passes
+  before committing.)
 
 ### Step 2: Determine What Changed
 

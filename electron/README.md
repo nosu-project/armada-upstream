@@ -52,7 +52,7 @@ derives `.ico`/`.icns` from it.
 `.gitlab-ci.yml`, on version tags (`vX.Y.Z`):
 
 - `build-desktop-web` builds the web bundle once (empty platform relays) and
-  passes `client/electron/dist/` to the platform jobs as an artifact.
+  passes `electron/dist/` to the platform jobs as an artifact.
 - `build-desktop-linux` / `build-desktop-windows` package the installers, upload
   them to the generic package registry, and the `release` job links them on the
   GitLab Release — alongside the Android APK/AAB.

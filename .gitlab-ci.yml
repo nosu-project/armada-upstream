@@ -1,9 +1,12 @@
 # Armada CI/CD
 #
-# The web client lives in client/. This pipeline builds the web app, wraps it
-# in the committed Capacitor Android project (client/android), and produces a
-# signed release APK + AAB on version tags (vX.Y.Z), mirroring how ../ditto
-# builds its APK.
+# This repository is the Armada client (web/Android/desktop) — the Vite app at
+# the repo root. This pipeline builds the web app, wraps it in the committed
+# Capacitor Android project (android/), and produces a signed release APK + AAB
+# on version tags (vX.Y.Z), plus Electron desktop installers.
+#
+# The self-hostable backend (NIP-29 relay + LiveKit voice + Concord AV broker)
+# lives in the separate `armada-relay` repository.
 #
 # Required CI/CD variables (Settings → CI/CD → Variables), all "masked" and the
 # base64 one "Protected" if tags are protected:
@@ -36,37 +39,14 @@ test:
   cache:
     key:
       files:
-        - client/package-lock.json
+        - package-lock.json
     paths:
-      - client/node_modules/
+      - node_modules/
   script:
-    - cd client
     - npm ci
     - npm run test
     # Fail the pipeline on known-high/critical advisories in dependencies.
     - npm audit --audit-level=high
-
-# ── Relay build + vulnerability scan ────────────────────────────────────────
-relay:
-  stage: test
-  image: golang:1.25
-  timeout: 10 minutes
-  rules:
-    - if: $CI_COMMIT_TAG
-      when: never
-    - when: always
-  cache:
-    key: go-mod
-    paths:
-      - .gocache/
-  variables:
-    GOPATH: $CI_PROJECT_DIR/.gocache
-  script:
-    - cd server
-    - go build ./...
-    - go vet ./...
-    - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-
 
 # ── Signed Android APK + AAB on version tags ────────────────────────────────
 build-apk:
@@ -106,26 +86,26 @@ build-apk:
     - sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" > /dev/null
 
     # Point Gradle at the SDK
-    - echo "sdk.dir=$ANDROID_SDK_ROOT" > client/android/local.properties
+    - echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
 
     # Decode signing keystore and migrate JKS -> PKCS12 for Gradle compatibility.
     # PKCS12 uses a single password, so the key and store passwords must match
     # (KEY_PASSWORD == KEYSTORE_PASSWORD by construction — see secrets README).
-    - echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > client/android/app/my-upload-key.jks
+    - echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/my-upload-key.jks
     - keytool -importkeystore
-        -srckeystore client/android/app/my-upload-key.jks
-        -destkeystore client/android/app/my-upload-key.keystore
+        -srckeystore android/app/my-upload-key.jks
+        -destkeystore android/app/my-upload-key.keystore
         -deststoretype pkcs12
         -srcstorepass "$KEYSTORE_PASSWORD"
         -deststorepass "$KEYSTORE_PASSWORD"
         -srcalias upload
         -destalias upload
         -noprompt
-    - rm client/android/app/my-upload-key.jks
+    - rm android/app/my-upload-key.jks
 
     # Write key.properties consumed by android/app/build.gradle
     - |
-      cat > client/android/key.properties << EOF
+      cat > android/key.properties << EOF
       storePassword=$KEYSTORE_PASSWORD
       keyPassword=$KEY_PASSWORD
       keyAlias=upload
@@ -139,24 +119,22 @@ build-apk:
     - echo "Building version $VERSION_NAME (code $VERSION_CODE) from tag $CI_COMMIT_TAG"
 
     # Stamp version into android/app/build.gradle
-    - sed -i "s/versionCode [0-9]*/versionCode ${VERSION_CODE}/" client/android/app/build.gradle
-    - sed -i "s/versionName \"[^\"]*\"/versionName \"${VERSION_NAME}\"/" client/android/app/build.gradle
+    - sed -i "s/versionCode [0-9]*/versionCode ${VERSION_CODE}/" android/app/build.gradle
+    - sed -i "s/versionName \"[^\"]*\"/versionName \"${VERSION_NAME}\"/" android/app/build.gradle
 
     # Build web assets and sync into the Capacitor Android project
-    - cd client
     - npm ci
     - npx vite build -l error
     - cp dist/index.html dist/404.html
     - npx cap sync android
-    - cd ..
 
     # Build signed release APK + AAB
-    - cd client/android && chmod +x gradlew && ./gradlew assembleRelease bundleRelease && cd ../..
+    - cd android && chmod +x gradlew && ./gradlew assembleRelease bundleRelease && cd ..
 
     # Collect artifacts under a predictable path
     - mkdir -p artifacts
-    - cp client/android/app/build/outputs/apk/release/app-release.apk "artifacts/Armada.apk"
-    - cp client/android/app/build/outputs/bundle/release/app-release.aab "artifacts/Armada.aab"
+    - cp android/app/build/outputs/apk/release/app-release.apk "artifacts/Armada.apk"
+    - cp android/app/build/outputs/bundle/release/app-release.aab "artifacts/Armada.aab"
     - ls -lh artifacts/
 
     # Upload to the Generic Packages registry for a stable public download URL
@@ -176,22 +154,22 @@ build-apk:
   cache:
     key: android-gradle
     paths:
-      - client/android/.gradle/
-      - client/.gradle/
+      - android/.gradle/
+      - .gradle/
 
 # ── Desktop (Electron) builds on version tags ───────────────────────────────
 #
 # Armada desktop is a SOVEREIGN, standalone client: it bundles the web build and
-# serves it over a custom secure scheme (see client/electron/main.js). The web
-# build is compiled with EMPTY platform relays (VITE_PLATFORM_RELAYS="") so
-# nothing is baked in — the user adds whatever servers they want.
+# serves it over a custom secure scheme (see electron/main.js). The web build is
+# compiled with EMPTY platform relays (VITE_PLATFORM_RELAYS="") so nothing is
+# baked in — the user adds whatever servers they want.
 #
 # build-desktop-web builds that web bundle ONCE; the per-platform jobs consume it
 # as an artifact and run electron-builder. The app icon is committed at
-# client/electron/build/icon.png (electron-builder derives .ico/.icns from it).
+# electron/build/icon.png (electron-builder derives .ico/.icns from it).
 
 # Build the standalone web bundle (no pinned relays) and hand it to the
-# platform jobs at client/electron/dist/.
+# platform jobs at electron/dist/.
 build-desktop-web:
   stage: build
   image: node:22
@@ -207,11 +185,10 @@ build-desktop-web:
   cache:
     key:
       files:
-        - client/package-lock.json
+        - package-lock.json
     paths:
-      - client/node_modules/
+      - node_modules/
   script:
-    - cd client
     - npm ci
     - npx vite build -l error
     - cp dist/index.html dist/404.html
@@ -220,7 +197,7 @@ build-desktop-web:
     - cp -r dist electron/dist
   artifacts:
     paths:
-      - client/electron/dist/
+      - electron/dist/
     expire_in: 1 day
 
 .desktop-template: &desktop-template
@@ -234,25 +211,25 @@ build-desktop-web:
   before_script:
     # Version from the tag (v2.1.0 -> 2.1.0).
     - export TAG="${CI_COMMIT_TAG#v}"
-    - cd client/electron
+    - cd electron
     # Stamp the version into the Electron app's package.json.
     - 'sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json'
     - npm install --no-audit --no-fund
   cache:
     key: electron-builder-cache
     paths:
-      - client/electron/.cache/
+      - electron/.cache/
 
 build-desktop-linux:
   <<: *desktop-template
   image: electronuserland/builder:20
   script:
     - npx electron-builder --linux --config electron-builder.yml --publish never
-    - cd ../..
+    - cd ..
     - mkdir -p artifacts
     # Collect the AppImage + deb under predictable names.
-    - cp client/electron/release/*.AppImage "artifacts/Armada-${CI_COMMIT_TAG}-linux-x86_64.AppImage"
-    - cp client/electron/release/*.deb "artifacts/Armada-${CI_COMMIT_TAG}-linux-amd64.deb"
+    - cp electron/release/*.AppImage "artifacts/Armada-${CI_COMMIT_TAG}-linux-x86_64.AppImage"
+    - cp electron/release/*.deb "artifacts/Armada-${CI_COMMIT_TAG}-linux-amd64.deb"
     - ls -lh artifacts/
     - |
       for f in artifacts/*; do
@@ -273,11 +250,11 @@ build-desktop-windows:
   image: electronuserland/builder:20-wine
   script:
     - npx electron-builder --win --config electron-builder.yml --publish never
-    - cd ../..
+    - cd ..
     - mkdir -p artifacts
-    - cp client/electron/release/*Setup*.exe "artifacts/Armada-${CI_COMMIT_TAG}-Setup.exe"
+    - cp electron/release/*Setup*.exe "artifacts/Armada-${CI_COMMIT_TAG}-Setup.exe"
     # The portable build is the non-Setup .exe.
-    - cp $(ls client/electron/release/*.exe | grep -iv setup | head -n1) "artifacts/Armada-${CI_COMMIT_TAG}-windows-portable.exe"
+    - cp $(ls electron/release/*.exe | grep -iv setup | head -n1) "artifacts/Armada-${CI_COMMIT_TAG}-windows-portable.exe"
     - ls -lh artifacts/
     - |
       for f in artifacts/Armada-${CI_COMMIT_TAG}-Setup.exe artifacts/Armada-${CI_COMMIT_TAG}-windows-portable.exe; do
@@ -307,14 +284,14 @@ build-desktop-macos:
       allow_failure: true
   before_script:
     - export TAG="${CI_COMMIT_TAG#v}"
-    - cd client/electron
+    - cd electron
     - 'sed -i "" "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json || sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${TAG}\"/" package.json'
     - npm install --no-audit --no-fund
   script:
     - npx electron-builder --mac --config electron-builder.yml --publish never
-    - cd ../..
+    - cd ..
     - mkdir -p artifacts
-    - for f in client/electron/release/*.dmg; do cp "$f" "artifacts/$(basename "$f")"; done
+    - for f in electron/release/*.dmg; do cp "$f" "artifacts/$(basename "$f")"; done
     - ls -lh artifacts/
     - |
       for f in artifacts/*.dmg; do
