@@ -6,12 +6,22 @@ import type { NostrEvent } from "@nostrify/nostrify";
  * `useAppBlossomServers` is enabled (the default), and as the only servers
  * when the user has no list of their own. Order follows BUD-03's "most
  * trusted first" convention.
+ *
+ * Deployment-configurable via `VITE_APP_BLOSSOM_SERVERS` (comma-separated
+ * http(s) origins), mirroring `VITE_APP_RELAYS`: a hosted/self-hosted build
+ * bakes in its own media servers, and the shipped APK/desktop builds can point
+ * at whatever the operator chooses. Falls back to the public Armada/Ditto
+ * media servers when unset or empty.
  */
-export const APP_BLOSSOM_SERVERS = [
-  "https://blossom.ditto.pub/",
-  "https://blossom.dreamith.to/",
-  "https://blossom.primal.net/",
-];
+const DEFAULT_APP_BLOSSOM_SERVERS =
+  "https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/";
+
+export const APP_BLOSSOM_SERVERS: string[] = (
+  import.meta.env.VITE_APP_BLOSSOM_SERVERS || DEFAULT_APP_BLOSSOM_SERVERS
+)
+  .split(",")
+  .map((url: string) => normalizeBlossomServerUrl(url))
+  .filter((url: string | null): url is string => url !== null);
 
 /**
  * The user's personal Blossom server list, mirroring Ditto's

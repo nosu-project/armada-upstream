@@ -4,7 +4,8 @@ import { useEffect, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
-import { APP_NAME, APP_RELAYS } from "@/lib/platform";
+import { useAppContext } from "@/hooks/useAppContext";
+import { APP_NAME } from "@/lib/platform";
 import {
   addToConcordList,
   CONCORD_LIST_D_TAG,
@@ -585,15 +586,19 @@ export function useApplyConcordResync() {
  *
  * Runtime relay fan-out is the UNION of the community's own relays (sealed in
  * the invite — for a Vector community, Vector's relays) and this deployment's
- * {@link APP_RELAYS}, so Armada users additionally gather on Armada infra while
- * staying fully reachable to clients on the community's original relays
- * (cross-compat). The community's own relays come FIRST so the protocol cap
- * never drops them in favor of app relays. This union is applied to the runtime
- * Community only; the sealed invite bundle is untouched, so a re-shared link
- * still points other clients at the owner's original relay set.
+ * user-configured app relays (`config.appRelays`), so Armada users
+ * additionally gather on their configured infra while staying fully reachable
+ * to clients on the community's original relays (cross-compat). The community's
+ * own relays come FIRST so the protocol cap never drops them in favor of app
+ * relays. This union is applied to the runtime Community only; the sealed
+ * invite bundle is untouched, so a re-shared link still points other clients at
+ * the owner's original relay set. Because it reads `config.appRelays` (not the
+ * build-time default), removing an app relay in Settings actually stops the
+ * client connecting to it.
  */
 export function useConcordCommunity(communityIdHex: string | undefined): Community | undefined {
   const { data } = useConcordList();
+  const { config } = useAppContext();
   // Memoize so the rehydrated Community keeps a STABLE identity across renders.
   // `acceptInvite` + the spread would otherwise mint a new object every render,
   // cascading fresh `community`/`channel` objects (and thus re-renders of the
@@ -606,9 +611,9 @@ export function useConcordCommunity(communityIdHex: string | undefined): Communi
       const bundle = entry.current.keys.invite as CommunityInvite | undefined;
       if (!bundle) return undefined;
       const community = acceptInvite(bundle);
-      return { ...community, relays: capRelays([...community.relays, ...APP_RELAYS]) };
+      return { ...community, relays: capRelays([...community.relays, ...config.appRelays]) };
     } catch {
       return undefined;
     }
-  }, [data, communityIdHex]);
+  }, [data, communityIdHex, config.appRelays]);
 }

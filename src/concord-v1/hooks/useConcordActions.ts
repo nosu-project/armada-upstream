@@ -21,6 +21,7 @@ import { isExpired, locatorHex, parseInviteUrl, parsePublicInviteEvent, signerPu
 import { adminRole, type Role } from "@/concord-v1/lib/roles";
 import { createCommunity as mintCommunity, random32, type Channel, type Community } from "@/concord-v1/lib/types";
 import { APP_RELAYS } from "@/lib/platform";
+import { useAppContext } from "@/hooks/useAppContext";
 
 /** A preview of where an invite leads, resolved before actually joining. */
 export interface ConcordInvitePreview {
@@ -46,9 +47,13 @@ export function useConcordActions() {
   const { mutateAsync: updateList } = useUpdateConcordList();
   const queryClient = useQueryClient();
   const list = useConcordList();
+  const { config } = useAppContext();
 
-  /** The app relays a Concord community should gather on (deployment-configurable). */
-  const relays = APP_RELAYS;
+  // The app relays a Concord community should gather on. Prefer the user's
+  // configured app relays (so removing a relay in Settings actually takes
+  // effect) and only fall back to the build-time defaults when the user has
+  // emptied their list entirely.
+  const relays = config.appRelays.length > 0 ? config.appRelays : APP_RELAYS;
 
   /** Snapshot a live Community into the membership-list key bundle. */
   function toBundle(c: Community, epoch = Number(c.serverRootEpoch)): ConcordKeyBundle {

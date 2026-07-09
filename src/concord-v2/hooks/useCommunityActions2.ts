@@ -88,6 +88,12 @@ export function useCommunityActions2() {
   const { mutateAsync: updateList } = useUpdateCommunityList2();
   const queryClient = useQueryClient();
 
+  // Fallback relays for resolving an invite bundle when the fragment carries no
+  // bootstrap relays of its own. Prefer the user's configured app relays (so a
+  // removed relay isn't silently reused) and fall back to the build-time
+  // defaults only when the user has emptied their list.
+  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : APP_RELAYS;
+
   const create = useMutation<{ communityId: string; name: string }, Error, { name: string }>({
     mutationFn: async ({ name }) => {
       if (!user) throw new Error("Sign in to start an encrypted community.");
@@ -152,7 +158,7 @@ export function useCommunityActions2() {
 
   const preview = useMutation<InvitePreview2, Error, { invite: ParsedInviteLink }>({
     mutationFn: async ({ invite }) => {
-      const bundle = await resolveBundle(nostr, invite, APP_RELAYS);
+      const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
       // Fail loudly when this platform can't reach ANY of the community's
       // relays (#47) — e.g. a ws://-only dev community opened on the APK,
       // where mixed content silently blocks every connection.
@@ -171,7 +177,7 @@ export function useCommunityActions2() {
   const join = useMutation<{ communityId: string; name: string }, Error, { invite: ParsedInviteLink }>({
     mutationFn: async ({ invite }) => {
       if (!user) throw new Error("Sign in to join an encrypted community.");
-      const bundle = await resolveBundle(nostr, invite, APP_RELAYS);
+      const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new Error(unusable);
       const entry = bundleToEntry(bundle);

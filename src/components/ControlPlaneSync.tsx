@@ -10,7 +10,7 @@ import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { syncControlPlane } from "@/lib/controlPlaneSync";
-import { APP_RELAYS } from "@/lib/platform";
+import { useAppContext } from "@/hooks/useAppContext";
 
 /**
  * Sync the control plane of EVERY Concord community (V1 + V2) on pageload.
@@ -30,6 +30,7 @@ import { APP_RELAYS } from "@/lib/platform";
 function useControlPlaneSync(): void {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
+  const { config } = useAppContext();
 
   const { data: v1Data } = useConcordList();
   const { data: v2Data } = useCommunityList2();
@@ -44,13 +45,13 @@ function useControlPlaneSync(): void {
       if (!invite) continue;
       try {
         const community = acceptInvite(invite);
-        out.push({ ...community, relays: capRelays([...community.relays, ...APP_RELAYS]) });
+        out.push({ ...community, relays: capRelays([...community.relays, ...config.appRelays]) });
       } catch {
         // skip unrehydratable entries
       }
     }
     return out;
-  }, [v1Data]);
+  }, [v1Data, config.appRelays]);
 
   const v2: CommunityV2[] = useMemo(() => {
     if (!v2Data) return [];

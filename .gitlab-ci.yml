@@ -182,6 +182,8 @@ build-desktop-web:
     VITE_PLATFORM_RELAYS: ""
     # App relays still seed non-NIP-29 traffic (profiles/lists); user-editable.
     VITE_APP_RELAYS: ${VITE_APP_RELAYS}
+    # App Blossom media servers seed uploads; user-editable in Settings.
+    VITE_APP_BLOSSOM_SERVERS: ${VITE_APP_BLOSSOM_SERVERS}
   cache:
     key:
       files:

@@ -64,6 +64,11 @@ the box; other hostnames need HTTPS.
   mention autocomplete); `search` filters route only to these (default
   `wss://relay.ditto.pub,wss://relay.dreamith.to`). User-editable in Settings;
   when empty, search falls back to the app relays.
+- `VITE_APP_BLOSSOM_SERVERS` — comma-separated default Blossom media servers
+  (BUD-03) uploads fall back to, in the style of `VITE_APP_RELAYS` (default
+  `https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/`).
+  User-editable in Settings, and can be turned off entirely with the "Use app
+  media servers" toggle.
 - `VITE_CONCORD_AV_SERVERS` — fallback Concord voice (CORD-07) token brokers
   (default `https://armada.buzz`).
 - `VITE_APP_NAME` — display name.
