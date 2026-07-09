@@ -43,6 +43,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // Live speaker set (pubkeys), reported by the connected room so voice
   // activity can render outside the LiveKit context (sidebar rosters).
   const [speakingPubkeys, setSpeakingState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
+  // Live muted set (pubkeys), reported by the connected room so the sidebar
+  // roster can show who has their mic off.
+  const [mutedPubkeys, setMutedState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
   // Live roster of the connected room (pubkeys), reported by the room so the
   // active call's occupancy renders from LiveKit truth instead of relay
   // presence events (which lag/desync). Null while not connected.
@@ -90,6 +93,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setExiting(true);
     setStageOpen(false);
     setSpeakingState(NO_SPEAKERS);
+    setMutedState(NO_SPEAKERS);
     setRosterState(null);
     if (exitTimer.current) clearTimeout(exitTimer.current);
     exitTimer.current = setTimeout(() => {
@@ -142,6 +146,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setSpeakingState((prev) => (sameSet(prev, next) ? prev : next));
   }, []);
 
+  // Equality-guarded so the room's frequent mute reports only re-render context
+  // consumers when the muted set actually changed.
+  const setMutedPubkeys = useCallback((next: Set<string>) => {
+    setMutedState((prev) => (sameSet(prev, next) ? prev : next));
+  }, []);
+
   // Equality-guarded so the room's participant reports only re-render context
   // consumers when the roster actually changed.
   const setVoiceRoomPubkeys = useCallback((next: readonly string[] | null) => {
@@ -167,6 +177,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         setStageOpen,
         speakingPubkeys,
         setSpeakingPubkeys,
+        mutedPubkeys,
+        setMutedPubkeys,
         voiceRoomPubkeys,
         setVoiceRoomPubkeys,
       }}

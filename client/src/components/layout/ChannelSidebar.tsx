@@ -42,7 +42,7 @@ function ChannelLink({
   unread?: GroupUnread;
   onNavigate?: () => void;
 }) {
-  const { activeCall, speakingPubkeys, voiceRoomPubkeys } = useCall();
+  const { activeCall, speakingPubkeys, mutedPubkeys, voiceRoomPubkeys } = useCall();
   const { markRead } = useReadState();
   const { isChannelMuted, toggleChannelMute } = useMutes();
   const muted = isChannelMuted(group.relay, group.id);
@@ -128,6 +128,7 @@ function ChannelLink({
         <VoiceParticipantList
           participants={roster!}
           speaking={inCall ? speakingPubkeys : undefined}
+          muted={inCall ? mutedPubkeys : undefined}
         />
       )}
         </div>

@@ -85,6 +85,15 @@ export interface CallContextType {
   /** Internal: the connected room reports its live speaker set here. */
   setSpeakingPubkeys: (pubkeys: Set<string>) => void;
   /**
+   * Pubkeys currently muted (microphone disabled) in the ACTIVE call (resolved
+   * from LiveKit identities; unverified Concord identities are excluded). Lets
+   * UI outside the LiveKit room — e.g. the sidebar's nested voice roster — show
+   * who is muted. Empty when not in a call.
+   */
+  mutedPubkeys: ReadonlySet<string>;
+  /** Internal: the connected room reports its live muted set here. */
+  setMutedPubkeys: (pubkeys: Set<string>) => void;
+  /**
    * The ACTIVE call's live roster: every participant currently in the
    * connected LiveKit room (local + remote), resolved to pubkeys (deduped
    * across multiple sessions; unverified Concord identities excluded). Null
