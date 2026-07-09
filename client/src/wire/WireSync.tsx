@@ -23,7 +23,7 @@ import { fetchRelayInfoDoc } from "@/hooks/useRelayInfo";
 import { readFolded } from "@/lib/foldedCache";
 import { buildRelayGroups, KIND_GROUP_METADATA } from "@/lib/nip29";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
-import { PLATFORM_RELAYS, normalizeRelayUrl } from "@/lib/platform";
+import { PINNED_RAIL_RELAYS, normalizeRelayUrl } from "@/lib/platform";
 import { emitWireScopes } from "@/wire/bus";
 import { ingestWireEvents } from "@/wire/ingest";
 import { buildWireSpec, type WireSpec } from "@/wire/spec";
@@ -127,7 +127,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
  * subscribed only to `groupList.groups` it would open ZERO `#h` subscriptions
  * for such servers and their timelines would never ingest (empty servers).
  *
- * So we enumerate the same servers the rail shows (PLATFORM_RELAYS +
+ * So we enumerate the same servers the rail shows (PINNED_RAIL_RELAYS +
  * config.addedRelays) and, per relay, read the group ids from:
  *   - the relay-PROVENANCE-scoped kind-39000 metadata already in the store
  *     (instant, and the common case after a first visit), and
@@ -144,7 +144,7 @@ function useWireNip29Groups(): Array<{ id: string; relay: string }> {
   const servers = useMemo(() => {
     const out: string[] = [];
     const seen = new Set<string>();
-    for (const url of [...PLATFORM_RELAYS, ...config.addedRelays]) {
+    for (const url of [...PINNED_RAIL_RELAYS, ...config.addedRelays]) {
       const relay = normalizeRelayUrl(url);
       if (relay && !seen.has(relay)) {
         seen.add(relay);

@@ -27,7 +27,7 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { readClipboardText } from "@/lib/clipboard";
 import { classifyAddInput, type ConcordInvite } from "@/concord-v1/lib/concord";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
-import { PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
+import { PINNED_RAIL_RELAYS, relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 interface AddDialogProps {
@@ -58,7 +58,16 @@ export function AddDialog({ open, onOpenChange }: AddDialogProps) {
   );
 }
 
-function AddBody({ onDone }: { onDone: () => void }) {
+/**
+ * The Add wizard's body: create an encrypted community, plus the smart-paste
+ * "escape hatch" for joining via an invite link or NIP-29 server URL.
+ *
+ * Exported for standalone/full-page use (the welcome-page onboarding renders
+ * it inline). A standalone host must render {@link ArmadaCrestKeyframes}
+ * alongside it for the crest animation, and provide `onDone` (called after a
+ * successful create/join/add; the dialog uses it to close, a page can no-op).
+ */
+export function AddBody({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate();
   const { create, isCreating } = useCommunityActions2();
 
@@ -82,10 +91,15 @@ function AddBody({ onDone }: { onDone: () => void }) {
     <div className="flex flex-col items-center gap-6 text-center">
       <ArmadaCrest size={84} />
 
-      <div className="space-y-1.5">
-        <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-          start an encrypted community
-        </h2>
+      <div className="space-y-3">
+        <div>
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+            gather your crew
+          </h2>
+          <p className="font-mono text-base lowercase tracking-tight text-muted-foreground">
+            start an encrypted community
+          </p>
+        </div>
         <p className="text-sm text-muted-foreground">
           Serverless and end-to-end-encrypted. No host can read it; your key is
           your membership. You become the owner.
@@ -97,7 +111,7 @@ function AddBody({ onDone }: { onDone: () => void }) {
           e.preventDefault();
           handleCreate();
         }}
-        className="w-full space-y-3"
+        className="w-full max-w-sm space-y-3"
       >
         <Input
           value={name}
@@ -225,7 +239,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           });
         } else if (classified.kind === "nip29") {
           const relay = classified.relay;
-          if (PLATFORM_RELAYS.includes(relay) || config.addedRelays.includes(relay)) {
+          if (PINNED_RAIL_RELAYS.includes(relay) || config.addedRelays.includes(relay)) {
             throw new Error("That server is already in your list.");
           }
           const res = await fetch(relayToHttpUrl(relay), {
@@ -302,7 +316,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
   const busy = v1.isWorking || v2.isJoining || committing;
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="w-full">
+    <Collapsible open={open} onOpenChange={setOpen} className="w-full max-w-sm">
       <CollapsibleTrigger asChild>
         <button
           type="button"

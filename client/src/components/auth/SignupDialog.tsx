@@ -2,36 +2,32 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import React, { useState, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { Eye, EyeOff, KeyRound, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, KeyRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { toast } from '@/hooks/useToast';
-import { parseAuthorEvent } from '@/hooks/useAuthor';
 import { useLoginActions } from '@/hooks/useLoginActions';
-import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { saveNsec } from '@/lib/credentialManager';
-import { isPublishQueuedError } from '@/lib/publishOutbox';
 
 interface SignupDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  /**
+   * Called after the account is created and the key is saved (the user is
+   * logged in at this point). The welcome-page onboarding uses this to start
+   * the full-page profile-creation step; profile setup no longer lives in
+   * this dialog.
+   */
+  onComplete?: () => void;
 }
 
-const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
-  const [step, setStep] = useState<'generate' | 'download' | 'profile'>('generate');
+const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete }) => {
+  const [step, setStep] = useState<'generate' | 'download'>('generate');
   const [nsec, setNsec] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [pubkey, setPubkey] = useState('');
-  const [name, setName] = useState('');
-  const [about, setAbout] = useState('');
-  const queryClient = useQueryClient();
   const login = useLoginActions();
-  const { mutateAsync: publishEvent, isPending: isPublishing } = useNostrPublish();
 
   // Generate a proper nsec key using nostr-tools.
   const generateKey = () => {
@@ -42,7 +38,9 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
   };
 
   // Save the key via the best available method (credential manager on
-  // Chromium, file download elsewhere), log in, and advance to profile setup.
+  // Chromium, file download elsewhere), log in, and finish. Profile setup
+  // happens afterwards in the full-page onboarding (see WelcomePage), not
+  // here.
   const handleContinue = async () => {
     try {
       const decoded = nip19.decode(nsec);
@@ -56,8 +54,8 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
       await saveNsec(npub, nsec);
 
       login.nsec(nsec);
-      setPubkey(pubkey);
-      setStep('profile');
+      onComplete?.();
+      onClose();
     } catch {
       toast({
         title: 'Save failed',
@@ -67,43 +65,9 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
     }
   };
 
-  const finishSignup = async (skipProfile = false) => {
-    try {
-      if (!skipProfile && (name || about)) {
-        const data: Record<string, string> = {};
-        if (name) data.name = name;
-        if (about) data.about = about;
-        await publishEvent({
-          kind: 0,
-          content: JSON.stringify(data),
-          tags: [],
-          onSigned: (event) => {
-            queryClient.setQueryData(['author', pubkey || event.pubkey], parseAuthorEvent(event));
-          },
-        });
-      }
-    } catch (error) {
-      if (isPublishQueuedError(error)) {
-        toast({
-          title: 'Profile saved locally',
-          description: 'It will publish automatically when you are back online.',
-        });
-      } else {
-        toast({
-          title: 'Profile Setup Failed',
-          description: 'Your account was created but profile setup failed. You can update it later.',
-          variant: 'destructive',
-        });
-      }
-    } finally {
-      onClose();
-    }
-  };
-
   const getTitle = () => {
     if (step === 'generate') return 'sign up';
-    if (step === 'download') return 'secret key';
-    if (step === 'profile') return 'create your profile';
+    return 'secret key';
   };
 
   // Reset state when dialog opens
@@ -112,9 +76,6 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
       setStep('generate');
       setNsec('');
       setShowKey(false);
-      setPubkey('');
-      setName('');
-      setAbout('');
     }
   }, [isOpen]);
 
@@ -184,43 +145,6 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose }) => {
                 <p className='text-xs text-amber-700 dark:text-amber-300/90'>
                   This key is your primary and only means of accessing your account. Store it safely and securely.
                 </p>
-              </div>
-            </div>
-          )}
-
-          {/* Profile Step */}
-          {step === 'profile' && (
-            <div className='space-y-4'>
-              <div className='space-y-2'>
-                <Label htmlFor='signup-name'>Name</Label>
-                <Input
-                  id='signup-name'
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder='How should people know you?'
-                  maxLength={64}
-                  className="bg-background/40 border-transparent"
-                />
-              </div>
-              <div className='space-y-2'>
-                <Label htmlFor='signup-about'>About</Label>
-                <Textarea
-                  id='signup-about'
-                  value={about}
-                  onChange={(e) => setAbout(e.target.value)}
-                  placeholder='A few words about you (optional)'
-                  maxLength={500}
-                  className="bg-background/40 border-transparent"
-                />
-              </div>
-
-              <div className='space-y-2'>
-                <Button className='w-full clip-corner-lg' onClick={() => finishSignup(false)} disabled={isPublishing}>
-                  {isPublishing ? <><Loader2 className="size-4 mr-2 animate-spin" /> Creating Profile…</> : 'Create profile'}
-                </Button>
-                <Button variant='outline' className='w-full clip-corner-lg' onClick={() => finishSignup(true)} disabled={isPublishing}>
-                  Skip for now
-                </Button>
               </div>
             </div>
           )}

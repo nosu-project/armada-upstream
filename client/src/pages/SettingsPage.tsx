@@ -38,7 +38,7 @@ import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
-import { APP_RELAYS, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, PINNED_RAIL_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -263,7 +263,7 @@ export function SettingsPage() {
         return (
           <SettingsRow>
             <RelayListEditor
-              pinned={PLATFORM_RELAYS}
+              pinned={PINNED_RAIL_RELAYS}
               relays={config.addedRelays}
               onChange={setAddedRelays}
               emptyText="No extra servers added. Use the + button in the server rail to add one."

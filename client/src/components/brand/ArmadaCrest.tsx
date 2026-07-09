@@ -67,6 +67,146 @@ export function ArmadaCrest({ size = 132, className = "" }: { size?: number; cla
 }
 
 /**
+ * The animated secret-key mark, in the same visual language as the crest:
+ *   - a cut-corner key bow (the grip) draws on like the crest frame,
+ *   - the rose shaft-and-teeth blade fades/scales up and pulses a glow,
+ *   - a rose "bit" diamond sits in the bow like the crest's advancing A,
+ *   - the cyan wake sweeps beneath on the same loop,
+ *   - and the whole key periodically turns in its lock.
+ *
+ * Used on the save-your-key step of onboarding. Pair with
+ * {@link ArmadaCrestKeyframes} once per screen.
+ */
+export function ArmadaKey({ size = 132, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 256 256"
+      fill="none"
+      role="img"
+      aria-label="Secret key"
+      className={`relative animate-[armada-rise_0.9s_cubic-bezier(0.22,1,0.36,1)_both] drop-shadow-[0_8px_24px_hsl(var(--primary)/0.25)] ${className}`}
+    >
+      {/* The key turns in its lock on a loop (after the entrance settles). */}
+      <g
+        className="animate-[armada-key-turn_4.5s_ease-in-out_1.8s_infinite]"
+        style={{ transformOrigin: "76px 128px" }}
+      >
+        {/* Cut-corner key bow — draws on like the crest frame. */}
+        <path
+          d="M48 82 H104 L122 100 V156 L104 174 H48 L30 156 V100 Z"
+          fill="none"
+          stroke="hsl(var(--foreground) / 0.85)"
+          strokeWidth="10"
+          pathLength={1}
+          className="animate-[armada-draw_1.1s_ease-out_0.15s_both]"
+        />
+
+        {/* Shaft + teeth and the bow bit — rose, glowing pulse. */}
+        <g
+          className="animate-[armada-blade-in_0.7s_cubic-bezier(0.34,1.56,0.64,1)_0.5s_both]"
+          style={{ transformOrigin: "128px 128px" }}
+        >
+          <path
+            d="M118 120 H228 V160 H212 V136 H196 V152 H180 V136 H118 Z"
+            fill="hsl(var(--primary))"
+            className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
+          />
+          {/* The bit: a rose diamond in the bow, echoing the crest's blade. */}
+          <path
+            d="M76 110 L94 128 L76 146 L58 128 Z"
+            fill="hsl(var(--primary))"
+            className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
+          />
+        </g>
+      </g>
+
+      {/* Cyan wake — same loop as the crest. */}
+      <g stroke="hsl(var(--accent2, 180 90% 55%))" strokeLinecap="round">
+        <path
+          d="M88 200 H168"
+          strokeWidth="6"
+          pathLength={1}
+          className="animate-[armada-wake_1.8s_ease-in-out_0.8s_infinite]"
+        />
+        <path
+          d="M104 216 H152"
+          strokeWidth="4"
+          opacity="0.7"
+          pathLength={1}
+          className="animate-[armada-wake_1.8s_ease-in-out_1.0s_infinite]"
+        />
+      </g>
+    </svg>
+  );
+}
+
+/**
+ * The animated identity mark for the profile step: a cut-corner badge frame
+ * draws on, and a rose figure — diamond head over chamfered shoulders — rises
+ * into it with the crest's springy entrance and glow. The cyan wake doubles
+ * as the signature line. Pair with {@link ArmadaCrestKeyframes}.
+ */
+export function ArmadaIdentity({ size = 132, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 256 256"
+      fill="none"
+      role="img"
+      aria-label="Profile identity"
+      className={`relative animate-[armada-rise_0.9s_cubic-bezier(0.22,1,0.36,1)_both] drop-shadow-[0_8px_24px_hsl(var(--primary)/0.25)] ${className}`}
+    >
+      {/* Cut-corner badge frame — draws on like the crest. */}
+      <path
+        d="M64 16 H232 a8 8 0 0 1 8 8 V192 L192 240 H24 a8 8 0 0 1 -8 -8 V64 Z"
+        fill="none"
+        stroke="hsl(var(--foreground) / 0.85)"
+        strokeWidth="10"
+        pathLength={1}
+        className="animate-[armada-draw_1.1s_ease-out_0.15s_both]"
+      />
+
+      {/* The figure: diamond head over chamfered shoulders — rose, glowing. */}
+      <g
+        className="animate-[armada-blade-in_0.7s_cubic-bezier(0.34,1.56,0.64,1)_0.5s_both]"
+        style={{ transformOrigin: "128px 120px" }}
+      >
+        <path
+          d="M128 48 L160 80 L128 112 L96 80 Z"
+          fill="hsl(var(--primary))"
+          className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
+        />
+        <path
+          d="M104 128 H152 L184 168 H72 Z"
+          fill="hsl(var(--primary))"
+          className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
+        />
+      </g>
+
+      {/* Cyan signature line — the wake, writing the name. */}
+      <g stroke="hsl(var(--accent2, 180 90% 55%))" strokeLinecap="round">
+        <path
+          d="M84 200 H172"
+          strokeWidth="6"
+          pathLength={1}
+          className="animate-[armada-wake_1.8s_ease-in-out_0.8s_infinite]"
+        />
+        <path
+          d="M100 216 H140"
+          strokeWidth="4"
+          opacity="0.7"
+          pathLength={1}
+          className="animate-[armada-wake_1.8s_ease-in-out_1.0s_infinite]"
+        />
+      </g>
+    </svg>
+  );
+}
+
+/**
  * Scoped keyframes for the crest + terminal. Inlined (rather than added to
  * tailwind.config) because they're SVG-specific (stroke-dash draws, the wake
  * sweep) and used only on the brand surfaces. Honors `prefers-reduced-motion`.
@@ -96,6 +236,12 @@ export function ArmadaCrestKeyframes() {
         25%      { opacity: 1; }
         60%      { stroke-dashoffset: 0; opacity: 1; }
         100%     { stroke-dasharray: 1; stroke-dashoffset: -1; opacity: 0; }
+      }
+      @keyframes armada-key-turn {
+        0%, 55%, 100% { transform: rotate(0deg); }
+        65%           { transform: rotate(-16deg); }
+        78%           { transform: rotate(7deg); }
+        88%           { transform: rotate(-2deg); }
       }
       @keyframes armada-swell {
         0%, 100% { opacity: 0.5; transform: scale(1); }

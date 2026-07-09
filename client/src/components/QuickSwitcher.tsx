@@ -12,7 +12,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { useAppContext } from "@/hooks/useAppContext";
-import { PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { RelayInfoDocument } from "@/hooks/useRelayInfo";
@@ -57,12 +57,12 @@ export function QuickSwitcher() {
   const queryClient = useQueryClient();
   const { config } = useAppContext();
 
-  // Rail-ordered server list (same construction as ServerRail: pinned platform
-  // relays + user-added, de-duplicated, in the user's saved order).
+  // Rail-ordered server list (same construction as ServerRail: any opt-in
+  // pinned relays + user-added, de-duplicated, in the user's saved order).
   const servers = useMemo(() => {
     const seen = new Set<string>();
     const list: string[] = [];
-    for (const url of [...PLATFORM_RELAYS, ...config.addedRelays]) {
+    for (const url of [...PINNED_RAIL_RELAYS, ...config.addedRelays]) {
       if (!seen.has(url)) {
         seen.add(url);
         list.push(url);

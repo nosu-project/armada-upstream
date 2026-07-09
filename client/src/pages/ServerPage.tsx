@@ -23,7 +23,7 @@ import { useMutes } from "@/hooks/useMutes";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
-import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shareOrigin } from "@/lib/shareOrigin";
 import { pickDefaultChannel } from "@/lib/utils";
@@ -84,9 +84,9 @@ export function ServerPage() {
     );
   }
 
-  const isPinned = PLATFORM_RELAYS.includes(relayUrl);
-  // A server is removable if it isn't a build-time pinned platform relay.
-  // We compare by NORMALIZED url, not raw string equality: the stored
+  const isPinned = PINNED_RAIL_RELAYS.includes(relayUrl);
+  // A server is removable unless it's an opt-in build-time pinned relay
+  // (`VITE_PIN_PLATFORM_RELAYS`, off by default). We compare by NORMALIZED url, not raw string equality: the stored
   // `addedRelays` entry may differ superficially from the route-derived url
   // (e.g. a trailing slash or casing off a kind-10009 `r` tag), which used to
   // hide "Remove server" for a server that's plainly in the rail. Any

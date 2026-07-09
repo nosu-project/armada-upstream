@@ -425,12 +425,24 @@ function FieldRow({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+interface ProfileSettingsProps {
+  /**
+   * Called after a successful kind-0 publish. The welcome-page onboarding uses
+   * this to advance to the next step; Settings leaves it unset.
+   */
+  onSaved?: () => void;
+  /** Save-button label (defaults to "Save Profile"; onboarding uses "Continue"). */
+  saveLabel?: string;
+  /** Center the save button (onboarding); defaults to left-aligned. */
+  centerSave?: boolean;
+}
+
 /**
  * WYSIWYG profile editor. Renders an interactive {@link ProfileCard} the user
  * edits in place, plus a typed custom-fields section (presets for media,
  * wallets, links, etc.). Publishes a kind-0 metadata event on save.
  */
-export function ProfileSettings() {
+export function ProfileSettings({ onSaved, saveLabel, centerSave }: ProfileSettingsProps = {}) {
   const { user, metadata, event } = useCurrentUser();
   const queryClient = useQueryClient();
   const { mutateAsync: publishEvent, isPending } = useNostrPublish();
@@ -643,6 +655,7 @@ export function ProfileSettings() {
       queryClient.invalidateQueries({ queryKey: ['author', user.pubkey] });
 
       toast({ title: 'Profile saved' });
+      onSaved?.();
     } catch {
       toast({ title: 'Error', description: 'Failed to save profile.', variant: 'destructive' });
     }
@@ -691,10 +704,6 @@ export function ProfileSettings() {
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Tap any field on the card to edit. Click your avatar or banner to upload and crop a new image.
-          </p>
 
           {/* Interactive profile card */}
           <ProfileCard
@@ -826,9 +835,9 @@ export function ProfileSettings() {
             </CollapsibleContent>
           </Collapsible>
 
-          <div>
+          <div className={centerSave ? 'flex justify-center' : undefined}>
             <Button type="submit" disabled={busy} className="w-full sm:w-auto clip-corner-lg">
-              {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : <><Save className="size-4 mr-2" /> Save Profile</>}
+              {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : <><Save className="size-4 mr-2" /> {saveLabel ?? 'Save Profile'}</>}
             </Button>
           </div>
 

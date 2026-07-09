@@ -43,7 +43,7 @@ import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useRelayUnread } from "@/hooks/useRelayUnread";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { impact } from "@/lib/haptics";
-import { normalizeRelayUrl, PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
+import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
 import {
   applyDrop,
   dissolveFolder,
@@ -1114,12 +1114,14 @@ export function ServerRail({
   const concord2 = useLiveCommunities2();
   const [addOpen, setAddOpen] = useState(false);
 
-  // Build the full rail list (pinned platform relays + user-added ones),
-  // de-duplicated. Order/grouping is applied by the layout below.
+  // Build the full rail list (any opt-in pinned relays + user-added ones),
+  // de-duplicated. By default `PINNED_RAIL_RELAYS` is empty, so the rail shows
+  // only servers the user actually added/joined (via an invite/server link).
+  // Order/grouping is applied by the layout below.
   const servers = useMemo(() => {
     const base: string[] = [];
     const seen = new Set<string>();
-    for (const url of [...PLATFORM_RELAYS, ...config.addedRelays]) {
+    for (const url of [...PINNED_RAIL_RELAYS, ...config.addedRelays]) {
       const normalized = normalizeRelayUrl(url);
       if (normalized && !seen.has(normalized)) {
         seen.add(normalized);
@@ -1232,7 +1234,7 @@ export function ServerRail({
 
       // Also sync the relative order of user-added relays to the kind 10009
       // list (the cross-device source of truth for the added-server set).
-      const pinnedSet = new Set(PLATFORM_RELAYS);
+      const pinnedSet = new Set(PINNED_RAIL_RELAYS);
       const addedOrder = keys.filter(
         (k) => !k.startsWith("c1:") && !k.startsWith("c2:") && !pinnedSet.has(k),
       );

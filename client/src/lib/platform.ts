@@ -51,26 +51,55 @@ export function routeParamToRelay(param: string): string | undefined {
 export const APP_NAME: string = import.meta.env.VITE_APP_NAME || "Armada";
 
 /**
- * Pinned platform relays. Always present (when set); not user-removable.
+ * Platform (deployment-infrastructure) relays.
  *
  * `VITE_PLATFORM_RELAYS` is set only by a *hosted* deployment (the operator
- * pins their own relay). Every other build — the Android APK, the Electron
- * desktop app, and local `npm run dev` — leaves it unset/empty and therefore
- * ships with NO pinned relays: the user starts with zero servers and adds their
- * own. This is deliberate: a baked-in `ws://localhost:5577` is meaningless (and
- * actively confusing) on a phone or a sovereign desktop client, so we never
- * default to one. For local dev against a relay, set `VITE_PLATFORM_RELAYS`
- * yourself (e.g. `VITE_PLATFORM_RELAYS=ws://localhost:5577 npm run dev`).
+ * names their own relay). Every other build — the Android APK, the Electron
+ * desktop app, and local `npm run dev` — leaves it unset/empty. This is
+ * deliberate: a baked-in `ws://localhost:5577` is meaningless (and actively
+ * confusing) on a phone or a sovereign desktop client, so we never default to
+ * one. For local dev against a relay, set `VITE_PLATFORM_RELAYS` yourself
+ * (e.g. `VITE_PLATFORM_RELAYS=ws://localhost:5577 npm run dev`).
+ *
+ * These relays are used as deployment *infrastructure*: the connection pool
+ * always includes them, and they seed the AV-broker / DM-voice / NIP-46
+ * rendezvous fallbacks below. They are NOT auto-pinned into the server rail —
+ * see `PINNED_RAIL_RELAYS` for why, and how to opt back in.
  *
  * Unset (`undefined`) and empty (`""`) are treated identically — both mean "no
- * pinned relays". A non-empty value is the hosted deployment's comma-separated
- * pinned relays.
+ * platform relays".
  */
 const RAW_PLATFORM_RELAYS: string = import.meta.env.VITE_PLATFORM_RELAYS ?? "";
 export const PLATFORM_RELAYS: string[] = RAW_PLATFORM_RELAYS
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
+
+/**
+ * Relays that are auto-pinned into the server rail and auto-dived-into on
+ * login, WITHOUT the user ever joining/being invited.
+ *
+ * Historically this was `PLATFORM_RELAYS`: a hosted deployment's own relay was
+ * force-shown in every user's rail and every fresh sign-in landed straight in
+ * its channel list — even though the user never joined it. That conflated two
+ * separate things: the relay as *deployment infrastructure* (AV/DM-voice/pool
+ * fallback, below — still driven by `PLATFORM_RELAYS`) versus the relay as a
+ * *community the user belongs to*. A relay-based (NIP-29) community should be
+ * entered the same way any other is: via an invite/server link (which adds it
+ * to `addedRelays`, see GroupPage), not by build-time fiat.
+ *
+ * So the default is now **empty** — the platform relay is NOT auto-pinned; it
+ * appears in the rail only once the user visits its invite/server link. An
+ * operator who genuinely wants the old always-pinned behaviour (e.g. a
+ * single-community deployment where every user should land in it) can opt back
+ * in with `VITE_PIN_PLATFORM_RELAYS=true`.
+ */
+export const PINNED_RAIL_RELAYS: string[] = envBool(
+  import.meta.env.VITE_PIN_PLATFORM_RELAYS,
+  false,
+)
+  ? PLATFORM_RELAYS
+  : [];
 
 /**
  * Default app relays (Ditto's "app relays" concept): general-purpose relays

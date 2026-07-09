@@ -71,7 +71,7 @@ vi.mock("@/lib/platform", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/platform")>();
   return {
     ...actual,
-    PLATFORM_RELAYS: ["wss://a.example/", "wss://b.example/", "wss://c.example/"],
+    PINNED_RAIL_RELAYS: ["wss://a.example/", "wss://b.example/", "wss://c.example/"],
     normalizeRelayUrl: (u: string) => u,
     relayToRouteParam: (u: string) => encodeURIComponent(u),
   };

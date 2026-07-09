@@ -14,7 +14,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { PLATFORM_RELAYS, relayToRouteParam } from "@/lib/platform";
+import { relayToRouteParam } from "@/lib/platform";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
 // so the boot bundle carries only the shell + the landing route's code. This is
@@ -103,14 +103,18 @@ function HomeRedirect() {
     }
   }
 
-  const syncedServer = groupList?.servers.find((url) => !PLATFORM_RELAYS.includes(url));
-  const firstServer = PLATFORM_RELAYS[0] ?? config.addedRelays[0] ?? syncedServer;
+  // Prefer landing on a server the user has actually joined/added — never the
+  // deployment's platform relay by fiat (that's infrastructure, not a community
+  // the user belongs to; it's entered via an invite/server link like any other).
+  // `config.addedRelays` is the fast/offline cache; the synced kind-10009 list
+  // is the cross-device source of truth, consulted directly so we redirect the
+  // moment it resolves after login.
+  const firstServer = config.addedRelays[0] ?? groupList?.servers[0];
   if (!firstServer) {
-    // Signed in but no server yet (fresh account, or a standalone/rogue build
-    // with no pinned relay). The mesh is the home where it exists (Android);
-    // otherwise land on the main app shell (/dms) — which renders the server
-    // rail with its "+" add-server button — NOT the logged-out join screen.
-    return <Navigate to={mesh.available ? "/mesh" : "/dms"} replace />;
+    // Signed in but no server yet (fresh account). The mesh is the home where
+    // it exists (Android); otherwise show the getting-started screen so the
+    // user can accept an invite or add a server — NOT a bare app shell.
+    return <Navigate to={mesh.available ? "/mesh" : "/welcome"} replace />;
   }
   return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
 }

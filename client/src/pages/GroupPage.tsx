@@ -44,7 +44,7 @@ import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
-import { PLATFORM_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { relayRejectionMessage } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
 
@@ -227,14 +227,17 @@ export function GroupPage() {
 
   // Visiting a server/invite link (e.g. /s/chat.soapbox.pub/<group>) should add
   // the server to the user's rail so they can navigate back to it after going
-  // to DMs or another server. Platform relays are always present in the rail, so
-  // only non-platform servers need adding. Write the local cache immediately
-  // (works logged-out, instant rail visibility). The cross-device 10009 sync is
-  // deliberately NOT done here — see the membership-gated effect below.
+  // to DMs or another server. This is the primary way a relay-based community —
+  // INCLUDING the deployment's own platform relay — enters the rail: by the
+  // user following its invite/server link, not by build-time fiat. Only relays
+  // that are already auto-pinned (`PINNED_RAIL_RELAYS`, opt-in and empty by
+  // default) skip this. Write the local cache immediately (works logged-out,
+  // instant rail visibility). The cross-device 10009 sync is deliberately NOT
+  // done here — see the membership-gated effect below.
   const addedServerRef = useRef<string | null>(null);
   const syncedServerRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!relayUrl || PLATFORM_RELAYS.includes(relayUrl)) return;
+    if (!relayUrl || PINNED_RAIL_RELAYS.includes(relayUrl)) return;
     if (addedServerRef.current !== relayUrl) {
       addedServerRef.current = relayUrl;
       updateConfig((c) =>
@@ -290,7 +293,7 @@ export function GroupPage() {
   // list) is one of the signals, so a normal join both writes the group and
   // brings the server along.
   useEffect(() => {
-    if (!user || !relayUrl || PLATFORM_RELAYS.includes(relayUrl)) return;
+    if (!user || !relayUrl || PINNED_RAIL_RELAYS.includes(relayUrl)) return;
     if (!isMember) return;
     if (syncedServerRef.current === relayUrl) return;
     syncedServerRef.current = relayUrl;

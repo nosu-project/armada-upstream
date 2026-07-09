@@ -11,9 +11,11 @@ export type Theme = "light" | "dark" | "system" | "custom";
 /**
  * Application configuration, persisted to localStorage by AppProvider.
  *
- * Armada is an internal-infrastructure tool: the base server list is pinned
- * at build time (VITE_PLATFORM_RELAYS) and users may extend it with
- * additional internal relay URLs.
+ * The server list is the user's own: relays are added by following an
+ * invite/server link or via the "+" add flow (`addedRelays`). A deployment's
+ * platform relay (VITE_PLATFORM_RELAYS) is infrastructure, not an auto-joined
+ * community — it enters the rail the same way, via its invite/server link,
+ * unless an operator opts into pinning it (VITE_PIN_PLATFORM_RELAYS).
  */
 export interface AppConfig {
   /** Display theme mode. */

@@ -15,7 +15,7 @@ import { useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseBlossomServerList } from "@/lib/blossom";
 import { KIND_BLOSSOM_SERVERS } from "@/hooks/useBlossomServerList";
-import { PLATFORM_RELAYS } from "@/lib/platform";
+import { PINNED_RAIL_RELAYS } from "@/lib/platform";
 import { type EncryptedSettings } from "@/lib/schemas";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
 
@@ -188,7 +188,10 @@ export function NostrSync() {
 
     serversAppliedPubkey.current = user.pubkey;
 
-    const pinned = new Set(PLATFORM_RELAYS);
+    // Opt-in auto-pinned relays (`PINNED_RAIL_RELAYS`, empty by default) are
+    // always in the rail regardless of the list, so they needn't be cached;
+    // everything else the list knows about is merged in.
+    const pinned = new Set(PINNED_RAIL_RELAYS);
     const fromList = groupList.servers.filter((url) => !pinned.has(url));
     if (fromList.length === 0) return;
 
