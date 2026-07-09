@@ -3,7 +3,6 @@ import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
 import { APP_NAME } from "@/lib/platform";
 import { PublishQueuedError, isPublishQueuedError, queueSignedEvent, removeQueuedPublish } from "@/lib/publishOutbox";
-import { publishLive } from "@/lib/publishLive";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
 import { useCurrentUser } from "./useCurrentUser";
 import { useEventStore } from "./useEventStore";
@@ -97,15 +96,7 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         // for NIP-46 logins (#51).
         const timeout = publishTimeoutMs(user.method);
         if (relay) {
-          // Liveness-gated single-relay send (NIP-29 group traffic). A raw
-          // `nostr.relay(relay).event()` buffers the EVENT into a dead socket's
-          // queue when the socket was severed (mobile backgrounding / network
-          // change), so the message silently never reaches the relay; publishLive
-          // forces a fresh connection first. See lib/publishLive.ts.
-          await publishLive(nostr, relay, event, {
-            signal: AbortSignal.timeout(timeout),
-            timeoutMs: timeout,
-          });
+          await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(timeout) });
         } else {
           await nostr.event(event, { signal: AbortSignal.timeout(timeout) });
         }
@@ -140,10 +131,7 @@ export function useRepublish(): UseMutationResult<
     mutationFn: async ({ event, relay }) => {
       const timeout = publishTimeoutMs(user?.method);
       if (relay) {
-        await publishLive(nostr, relay, event, {
-          signal: AbortSignal.timeout(timeout),
-          timeoutMs: timeout,
-        });
+        await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(timeout) });
       } else {
         await nostr.event(event, { signal: AbortSignal.timeout(timeout) });
       }

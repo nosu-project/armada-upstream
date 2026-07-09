@@ -968,16 +968,6 @@ export class NostrBatcher {
     return this.pool.event(event, opts);
   }
 
-  /**
-   * The pool's live per-URL relay map. Exposed (pass-through) so the
-   * liveness-gated publish (`publishLive`) can detect a stale/half-dead socket
-   * and drop it to force a fresh connection. Callers hold `nostr` as this
-   * batcher, so without this pass-through the real pool is unreachable.
-   */
-  get relays() {
-    return this.pool.relays;
-  }
-
   req(
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
