@@ -4,6 +4,45 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.25.0] - 2026-07-09
+
+New members now get a guided, full-page setup: generate and save a key, set up a
+profile, and create or join a community, all in one flow. The community sidebar
+header is reworked into a cleaner layout with a Discord-style menu that expands
+inline for settings, invites, roles, and more. Cold-starting the Android app now
+shows an animated Armada crest that holds until the app is ready instead of a
+blank screen. This release also fixes community channels that could load blank
+or slowly, or briefly flash the wrong channel's messages when switching, and
+sharpens mobile layout on notched and landscape screens.
+
+### Added
+- Full-page onboarding for new members: a step-by-step wizard to generate a key,
+  save it, set up your profile, and create or join a community, with every step
+  after saving your key skippable
+- Mesh chat on/off toggle in the channel-list sidebar, so you can turn mesh on or
+  off without first opening a chat
+
+### Changed
+- Reworked community/server sidebar header: the name is now a menu that expands
+  inline for settings, invite, create channel, roles, mute, leave, and delete;
+  the community banner and icon layout are cleaned up
+- Android cold start now shows an animated Armada crest that stays on screen
+  until the app has painted, replacing the blank frame on launch
+- The profile editor hides its edit pencils on touch devices for a cleaner look
+- The platform relay is no longer pinned automatically; join it like any other
+  community via its invite or server link
+
+### Fixed
+- Community channels that could load blank until an app restart, load slowly, or
+  briefly flash the previous channel's messages when switching now load promptly
+  and correctly, including channels with older history
+- The Mentions view now surfaces mentions buried deep in a channel's history, not
+  just recent ones
+- Mobile safe-area handling on notched and landscape screens: content no longer
+  slides under a side notch, the composer clears tall navigation bars, and the
+  message placeholder stays put after rotating
+- Status-bar icons over a community banner stay legible with a subtle scrim
+
 ## [0.24.0] - 2026-07-08
 
 Replying in community chat now works the way you'd expect. Alongside the
