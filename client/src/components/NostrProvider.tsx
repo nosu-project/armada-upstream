@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { NostrEvent, NostrFilter, NPool, NRelay1 } from "@nostrify/nostrify";
+import { verifyEvent } from "nostr-tools";
 import { NostrContext } from "@nostrify/react";
 import { NUser, useNostrLogin } from "@nostrify/react/login";
 import type { NostrSigner } from "@nostrify/types";
@@ -27,6 +28,33 @@ interface NostrProviderProps {
  * signature across challenges — we just refuse the extra ones during the window.)
  */
 const AUTH_MIN_INTERVAL_MS = 5_000;
+
+/**
+ * NIP-59 gift-wrap kinds (Concord V2 wraps + ephemeral variant). See
+ * `wire/ingest.ts` WRAP_KINDS.
+ */
+const WRAP_KINDS = new Set([1059, 21059]);
+
+/**
+ * Skip Schnorr signature verification for gift-wraps, verify everything else.
+ *
+ * A 1059/21059 wrap's outer signature is cryptographically meaningless to the
+ * client: NIP-59 wraps are signed either by a single-use ephemeral key (direct
+ * invites) or, in Concord V2, by a group-shared *derived* stream key that every
+ * member can sign with. Neither establishes a sender identity. Authenticity and
+ * integrity of the payload come from NIP-44 (authenticated encryption) plus the
+ * inner seal's signature check (`stream.ts` `verifyEvent(seal)`) and the
+ * `rumor.pubkey === seal.pubkey` + rumor-id-hash bindings — all re-checked in
+ * the decrypt path regardless of the outer sig. Verifying the wrap here is pure
+ * redundant work, and wraps are the highest-volume kind on the auth'd stream
+ * relays, so skipping the Schnorr verify for just these kinds is a real ingest
+ * win. Every other kind (NIP-29 group events, DMs, profiles, …) still relies on
+ * its outer signature for identity, so those keep full verification.
+ */
+function verifyEventSkippingWraps(event: NostrEvent): boolean {
+  if (WRAP_KINDS.has(event.kind)) return true;
+  return verifyEvent(event);
+}
 
 /**
  * Provides the relay pool for the whole app.
@@ -238,6 +266,9 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     pool.current = new NPool({
       open(url: string) {
         const relay: NRelay1 = new NRelay1(url, {
+          // Gift-wrap (1059/21059) outer signatures are redundant on the client
+          // (see verifyEventSkippingWraps); skip them, verify everything else.
+          verifyEvent: verifyEventSkippingWraps,
           // NIP-42: respond to relay AUTH challenges by signing a kind 22242
           // ephemeral event with the current user's signer.
           //
