@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useConcordBanlist } from "@/concord-v1/hooks/useConcordModeration";
@@ -454,9 +454,16 @@ export function useConcordChannelMessages(community: Community | undefined, chan
       return own.length > 0 ? own : undefined;
     },
     initialDataUpdatedAt: 0,
-    // Keep the previous channel's messages on screen while the next channel's
-    // first read resolves, so switching never flashes a skeleton.
-    placeholderData: keepPreviousData,
+    // Keep the previous render's messages painted ONLY when they belong to
+    // THIS channel (the previous query has the same key), never the outgoing
+    // channel's timeline during a switch — the new channel paints from its own
+    // snapshot (`initialData`) or a skeleton. Decided from the previous
+    // query's own key (race-free), NOT a ref updated by an effect: this inline
+    // closure defeats TanStack's placeholder memoization, so it re-runs on
+    // EVERY render while the new channel's first read is pending, and a ref
+    // would already point at the new channel by the second render.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery && hashKey(prevQuery.queryKey) === hashKey(queryKey) ? prev : undefined,
     // Backstop + backfill. The live subscription delivers NEW messages
     // instantly; this poll heals gaps (dropped subscription / missed event) and
     // walks OLDER history into the append-only local store via `until`
@@ -559,10 +566,18 @@ export function useConcordChannelMessages(community: Community | undefined, chan
        */
       const backfillAndRefresh = async () => {
         if (signal.aborted) return;
-        // Re-reading the store is the slow part (seconds on a cold WebView), so
-        // walk BOTH backfill phases first, then recompose ONCE — not after each.
-        await backfillStore(nostr, relays, w, signal, undefined, 1); // newest page
+        // Phase (a): newest page — surfaces the messages the viewer actually
+        // sees on open. Recompose + PAINT + release the skeleton right after it,
+        // so a cold channel shows its latest history immediately instead of
+        // waiting through the bounded older-history walk below (which, on a
+        // fresh login, meant staring at a skeleton while deep history paged in).
+        await backfillStore(nostr, relays, w, signal, undefined, 1);
         if (signal.aborted) return;
+        queryClient.setQueryData<OpenedMessage[]>(queryKey, await composeFromStore());
+        if (!signal.aborted) setFirstLoadDone(true);
+
+        // Phase (b): the bounded, resumable older-history walk — streams in
+        // underneath the already-painted newest page.
         const resumeFrom = backfillCursor.current.get(cursorKey);
         const oldest = await backfillStore(nostr, relays, w, signal, resumeFrom);
         if (oldest !== undefined && (resumeFrom === undefined || oldest < resumeFrom)) {

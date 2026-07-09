@@ -363,4 +363,55 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
       expect((await peekPendingWraps(pks)).length).toBe(0);
     });
   });
+
+  it("does not paint the previous channel's messages when switching channels", async () => {
+    const chanA = makeChannel();
+    const chanB = makeChannel();
+    const alice = signer();
+    const now = Math.floor(Date.now() / 1000);
+
+    // Channel A has decrypted history in the rumor store.
+    const wraps = [await wrapChatAt(chanA.channel, alice, "a-msg", now - 100)];
+    writeRumors(await openChatBatch(wraps, chanA.channel));
+    await waitFor(async () => {
+      expect((await queryChannelRumors(chanA.idHex, { limit: 10 })).length).toBe(1);
+    });
+
+    // Channel B is empty and its relay is cold (auth round-trips), so B's first
+    // read stays pending for a while after the switch.
+    const relay = new FakeRelay();
+    relay.delayMs = 800;
+    h.pool = makePool({ [RELAY]: relay });
+    const community = { idHex: "cc".repeat(32), relays: [RELAY] } as unknown as CommunityV2;
+
+    const { wrapper } = makeWrapper();
+    const { result, rerender } = renderHook(
+      ({ channel }: { channel: ChannelV2 }) => useChannelTimeline2(community, channel),
+      { wrapper, initialProps: { channel: chanA.channel } },
+    );
+    await waitFor(() => {
+      expect(result.current.folded.messages.map((m) => m.content)).toContain("a-msg");
+    });
+
+    // Switch to channel B: A's timeline must never paint into B — not on the
+    // switch render, and not on any LATER re-render while B's first read is
+    // still pending. (Regression: an effect-updated ref re-admitted the old
+    // channel's data through `placeholderData` one render after the switch —
+    // the inline placeholder closure defeats TanStack's memoization, so any
+    // re-render re-invokes it with the previous query's data, and by then the
+    // ref already pointed at the new channel.)
+    rerender({ channel: chanB.channel });
+    expect(result.current.folded.messages.map((m) => m.content)).not.toContain("a-msg");
+    rerender({ channel: chanB.channel });
+    expect(result.current.folded.messages.map((m) => m.content)).not.toContain("a-msg");
+
+    // …and B settles empty.
+    await waitFor(
+      () => {
+        expect(result.current.isLoading).toBe(false);
+        expect(result.current.folded.messages).toEqual([]);
+      },
+      { timeout: 8_000 },
+    );
+  });
 });

@@ -37,6 +37,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { resolveMs, type OpenedEvent } from "@/concord-v2/lib/stream";
+import { emitWireScopes } from "@/wire/bus";
 import type { OpenedChat } from "@/concord-v2/lib/chat";
 
 const DB_NAME = "armada-concord-rumors";
@@ -126,12 +127,16 @@ export function storedToOpened(ev: NostrEvent): OpenedEvent {
   const streamPk = ev.tags.find((t) => t[0] === TAG_STREAM)?.[1] ?? "";
   const wrapId = ev.tags.find((t) => t[0] === TAG_WRAP)?.[1] ?? "";
   const sealKind = Number(ev.tags.find((t) => t[0] === TAG_SEALKIND)?.[1] ?? "0");
-  let seal: NostrEvent;
-  try {
-    seal = JSON.parse(ev.tags.find((t) => t[0] === TAG_SEAL)?.[1] ?? "{}") as NostrEvent;
-  } catch {
-    seal = {} as NostrEvent;
-  }
+
+  // The seal is the full signed NIP-59 seal JSON — bulky, and needed ONLY by
+  // the control-plane rekey path (rewrapSeal), NEVER to render a chat message.
+  // Parsing it eagerly here cost a JSON.parse of a large blob for every message
+  // in the window on every channel read (a real switch-latency tax on Android).
+  // Defer it behind a lazy, memoized getter so the parse happens only if a
+  // consumer actually reads `.seal`.
+  const sealRaw = ev.tags.find((t) => t[0] === TAG_SEAL)?.[1] ?? "{}";
+  let sealParsed: NostrEvent | undefined;
+
   return {
     rumorId: ev.id,
     author: ev.pubkey,
@@ -143,7 +148,16 @@ export function storedToOpened(ev: NostrEvent): OpenedEvent {
     wrapId,
     streamPk,
     sealKind,
-    seal,
+    get seal(): NostrEvent {
+      if (sealParsed === undefined) {
+        try {
+          sealParsed = JSON.parse(sealRaw) as NostrEvent;
+        } catch {
+          sealParsed = {} as NostrEvent;
+        }
+      }
+      return sealParsed;
+    },
   };
 }
 
@@ -179,29 +193,45 @@ export async function queryChannelRumors(
 }
 
 /**
- * Read cached messages across a community's channels that p-tag `pubkey` — the
- * "@ Mentions" view, purely local (no relay, no decrypt). Both `p` and
- * `channel` are in {@link QUERYABLE_TAGS}, so the filter is index-backed. Each
- * message's own `channel` binding tag recovers its channel id for the row.
- * Covers kind-9 messages and kind-1111 thread replies (a reply p-tags the
- * message author, so "replied to you" surfaces here too).
+ * Read the newest `perChannel` chat rumors for EACH of several channels in a
+ * SINGLE store transaction, returned grouped by channel id.
+ *
+ * The store's `query([...])` runs every filter concurrently inside one
+ * readonly transaction, so passing one `#channel` filter per channel collapses
+ * what used to be N independent `queryChannelRumors` calls (N transactions, N
+ * connection acquisitions — the source of the channel-switch contention) into a
+ * single transaction. Each filter is independently `limit`-bounded, so a busy
+ * channel can't starve a quiet one (unlike a single multi-value `#channel`
+ * filter, whose global limit is shared across channels).
+ *
+ * Channels with no cached rumors are omitted from the result map.
  */
-export async function queryMentionRumors(
+export async function queryRumorsByChannel(
   channelIdsHex: string[],
-  pubkey: string,
-  opts: { limit: number; signal?: AbortSignal },
-): Promise<OpenedChat[]> {
-  if (channelIdsHex.length === 0 || !pubkey) return [];
-  const filter = {
-    kinds: [9, 1111],
-    "#p": [pubkey],
-    "#channel": channelIdsHex,
-    limit: opts.limit,
-  };
-  const events = await rumorStore().query([filter], { signal: opts.signal });
-  return events.map((ev) =>
-    storedToOpenedChat(ev, ev.tags.find((t) => t[0] === "channel")?.[1] ?? ""),
+  opts: { perChannel: number; signal?: AbortSignal },
+): Promise<Map<string, OpenedChat[]>> {
+  const out = new Map<string, OpenedChat[]>();
+  if (channelIdsHex.length === 0) return out;
+
+  const events = await rumorStore().query(
+    channelIdsHex.map((idHex) => ({
+      kinds: CHAT_KINDS,
+      "#channel": [idHex],
+      limit: opts.perChannel,
+    })),
+    { signal: opts.signal },
   );
+
+  // One query() merges + de-dupes across filters, so recover each row's channel
+  // from its own binding tag rather than trusting filter order.
+  for (const ev of events) {
+    const idHex = ev.tags.find((t) => t[0] === "channel")?.[1];
+    if (!idHex) continue;
+    let list = out.get(idHex);
+    if (!list) out.set(idHex, (list = []));
+    list.push(storedToOpenedChat(ev, idHex));
+  }
+  return out;
 }
 
 /** How many chat rumors are cached for a channel. */
@@ -227,21 +257,37 @@ export async function queryByStreams(
 }
 
 /**
- * Persist opened stream events (any plane), fire-and-forget. Kind-5 deletes
- * trigger the store's self-only NIP-09 removal of their targets. Failures are
- * swallowed.
+ * Persist opened stream events (any plane). Kind-5 deletes trigger the store's
+ * self-only NIP-09 removal of their targets. Best-effort: failures are
+ * swallowed. Resolves once the batched write commits, so callers that need to
+ * act on the durable result (e.g. ring the bus) can await it; most fire and
+ * forget.
  */
-export function writeOpened(opened: OpenedEvent[]): void {
-  if (opened.length === 0) return;
+export function writeOpened(opened: OpenedEvent[]): Promise<void> {
+  if (opened.length === 0) return Promise.resolve();
   const s = rumorStore();
-  void Promise.all(opened.map((o) => s.event(openedToStored(o)))).catch(() => {
-    // Best-effort cache.
-  });
+  return Promise.all(opened.map((o) => s.event(openedToStored(o))))
+    .then(() => undefined)
+    .catch(() => undefined);
 }
 
-/** Chat alias: OpenedChat is an OpenedEvent, so writing is identical. */
+/**
+ * Persist opened chat rumors, then ring the wire bus for each channel written
+ * so every live timeline (and the community scan) re-reads — regardless of
+ * which query kicked off the write. This is what makes the write→paint path
+ * event-driven: a backfill that decrypted a cold channel's history announces
+ * `c2:<channel>` once its rumors are durably stored, so the timeline paints
+ * even if the query that started the backfill was superseded or aborted first.
+ *
+ * The emit is deferred until the write commits, so the re-read it triggers sees
+ * the just-written rows.
+ */
 export function writeRumors(opened: OpenedChat[]): void {
-  writeOpened(opened);
+  if (opened.length === 0) return;
+  const channels = new Set(opened.map((o) => o.channelIdHex).filter(Boolean));
+  void writeOpened(opened).then(() => {
+    if (channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
+  });
 }
 
 // ── Pending raw-wrap holding store ──────────────────────────────────────────
@@ -274,9 +320,32 @@ function pendingStore(): NIndexedDB {
   return pending;
 }
 
+/**
+ * Whether the pending store is known to hold nothing peek-worthy:
+ *   - `true`      — provably empty; peeks return without touching IndexedDB.
+ *   - `false`     — something is (or may be) parked; peeks do the real read.
+ *   - `undefined` — unknown (fresh session); the FIRST peek probes the durable
+ *                   store once and caches the answer.
+ *
+ * The probe is what keeps this correct across restarts: wraps parked in a
+ * PREVIOUS session (key never arrived before the app was killed) are durable,
+ * so a session-scoped "was anything parked?" flag alone would hide them from
+ * the drain forever — the native service's buffer was already drained, so
+ * nothing re-parks them. One cheap `limit: 1` probe on the first peek finds
+ * them; after that, the common web/desktop case (nothing ever parked) skips
+ * IndexedDB on every subsequent peek, keeping the parked-wrap drain off the
+ * channel-read hot path.
+ */
+let pendingKnownEmpty: boolean | undefined;
+
+/** How often (ms) to run the age-prune of undecodable stragglers. */
+const PENDING_PRUNE_INTERVAL_MS = 5 * 60_000;
+let lastPendingPruneAt = 0;
+
 /** Park raw V2 wraps for later WebView-side decryption (native ingest path). */
 export function parkPendingWraps(wraps: NostrEvent[]): void {
   if (wraps.length === 0) return;
+  pendingKnownEmpty = false;
   const s = pendingStore();
   void Promise.all(wraps.map((w) => s.event(w))).catch(() => undefined);
 }
@@ -285,15 +354,32 @@ export function parkPendingWraps(wraps: NostrEvent[]): void {
  * Read (WITHOUT removing) the raw wraps parked for a plane's stream addresses.
  * The caller decrypts them, writes the recovered rumors to the opened-event
  * store, and then acknowledges the decoded ones via {@link ackPendingWraps}.
- * Also prunes wraps past {@link PENDING_MAX_AGE_SECS} so permanently
- * undecodable stragglers can't accumulate.
+ *
+ * Returns immediately when the pending store is known empty (see {@link
+ * pendingKnownEmpty}). Otherwise reads the parked wraps, and — at most once
+ * every {@link PENDING_PRUNE_INTERVAL_MS} — age-prunes permanently-undecodable
+ * stragglers (a readwrite scan kept off the per-peek path).
  */
 export async function peekPendingWraps(streamPks: string[]): Promise<NostrEvent[]> {
   if (streamPks.length === 0) return [];
+  if (pendingKnownEmpty === true) return [];
   const s = pendingStore();
   try {
-    const cutoff = Math.floor(Date.now() / 1000) - PENDING_MAX_AGE_SECS;
-    void s.remove([{ kinds: [1059, 21059], until: cutoff }]).catch(() => undefined);
+    if (pendingKnownEmpty === undefined) {
+      // First peek this session: one cheap probe of the durable store, so
+      // wraps parked in a previous session are still found (see above).
+      const any = await s.query([{ kinds: [1059, 21059], limit: 1 }]);
+      // A concurrent park may have flipped this to `false` mid-probe; an empty
+      // probe result must not clobber that.
+      if (pendingKnownEmpty === undefined) pendingKnownEmpty = any.length === 0;
+      if (pendingKnownEmpty === true) return [];
+    }
+    const now = Date.now();
+    if (now - lastPendingPruneAt >= PENDING_PRUNE_INTERVAL_MS) {
+      lastPendingPruneAt = now;
+      const cutoff = Math.floor(now / 1000) - PENDING_MAX_AGE_SECS;
+      void s.remove([{ kinds: [1059, 21059], until: cutoff }]).catch(() => undefined);
+    }
     return await s.query([{ kinds: [1059, 21059], authors: streamPks, limit: 1000 }]);
   } catch {
     return [];

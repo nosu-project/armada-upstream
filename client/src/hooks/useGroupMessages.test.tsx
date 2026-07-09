@@ -149,4 +149,33 @@ describe("useGroupMessages (wire hydration)", () => {
     await new Promise((r) => setTimeout(r, 150));
     await waitFor(() => expect(result.current.data?.some((e) => e.id === mine.id)).toBe(true));
   });
+
+  it("does not paint the previous channel's messages when switching channels on the same relay", async () => {
+    const { wrapper } = setup();
+    const a = msg("g1", { created_at: 100 });
+    h.store.events.push(a);
+
+    const { result, rerender } = renderHook(
+      ({ group }: { group: string }) => useGroupMessages(RELAY, group),
+      { wrapper, initialProps: { group: "g1" } },
+    );
+    await waitFor(() => expect(result.current.data?.map((e) => e.id)).toEqual([a.id]));
+
+    // Switch to an empty channel on the SAME relay: the outgoing channel's
+    // message must NOT linger (regression: placeholderData kept prev per-relay).
+    rerender({ group: "g2" });
+    expect(result.current.data?.some((e) => e.id === a.id) ?? false).toBe(false);
+
+    // …and it must STAY gone on subsequent re-renders while g2's first read is
+    // still pending. (Regression: an effect-updated ref re-admitted the old
+    // channel's data through `placeholderData` one render after the switch —
+    // the inline placeholder closure defeats TanStack's memoization, so any
+    // re-render re-invokes it with the previous query's data, and by then the
+    // ref already pointed at the new room.)
+    rerender({ group: "g2" });
+    expect(result.current.data?.some((e) => e.id === a.id) ?? false).toBe(false);
+
+    // Eventually g2's own (empty) read settles.
+    await waitFor(() => expect(result.current.data?.some((e) => e.id === a.id)).toBe(false));
+  });
 });

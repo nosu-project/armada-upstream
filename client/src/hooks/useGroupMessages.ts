@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useEventStore } from "@/hooks/useEventStore";
@@ -109,13 +109,6 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   // network pull (which can be skipped, deadlocking the skeleton).
   const [firstLoadDone, setFirstLoadDone] = useState(false);
 
-  // Which relay the currently-rendered `query.data` belongs to. Used by
-  // `placeholderData` below to decide whether the previous room's messages are
-  // safe to keep painted during a switch: same server → yes (no skeleton
-  // flash); different community → no (blank rather than show another
-  // community's timeline).
-  const dataRelayRef = useRef<string | undefined>(relayUrl);
-
   // Last-known-good localStorage snapshot scope for this room: a pure READ
   // CACHE for the first frame of a cold launch (Android IndexedDB cold-opens
   // in seconds). Never an ingestion source — the store remains authoritative.
@@ -138,15 +131,18 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       const existing = queryClient.getQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId)) ?? [];
 
       // The store is the source of truth: the wire writes every incoming
-      // event here before the bus asks us to re-read.
-      const cached = await store.query([
-        { kinds: TIMELINE_KINDS, "#h": [groupId!], limit: Math.max(PAGE_SIZE, existing.length) },
+      // event here before the bus asks us to re-read. Read the timeline and
+      // the group's deletions in parallel so the local paint isn't gated on
+      // two sequential IndexedDB round-trips.
+      const [cached, deletes] = await Promise.all([
+        store.query([
+          { kinds: TIMELINE_KINDS, "#h": [groupId!], limit: Math.max(PAGE_SIZE, existing.length) },
+        ]),
+        // Deletions: the store self-applies NIP-09 for same-author deletes, but
+        // NIP-29 moderators delete others' messages — hide anything referenced
+        // by a kind-5 in this group.
+        store.query([{ kinds: [KIND_DELETE], "#h": [groupId!], limit: 200 }]),
       ]);
-
-      // Deletions: the store self-applies NIP-09 for same-author deletes, but
-      // NIP-29 moderators delete others' messages — hide anything referenced
-      // by a kind-5 in this group.
-      const deletes = await store.query([{ kinds: [KIND_DELETE], "#h": [groupId!], limit: 200 }]);
       const deletedIds = new Set(
         deletes.flatMap((d) => d.tags.filter(([n, v]) => n === "e" && v).map(([, v]) => v)),
       );
@@ -223,17 +219,22 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
-    // Keep showing the previous channel's messages while the next loads, so
-    // switching channels within the SAME community never flashes the skeleton.
-    // Switching to a DIFFERENT community drops the unrelated timeline instead.
-    placeholderData: (prev) => (dataRelayRef.current === relayUrl ? prev : undefined),
+    // Keep the previous render's messages painted ONLY when they belong to
+    // THIS room (the previous query has the same key — e.g. a remount after
+    // cache eviction), so a same-room reload never flashes the skeleton. A
+    // channel switch means the previous query is a DIFFERENT room, so its
+    // messages are dropped — the new channel paints from its own synchronous
+    // snapshot (`initialData`) or a skeleton, never the outgoing channel's
+    // timeline. Decided from the previous query's own key (race-free), NOT a
+    // ref updated by an effect: this inline closure defeats TanStack's
+    // placeholder memoization, so it re-runs on EVERY render while the new
+    // room's first read is pending, and a ref would already point at the new
+    // room by the second render.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery && hashKey(prevQuery.queryKey) === hashKey(messagesKey(relayUrl, groupId))
+        ? prev
+        : undefined,
   });
-
-  // Track which relay the data now on screen belongs to, for the next switch's
-  // `placeholderData` decision. Runs after render commits `query.data`.
-  useEffect(() => {
-    dataRelayRef.current = relayUrl;
-  }, [relayUrl, query.data]);
 
   // Wire hydration: when this group's store changes, re-read it. (The queryFn
   // is a cheap local read; its relay pull is independently throttled.)

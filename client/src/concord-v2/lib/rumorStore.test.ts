@@ -1,7 +1,7 @@
 import { IDBFactory } from "fake-indexeddb";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { bytesToHex, channelGroupKey } from "@/concord-v2/lib/derive";
 import { openChatBatch, type OpenedChat } from "@/concord-v2/lib/chat";
@@ -199,5 +199,27 @@ describe("concord-v2 rumor store", () => {
     ackPendingWraps([wrap.id]);
     const after = await eventually(() => peekPendingWraps([control.pk]), (r) => r.length === 0);
     expect(after.length).toBe(0);
+  });
+
+  it("peeks wraps parked in a PREVIOUS session (restart before the key arrived)", async () => {
+    const alice = signer();
+    const control = channelGroupKey(new Uint8Array(32).fill(8), new Uint8Array(32).fill(4), 0);
+    const rumor = buildRumor({ kind: 3308, content: "{}", tags: [["vsk", "0"], ["eid", "ef".repeat(32)], ["ev", "1"]], pubkey: alice.pubkey, ms: null });
+    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control);
+
+    // Session 1: the wrap arrives for a stream we hold no key for and is
+    // parked. The app is then killed before the key ever resolves.
+    parkPendingWraps([wrap]);
+    await eventually(() => peekPendingWraps([control.pk]), (r) => r.length === 1);
+
+    // Session 2: fresh module state (app restart), SAME durable IndexedDB.
+    // The key arrives NOW, so the drain peeks — it must still see the wrap
+    // parked last session. (Regression: a session-scoped "ever parked" flag
+    // made this peek return [] until something new happened to park, leaving
+    // last session's wraps invisible even once their key was available.)
+    vi.resetModules();
+    const fresh = await import("@/concord-v2/lib/rumorStore");
+    const parked = await fresh.peekPendingWraps([control.pk]);
+    expect(parked.map((w) => w.id)).toEqual([wrap.id]);
   });
 });

@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { queryChannelRumors } from "@/concord-v2/lib/rumorStore";
+import { useCommunityRumors } from "@/concord-v2/hooks/useCommunityRumors";
 import { foldTimeline, replyTargetOf, type OpenedChat } from "@/concord-v2/lib/chat";
 import { openedToChatMsg } from "@/concord-v2/hooks/useTransport2";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
@@ -12,10 +12,6 @@ import {
   markConcord2ThreadRead,
   type Concord2ThreadReadMap,
 } from "@/concord-v2/lib/threadReadState2";
-import { useWireScopes } from "@/wire/useWireScopes";
-
-/** How many newest cached rumors to fold per channel when scanning threads. */
-const SCAN_LIMIT = 200;
 
 /** A thread the current user has participated in, summarized for the tab. */
 export interface Concord2Thread {
@@ -39,20 +35,14 @@ const threadReadMapKey = (pubkey: string | undefined) =>
 
 /**
  * Threads the current user has participated in across a Concord V2 community —
- * every thread whose ROOT or any reply they authored — summarized newest-reply
- * first, purely from the local decrypted rumor cache (IndexedDB). No relay
- * query is made: the wire keeps every channel's cache fed, so this scan folds
- * each channel's cached rumors (applying edits/deletes), buckets replies by
- * their `q` root, and keeps the threads the user is in.
+ * every thread whose root or any reply they authored — summarized newest-reply
+ * first, derived PURELY from the shared community rumor scan
+ * ({@link useCommunityRumors}). No store access of its own.
  *
- * "New" is per-thread (not per-channel like {@link useConcord2Unread}): a
- * thread lights up when its newest reply is newer than the last time the user
- * opened it (tracked in {@link threadReadState2}) and isn't their own. Modeled
- * on {@link useConcord2Mentions}: shared query cache keyed by pubkey + channel
- * set, re-scanned on the wire bus, light poll as a backstop.
- *
- * `markRead(rootId, ts)` advances a thread's read stamp (call when the user
- * opens the thread panel).
+ * "New" is per-thread: a thread lights up when its newest reply is newer than
+ * the last time the user opened it (tracked in {@link threadReadState2}) and
+ * isn't their own. The per-thread read comparison is pure computation layered
+ * over the shared scan, so `markRead` recomputes instantly without re-reading.
  */
 export function useConcord2Threads(channels: ChannelV2[]): {
   threads: Concord2Thread[];
@@ -67,8 +57,6 @@ export function useConcord2Threads(channels: ChannelV2[]): {
   const channelSig = channels.map((c) => c.idHex).join(",");
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The persisted per-thread read map, shared across mounts via the query cache
-  // (so `markRead` from the open panel updates the tab's badge instantly).
   const { data: readMap = {} } = useQuery<Concord2ThreadReadMap>({
     queryKey: threadReadMapKey(pubkey),
     queryFn: () => loadConcord2ThreadReadState(pubkey!),
@@ -76,89 +64,90 @@ export function useConcord2Threads(channels: ChannelV2[]): {
     staleTime: Infinity,
   });
 
-  const { data: threads = [], isLoading } = useQuery<Concord2Thread[]>({
-    queryKey: ["concord2-threads", pubkey, channelSig, readMap],
-    queryFn: async () => {
-      const perChannel = await Promise.all(
-        channelIds.map(async (idHex) => {
-          try {
-            const rumors = await queryChannelRumors(idHex, { limit: SCAN_LIMIT });
-            return { idHex, messages: foldTimeline(rumors).messages };
-          } catch {
-            return { idHex, messages: [] as OpenedChat[] };
-          }
-        }),
-      );
+  const { byChannel: rumorsByChannel, isLoading } = useCommunityRumors(channelIds);
 
-      const out: Concord2Thread[] = [];
-      for (const { idHex, messages } of perChannel) {
-        const byId = new Map(messages.map((m) => [m.rumorId, m]));
-        // Bucket thread replies by their root. A thread reply is a NIP-22
-        // kind-1111 comment (uppercase `E` root); a kind-9 `q` is an inline
-        // reply and never a thread (see `replyTargetOf`).
-        const repliesByRoot = new Map<string, OpenedChat[]>();
-        for (const m of messages) {
-          const root = replyTargetOf(m);
-          if (!root) continue;
-          const list = repliesByRoot.get(root) ?? [];
-          list.push(m);
-          repliesByRoot.set(root, list);
-        }
+  // Bucket each channel's folded rumors into the threads the user is in. Pure
+  // computation over the shared scan — no store, no readMap dependency (that is
+  // layered on below).
+  const scanned = useMemo(() => {
+    const out: Array<{
+      root: ChatMsg;
+      rootId: string;
+      newestReplyAuthor: string;
+      channelIdHex: string;
+      replyCount: number;
+      lastReplyAt: number;
+      participants: string[];
+    }> = [];
 
-        for (const [rootId, replies] of repliesByRoot) {
-          const rootMsg = byId.get(rootId);
-          // Orphan root (older than the scan window / undecoded): skip — we
-          // have no root to render or open a panel for.
-          if (!rootMsg) continue;
-          const authoredRoot = rootMsg.author === pubkey;
-          const authoredReply = replies.some((r) => r.author === pubkey);
-          if (!authoredRoot && !authoredReply) continue;
+    for (const [idHex, rumors] of rumorsByChannel) {
+      const messages = foldTimeline(rumors).messages;
+      const byId = new Map(messages.map((m) => [m.rumorId, m]));
 
-          replies.sort((a, b) => a.ms - b.ms);
-          const newest = replies[replies.length - 1];
-          const lastReplyAt = newest.createdAt;
-
-          // Distinct repliers, newest-first (avatar stack).
-          const participants: string[] = [];
-          const seen = new Set<string>();
-          for (let i = replies.length - 1; i >= 0; i--) {
-            const a = replies[i].author;
-            if (!seen.has(a)) {
-              seen.add(a);
-              participants.push(a);
-            }
-          }
-
-          const lastRead = readMap[rootId] ?? 0;
-          const hasNew = newest.author !== pubkey && lastReplyAt > lastRead;
-
-          out.push({
-            root: openedToChatMsg(rootMsg),
-            channelIdHex: idHex,
-            replyCount: replies.length,
-            lastReplyAt,
-            participants,
-            hasNew,
-          });
-        }
+      // Bucket thread replies by their root. A thread reply is a NIP-22
+      // kind-1111 comment (uppercase `E` root); a kind-9 `q` is an inline reply
+      // and never a thread (see `replyTargetOf`).
+      const repliesByRoot = new Map<string, OpenedChat[]>();
+      for (const m of messages) {
+        const root = replyTargetOf(m);
+        if (!root) continue;
+        const list = repliesByRoot.get(root) ?? [];
+        list.push(m);
+        repliesByRoot.set(root, list);
       }
 
-      out.sort((a, b) => b.lastReplyAt - a.lastReplyAt);
-      return out;
-    },
-    enabled: !!pubkey && channelIds.length > 0,
-    refetchInterval: 30_000,
-    staleTime: 0,
-  });
+      for (const [rootId, replies] of repliesByRoot) {
+        const rootMsg = byId.get(rootId);
+        // Orphan root (older than the scan window / undecoded): no root to
+        // render or open a panel for.
+        if (!rootMsg) continue;
+        const authoredRoot = rootMsg.author === pubkey;
+        const authoredReply = replies.some((r) => r.author === pubkey);
+        if (!authoredRoot && !authoredReply) continue;
 
-  useWireScopes((scopes) => {
-    for (const idHex of channelIds) {
-      if (scopes.has(`c2:${idHex}`)) {
-        void queryClient.invalidateQueries({ queryKey: ["concord2-threads", pubkey] });
-        return;
+        replies.sort((a, b) => a.ms - b.ms);
+        const newest = replies[replies.length - 1];
+
+        // Distinct repliers, newest-first (avatar stack).
+        const participants: string[] = [];
+        const seen = new Set<string>();
+        for (let i = replies.length - 1; i >= 0; i--) {
+          const a = replies[i].author;
+          if (!seen.has(a)) {
+            seen.add(a);
+            participants.push(a);
+          }
+        }
+
+        out.push({
+          root: openedToChatMsg(rootMsg),
+          rootId,
+          newestReplyAuthor: newest.author,
+          channelIdHex: idHex,
+          replyCount: replies.length,
+          lastReplyAt: newest.createdAt,
+          participants,
+        });
       }
     }
-  });
+
+    out.sort((a, b) => b.lastReplyAt - a.lastReplyAt);
+    return out;
+  }, [rumorsByChannel, pubkey]);
+
+  // Layer per-thread "new" on top as pure arithmetic against the read map.
+  const threads = useMemo<Concord2Thread[]>(
+    () =>
+      scanned.map((t) => ({
+        root: t.root,
+        channelIdHex: t.channelIdHex,
+        replyCount: t.replyCount,
+        lastReplyAt: t.lastReplyAt,
+        participants: t.participants,
+        hasNew: t.newestReplyAuthor !== pubkey && t.lastReplyAt > (readMap[t.rootId] ?? 0),
+      })),
+    [scanned, readMap, pubkey],
+  );
 
   const markRead = useCallback(
     (rootId: string, timestamp: number) => {

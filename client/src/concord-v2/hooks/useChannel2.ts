@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
@@ -305,7 +305,15 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
-    placeholderData: keepPreviousData,
+    // Keep the previous render's messages painted ONLY when they belong to
+    // THIS channel (the previous query has the same key), never the outgoing
+    // channel's timeline during a switch. Decided from the previous query's
+    // own key (race-free), NOT a ref updated by an effect: this inline closure
+    // defeats TanStack's placeholder memoization, so it re-runs on EVERY
+    // render while the new channel's first read is pending, and a ref would
+    // already point at the new channel by the second render.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery && hashKey(prevQuery.queryKey) === hashKey(queryKey) ? prev : undefined,
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const cursorKeyId = channelIdHex ?? "";
@@ -345,9 +353,21 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       const backfillAndRefresh = async () => {
         if (signal.aborted) return;
         // Pass 1: pull the newest page (no `until`) so live-adjacent history
-        // lands first.
+        // lands first. Decrypt it and PAINT immediately — the newest page is
+        // what the viewer sees on open, so the timeline shows as soon as this
+        // lands rather than waiting for the deep-history passes below (which,
+        // on a cold channel, meant staring at a skeleton through up to 20
+        // back-to-back relay pages).
         const newest = await backfillStore(nostr, community!.relays, channel!, signal, { maxPages: 1 });
         if (signal.aborted) return;
+
+        const firstOpened = await openChatBatch(newest.events, channel!, { signal });
+        if (signal.aborted) return;
+        writeRumors(firstOpened);
+        queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore(firstOpened));
+        // Release the loading skeleton now — the newest history is on screen;
+        // older history streams in underneath as the passes below complete.
+        if (!signal.aborted) setFirstLoadDone(true);
 
         const saved = cursor.current.get(cursorKeyId);
 
@@ -375,9 +395,10 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         const older = await backfillStore(nostr, community!.relays, channel!, signal, { until: resumeFrom });
         if (signal.aborted) return;
 
-        // Decrypt every wrap collected across the passes into the rumor cache.
+        // Decrypt the bridge + older pages into the rumor cache (pass 1 already
+        // decrypted + painted above).
         const opened = await openChatBatch(
-          [...newest.events, ...bridge.events, ...older.events],
+          [...bridge.events, ...older.events],
           channel!,
           { signal },
         );
