@@ -65,8 +65,12 @@ function statusEvent(data: UserStatusResult): NostrEvent | undefined {
  * different authors (e.g. an entire member list) into a single REQ — no
  * per-user subscription thread.
  *
- * Found statuses are cached for 5 minutes; misses re-check cheaply (and
- * batched) every 60s while mounted, mirroring `useAuthor`.
+ * A status is just a low-stakes vanity string, so it never goes stale within a
+ * session — no background re-polling for either hits or misses. It's refreshed
+ * only on remount/GC, and the publish path (`useSetUserStatus`) writes changes
+ * straight into the cache. Treating a miss as urgent (re-checking every 60s)
+ * used to make an idle channel full of status-less members — the common case —
+ * generate near-constant traffic.
  */
 export function useUserStatus(
   pubkey: string | undefined,
@@ -117,9 +121,8 @@ export function useUserStatus(
       return parseUserStatusEvent(event);
     },
     enabled: !!pubkey,
-    staleTime: (query) => (query.state.data?.status ? 5 * 60 * 1000 : 30 * 1000),
+    staleTime: Infinity,
     gcTime: 10 * 60 * 1000,
-    refetchInterval: (query) => (query.state.data?.status ? false : 60 * 1000),
     refetchOnWindowFocus: false,
     retry: 1,
   });
