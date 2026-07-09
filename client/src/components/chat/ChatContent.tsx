@@ -2,6 +2,7 @@ import { nip19 } from "nostr-tools";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { AudioMessage } from "@/components/chat/AudioMessage";
 import { emojify } from "@/components/chat/CustomEmoji";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
@@ -77,7 +78,7 @@ type ImageRef = EncryptedRef;
 /** A parsed token from message content. */
 type ContentToken =
   | { type: "text"; value: string }
-  | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string }
+  | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string }
   | { type: "image-gallery"; urls: ImageRef[] }
   | { type: "media-embed"; url: string; encryption?: ImetaEncryption; mime?: string }
   | { type: "link-embed"; url: string }
@@ -306,6 +307,8 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
               url,
               encryption: inlineImeta?.encryption,
               mime: inlineImetaMime,
+              dim: inlineImeta?.dim,
+              blurhash: inlineImeta?.blurhash,
             });
             lastIndex = index + fullMatch.length;
             const leadingWs = segment.substring(lastIndex).match(/^\s+/);
@@ -461,7 +464,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         if (!url || renderedUrls.has(url)) continue;
         const mime = imageMimeFor(entry);
         if (mime?.startsWith("image/")) {
-          result.push({ type: "image-embed", url, encryption: entry.encryption, mime });
+          result.push({ type: "image-embed", url, encryption: entry.encryption, mime, dim: entry.dim, blurhash: entry.blurhash });
           renderedUrls.add(url);
         } else if (mime?.startsWith("audio/") || mime?.startsWith("video/")) {
           result.push({ type: "media-embed", url, encryption: entry.encryption, mime });
@@ -543,11 +546,11 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     while (i < tokens.length) {
       const token = tokens[i];
       if (token.type === "image-embed") {
-        const run: ImageRef[] = [{ url: token.url, encryption: token.encryption, mime: token.mime }];
+        const run: ImageRef[] = [{ url: token.url, encryption: token.encryption, mime: token.mime, dim: token.dim, blurhash: token.blurhash }];
         let j = i + 1;
         while (j < tokens.length && tokens[j].type === "image-embed") {
           const t = tokens[j] as Extract<ContentToken, { type: "image-embed" }>;
-          run.push({ url: t.url, encryption: t.encryption, mime: t.mime });
+          run.push({ url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash });
           j++;
         }
         if (run.length >= 2) {
@@ -568,7 +571,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
   const allImages = useMemo<ImageRef[]>(
     () =>
       groupedTokens.flatMap((t) => {
-        if (t.type === "image-embed") return [{ url: t.url, encryption: t.encryption, mime: t.mime }];
+        if (t.type === "image-embed") return [{ url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash }];
         if (t.type === "image-gallery") return t.urls;
         return [];
       }),
@@ -664,7 +667,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         return (
           <InlineImage
             key={key}
-            image={{ url: token.url, encryption: token.encryption, mime: token.mime }}
+            image={{ url: token.url, encryption: token.encryption, mime: token.mime, dim: token.dim, blurhash: token.blurhash }}
             onClick={(e) => {
               e.stopPropagation();
               setLightboxIndex(imgIndex);
@@ -966,6 +969,8 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
     );
   }
 
+  const aspectRatio = parseDimAspectRatio(image.dim);
+
   return (
     <button
       type="button"
@@ -973,14 +978,24 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
       onClick={onClick}
     >
       <div
-        className={cn("relative rounded-lg overflow-hidden", !loaded && "bg-muted")}
-        style={!loaded ? { minHeight: 120, minWidth: 160 } : undefined}
+        className={cn("relative rounded-lg overflow-hidden", !loaded && !image.blurhash && "bg-muted")}
+        style={
+          !loaded
+            ? { aspectRatio, minHeight: aspectRatio ? undefined : 120, minWidth: 160 }
+            : undefined
+        }
       >
+        {!loaded && image.blurhash && (
+          <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
+        )}
         {resolved.status === "ready" && (
           <img
             src={resolved.src}
             alt=""
-            className="block max-w-full max-h-80 h-auto rounded-lg hover:opacity-90 transition-opacity"
+            className={cn(
+              "block max-w-full max-h-80 h-auto rounded-lg hover:opacity-90 transition-opacity",
+              !loaded && aspectRatio && "absolute inset-0 w-full h-full object-cover",
+            )}
             loading="lazy"
             onLoad={() => setLoaded(true)}
             onError={() => setFailed(true)}
@@ -1022,16 +1037,32 @@ function ImageGrid({ images, onOpen }: { images: ImageRef[]; onOpen: (index: num
 
 /** A single grid cell image, decrypting on display when encrypted. */
 function GridImage({ image }: { image: ImageRef }) {
+  const [loaded, setLoaded] = useState(false);
   const resolved = useResolvedMediaSrc(image);
-  if (resolved.status !== "ready") return null;
   return (
-    <img
-      src={resolved.src}
-      alt=""
-      loading="lazy"
-      className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity"
-    />
+    <>
+      {!loaded && image.blurhash && (
+        <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
+      )}
+      {resolved.status === "ready" && (
+        <img
+          src={resolved.src}
+          alt=""
+          loading="lazy"
+          onLoad={() => setLoaded(true)}
+          className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity"
+        />
+      )}
+    </>
   );
+}
+
+/** Parses a NIP-94 `dim` string ("WxH") into a CSS `aspect-ratio` value. */
+function parseDimAspectRatio(dim: string | undefined): string | undefined {
+  if (!dim) return undefined;
+  const [w, h] = dim.split("x").map(Number);
+  if (!w || !h || Number.isNaN(w) || Number.isNaN(h)) return undefined;
+  return `${w} / ${h}`;
 }
 
 /** Mention chip resolving the profile's display name. */
