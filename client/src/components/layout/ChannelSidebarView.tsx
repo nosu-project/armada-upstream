@@ -147,7 +147,7 @@ export function ChannelSidebarView({
                 This darkens exactly the top inset band so they stay legible. */}
             <div
               aria-hidden
-              className="sidebar:hidden absolute inset-x-0 top-0 h-[calc(var(--safe-area-inset-top,env(safe-area-inset-top,0px))+0.5rem)] pointer-events-none bg-gradient-to-b from-black/45 to-transparent"
+              className="sidebar:hidden absolute inset-x-0 top-0 h-[calc(var(--safe-area-inset-top,env(safe-area-inset-top,0px))+0.5rem)] pointer-events-none bg-gradient-to-b from-[hsl(var(--chrome))] via-[hsl(var(--chrome)/0.7)] to-transparent"
             />
             {/* Bottom-anchored scrim so the title reads on any banner. */}
             <div
