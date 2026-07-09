@@ -3,6 +3,7 @@ package pub.armada.app;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.webkit.WebView;
 
 import androidx.activity.EdgeToEdge;
 import androidx.core.splashscreen.SplashScreen;
@@ -84,4 +85,37 @@ public class MainActivity extends BridgeActivity {
     // a soft navigation, never a `window.location.href` document reload (which
     // would cold-boot the whole app: re-mount providers, re-open IndexedDB and
     // pay its multi-second WebView warm-up, re-run sync, re-subscribe relays).
+
+    // Recover from the WebView getting STUCK reporting `document.visibilityState
+    // === "hidden"` while the app is actually foreground. On some background→
+    // foreground / screen-off→on transitions the Android WebView fails to
+    // propagate its restored visibility to the renderer's page-visibility state,
+    // so Chromium keeps the document "hidden" and FREEZES all timers, intervals,
+    // rAF and background tasks in it. Every timer-driven subsystem then stops —
+    // relay reconnect polls, Concord backfill retries, wire sync — and channels
+    // silently read blank until the process is killed and relaunched (a fresh
+    // WebView starts visible). A document reload does NOT fix it (the reloaded
+    // document is still hidden); only re-resuming the WebView does.
+    //
+    // `WebView.onResume()` + `resumeTimers()` un-freeze the renderer's timer and
+    // task queues for this (now genuinely foreground) activity, so the frozen
+    // subsystems resume even if the WebView's `visibilityState` stays cosmetically
+    // "hidden". The existing `appStateChange`→`focusManager` wiring (see App.tsx)
+    // then drives the catch-up refetch. Cheap and idempotent, so running it on
+    // every resume is safe; it's a no-op when the WebView was never frozen.
+    @Override
+    public void onResume() {
+        super.onResume();
+        try {
+            if (this.bridge != null) {
+                WebView webView = this.bridge.getWebView();
+                if (webView != null) {
+                    webView.onResume();
+                    webView.resumeTimers();
+                }
+            }
+        } catch (Exception ignored) {
+            // Best-effort: never let a resume-recovery attempt crash the activity.
+        }
+    }
 }

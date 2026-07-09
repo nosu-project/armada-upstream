@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.25.1] - 2026-07-09
+
+Fixes an Android bug where community channels would silently stop loading after
+the app was backgrounded or the screen turned off, leaving rooms blank until the
+app was fully closed and reopened. Camera-off participants in a call now show a
+softly blurred version of their avatar behind their tile instead of a flat
+placeholder.
+
+### Fixed
+- Android: community channels no longer go blank after backgrounding the app or
+  turning the screen off and returning — history now catches up within a couple
+  seconds instead of requiring a full restart
+
+### Changed
+- Call tiles for participants with their camera off now display a blurred avatar
+  backdrop instead of a plain placeholder
+
 ## [0.25.0] - 2026-07-09
 
 New members now get a guided, full-page setup: generate and save a key, set up a
