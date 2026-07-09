@@ -1,16 +1,20 @@
 # Armada
 
-Encrypted communities with text and voice. **No host required.** Your keys, your
-fleet.
+Discord without the company. **No host required.** Your keys, your people.
 
-Armada is a Discord-style community chat app built on [Nostr](https://nostr.com).
-Its focus is [**Concord**](https://github.com/concord-protocol/concord): a
-serverless, end-to-end encrypted community protocol. Spin up a community with
-nothing to set up and nobody in the middle — text channels, live voice rooms,
-and invites, all without running a server. Communities ride as gift-wrapped
-Nostr events over ordinary relays; only members can read them.
+Armada is an end-to-end encrypted community chat app built on
+[Nostr](https://nostr.com) — servers, channels, threads, voice, and moderation,
+everything you expect from a chat app. Nobody can read your messages, sell your
+data, or shut your community down.
 
-Armada also still supports [NIP-29 relay-based
+Communities are serverless by default, built on
+[**Concord**](https://github.com/concord-protocol/concord): a serverless,
+end-to-end encrypted community protocol. Spin up a community with nothing to set
+up and nobody in the middle — text channels, live voice rooms, and invites, all
+without running a server. Communities ride as gift-wrapped Nostr events over
+ordinary relays; only members can read them.
+
+Armada also supports [NIP-29 relay-based
 groups](https://github.com/nostr-protocol/nips/blob/master/29.md) for operators
 who want to **self-host a server** and own membership, moderation, and data. The
 optional self-hostable backend (NIP-29 relay + LiveKit voice + Concord AV
