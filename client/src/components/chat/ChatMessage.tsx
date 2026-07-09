@@ -493,7 +493,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const toolbar = (
     <>
       {canWrite && !isEditing && reactions && <ReactionPicker onReact={reactions.react} />}
-      {canWrite && !isEditing && onReply && (
+      {canWrite && !isEditing && onOpenThread && (
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -501,7 +501,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
               size="icon"
               aria-label="Reply"
               className="size-9 md:size-7 text-muted-foreground hover:text-primary"
-              onClick={() => onReply(event)}
+              onClick={() => onOpenThread(event)}
             >
               <Reply className="size-[18px] md:size-3.5" />
             </Button>
@@ -509,20 +509,20 @@ const ChatMessageInner = memo(function ChatMessageInner({
           <TooltipContent>Reply</TooltipContent>
         </Tooltip>
       )}
-      {canWrite && !isEditing && onOpenThread && (
+      {canWrite && !isEditing && onReply && (
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Reply in thread"
+              aria-label="Quote"
               className="size-9 md:size-7 text-muted-foreground hover:text-primary"
-              onClick={() => onOpenThread(event)}
+              onClick={() => onReply(event)}
             >
               <MessagesSquare className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Reply in thread</TooltipContent>
+          <TooltipContent>Quote</TooltipContent>
         </Tooltip>
       )}
       {canEdit && !isEditing && (
@@ -721,14 +721,14 @@ const ChatMessageInner = memo(function ChatMessageInner({
       {/* Discord-style right-click menu, mirroring the hover toolbar's
           capability gating. */}
       <ContextMenuContent className="w-52">
-        {canWrite && !isEditing && onReply && (
-          <ContextMenuItem onSelect={() => onReply(event)}>
+        {canWrite && !isEditing && onOpenThread && (
+          <ContextMenuItem onSelect={() => onOpenThread(event)}>
             <Reply className="mr-2 size-4" /> Reply
           </ContextMenuItem>
         )}
-        {canWrite && !isEditing && onOpenThread && (
-          <ContextMenuItem onSelect={() => onOpenThread(event)}>
-            <MessagesSquare className="mr-2 size-4" /> Reply in thread
+        {canWrite && !isEditing && onReply && (
+          <ContextMenuItem onSelect={() => onReply(event)}>
+            <MessagesSquare className="mr-2 size-4" /> Quote
           </ContextMenuItem>
         )}
         {canEdit && !isEditing && (
