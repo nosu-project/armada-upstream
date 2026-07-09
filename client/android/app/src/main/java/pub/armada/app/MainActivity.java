@@ -1,13 +1,26 @@
 package pub.armada.app;
 
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.webkit.WebView;
 
 import androidx.activity.EdgeToEdge;
 import androidx.core.splashscreen.SplashScreen;
 
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.WebViewListener;
 
 public class MainActivity extends BridgeActivity {
+    // Held true from launch until the WebView commits its first visible paint
+    // (or a safety timeout fires). While true, the native splash stays up.
+    private volatile boolean webNotReady = true;
+
+    // Hard cap on how long the native splash may cover a cold start. The
+    // WebView first-paint signal is the normal dismisser; this only guards
+    // against it never arriving (so the splash can't hang forever).
+    private static final long SPLASH_MAX_MS = 8000;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // Register native plugins before super.onCreate.
@@ -18,7 +31,17 @@ public class MainActivity extends BridgeActivity {
         // (Theme.SplashScreen) window and hands off to postSplashScreenTheme
         // (AppTheme.NoActionBar) once the activity is up — without this the
         // launch theme's splash window can linger as a band after launch.
-        SplashScreen.installSplashScreen(this);
+        SplashScreen splashScreen = SplashScreen.installSplashScreen(this);
+
+        // Hold the branded native splash on screen until the WebView has
+        // actually PAINTED the web content. Without this, Android dismisses the
+        // splash the moment the activity is up — but on a cold start the WebView
+        // warm-up + bundle parse takes ~1-2s more, leaving a blank dark window
+        // (the app's #100b15 background) with nothing on it. Keeping the splash
+        // up bridges that gap so the crest covers the whole cold start and hands
+        // off directly to the rendered app (whose own in-HTML splash then shows
+        // during any further route-chunk load).
+        splashScreen.setKeepOnScreenCondition(() -> webNotReady);
 
         // Enable edge-to-edge so the WebView draws under the status and
         // navigation bars. The @capacitor-community/safe-area plugin then
@@ -27,6 +50,28 @@ public class MainActivity extends BridgeActivity {
         // app's CSS consumes for top/bottom safe-area handling.
         EdgeToEdge.enable(this);
         super.onCreate(savedInstanceState);
+
+        // Lift the splash on the WebView's first visible paint.
+        // onPageCommitVisible fires when the WebView has committed the first
+        // frame with page content on screen — the exact moment the blank dark
+        // window would otherwise give way to the web layer. A safety timeout
+        // guarantees the splash lifts even if the callback never arrives.
+        new Handler(Looper.getMainLooper()).postDelayed(() -> webNotReady = false, SPLASH_MAX_MS);
+
+        if (getBridge() != null) {
+            getBridge()
+                .addWebViewListener(
+                    new WebViewListener() {
+                        @Override
+                        public void onPageCommitVisible(WebView view, String url) {
+                            webNotReady = false;
+                        }
+                    }
+                );
+        } else {
+            // No bridge handle (shouldn't happen): don't hold the splash.
+            webNotReady = false;
+        }
     }
 
     // Notification taps deep-link via the `armada://open<path>` data URI set on
