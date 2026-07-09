@@ -93,8 +93,10 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
     enabled: entries.length > 0,
     staleTime: 30_000,
     // Fold snapshots update out-of-band (community open / control sync) —
-    // re-read periodically to pick up new channels and rotated epochs.
-    refetchInterval: 60_000,
+    // re-read periodically to pick up new channels and rotated epochs. This is
+    // a local (IndexedDB) read, but there's no reason to run it while hidden.
+    refetchInterval: 2 * 60_000,
+    refetchIntervalInBackground: false,
     queryFn: async () => {
       const out: Array<{ relays: string[]; channel: ChannelV2 }> = [];
       const keys: GroupKey[] = [];
@@ -161,9 +163,11 @@ function useWireNip29Groups(): Array<{ id: string; relay: string }> {
     enabled: servers.length > 0,
     // Relay-signed, rarely-changing directory data. Re-read periodically to
     // pick up newly-created channels; the channel-list UI invalidates on real
-    // changes, but the wire keeps its own quiet refresh.
+    // changes, but the wire keeps its own quiet refresh. Slow, and paused while
+    // the tab is hidden.
     staleTime: 60_000,
-    refetchInterval: 5 * 60_000,
+    refetchInterval: 15 * 60_000,
+    refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const store = await eventStore;
       const perRelay = await Promise.all(

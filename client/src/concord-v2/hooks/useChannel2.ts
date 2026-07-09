@@ -331,7 +331,12 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
     // already point at the new channel by the second render.
     placeholderData: (prev, prevQuery) =>
       prevQuery && hashKey(prevQuery.queryKey) === hashKey(queryKey) ? prev : undefined,
-    refetchInterval: 60_000,
+    // Live messages arrive over the wire's standing subscription (see above);
+    // this timer only drives periodic relay BACKFILL/healing, itself floored by
+    // BACKFILL_MIN_INTERVAL_MS. Run it slowly and only while the tab is visible
+    // — a wire-bus invalidation still refreshes the view instantly on new msgs.
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const cursorKeyId = channelIdHex ?? "";
 

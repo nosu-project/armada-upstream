@@ -66,7 +66,12 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
     queryKey: ["concord2", "rekey", community?.idHex ?? null, nextEpoch.toString()],
     enabled: Boolean(community),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    // Rekeys are rare, admin-initiated rotations; this watcher only runs for the
+    // open community (mounted on ConcordV2Page). Poll at a relaxed cadence and
+    // never while the tab is hidden — per-relay cursors below mean a longer gap
+    // only delays adoption, never skips a chunk (issue #19 family).
+    refetchInterval: 2 * 60_000,
+    refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const address = baseRekeyGroupKey(community!.root, community!.id, nextEpoch);
       const base: { kinds: number[]; authors: string[]; limit: number } = {

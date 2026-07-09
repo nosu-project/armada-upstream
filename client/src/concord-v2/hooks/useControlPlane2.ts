@@ -143,7 +143,12 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
     queryKey,
     enabled: Boolean(community) && active,
     staleTime: 15_000,
-    refetchInterval: active ? 60_000 : false,
+    // The live `req` above is the primary path; this poll is only a gap-filler
+    // for events a dropped subscription missed, so it runs slowly and never
+    // while the tab is hidden. Per-relay cursors guarantee no edition is
+    // skipped regardless of the interval (issue #19).
+    refetchInterval: active ? 5 * 60_000 : false,
+    refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const groups = controlGroups(community!);
       // Drain any wraps the native service parked (it can't decrypt) into the
@@ -245,7 +250,11 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
     queryKey: ["concord2", "dissolved", community?.idHex ?? null],
     enabled: Boolean(community) && active,
     staleTime: 30_000,
-    refetchInterval: active ? 60_000 : false,
+    // A dissolution is a rare, terminal event; once stored it's cached forever
+    // (the network branch below short-circuits). A slow, foreground-only poll
+    // is plenty to notice it.
+    refetchInterval: active ? 5 * 60_000 : false,
+    refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const group = dissolvedGroupKey(community!.id);
       // A dissolution tombstone is terminal and immutable — if we've already

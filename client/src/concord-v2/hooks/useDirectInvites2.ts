@@ -68,7 +68,11 @@ export function useDirectInvites2() {
     ],
     enabled: Boolean(user?.signer.nip44) && listReady,
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    // Invites aren't latency-critical (the user consents whenever they get to
+    // it) and the cursor means a longer gap just delays discovery, never drops
+    // one. Poll slowly and only while the tab is visible.
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
 
