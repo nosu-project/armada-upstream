@@ -17,7 +17,9 @@ import { nip19 } from "nostr-tools";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
-import { ReplyPreview, ReplyThumbnail, firstImageRef } from "@/components/chat/ChatMessage";import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
+import { ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import { firstImageRef } from "@/components/chat/messageHelpers";
+import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
 import { GifPicker } from "@/components/chat/GifPicker";
 import { MentionAutocomplete } from "@/components/chat/MentionAutocomplete";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
@@ -940,7 +942,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       .filter((url) => !text.includes(url));
     const finalText = [text, ...extraUrls].filter(Boolean).join("\n");
     await publishMessage(finalText);
-  }, [content, attachments, sendOverride, executeSlash, publishMessage]);
+  }, [content, attachments, executeSlash, publishMessage]);
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;

@@ -2,7 +2,8 @@ import { Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, firstImageRef, getReplyToId, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import { firstImageRef, getReplyToId } from "@/components/chat/messageHelpers";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import LoginDialog from "@/components/auth/LoginDialog";

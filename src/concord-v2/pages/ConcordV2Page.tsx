@@ -4,7 +4,8 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, firstImageRef, ReplyContextLine, getQuoteReplyToId, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpers";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";

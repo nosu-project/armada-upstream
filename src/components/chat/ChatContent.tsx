@@ -4,11 +4,12 @@ import { Link } from "react-router-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { AudioMessage } from "@/components/chat/AudioMessage";
-import { emojify } from "@/components/chat/CustomEmoji";
+import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
-import { CodeBlock, InlineCode, renderInlineMarkdown } from "@/components/chat/Markdown";
+import { CodeBlock, InlineCode } from "@/components/chat/Markdown";
+import { renderInlineMarkdown } from "@/components/chat/markdownRender";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { XdcAttachment } from "@/components/chat/XdcAttachment";
 import { useAuthor } from "@/hooks/useAuthor";

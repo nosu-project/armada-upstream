@@ -19,7 +19,7 @@ interface PollOption {
 }
 
 /** Parse a kind 1068 poll event into its options and settings. */
-export function parsePoll(event: NostrEvent) {
+function parsePoll(event: NostrEvent) {
   const options: PollOption[] = [];
   let pollType: "singlechoice" | "multiplechoice" = "singlechoice";
   let endsAt: number | undefined;

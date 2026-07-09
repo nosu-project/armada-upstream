@@ -2,7 +2,7 @@ import data from "@emoji-mart/data";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
-import { getCaretCoordinates } from "@/components/chat/MentionAutocomplete";
+import { getCaretCoordinates } from "@/lib/caretCoordinates";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
 import { useCustomEmojis, type CustomEmoji } from "@/hooks/useCustomEmojis";
 import { cn } from "@/lib/utils";

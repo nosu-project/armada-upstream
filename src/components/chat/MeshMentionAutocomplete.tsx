@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { getCaretCoordinates } from "@/components/chat/MentionAutocomplete";
+import { getCaretCoordinates } from "@/lib/caretCoordinates";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
 import { meshIdentity, meshMentionToken, type MeshIdentity } from "@/lib/meshIdentity";
 import { cn } from "@/lib/utils";

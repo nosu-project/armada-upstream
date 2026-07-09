@@ -9,7 +9,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
@@ -116,7 +116,7 @@ describe("useGroupMessages (wire hydration)", () => {
     // The wire ingests into the store, then announces.
     const incoming = msg("g1");
     h.store.events.push(incoming);
-    emitWireScopes(["nip29:g1"]);
+    act(() => emitWireScopes(["nip29:g1"]));
 
     await waitFor(() => expect(result.current.data?.some((e) => e.id === incoming.id)).toBe(true));
   });
@@ -139,14 +139,17 @@ describe("useGroupMessages (wire hydration)", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     const mine = msg("g1");
-    result.current.insertOptimistic(mine);
+    act(() => result.current.insertOptimistic(mine));
     await waitFor(() => expect(result.current.data?.some((e) => e.id === mine.id)).toBe(true));
     expect(result.current.status[mine.id]).toBe("pending");
 
     // A wire announcement re-reads the store; the optimistic message (not yet
-    // in the store) must survive the fold.
-    emitWireScopes(["nip29:g1"]);
-    await new Promise((r) => setTimeout(r, 150));
+    // in the store) must survive the fold. The re-read is async, so let the
+    // resulting state update settle inside act().
+    await act(async () => {
+      emitWireScopes(["nip29:g1"]);
+      await new Promise((r) => setTimeout(r, 150));
+    });
     await waitFor(() => expect(result.current.data?.some((e) => e.id === mine.id)).toBe(true));
   });
 
