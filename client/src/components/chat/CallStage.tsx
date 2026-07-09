@@ -229,6 +229,28 @@ function VolumeMenu({
   );
 }
 
+/**
+ * A heavily blurred, darkened copy of the participant's avatar that fills the
+ * whole tile behind the crisp centered avatar — the Signal "camera off" look.
+ * When there's no picture we fall back to the plain black canvas.
+ */
+function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
+  if (!picture) return null;
+  return (
+    <div className="absolute inset-0 overflow-hidden" aria-hidden>
+      <img
+        src={picture}
+        alt=""
+        // Scale up so the blur's soft edges never reveal the tile background,
+        // then blur heavily and dim so the foreground avatar/nameplate stay legible.
+        className="h-full w-full scale-150 object-cover blur-2xl"
+        draggable={false}
+      />
+      <div className="absolute inset-0 bg-black/40" />
+    </div>
+  );
+}
+
 /** A single video tile (camera or screenshare) for one participant track. */
 function VideoTile({
   trackRef,
@@ -285,12 +307,15 @@ function VideoTile({
           )}
         />
       ) : (
-        <Avatar shape={shape} className={focused ? "size-24" : "size-16"}>
-          <AvatarImage src={metadata?.picture} alt={displayName} />
-          <AvatarFallback className="bg-primary/20 text-primary text-xl">
-            {displayName[0]?.toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
+        <>
+          <BlurredAvatarBackdrop picture={metadata?.picture} />
+          <Avatar shape={shape} className={cn("relative", focused ? "size-24" : "size-16")}>
+            <AvatarImage src={metadata?.picture} alt={displayName} />
+            <AvatarFallback className="bg-primary/20 text-primary text-xl">
+              {displayName[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+        </>
       )}
       <FocusButton focused={focused} onClick={onToggleFocus} />
       {/* Remote (non-screenshare) nameplates open the per-user volume menu. */}
@@ -379,9 +404,10 @@ function AvatarTile({
         focused ? "h-full w-full" : "h-full w-full",
       )}
     >
+      <BlurredAvatarBackdrop picture={metadata?.picture} />
       <div
         className={cn(
-          "rounded-full transition-shadow",
+          "relative rounded-full transition-shadow",
           !hasCustomShape && isSpeaking && "ring-2 ring-success shadow-[0_0_0_4px_hsl(var(--success)/0.35)]",
         )}
         style={ringStyle}
