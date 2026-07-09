@@ -226,6 +226,7 @@ export function MeshPage() {
             peers={mesh.peers}
             peerCount={mesh.peers.length}
             onRetry={() => void mesh.start()}
+            onSetEnabled={(enabled) => mesh.setEnabled(enabled)}
             onOpenBroadcast={() => setView({ type: "broadcast" })}
             onOpenDM={(peerID) => setView({ type: "dm", peerID })}
             className="flex-1 sidebar:flex-none sidebar:w-60"
@@ -375,6 +376,7 @@ function MeshSidebar({
   peers,
   peerCount,
   onRetry,
+  onSetEnabled,
   onOpenBroadcast,
   onOpenDM,
   className,
@@ -387,6 +389,7 @@ function MeshSidebar({
   peers: MeshPeer[];
   peerCount: number;
   onRetry: () => void;
+  onSetEnabled: (enabled: boolean) => void;
   onOpenBroadcast: () => void;
   onOpenDM: (peerID: string) => void;
   className?: string;
@@ -405,6 +408,35 @@ function MeshSidebar({
           : "Unavailable here"
       }
       addChannelDisabled
+      preChannels={
+        // The mesh on/off toggle lives in the channel list too: on mobile the
+        // chat pane (which hosts the enable landing state and the header's
+        // power button) is slid away, so this is the only reachable switch.
+        available && (
+          <div className="px-2 pb-1">
+            {enabled ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full clip-corner-lg justify-start text-muted-foreground hover:text-destructive"
+                onClick={() => onSetEnabled(false)}
+              >
+                <Power className="size-4" />
+                Turn off mesh chat
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                className="w-full clip-corner-lg"
+                onClick={() => onSetEnabled(true)}
+              >
+                <Bluetooth className="size-4" />
+                Turn on mesh chat
+              </Button>
+            )}
+          </div>
+        )
+      }
       footer={
         <div className="px-3 pb-safe shrink-0">
           <LoginArea className="w-full flex" />
@@ -785,7 +817,7 @@ function DisabledState({ onEnable }: { onEnable: () => void }) {
           internet needed. Turning it on asks for Bluetooth permission and keeps a
           background connection (with a persistent notification) while active.
         </p>
-        <Button className="mt-2" onClick={onEnable}>
+        <Button className="mt-2 clip-corner-lg" onClick={onEnable}>
           <Bluetooth className="size-4" />
           Turn on mesh chat
         </Button>
