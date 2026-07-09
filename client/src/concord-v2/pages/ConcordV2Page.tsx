@@ -36,6 +36,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
@@ -223,9 +224,14 @@ function SidebarFooter2() {
     <>
       {/* Voice call bar slot — the persistent call UI portals here. */}
       <div ref={ref} className="empty:hidden shrink-0 px-2 pb-2" />
+      {/* Account area. The inner pb-2 mirrors the composer's inner `p-2` so the
+          switcher and the chat composer end at the SAME line above the safe-area
+          inset (without it the switcher sat ~8px lower). */}
       <div className="px-3 pb-safe shrink-0">
         {user ? (
-          <LoginArea className="w-full flex" />
+          <div className="pb-2">
+            <LoginArea className="w-full flex" />
+          </div>
         ) : (
           <div className="p-2 flex justify-center">
             <JoinButton className="w-full max-w-xs clip-corner-lg font-medium" />
@@ -581,6 +587,7 @@ function ThreadReplyAvatar({ pubkey }: { pubkey: string }) {
 export function ConcordV2Page() {
   const { communityId, channelId: routeChannelId } = useParams<{ communityId: string; channelId: string }>();
   const { user } = useCurrentUser();
+  const isTouchDevice = useIsTouch();
   const { config, updateConfig } = useAppContext();
   const { mutedChannels, isCommunityMuted, toggleCommunityMute, toggleConcordChannelMute } = useMutes();
   const lastChannelKey = communityId ? `c2:${communityId}` : "";
@@ -812,7 +819,10 @@ export function ConcordV2Page() {
   // The community-name header menu (Discord-style): expands inline below the
   // header, pushing the channel list down with a height animation.
   const [communityMenuOpen, setCommunityMenuOpen] = useState(false);
-  const [membersVisible, setMembersVisible] = useState(true);
+  /** Member roster pane. Defaults OFF on touch devices (a landscape phone
+   * crosses the 900px breakpoint but is too short to spare the roster width);
+   * openable from the header toggle. On real desktop it stays on. */
+  const [membersVisible, setMembersVisible] = useState(() => !isTouchDevice);
   const [membersOpen, setMembersOpen] = useState(false);
   // Mobile: landing on the community root (no channel in the URL) shows the
   // channel list, not a chat pane — selecting a community should let you pick a

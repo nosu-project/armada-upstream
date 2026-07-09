@@ -46,6 +46,7 @@ import { useConcordDissolved } from "@/concord-v1/hooks/useConcordRoster";
 import { useConcordTransport } from "@/concord-v1/hooks/useConcordTransport";
 import { useSendConcordMessage } from "@/concord-v1/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
@@ -191,10 +192,14 @@ function ConcordSidebarFooter() {
     <>
       {/* Voice call bar slot — the persistent call UI portals here. */}
       <div ref={ref} className="empty:hidden shrink-0 px-2 pb-2" />
-      {/* Account area / account switcher. */}
+      {/* Account area / account switcher. The inner pb-2 mirrors the composer's
+          inner `p-2` so the switcher and the chat composer end at the SAME line
+          above the safe-area inset (without it the switcher sat ~8px lower). */}
       <div className="px-3 pb-safe shrink-0">
         {user ? (
-          <LoginArea className="w-full flex" />
+          <div className="pb-2">
+            <LoginArea className="w-full flex" />
+          </div>
         ) : (
           <div className="p-2 flex justify-center">
             <JoinButton className="w-full max-w-xs clip-corner-lg font-medium" />
@@ -289,6 +294,7 @@ function ConcordChannelRow({
 export function ConcordPage() {
   const { communityId, channelId: routeChannelId } = useParams<{ communityId: string; channelId: string }>();
   const { user } = useCurrentUser();
+  const isTouchDevice = useIsTouch();
   const { config, updateConfig } = useAppContext();
   const { mutedChannels, isCommunityMuted, toggleCommunityMute, toggleConcordChannelMute } = useMutes();
   // Storage key for this community's last-opened channel (local preference).
@@ -451,8 +457,10 @@ export function ConcordPage() {
   // The community-name header menu (Discord-style): expands inline below the
   // header, pushing the channel list down with a height animation.
   const [communityMenuOpen, setCommunityMenuOpen] = useState(false);
-  /** Desktop: whether the member roster pane is shown. */
-  const [membersVisible, setMembersVisible] = useState(true);
+  /** Desktop: whether the member roster pane is shown. Defaults OFF on touch
+   * devices (a landscape phone crosses the 900px breakpoint but is too short to
+   * spare the roster width); openable from the header toggle. */
+  const [membersVisible, setMembersVisible] = useState(() => !isTouchDevice);
   /** Mobile: whether the member sheet is open. */
   const [membersOpen, setMembersOpen] = useState(false);
   // Mobile: landing on the community root (no channel in the URL) shows the

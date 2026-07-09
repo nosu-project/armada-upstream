@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEvent } from "@/hooks/useEvent";
+import { useGroup } from "@/hooks/useGroup";
 import { useGroupMessages } from "@/hooks/useGroupMessages";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useGroupSearch } from "@/hooks/useGroupSearch";
@@ -138,7 +139,7 @@ function Nip29ChatMessage({
 function ComposerSkeleton() {
   return (
     <div
-      className="relative shrink-0 pb-[var(--safe-area-inset-bottom-capped,0px)] sidebar:pb-1"
+      className="relative shrink-0 pb-[var(--safe-area-pad-bottom,0px)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]"
       aria-hidden
     >
       <div className="p-2">
@@ -189,6 +190,8 @@ interface GroupChatProps {
  */
 export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, searchQuery = "", scrollToMessageRef }: GroupChatProps) {
   const { user } = useCurrentUser();
+  const { data: groupDetails } = useGroup(relayUrl, groupId);
+  const channelName = groupDetails?.group?.name;
   const {
     data: messages = [],
     isLoading,
@@ -544,6 +547,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             groupId={groupId}
             messages={messages}
             replyTo={replyTo}
+            placeholder={channelName ? `Message ${channelName}` : undefined}
             onCancelReply={() => setReplyTo(undefined)}
             onSent={handleSent}
             onOptimisticInsert={insertOptimistic}

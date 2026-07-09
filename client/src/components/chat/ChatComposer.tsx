@@ -379,12 +379,21 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setMode("post");
   }, [draftKey]);
 
-  // Auto-resize the textarea as content grows/shrinks.
+  // Auto-resize the textarea as content grows/shrinks. Also recompute on
+  // viewport resize/rotation: the textarea font shrinks at the `md:` breakpoint
+  // (text-base -> text-sm), so a portrait height would otherwise stay stale
+  // (too tall, placeholder floating above the buttons) after rotating to
+  // landscape, and vice-versa.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    const resize = () => {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
   }, [content]);
 
   // Focus the textarea when starting a reply.
@@ -1072,7 +1081,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   return (
     <div
-      className="relative shrink-0 pb-[var(--safe-area-inset-bottom-capped,0px)] sidebar:pb-1"
+      className="relative shrink-0 pb-[var(--safe-area-pad-bottom,0px)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -1305,7 +1314,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   }}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
-                  placeholder={mode === "poll" ? "Ask a question…" : (placeholder ?? "Message the channel…")}
+                  placeholder={mode === "poll" ? "Ask a question…" : (placeholder ?? "Message this channel…")}
                   rows={1}
                   maxLength={MAX_CHARS}
                   className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto align-middle"

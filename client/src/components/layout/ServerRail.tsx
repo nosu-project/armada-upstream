@@ -1570,7 +1570,7 @@ export function ServerRail({
         // rail; widens to the full desktop rail at the `sidebar:` breakpoint.
         "flex flex-col items-center gap-4 sidebar:gap-5 w-[60px] sidebar:w-[72px] shrink-0 overflow-y-auto bg-chrome-deep select-none",
         "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
-        "pb-[calc(0.75rem+var(--safe-area-inset-bottom-capped,0px))]",
+        "pb-[var(--safe-area-pad-bottom,0.75rem)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]",
         // Lock scrolling while dragging so the rail doesn't fight the gesture.
         reordering && "overflow-hidden",
         className,

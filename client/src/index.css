@@ -30,14 +30,26 @@
     --radius-chrome: 0.1875rem; /* 3px */
     --top-bar-height: 3rem;
     --bottom-nav-height: 3.25rem;
-    /* Capped bottom safe-area inset for persistent bottom chrome (composer,
-     * sidebar footers, the server rail). The raw iOS home-indicator inset
-     * (34px) plus the base gaps reads as a void under the chrome; capping the
-     * inset contribution at 20px keeps the chrome clear of the indicator pill
-     * without over-padding. On platforms with no bottom inset (Android APK,
-     * desktop) this resolves to 0. Use the raw .safe-area-bottom where full
-     * clearance is wanted (e.g. scrollable content ends). */
-    --safe-area-inset-bottom-capped: min(var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)), 1.25rem);
+    /* Bottom inset for persistent bottom chrome (composer, sidebar footers, the
+     * server rail), resolved as max(base gap, real inset).
+     *
+     * Why max() and not "gap + inset": stacking a base gap ON TOP of the full
+     * inset over-pads — the raw iOS home-indicator (~34px) plus a gap reads as a
+     * void under the chrome. But hard-CAPPING the inset (the previous approach,
+     * min(inset, 20px)) is worse: it CLIPS on devices with genuinely tall bottom
+     * bars (Android 3-button nav ~48px, larger gesture bars), so the chrome sat
+     * under the system bar. max(gap, inset) keeps a comfortable minimum gap on
+     * no-/small-inset devices (Android gesture, desktop, PWA) AND fully clears
+     * the bar on tall-inset devices — consistent spacing across every device,
+     * and it tracks live on rotation because the inset is native env(). */
+    --safe-area-pad-bottom: max(0.75rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    /* Tight variant for the multi-pane (>=900px "sidebar") layout, which uses a
+     * small 0.25rem base gap. A phone in LANDSCAPE is wider than 900px, so it
+     * takes the sidebar layout — but it still has a real bottom inset (gesture
+     * bar). A flat desktop pb-1 (4px) there left the composer under the nav bar.
+     * max(0.25rem, inset) keeps the tight desktop look while clearing the bar on
+     * a landscape phone. */
+    --safe-area-pad-bottom-tight: max(0.25rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   }
 }
 
@@ -90,6 +102,23 @@
 
   html, body, #root {
     height: 100%;
+  }
+
+  /*
+   * Landscape side cutouts (notch/camera on the long edge when the phone is
+   * held sideways) and any left/right safe-area inset. The whole multi-pane app
+   * lives inside #root, so padding its left/right edges shifts the entire layout
+   * into the safe box: the leftmost pane (server rail) clears a left cutout and
+   * the rightmost content clears a right one, WITHOUT adding gaps between panes.
+   * env() is 0 when there's no cutout (portrait, no-notch, desktop), so this is
+   * inert there, and it tracks live on rotation because env() is re-evaluated by
+   * the engine. Top/bottom insets are handled per-pane (each mobile pane owns
+   * its own status-bar / bottom-bar clearance), so only left/right go here.
+   */
+  #root {
+    box-sizing: border-box;
+    padding-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+    padding-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
   }
 
   /*
@@ -264,14 +293,25 @@
   .safe-area-bottom {
     padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
   }
-  /* Like safe-area-bottom, but always keeps a base gap so content never sits
-   * flush against the screen edge. The raw iOS home-indicator inset (~34px) is
-   * far more than bottom chrome needs to clear the indicator, and stacking the
-   * full inset on top of the base gap leaves a big empty void under footers/
-   * composers. Cap the inset contribution so the total stays tight while still
-   * clearing the indicator. */
+  /* Like safe-area-bottom, but always keeps a comfortable minimum gap so content
+   * never sits flush against the screen edge, while fully clearing tall system
+   * bars. See --safe-area-pad-bottom for the max(gap, inset) rationale.
+   *
+   * Responsive base to stay CONSISTENT with the composer across layouts: in the
+   * single-pane mobile layout every bottom surface uses the 0.75rem base; in the
+   * multi-pane (>=900px "sidebar") layout — which a landscape phone also takes —
+   * they all drop to the 0.25rem tight base so the account switcher, channel
+   * list footer, composer and rail all sit at the SAME bottom line (whichever of
+   * base/inset wins, they win it identically). Previously .pb-safe kept the
+   * 0.75rem base while the composer used the tight base, so with a small/zero
+   * inset the panes ended at different heights. */
   .pb-safe {
-    padding-bottom: calc(0.75rem + var(--safe-area-inset-bottom-capped));
+    padding-bottom: var(--safe-area-pad-bottom);
+  }
+  @media (width >= 900px) {
+    .pb-safe {
+      padding-bottom: var(--safe-area-pad-bottom-tight);
+    }
   }
 
   /* Top of the mobile content, just below the fixed top bar + its inset. */

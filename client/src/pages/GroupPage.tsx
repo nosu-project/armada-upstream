@@ -37,6 +37,7 @@ import { useGroup } from "@/hooks/useGroup";
 import { useGroupMembership, useJoinGroup, useLeaveGroup } from "@/hooks/useGroupMembership";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useHeaderOverflow } from "@/hooks/useHeaderOverflow";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
 import { channelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useCalendarEvents } from "@/hooks/useCalendarEvents";
@@ -127,11 +128,16 @@ export function GroupPage() {
   const channelMuted = Boolean(relayUrl && groupId && mutedChannels.has(channelMuteKey(relayUrl, groupId)));
   const serverMuted = Boolean(relayUrl && isCommunityMuted(relayUrl));
   const { activeCall, joinCall } = useCall();
+  const isTouchDevice = useIsTouch();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
-  /** Whether the desktop member roster is shown (toggled from the header). */
-  const [membersVisible, setMembersVisible] = useState(true);
+  /** Whether the desktop member roster is shown (toggled from the header).
+   * Defaults OFF on touch devices (phones/tablets — including a landscape phone
+   * that crosses the 900px sidebar breakpoint but is too short to spare the
+   * roster width); the user can still open it from the header toggle. On real
+   * desktop it stays on by default. */
+  const [membersVisible, setMembersVisible] = useState(() => !isTouchDevice);
   /** Whether the header search bar is expanded, and its current query text. */
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");

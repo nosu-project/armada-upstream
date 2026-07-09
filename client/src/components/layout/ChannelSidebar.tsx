@@ -309,10 +309,15 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           {/* Voice call bar slot — the persistent call UI portals here. */}
           <div ref={callBarRef} className="empty:hidden shrink-0" />
 
-          {/* Account area */}
+          {/* Account area. The extra pb-2 mirrors the composer's inner `p-2`
+              (which sits inside its pb-safe wrapper) so the account switcher and
+              the chat composer end at the SAME line above the safe-area inset —
+              without it the switcher sat ~8px lower than the composer. */}
           <div className="px-3 pb-safe shrink-0">
             {user ? (
-              <LoginArea className="w-full flex" />
+              <div className="pb-2">
+                <LoginArea className="w-full flex" />
+              </div>
             ) : (
               <div className="p-2 flex justify-center">
                 <JoinButton className="w-full max-w-xs clip-corner-lg font-medium" />
