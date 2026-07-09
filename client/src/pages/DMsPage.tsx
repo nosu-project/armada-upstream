@@ -1154,7 +1154,7 @@ export function DMsPage() {
             <div className="flex flex-col items-center gap-3 max-w-sm">
               <MessageSquare className="size-12 opacity-30" />
               <p className="text-sm">Select a conversation</p>
-              <Button variant="outline" className="mt-1" onClick={startComposing}>
+              <Button className="mt-1 clip-corner-lg" onClick={startComposing}>
                 <PenSquare className="size-4" />
                 New message
               </Button>
