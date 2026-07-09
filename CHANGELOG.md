@@ -4,6 +4,28 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.25.2] - 2026-07-09
+
+Chat images now open in a cinematic gallery: swipe between photos, pinch or
+double-tap to zoom and pan, and download or open the original, with images
+blurring up smoothly as they load. Voice notes now play through automatically,
+rolling to the next one when the current clip ends. The message toolbar's Reply
+and Quote actions have been reordered and relabeled for clarity, and a mute
+indicator now shows in the sidebar voice roster while you're in a call.
+
+### Added
+- Cinematic image gallery in chat: horizontal swipe between images, pinch, wheel,
+  and double-tap zoom and pan, a download/open-original button, and blurred
+  placeholders that sharpen as each image loads
+- Voice notes auto-play the next clip when one finishes
+- Mute indicator in the sidebar voice roster while you're in a call
+
+### Changed
+- Reworked the message Reply and Quote actions: clearer labels, icons, and order
+
+### Fixed
+- Emoji picker no longer clips at the edges of reaction and status popovers
+
 ## [0.25.1] - 2026-07-09
 
 Fixes an Android bug where community channels would silently stop loading after
