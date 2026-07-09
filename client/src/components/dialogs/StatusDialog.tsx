@@ -149,9 +149,9 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
                   side="top"
                   align="end"
                   sideOffset={8}
-                  className="w-[min(20rem,90vw)] p-0 rounded-xl border-border shadow-lg overflow-hidden"
+                  className="flex w-[min(20rem,90vw)] h-[min(360px,55dvh)] max-h-[var(--radix-popover-content-available-height)] p-0 rounded-xl border-border shadow-lg overflow-hidden"
                 >
-                  <Suspense fallback={<div className="h-[360px]" />}>
+                  <Suspense fallback={<div className="w-full" />}>
                     <LazyEmojiPicker
                       customEmojis={customEmojis}
                       onSelect={(selection) => {
