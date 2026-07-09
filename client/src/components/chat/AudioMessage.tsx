@@ -1,7 +1,12 @@
 import { Pause, Play } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+import {
+  pauseOthers,
+  playNextAfter,
+  registerAudioPlayer,
+} from "@/lib/audioPlaybackQueue";
 import { formatTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +61,10 @@ function toBars(waveform: string | undefined): number[] {
  */
 export function AudioMessage({ src, mime, encryption, waveform, duration, className }: AudioMessageProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  // Set when a coordinated `play()` request arrives before the <audio> element
+  // has mounted (encrypted blobs mount lazily once decrypted); consumed on the
+  // next play attempt.
+  const wantsPlayRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [mediaDuration, setMediaDuration] = useState(() => {
@@ -71,18 +80,51 @@ export function AudioMessage({ src, mime, encryption, waveform, duration, classN
   const bars = useMemo(() => toBars(waveform), [waveform]);
   const progress = mediaDuration > 0 ? currentTime / mediaDuration : 0;
 
+  // Imperatively start playback. Used both by the play button and by the
+  // playback coordinator (auto-advance). If the <audio> element hasn't mounted
+  // yet (encrypted blob still decrypting), flag it to play as soon as it does.
+  const play = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.play().catch(() => {
+        /* autoplay may be blocked; ignore */
+      });
+    } else {
+      wantsPlayRef.current = true;
+    }
+  }, []);
+
+  // Register with the cross-component coordinator so this player participates in
+  // single-playback and auto-advance. `play` is stable, so this runs once.
+  useEffect(() => registerAudioPlayer({ get el() { return audioRef.current; }, play }), [play]);
+
   // The <audio> element only mounts once the src is resolved, so re-attach
   // listeners when the resolve state changes.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    const onPlay = () => setIsPlaying(true);
+    const onPlay = () => {
+      setIsPlaying(true);
+      // Only one voice note plays at a time.
+      pauseOthers(audio);
+    };
     const onPause = () => setIsPlaying(false);
-    const onEnded = () => setIsPlaying(false);
+    const onEnded = () => {
+      setIsPlaying(false);
+      // Continue the thread: play the next voice note in document order.
+      playNextAfter(audio);
+    };
     const onTime = () => setCurrentTime(audio.currentTime);
     const onDur = () => {
       if (Number.isFinite(audio.duration)) setMediaDuration(audio.duration);
     };
+    // Honour a play request that arrived before this element mounted.
+    if (wantsPlayRef.current) {
+      wantsPlayRef.current = false;
+      audio.play().catch(() => {
+        /* autoplay may be blocked; ignore */
+      });
+    }
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("ended", onEnded);
@@ -103,7 +145,7 @@ export function AudioMessage({ src, mime, encryption, waveform, duration, classN
     e.stopPropagation();
     const audio = audioRef.current;
     if (!audio) return;
-    if (audio.paused) audio.play();
+    if (audio.paused) play();
     else audio.pause();
   };
 
