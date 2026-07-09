@@ -2,7 +2,7 @@ import { Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, getReplyToId, ReplyContextLine, replyPreviewText } from "@/components/chat/ChatMessage";
+import { ChatMessage, firstImageRef, getReplyToId, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import LoginDialog from "@/components/auth/LoginDialog";
@@ -41,10 +41,12 @@ function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl
 
   if (!event) return null;
 
+  const image = firstImageRef(event);
   return (
     <ReplyContextLine
       name={displayName}
-      preview={replyPreviewText(event.content)}
+      preview={<ReplyPreview content={event.content} hideMediaPlaceholder={!!image} />}
+      thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
       onClick={() => onJump(eventId)}
     />
   );
@@ -64,6 +66,7 @@ interface Nip29ChatMessageProps {
   onEditSubmit: (event: ChatMsg, content: string) => void;
   onEditCancel: () => void;
   onJumpToReply: (id: string) => void;
+  onReply: (event: ChatMsg) => void;
 }
 
 /**
@@ -86,6 +89,7 @@ function Nip29ChatMessage({
   onEditSubmit,
   onEditCancel,
   onJumpToReply,
+  onReply,
 }: Nip29ChatMessageProps) {
   const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
   return (
@@ -102,12 +106,17 @@ function Nip29ChatMessage({
       replyCount={transport.replyCountFor?.(event.id) ?? 0}
       threadParticipants={threadInfo.participants}
       lastReplyAt={threadInfo.lastReplyAt}
-      replyContext={<ReplyContext eventId={getReplyToId(event) ?? ""} relayUrl={relayUrl} onJump={onJumpToReply} />}
+      replyContext={
+        getReplyToId(event)
+          ? <ReplyContext eventId={getReplyToId(event)!} relayUrl={relayUrl} onJump={onJumpToReply} />
+          : undefined
+      }
       onRetry={() => transport.retry?.(event)}
       onDiscard={() => transport.discard?.(event.id)}
       onTogglePin={transport.togglePin}
       onDelete={transport.deleteMessage}
       onOpenThread={transport.openThread ? (e) => transport.openThread!(e, true) : undefined}
+      onReply={onReply}
       onEdit={onEdit}
       onEditSubmit={onEditSubmit}
       onEditCancel={onEditCancel}
@@ -232,6 +241,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   const [threadRoot, setThreadRoot] = useState<NostrEvent | undefined>(undefined);
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<NostrEvent | undefined>(undefined);
+  const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
@@ -487,6 +497,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                       onEditSubmit={handleEditSubmit}
                       onEditCancel={() => setEditingId(undefined)}
                       onJumpToReply={jumpToReply}
+                      onReply={setReplyTo}
                     />
                   ))}
               </>
@@ -520,6 +531,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                 onEditSubmit={handleEditSubmit}
                 onEditCancel={() => setEditingId(undefined)}
                 onJumpToReply={jumpToReply}
+                onReply={setReplyTo}
               />
             )}
           />
@@ -531,6 +543,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             relayUrl={relayUrl}
             groupId={groupId}
             messages={messages}
+            replyTo={replyTo}
+            onCancelReply={() => setReplyTo(undefined)}
             onSent={handleSent}
             onOptimisticInsert={insertOptimistic}
             onOptimisticSent={markSent}

@@ -1,10 +1,10 @@
 import { AtSign, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage } from "@/components/chat/ChatMessage";
+import { ChatMessage, firstImageRef, ReplyContextLine, getQuoteReplyToId, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
@@ -42,6 +42,7 @@ import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
@@ -116,6 +117,24 @@ function Banner2({ banner }: { banner: ImagePointer | undefined }) {
   );
 }
 
+/** Concord V2 inline-reply context: resolve the replied-to rumor from the
+ *  in-memory decoded set (rumors aren't relay-fetchable) and render the shared
+ *  "replying to …" chrome. Clicking jumps the timeline to the parent. */
+function ReplyContext2({ parent, onJump }: { parent: ChatMsg | undefined; onJump: (id: string) => void }) {
+  const author = useAuthor(parent?.pubkey);
+  const name = useScopedDisplayName(parent?.pubkey, author.data?.metadata);
+  if (!parent) return null;
+  const image = firstImageRef(parent);
+  return (
+    <ReplyContextLine
+      name={name}
+      preview={<ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} />}
+      thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
+      onClick={() => onJump(parent.id)}
+    />
+  );
+}
+
 interface ChatMessage2Props {
   event: ChatMsg;
   reactions: MessageReactions;
@@ -128,13 +147,17 @@ interface ChatMessage2Props {
   active: boolean;
   onToggleActive: (id: string) => void;
   onOpenThread: ((event: ChatMsg) => void) | undefined;
+  onReply: ((event: ChatMsg) => void) | undefined;
+  /** Resolved "replying to …" line for an inline reply (undefined otherwise). */
+  replyContext: ReactNode;
   onDelete: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
 }
 
-/** Memoized per-message binding (mirrors V1's ConcordChatMessage). Replies are
- *  threaded (nested in the thread panel), so the reply action opens the thread. */
+/** Memoized per-message binding (mirrors V1's ConcordChatMessage). A normal
+ *  reply quotes the parent inline (`onReply`); "reply in thread" opens the
+ *  thread panel (`onOpenThread`). */
 const ChatMessage2 = memo(function ChatMessage2({
   event,
   reactions,
@@ -146,6 +169,8 @@ const ChatMessage2 = memo(function ChatMessage2({
   active,
   onToggleActive,
   onOpenThread,
+  onReply,
+  replyContext,
   onDelete,
   onRetry,
   onDiscard,
@@ -175,6 +200,8 @@ const ChatMessage2 = memo(function ChatMessage2({
       threadParticipants={threadInfo.participants}
       lastReplyAt={threadInfo.lastReplyAt}
       onOpenThread={onOpenThread}
+      onReply={onReply}
+      replyContext={replyContext}
       onDelete={onDelete}
       onRetry={onRetry ? () => onRetry(event) : undefined}
       onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
@@ -810,6 +837,7 @@ export function ConcordV2Page() {
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
+  const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
   const toggleActive = useCallback((id: string) => setActiveId((cur) => (cur === id ? undefined : id)), []);
 
@@ -851,6 +879,18 @@ export function ConcordV2Page() {
   const openThread = useCallback((event: ChatMsg, focusReply = false) => {
     setThreadAutoFocus(focusReply);
     setThreadRoot(event);
+  }, []);
+
+  // Inline-reply plumbing: a by-id lookup over the decoded set (rumors aren't
+  // relay-fetchable, so the "replying to …" line resolves the parent locally),
+  // and a jump-to-message handler for clicking that line.
+  const messagesById = useMemo(() => {
+    const m = new Map<string, ChatMsg>();
+    for (const msg of allMessages) m.set(msg.id, msg);
+    return m;
+  }, [allMessages]);
+  const jumpWithinChannel = useCallback((id: string) => {
+    timelineRef.current?.scrollToMessage(id);
   }, []);
 
   // Fulfil a pending Threads-tab open: once its channel is active and the
@@ -897,12 +937,17 @@ export function ConcordV2Page() {
   if (!communityId) return <Navigate to="/" replace />;
 
   const handleSend = async (content: string, tags: string[][]) => {
-    // Top-level message. The composer's content-derived tags (emoji, imeta,
-    // mentions) are sealed verbatim; NIP-29 `h` and any `e`/`q` tags are
-    // dropped. Replies are threaded (a nested reply carries its root via the
-    // rumor's own `q`, sent through the transport's `sendThreadReply`).
-    const extraTags = tags.filter(([name]) => name !== "h" && name !== "e" && name !== "q");
+    // The composer's content-derived tags (emoji, imeta, mentions) are sealed
+    // verbatim; NIP-29 `h` and stray `e` tags are always dropped. An INLINE
+    // reply keeps its NIP-C7 `q` (+ the `p` notifying the replied-to author) so
+    // it renders quoted in the timeline; a top-level message keeps neither.
+    // THREAD replies are a separate path (kind-1111, via `sendThreadReply`).
+    const isReply = Boolean(replyTo);
+    const extraTags = tags.filter(([name]) =>
+      name !== "h" && name !== "e" && (isReply || name !== "q"),
+    );
     await send({ content, extraTags });
+    setReplyTo(undefined);
   };
 
   const handleCreateChannel = async () => {
@@ -1387,7 +1432,9 @@ export function ConcordV2Page() {
                         No messages yet. Say something — only members can read it.
                       </p>
                     }
-                    renderMessage={(msg, continuation) => (
+                    renderMessage={(msg, continuation) => {
+                      const replyId = getQuoteReplyToId(msg);
+                      return (
                       <ChatMessage2
                         key={msg.id}
                         event={msg}
@@ -1400,11 +1447,18 @@ export function ConcordV2Page() {
                         active={activeId === msg.id}
                         onToggleActive={toggleActive}
                         onOpenThread={onOpenThreadCb}
+                        onReply={canWrite ? setReplyTo : undefined}
+                        replyContext={
+                          replyId ? (
+                            <ReplyContext2 parent={messagesById.get(replyId)} onJump={jumpWithinChannel} />
+                          ) : undefined
+                        }
                         onDelete={transport.deleteMessage}
                         onRetry={transport.retry}
                         onDiscard={transport.discard}
                       />
-                    )}
+                      );
+                    }}
                   />
 
                   {typingPubkeys.length > 0 && <TypingIndicator pubkeys={typingPubkeys} />}
@@ -1416,6 +1470,9 @@ export function ConcordV2Page() {
                       mentionPubkeys={memberPubkeys}
                       placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                       sendOverride={handleSend}
+                      replyTo={replyTo}
+                      replyMarker="nipc7"
+                      onCancelReply={() => setReplyTo(undefined)}
                       onTyping={publishTyping}
                       encryptAttachments
                     />

@@ -14,7 +14,7 @@
 
 import type { NostrEvent } from "nostr-tools/pure";
 
-import { KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION } from "@/concord-v2/lib/kinds";
 import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 
@@ -91,9 +91,50 @@ export async function openChatBatch(
 
 // ── Tag helpers ──────────────────────────────────────────────────────────────
 
-/** A reply quotes its parent with a `q` tag citing the parent RUMOR id (NIP-C7). */
-export function replyTargetOf(ev: { tags: string[][] }): string | undefined {
-  return ev.tags.find((t) => t[0] === "q")?.[1];
+/**
+ * Build the NIP-22 tags for a kind-1111 threaded reply to `parent`. The
+ * uppercase `K`/`E`/`P` tags pin the immutable *thread root*; the lowercase
+ * `k`/`e`/`p` tags point at the *immediate parent*. When the parent is itself a
+ * comment, its uppercase root tags are inherited so the root is stable at any
+ * nesting depth (matching the NIP-29 side, `buildCommentTags`). All ids are
+ * RUMOR ids (the NIP-01 hash of the inner unsigned event), so a reply cites
+ * exactly the decrypted message the user replied to.
+ *
+ * This is deliberately distinct from a kind-9 `q` tag: NIP-C7 reserves `q` for
+ * inline quote-replies, while threads are NIP-22 comments.
+ *
+ * https://github.com/nostr-protocol/nips/blob/master/22.md
+ */
+export function buildV2CommentTags(parent: { id: string; kind: number; pubkey: string; tags: string[][] }): string[][] {
+  const tags: string[][] = [];
+
+  const rootTags = parent.tags.filter(([n]) => n === "K" || n === "E" || n === "P");
+  if (rootTags.length > 0) {
+    // Parent is itself a comment: inherit its root pointer verbatim.
+    for (const t of rootTags) tags.push([...t]);
+  } else {
+    // Parent is the root of this thread.
+    tags.push(["K", String(parent.kind)]);
+    tags.push(["E", parent.id, "", parent.pubkey]);
+    tags.push(["P", parent.pubkey]);
+  }
+
+  // Immediate-parent pointer (always the event being replied to).
+  tags.push(["k", String(parent.kind)]);
+  tags.push(["e", parent.id, "", parent.pubkey]);
+  tags.push(["p", parent.pubkey]);
+
+  return tags;
+}
+
+/**
+ * The thread-root rumor id a message belongs to, or undefined for a top-level
+ * message. Threaded replies are NIP-22 kind-1111 comments carrying the root in
+ * their uppercase `E` tag. A kind-9 `q` tag is an INLINE reply (timeline, not a
+ * thread), so it is deliberately NOT treated as a thread root.
+ */
+export function replyTargetOf(ev: { kind: number; tags: string[][] }): string | undefined {
+  return ev.kind === KIND_COMMENT ? ev.tags.find((t) => t[0] === "E")?.[1] : undefined;
 }
 
 /** Reactions / edits / deletes name their target rumor with an `e` tag. */
@@ -180,7 +221,9 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
       if (url && !entry.url) entry.url = url;
       continue;
     }
-    if (ev.kind === KIND_MESSAGE) {
+    if (ev.kind === KIND_MESSAGE || ev.kind === KIND_COMMENT) {
+      // kind-9 top-level messages and kind-1111 threaded replies both land in
+      // the timeline pool; the reader splits them by their NIP-22 root pointer.
       byId.set(ev.rumorId, ev);
     }
   }

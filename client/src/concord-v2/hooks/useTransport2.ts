@@ -8,7 +8,7 @@ import {
 } from "@/concord-v2/hooks/useChannel2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
-import { KIND_REACTION } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_REACTION } from "@/concord-v2/lib/kinds";
 import type { OpenedChat } from "@/concord-v2/lib/chat";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -21,9 +21,14 @@ const EMPTY_TALLIES: ReactionTally[] = [];
 /** Shared empty reply array, so a thread with no replies keeps a stable reference. */
 const EMPTY_REPLIES: ChatMsg[] = [];
 
-/** The root id a message replies to (NIP-C7 `q` tag), if any. */
+/**
+ * The thread-root rumor id a message belongs to, or undefined for a top-level
+ * message. Threaded replies are NIP-22 kind-1111 comments carrying an uppercase
+ * `E` root tag. A kind-9 `q` tag is an INLINE reply (rendered in the timeline,
+ * not a thread), so it is NOT a thread root here.
+ */
 function replyRootOf(m: ChatMsg): string | undefined {
-  return m.tags.find((t) => t[0] === "q")?.[1];
+  return m.kind === KIND_COMMENT ? m.tags.find((t) => t[0] === "E")?.[1] : undefined;
 }
 
 /** Adapt a decrypted V2 chat event to the shared `ChatMsg` shape. */
@@ -78,11 +83,13 @@ export function useTransport2(
     return out;
   }, [folded.messages]);
 
-  // Threading: a reply is an ordinary sealed chat message carrying a
-  // `["q", root, "", author]` tag (NIP-C7). Slack-style, replies are NOT shown
-  // top-level — they're nested under their root in the thread panel. Split the
-  // decoded list into top-level messages (the timeline) and replies bucketed by
-  // root id (the threads).
+  // Threading: a THREAD reply is a sealed NIP-22 kind-1111 comment carrying an
+  // uppercase `E` thread-root tag. Slack-style, thread replies are NOT shown
+  // top-level — they're nested under their root in the thread panel. An INLINE
+  // reply (kind-9 with a `q` tag) is NOT a thread reply: it renders as an
+  // ordinary timeline row with a "replying to …" line, so it's never bucketed
+  // here. Split the decoded list into top-level messages (the timeline) and
+  // thread replies bucketed by root id (the threads).
   //
   // ORPHANS render top-level: a reply whose root is not in the loaded window
   // (older history, or a root this client never decoded) would otherwise be
@@ -115,11 +122,16 @@ export function useTransport2(
   );
   const sendThreadReply = useCallback(
     async (root: ChatMsg, content: string, tags: string[][]) => {
-      // Seal the reply as a normal chat message; drop the composer's NIP-29 `h`
-      // and any `e`/`q` tags (the reply target rides the rumor's own `q`),
-      // mirroring the page's `handleSend`.
+      // Seal the reply as a NIP-22 kind-1111 comment; the thread pointers are
+      // derived from `root` inside `send` (via `replyTo`). Drop the composer's
+      // NIP-29 `h` and any `e`/`q` tags (a `q` here would be an inline quote, not
+      // the thread link), mirroring the page's `handleSend`.
       const extraTags = tags.filter(([name]) => name !== "h" && name !== "e" && name !== "q");
-      await send({ content, replyTo: { id: root.id, author: root.pubkey }, extraTags });
+      await send({
+        content,
+        replyTo: { id: root.id, kind: root.kind, pubkey: root.pubkey, tags: root.tags },
+        extraTags,
+      });
     },
     [send],
   );

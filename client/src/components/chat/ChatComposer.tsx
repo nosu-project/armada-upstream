@@ -17,7 +17,7 @@ import { nip19 } from "nostr-tools";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
-import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
+import { ReplyPreview, ReplyThumbnail, firstImageRef } from "@/components/chat/ChatMessage";import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
 import { GifPicker } from "@/components/chat/GifPicker";
 import { MentionAutocomplete } from "@/components/chat/MentionAutocomplete";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
@@ -45,7 +45,7 @@ import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { encryptFileForUpload } from "@/lib/encryptedMedia";
-import { IMETA_MEDIA_URL_REGEX, IMETA_MEDIA_URL_TEST_REGEX, mimeFromExt } from "@/lib/mediaUrls";
+import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
@@ -190,6 +190,14 @@ interface ChatComposerProps {
   /** Message being replied to, if any. */
   replyTo?: NostrEvent;
   onCancelReply?: () => void;
+  /**
+   * How to tag an inline reply to `replyTo`:
+   * - `"nip10"` (default): NIP-10 marked `e`/`p` tags (NIP-29 groups).
+   * - `"nipc7"`: a NIP-C7 `q` tag citing the parent rumor id (Concord — keeps
+   *   `q` for inline quotes, kind-1111 for threads, per CORD-03 §3).
+   * The referenced-message chrome (`ReplyContextLine`) reads either shape.
+   */
+  replyMarker?: "nip10" | "nipc7";
   /** Called after a message is successfully sent. */
   onSent?: () => void;
   /**
@@ -263,7 +271,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
@@ -690,14 +698,20 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       tags.push(["p", pk]);
     }
 
-    // Reply tags (NIP-10 marked)
+    // Inline reply tags. Concord uses a NIP-C7 `q` (parent rumor id + author),
+    // leaving kind-1111 for threads; NIP-29 uses NIP-10 marked `e`/`root` tags.
+    // Either way `p`-tag the replied-to author so they're notified.
     if (replyTo) {
-      const rootTag = replyTo.tags.find(([name, , , marker]) => name === "e" && marker === "root");
-      if (rootTag) {
-        tags.push(["e", rootTag[1], rootTag[2] || relayUrl, "root", ...(rootTag[4] ? [rootTag[4]] : [])]);
-        tags.push(["e", replyTo.id, relayUrl, "reply", replyTo.pubkey]);
+      if (replyMarker === "nipc7") {
+        tags.push(["q", replyTo.id, "", replyTo.pubkey]);
       } else {
-        tags.push(["e", replyTo.id, relayUrl, "root", replyTo.pubkey]);
+        const rootTag = replyTo.tags.find(([name, , , marker]) => name === "e" && marker === "root");
+        if (rootTag) {
+          tags.push(["e", rootTag[1], rootTag[2] || relayUrl, "root", ...(rootTag[4] ? [rootTag[4]] : [])]);
+          tags.push(["e", replyTo.id, relayUrl, "reply", replyTo.pubkey]);
+        } else {
+          tags.push(["e", replyTo.id, relayUrl, "root", replyTo.pubkey]);
+        }
       }
       if (replyTo.pubkey !== user?.pubkey && !mentionedPubkeys.has(replyTo.pubkey)) {
         tags.push(["p", replyTo.pubkey]);
@@ -751,7 +765,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
 
     return tags;
-  }, [groupId, user, replyTo, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
+  }, [groupId, user, replyTo, replyMarker, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
 
   /** Publish a finalized message body via the active send path. */
   const publishMessage = useCallback(async (finalText: string) => {
@@ -1587,17 +1601,22 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 function ReplyBanner({ event, onCancel }: { event: NostrEvent; onCancel?: () => void }) {
   const author = useAuthor(event.pubkey);
   const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
-
-  // Strip media URLs for a compact text preview.
-  const preview = event.content.replace(new RegExp(IMETA_MEDIA_URL_TEST_REGEX.source, "gi"), "📎").trim();
+  const image = firstImageRef(event);
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-secondary/40 border-b text-xs animate-in slide-in-from-top-2 fade-in-0 duration-200">
-      <Reply className="size-3.5 text-muted-foreground shrink-0" />
-      <span className="text-muted-foreground shrink-0">
-        Replying to <span className="font-semibold text-foreground">{displayName}</span>
-      </span>
-      <span className="text-muted-foreground/70 truncate flex-1">{preview}</span>
+    <div className="flex items-start gap-2 px-3 py-1.5 bg-secondary/40 border-b text-xs animate-in slide-in-from-top-2 fade-in-0 duration-200">
+      <Reply className="size-3.5 text-muted-foreground shrink-0 mt-0.5" />
+      <div className="flex flex-col min-w-0 flex-1 gap-0.5">
+        <span className="flex items-center gap-1 min-w-0">
+          <span className="text-muted-foreground shrink-0">
+            Replying to <span className="font-semibold text-foreground">{displayName}</span>
+          </span>
+          <span className="text-muted-foreground/70 truncate">
+            <ReplyPreview content={event.content} hideMediaPlaceholder={!!image} />
+          </span>
+        </span>
+        {image && <ReplyThumbnail image={image} />}
+      </div>
       <button
         type="button"
         aria-label="Cancel reply"

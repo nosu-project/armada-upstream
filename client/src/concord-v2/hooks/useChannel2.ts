@@ -6,6 +6,7 @@ import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import {
+  buildV2CommentTags,
   foldTimeline,
   forgetChatSkips,
   openChatBatch,
@@ -13,7 +14,7 @@ import {
   type FoldedTimeline,
   type OpenedChat,
 } from "@/concord-v2/lib/chat";
-import { KIND_DELETE, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
 import {
   clearChannelExhausted,
   queryChannelRumors,
@@ -581,10 +582,14 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       extraTags,
     }: {
       content: string;
-      /** 9 message (default), 7 reaction, 5 delete, 3302 edit. */
+      /** 9 message (default), 7 reaction, 5 delete, 3302 edit, 1111 thread reply. */
       kind?: number;
-      /** Reply parent: `["q", id, "", author]` per NIP-C7. */
-      replyTo?: { id: string; author: string };
+      /**
+       * Thread parent. Present ⇒ this rumor is a NIP-22 kind-1111 comment, tagged
+       * with `K`/`E`/`P` (root) + `k`/`e`/`p` (parent) by {@link buildV2CommentTags}
+       * — NOT a kind-9 `q` (that's reserved for inline quote-replies, NIP-C7).
+       */
+      replyTo?: { id: string; kind: number; pubkey: string; tags: string[][] };
       /** `e`-target for reactions / deletes / edits. */
       target?: string;
       /** Extra rumor tags appended verbatim (NIP-30 emoji, NIP-92 imeta, …). */
@@ -593,14 +598,16 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       if (!user) throw new Error("Sign in to send a message.");
       if (!community || !channel) throw new Error("No channel selected.");
 
+      // A threaded reply is a NIP-22 comment (kind 1111), not a kind-9 message.
+      const effectiveKind = replyTo ? KIND_COMMENT : kind;
       const ms = Date.now();
       const tags: string[][] = [...channelBindingTags(channel.idHex, channel.current.epoch)];
-      if (replyTo) tags.push(["q", replyTo.id, "", replyTo.author]);
+      if (replyTo) tags.push(...buildV2CommentTags(replyTo));
       if (target) tags.push(["e", target]);
       if (kind === KIND_DELETE && target) tags.push(["k", KIND_MESSAGE.toString()]);
       if (extraTags) tags.push(...extraTags);
 
-      const rumor: Rumor = buildRumor({ kind, content, tags, pubkey: user.pubkey, ms });
+      const rumor: Rumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms });
       const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
       const wrap = wrapSeal(seal, channel.current.group);
 
@@ -608,7 +615,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       const opened: OpenedChat = {
         rumorId: rumor.id,
         author: user.pubkey,
-        kind,
+        kind: effectiveKind,
         content,
         tags,
         ms,
@@ -626,7 +633,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       writeRumors([opened]);
 
       void broadcast(wrap).catch(() => {
-        if (kind === KIND_MESSAGE) setStatus(rumor.id, "failed");
+        if (effectiveKind === KIND_MESSAGE || effectiveKind === KIND_COMMENT) setStatus(rumor.id, "failed");
       });
 
       return { rumorId: rumor.id, wrap };
@@ -649,8 +656,14 @@ export function useMessageActions2(community: CommunityV2 | undefined, channel: 
       const msg = raw.find((m) => m.rumorId === id);
       if (!msg) return;
       setStatus(id, "pending");
-      // Re-send as a fresh rumor (a new id); drop the failed original.
-      const replyTag = msg.tags.find((t) => t[0] === "q");
+      // Re-send as a fresh rumor (a new id); drop the failed original. A
+      // threaded reply (kind-1111 comment) carries its NIP-22 thread pointers in
+      // its own tags, so preserve them verbatim (minus the channel binding,
+      // which `send` re-adds) rather than rebuilding from a parent event.
+      const isComment = msg.kind === KIND_COMMENT;
+      const threadTags = isComment
+        ? msg.tags.filter(([n]) => n !== "channel" && n !== "epoch")
+        : undefined;
       queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old = []) =>
         old.filter((m) => m.rumorId !== id),
       );
@@ -658,7 +671,7 @@ export function useMessageActions2(community: CommunityV2 | undefined, channel: 
       void send({
         content: msg.content,
         kind: msg.kind,
-        replyTo: replyTag ? { id: replyTag[1], author: replyTag[3] ?? "" } : undefined,
+        extraTags: threadTags,
       }).catch(() => undefined);
     },
     [user, community, channel, channelIdHex, queryClient, setStatus, send],

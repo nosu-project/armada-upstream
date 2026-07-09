@@ -1,4 +1,4 @@
-import { AlertCircle, Braces, Copy, Link2, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
+import { AlertCircle, Braces, Copy, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
@@ -27,8 +27,11 @@ import {
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
+import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { parseImetaMap } from "@/lib/imeta";
+import { IMAGE_URL_REGEX } from "@/lib/mediaUrls";
 import { writeClipboardText } from "@/lib/clipboard";
 import { dittoEventUrl } from "@/lib/dittoUrl";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
@@ -37,12 +40,19 @@ import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
+import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ReactNode } from "react";
 
 /** NIP-88 poll kind. */
 const KIND_POLL = 1068;
 
-/** Extract the id of the message this event replies to (NIP-10 marked e tags). */
+/**
+ * Extract the id of the message this event *inline*-replies to via NIP-10
+ * marked `e` tags (Signal/Discord style — quoted in the timeline). Used by
+ * NIP-29, whose inline replies are NIP-10. Concord inline replies use a NIP-C7
+ * `q` tag instead (see the per-page reply-context resolvers); thread replies
+ * are a separate mechanism that never renders in the timeline.
+ */
 export function getReplyToId(event: ChatMsg): string | undefined {
   const replyTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "reply");
   if (replyTag) return replyTag[1];
@@ -51,12 +61,124 @@ export function getReplyToId(event: ChatMsg): string | undefined {
 }
 
 /**
+ * The id of the message a Concord event *inline*-replies to (a NIP-C7 `q` tag).
+ * Concord threads are kind-1111 comments (never in the timeline) and Concord
+ * inline replies are kind-9 with a `q`, so on a rendered top-level Concord row a
+ * `q` means "inline reply to this rumor".
+ */
+export function getQuoteReplyToId(event: ChatMsg): string | undefined {
+  return event.tags.find(([name]) => name === "q")?.[1];
+}
+
+/**
  * A one-line preview of a message's body for the reply-context line: URLs are
  * collapsed to 📎 (they'd blow out the line), and an all-URL/empty body falls
  * back to 📎. Shared so NIP-29 and Concord previews read identically.
+ *
+ * Prefer {@link ReplyPreview} (a node) where mentions should resolve to
+ * `@name`; this plain-string form is the fallback for contexts that need a
+ * bare string.
  */
 export function replyPreviewText(content: string): string {
   return content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
+}
+
+/** A `nostr:npub…`/`nostr:nprofile…`/bare-bech32 mention inside preview text. */
+const REPLY_MENTION_RE =
+  /(?:nostr:)?(npub1|nprofile1)([023456789acdefghjklmnpqrstuvwxyz]+)/gi;
+
+/** Resolve a single mention pubkey to `@displayname` for the preview line. */
+function ReplyMentionName({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  const name = useScopedDisplayName(pubkey, author.data?.metadata);
+  return <span className="text-primary">@{name}</span>;
+}
+
+/**
+ * A one-line reply preview that renders `@mentions` as resolved display names
+ * (via {@link ReplyMentionName}) instead of a raw `nostr:npub…`/hex string, and
+ * collapses URLs to 📎 — matching how the message body shows them. Falls back to
+ * 📎 for an all-URL/empty body. Used inside the reply-context line and the
+ * composer's reply banner.
+ *
+ * `hideMediaPlaceholder` drops the 📎 placeholder (used when a {@link
+ * ReplyThumbnail} already shows the image, so an image-only reply reads as just
+ * the thumbnail, not "📎").
+ */
+export function ReplyPreview({ content, hideMediaPlaceholder = false }: { content: string; hideMediaPlaceholder?: boolean }) {
+  // Collapse URLs first (they'd blow out the single line), then split on
+  // mentions so each resolves to @name.
+  const placeholder = hideMediaPlaceholder ? "" : "📎";
+  const withoutUrls = content.replace(/https?:\/\/\S+/g, placeholder);
+  const parts: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  let hasText = false;
+  for (const m of withoutUrls.matchAll(REPLY_MENTION_RE)) {
+    const start = m.index ?? 0;
+    if (start > last) {
+      const text = withoutUrls.slice(last, start);
+      if (text.trim()) hasText = true;
+      parts.push(<span key={key++}>{text}</span>);
+    }
+    try {
+      const decoded = nip19.decode(`${m[1]}${m[2]}`);
+      const pubkey = decoded.type === "npub" ? decoded.data : decoded.type === "nprofile" ? decoded.data.pubkey : undefined;
+      if (pubkey) {
+        hasText = true;
+        parts.push(<ReplyMentionName key={key++} pubkey={pubkey} />);
+      } else {
+        parts.push(<span key={key++}>{m[0]}</span>);
+        hasText = true;
+      }
+    } catch {
+      parts.push(<span key={key++}>{m[0]}</span>);
+      hasText = true;
+    }
+    last = start + m[0].length;
+  }
+  if (last < withoutUrls.length) {
+    const text = withoutUrls.slice(last);
+    if (text.trim()) hasText = true;
+    parts.push(<span key={key++}>{text}</span>);
+  }
+  if (!hasText) return hideMediaPlaceholder ? null : <>📎</>;
+  return <>{parts}</>;
+}
+
+/**
+ * The first image attachment of a message, as a media ref for a preview
+ * thumbnail — or undefined if the message has no image. Prefers an imeta entry
+ * declaring an image MIME (carries the decryption params for Concord's
+ * encrypted Blossom blobs), else the first inline image URL by extension.
+ */
+export function firstImageRef(event: ChatMsg): EncryptedRef | undefined {
+  const imeta = parseImetaMap(event.tags);
+  for (const entry of imeta.values()) {
+    const isImage = entry.mime?.startsWith("image/") || IMAGE_URL_REGEX.test(entry.url);
+    if (isImage) return { url: entry.url, encryption: entry.encryption, mime: entry.mime };
+  }
+  const inline = event.content.match(IMAGE_URL_REGEX)?.[0];
+  return inline ? { url: inline } : undefined;
+}
+
+/**
+ * A small square image thumbnail for the reply preview. Resolves the media the
+ * same way the message body does ({@link useResolvedMediaSrc}) so Concord's
+ * encrypted attachments decrypt too; renders nothing until it's ready (so the
+ * line never flashes a broken image).
+ */
+export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
+  const resolved = useResolvedMediaSrc(image);
+  if (resolved.status !== "ready") return null;
+  return (
+    <img
+      src={resolved.src}
+      alt=""
+      className="h-10 w-auto max-w-[6rem] shrink-0 rounded object-cover"
+      loading="lazy"
+    />
+  );
 }
 
 /**
@@ -72,21 +194,27 @@ export function replyPreviewText(content: string): string {
 export function ReplyContextLine({
   name,
   preview,
+  thumbnail,
   onClick,
 }: {
   name: string | undefined;
-  preview?: string;
+  preview?: ReactNode;
+  /** Optional media thumbnail shown before the preview (e.g. an image reply). */
+  thumbnail?: ReactNode;
   onClick?: () => void;
 }) {
   if (!name) return null;
   const content = (
     <>
-      <span className="font-semibold shrink-0">{name}</span>
-      {preview && <span className="truncate">{preview}</span>}
+      <span className="flex items-center gap-1.5 min-w-0">
+        <span className="font-semibold shrink-0">{name}</span>
+        {preview && <span className="truncate">{preview}</span>}
+      </span>
+      {thumbnail && <span className="mt-0.5">{thumbnail}</span>}
     </>
   );
   const className =
-    "flex items-center gap-1.5 text-[11px] text-muted-foreground/80 mb-0.5 min-w-0 border-l-2 border-muted-foreground/30 pl-2";
+    "flex flex-col text-[11px] text-muted-foreground/80 mb-0.5 min-w-0 border-l-2 border-muted-foreground/30 pl-2";
   if (!onClick) {
     return <div className={className}>{content}</div>;
   }
@@ -94,7 +222,7 @@ export function ReplyContextLine({
     <button
       type="button"
       onClick={onClick}
-      className={cn(className, "text-left hover:text-foreground hover:border-muted-foreground/60 transition-colors cursor-pointer")}
+      className={cn(className, "items-start text-left hover:text-foreground hover:border-muted-foreground/60 transition-colors cursor-pointer")}
     >
       {content}
     </button>
@@ -209,8 +337,13 @@ export interface ChatMessageProps {
   onTogglePin?: (event: ChatMsg) => void;
   /** Delete this message (hidden when absent). */
   onDelete?: (event: ChatMsg) => void;
-  /** Open the threaded-replies side panel — the reply action (hidden when absent). */
+  /** Open the threaded-replies side panel — the "reply in thread" action (hidden when absent). */
   onOpenThread?: (event: ChatMsg) => void;
+  /**
+   * Begin an inline reply to this message (Signal/Discord style — quoted in the
+   * timeline, distinct from a thread reply). Hidden when absent.
+   */
+  onReply?: (event: ChatMsg) => void;
   /** Begin editing this message (own, non-poll messages only; hidden when absent). */
   onEdit?: (event: ChatMsg) => void;
   /** Submit an inline edit with new content. */
@@ -275,6 +408,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   onTogglePin,
   onDelete,
   onOpenThread,
+  onReply,
   onEdit,
   onEditSubmit,
   onEditCancel,
@@ -288,7 +422,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const author = useAuthor(identityOverride ? undefined : event.pubkey);
   const scopedName = useScopedDisplayName(identityOverride ? undefined : event.pubkey, author.data?.metadata);
   const displayName = identityOverride?.name ?? scopedName;
-  const replyToId = getReplyToId(event);
+  // An inline reply renders a "replying to …" line above the body. The page
+  // resolves it per-protocol (NIP-29 NIP-10 `e`, Concord NIP-C7 `q`) and passes
+  // it as `replyContext`; its presence is the authoritative "this is a reply".
+  const hasReplyContext = Boolean(replyContext);
   const isPending = sendStatus === "pending";
   const isFailed = sendStatus === "failed";
   const isOwn = user?.pubkey === event.pubkey;
@@ -356,6 +493,22 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const toolbar = (
     <>
       {canWrite && !isEditing && reactions && <ReactionPicker onReact={reactions.react} />}
+      {canWrite && !isEditing && onReply && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Reply"
+              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
+              onClick={() => onReply(event)}
+            >
+              <Reply className="size-[18px] md:size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Reply</TooltipContent>
+        </Tooltip>
+      )}
       {canWrite && !isEditing && onOpenThread && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -366,7 +519,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
               className="size-9 md:size-7 text-muted-foreground hover:text-primary"
               onClick={() => onOpenThread(event)}
             >
-              <Reply className="size-[18px] md:size-3.5" />
+              <MessagesSquare className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Reply in thread</TooltipContent>
@@ -541,12 +694,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
           pending={isPending}
           edited={wasEdited && !isEditing}
           actions={toolbar}
-          beforeBody={replyToId && replyContext}
+          beforeBody={hasReplyContext ? replyContext : undefined}
           afterBody={afterBody}
           continuation={
             // Collapse into the previous message only for plain consecutive chats;
             // a reply line, edit field, pin or mention needs the full header.
-            continuation && !replyToId && !isEditing && !isPinned && !mentionsMe
+            continuation && !hasReplyContext && !isEditing && !isPinned && !mentionsMe
           }
           className={cn(
             active && "bg-secondary/40",
@@ -568,9 +721,14 @@ const ChatMessageInner = memo(function ChatMessageInner({
       {/* Discord-style right-click menu, mirroring the hover toolbar's
           capability gating. */}
       <ContextMenuContent className="w-52">
+        {canWrite && !isEditing && onReply && (
+          <ContextMenuItem onSelect={() => onReply(event)}>
+            <Reply className="mr-2 size-4" /> Reply
+          </ContextMenuItem>
+        )}
         {canWrite && !isEditing && onOpenThread && (
           <ContextMenuItem onSelect={() => onOpenThread(event)}>
-            <Reply className="mr-2 size-4" /> Reply in thread
+            <MessagesSquare className="mr-2 size-4" /> Reply in thread
           </ContextMenuItem>
         )}
         {canEdit && !isEditing && (

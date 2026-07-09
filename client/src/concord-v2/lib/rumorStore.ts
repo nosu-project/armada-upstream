@@ -157,7 +157,7 @@ export function storedToOpenedChat(ev: NostrEvent, channelIdHex: string): Opened
 // ── Reads / writes ────────────────────────────────────────────────────────────
 
 /** All chat-plane rumor kinds we persist and fold. */
-const CHAT_KINDS = [5, 7, 9, 3302];
+const CHAT_KINDS = [5, 7, 9, 1111, 3302];
 
 /**
  * Read a channel's cached chat rumors, newest-first up to `limit`. A `channel`
@@ -179,10 +179,12 @@ export async function queryChannelRumors(
 }
 
 /**
- * Read cached kind-9 messages across a community's channels that p-tag `pubkey`
- * — the "@ Mentions" view, purely local (no relay, no decrypt). Both `p` and
+ * Read cached messages across a community's channels that p-tag `pubkey` — the
+ * "@ Mentions" view, purely local (no relay, no decrypt). Both `p` and
  * `channel` are in {@link QUERYABLE_TAGS}, so the filter is index-backed. Each
  * message's own `channel` binding tag recovers its channel id for the row.
+ * Covers kind-9 messages and kind-1111 thread replies (a reply p-tags the
+ * message author, so "replied to you" surfaces here too).
  */
 export async function queryMentionRumors(
   channelIdsHex: string[],
@@ -191,7 +193,7 @@ export async function queryMentionRumors(
 ): Promise<OpenedChat[]> {
   if (channelIdsHex.length === 0 || !pubkey) return [];
   const filter = {
-    kinds: [9],
+    kinds: [9, 1111],
     "#p": [pubkey],
     "#channel": channelIdsHex,
     limit: opts.limit,

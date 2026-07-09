@@ -1,12 +1,12 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { ChevronLeft, Bell, BellOff, Hash, Loader2, LogOut, MoreVertical, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage } from "@/components/chat/ChatMessage";
+import { ChatMessage, firstImageRef, ReplyContextLine, getQuoteReplyToId, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
@@ -51,6 +51,8 @@ import { useConcordDissolved } from "@/concord-v1/hooks/useConcordRoster";
 import { useConcordTransport } from "@/concord-v1/hooks/useConcordTransport";
 import { useSendConcordMessage } from "@/concord-v1/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useAuthor } from "@/hooks/useAuthor";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
@@ -86,10 +88,26 @@ function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
   );
 }
 
+/** Concord V1 inline-reply context: resolve the replied-to message from the
+ *  in-memory decoded set and render the shared "replying to …" chrome. */
+function ReplyContext1({ parent, onJump }: { parent: ChatMsg | undefined; onJump: (id: string) => void }) {
+  const author = useAuthor(parent?.pubkey);
+  const name = useScopedDisplayName(parent?.pubkey, author.data?.metadata);
+  if (!parent) return null;
+  const image = firstImageRef(parent);
+  return (
+    <ReplyContextLine
+      name={name}
+      preview={<ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} />}
+      thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
+      onClick={() => onJump(parent.id)}
+    />
+  );
+}
+
 interface ConcordChatMessageProps {
   event: ChatMsg;
-  reactions: MessageReactions;
-  /** This message's thread replies (stable ref from the transport), for the badge. */
+  reactions: MessageReactions;  /** This message's thread replies (stable ref from the transport), for the badge. */
   replies: ChatMsg[];
   continuation: boolean;
   canWrite: boolean;
@@ -100,6 +118,9 @@ interface ConcordChatMessageProps {
   /** Toggle this row's tap-to-reveal toolbar (touch only). */
   onToggleActive: (id: string) => void;
   onOpenThread: ((event: ChatMsg) => void) | undefined;
+  onReply: ((event: ChatMsg) => void) | undefined;
+  /** Resolved "replying to …" line for an inline reply (undefined otherwise). */
+  replyContext: ReactNode;
   onDelete: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
@@ -126,6 +147,8 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   active,
   onToggleActive,
   onOpenThread,
+  onReply,
+  replyContext,
   onDelete,
   onRetry,
   onDiscard,
@@ -144,7 +167,9 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       replyCount={replies.length}
       threadParticipants={threadInfo.participants}
       lastReplyAt={threadInfo.lastReplyAt}
+      replyContext={replyContext}
       onOpenThread={onOpenThread}
+      onReply={onReply}
       onDelete={onDelete}
       onRetry={onRetry ? () => onRetry(event) : undefined}
       onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
@@ -455,6 +480,7 @@ export function ConcordPage() {
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
+  const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   // The single message whose tap-to-reveal toolbar is open (touch only). Mirrors
   // GroupChat: without this, the action toolbar stays `touch:pointer-events-none`
   // and the react/reply/delete buttons never become tappable on the APK.
@@ -519,6 +545,17 @@ export function ConcordPage() {
 
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
 
+  // Inline-reply plumbing: a by-id lookup over the decoded set (the "replying
+  // to …" line resolves the parent locally) and a jump-to-message handler.
+  const messagesById = useMemo(() => {
+    const m = new Map<string, ChatMsg>();
+    for (const msg of allMessages) m.set(msg.id, msg);
+    return m;
+  }, [allMessages]);
+  const jumpWithinChannel = useCallback((id: string) => {
+    timelineRef.current?.scrollToMessage(id);
+  }, []);
+
   // Moderation: ban (read-cut), kick (cooperative), unban. The recipient set for
   // a ban's read-cut is everyone we know about minus the banned member.
   const moderation = useConcordModeration(community, memberPubkeys);
@@ -543,8 +580,14 @@ export function ConcordPage() {
   // (a nested reply carries its root via the inner event's `reference`, sent
   // through the transport's `sendThreadReply`, not from the main composer).
   const handleSend = async (content: string, tags: string[][]) => {
-    const extraTags = tags.filter(([name]) => name !== "h" && name !== "e");
+    // An INLINE reply keeps its NIP-C7 `q` (+ notifying `p`); a top-level
+    // message drops it. `h`/`e` are always dropped (threads use `reference`).
+    const isReply = Boolean(replyTo);
+    const extraTags = tags.filter(([name]) =>
+      name !== "h" && name !== "e" && (isReply || name !== "q"),
+    );
     await send({ content, extraTags });
+    setReplyTo(undefined);
   };
 
   const handleCreateChannel = async () => {
@@ -843,7 +886,9 @@ export function ConcordPage() {
                   No messages yet. Say something — only members can read it.
                 </p>
               }
-              renderMessage={(msg, continuation) => (
+              renderMessage={(msg, continuation) => {
+                const replyId = getQuoteReplyToId(msg);
+                return (
                 <ConcordChatMessage
                   key={msg.id}
                   event={msg}
@@ -856,11 +901,18 @@ export function ConcordPage() {
                   active={activeId === msg.id}
                   onToggleActive={toggleActive}
                   onOpenThread={onOpenThreadCb}
+                  onReply={canWrite ? setReplyTo : undefined}
+                  replyContext={
+                    replyId ? (
+                      <ReplyContext1 parent={messagesById.get(replyId)} onJump={jumpWithinChannel} />
+                    ) : undefined
+                  }
                   onDelete={transport.deleteMessage}
                   onRetry={transport.retry}
                   onDiscard={transport.discard}
                 />
-              )}
+                );
+              }}
             />
 
             {(typingPubkeys?.length ?? 0) > 0 && (
@@ -874,6 +926,9 @@ export function ConcordPage() {
                 mentionPubkeys={memberPubkeys}
                 placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                 sendOverride={handleSend}
+                replyTo={replyTo}
+                replyMarker="nipc7"
+                onCancelReply={() => setReplyTo(undefined)}
                 onTyping={publishTyping}
                 encryptAttachments
               />

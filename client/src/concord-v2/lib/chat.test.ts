@@ -2,9 +2,9 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
-import { foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
+import { buildV2CommentTags, foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
 import { bytesToHex, channelGroupKey } from "@/concord-v2/lib/derive";
-import { KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 
@@ -49,7 +49,54 @@ describe("chat plane (CORD-03)", () => {
     const opened = await openChatBatch(wraps, channel);
     const folded = foldTimeline(opened);
     expect(folded.messages.map((m) => m.content)).toEqual(["first", "second"]);
-    expect(replyTargetOf(folded.messages[1])).toBe(m1.id);
+    // A kind-9 `q` is an INLINE reply (stays in the timeline), not a thread.
+    expect(replyTargetOf(folded.messages[1])).toBeUndefined();
+  });
+
+  it("threads NIP-22 kind-1111 replies: folds into the timeline, root resolves via the E tag", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+    const carol = signer();
+
+    const rootMsg = chatRumor(alice, KIND_MESSAGE, "root", 1000);
+    // A NIP-22 comment replying to the root message.
+    const commentTags = buildV2CommentTags({ id: rootMsg.id, kind: KIND_MESSAGE, pubkey: alice.pubkey, tags: rootMsg.tags });
+    const reply = chatRumor(bob, KIND_COMMENT, "reply", 1500, commentTags);
+    // A nested reply to the reply inherits the ROOT pointer (stable at depth).
+    const nestedTags = buildV2CommentTags({ id: reply.id, kind: KIND_COMMENT, pubkey: bob.pubkey, tags: reply.tags });
+    const nested = chatRumor(carol, KIND_COMMENT, "nested", 1800, nestedTags);
+
+    const wraps = await Promise.all([
+      wrapChat(rootMsg, channel, alice),
+      wrapChat(reply, channel, bob),
+      wrapChat(nested, channel, carol),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+
+    // All three survive the fold (kind-1111 is not dropped).
+    expect(folded.messages.map((m) => m.content)).toEqual(["root", "reply", "nested"]);
+    // Both replies point at the SAME thread root (the original message).
+    expect(replyTargetOf(folded.messages[1])).toBe(rootMsg.id);
+    expect(replyTargetOf(folded.messages[2])).toBe(rootMsg.id);
+    // The immediate parent is preserved distinctly from the root.
+    expect(nested.tags.find((t) => t[0] === "e")?.[1]).toBe(reply.id);
+    expect(nested.tags.find((t) => t[0] === "E")?.[1]).toBe(rootMsg.id);
+  });
+
+  it("treats a kind-9 `q` as an inline reply, not a thread (stays top-level)", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    const rootMsg = chatRumor(alice, KIND_MESSAGE, "root", 1000);
+    const inline = chatRumor(bob, KIND_MESSAGE, "inline reply", 1500, [["q", rootMsg.id, "", alice.pubkey]]);
+    const folded = foldTimeline(
+      await openChatBatch(await Promise.all([wrapChat(rootMsg, channel, alice), wrapChat(inline, channel, bob)]), channel),
+    );
+    // Not a thread root — the inline reply belongs in the timeline, so
+    // `replyTargetOf` returns undefined and the reader keeps it top-level.
+    expect(replyTargetOf(folded.messages[1])).toBeUndefined();
   });
 
   it("applies author-only edits (latest wins) and self-deletes", async () => {

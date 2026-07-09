@@ -21,8 +21,15 @@ export const KIND_SEAL_PLAINTEXT = 20014;
 
 // ── Chat Plane rumor kinds ───────────────────────────────────────────────────
 
-/** Chat message (NIP-C7 shape; replies via `q` tags). */
+/** Chat message (NIP-C7 shape; `q` tags are inline quote-replies, NOT threads). */
 export const KIND_MESSAGE = 9;
+/**
+ * Threaded reply (NIP-22 comment). A thread reply is a kind-1111 rumor pointing
+ * at its thread root (`K`/`E`/`P`) and immediate parent (`k`/`e`/`p`), NOT a
+ * kind-9 message with a `q` tag — `q` is reserved for inline quote-replies per
+ * NIP-C7. See {@link buildV2CommentTags}.
+ */
+export const KIND_COMMENT = 1111;
 /** Reaction (NIP-25 shape). */
 export const KIND_REACTION = 7;
 /** Delete (NIP-09 shape; names the author's own rumor ids). */

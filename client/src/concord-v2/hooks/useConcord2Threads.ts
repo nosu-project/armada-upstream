@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { queryChannelRumors } from "@/concord-v2/lib/rumorStore";
-import { foldTimeline, type OpenedChat } from "@/concord-v2/lib/chat";
+import { foldTimeline, replyTargetOf, type OpenedChat } from "@/concord-v2/lib/chat";
 import { openedToChatMsg } from "@/concord-v2/hooks/useTransport2";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { ChatMsg } from "@/components/chat/transport";
@@ -93,10 +93,12 @@ export function useConcord2Threads(channels: ChannelV2[]): {
       const out: Concord2Thread[] = [];
       for (const { idHex, messages } of perChannel) {
         const byId = new Map(messages.map((m) => [m.rumorId, m]));
-        // Bucket replies (kind-9 with a `q` root) by their thread root.
+        // Bucket thread replies by their root. A thread reply is a NIP-22
+        // kind-1111 comment (uppercase `E` root); a kind-9 `q` is an inline
+        // reply and never a thread (see `replyTargetOf`).
         const repliesByRoot = new Map<string, OpenedChat[]>();
         for (const m of messages) {
-          const root = m.tags.find((t) => t[0] === "q")?.[1];
+          const root = replyTargetOf(m);
           if (!root) continue;
           const list = repliesByRoot.get(root) ?? [];
           list.push(m);
