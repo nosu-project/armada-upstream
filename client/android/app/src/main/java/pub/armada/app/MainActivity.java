@@ -3,29 +3,32 @@ package pub.armada.app;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.webkit.WebView;
 
 import androidx.activity.EdgeToEdge;
 import androidx.core.splashscreen.SplashScreen;
 
 import com.getcapacitor.BridgeActivity;
-import com.getcapacitor.WebViewListener;
 
 public class MainActivity extends BridgeActivity {
-    // Held true from launch until the WebView commits its first visible paint
-    // (or a safety timeout fires). While true, the native splash stays up.
+    // Held true from launch until the web layer reports it has painted its first
+    // real frame (WebReadyPlugin) or a safety timeout fires. While true, the
+    // native animated-crest splash stays up, covering the whole cold start.
     private volatile boolean webNotReady = true;
 
-    // Hard cap on how long the native splash may cover a cold start. The
-    // WebView first-paint signal is the normal dismisser; this only guards
-    // against it never arriving (so the splash can't hang forever).
+    // Hard cap on how long the splash may cover a cold start. The web "painted"
+    // signal is the normal dismisser; this only guards against it never arriving
+    // (e.g. a JS crash before paint) so the splash can't hang forever.
     private static final long SPLASH_MAX_MS = 8000;
+
+    // How often to check WebReadyPlugin.webPainted (ms).
+    private static final long SPLASH_POLL_MS = 16;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // Register native plugins before super.onCreate.
         registerPlugin(ArmadaNotificationPlugin.class);
         registerPlugin(BluetoothMeshPlugin.class);
+        registerPlugin(WebReadyPlugin.class);
 
         // Install the androidx splash screen. This dismisses the launch
         // (Theme.SplashScreen) window and hands off to postSplashScreenTheme
@@ -33,14 +36,16 @@ public class MainActivity extends BridgeActivity {
         // launch theme's splash window can linger as a band after launch.
         SplashScreen splashScreen = SplashScreen.installSplashScreen(this);
 
-        // Hold the branded native splash on screen until the WebView has
-        // actually PAINTED the web content. Without this, Android dismisses the
-        // splash the moment the activity is up — but on a cold start the WebView
-        // warm-up + bundle parse takes ~1-2s more, leaving a blank dark window
-        // (the app's #100b15 background) with nothing on it. Keeping the splash
-        // up bridges that gap so the crest covers the whole cold start and hands
-        // off directly to the rendered app (whose own in-HTML splash then shows
-        // during any further route-chunk load).
+        // Hold the branded ANIMATED-crest splash on screen until the WEB LAYER
+        // reports it has painted its first real frame (WebReadyPlugin.signalReady,
+        // called from React after commit + a rAF). The in-HTML animated crest
+        // can't cover the cold start (it only exists once the WebView paints,
+        // ~1-2s in), so the animated NATIVE splash owns the whole cold start:
+        // it plays its entrance, then the finished crest sits until the app is
+        // actually on screen. We deliberately do NOT lift on the WebView's
+        // onPageCommitVisible — that fires on the blank background frame BEFORE
+        // React renders, which flashed an empty WebView ("the void") between the
+        // splash and the app.
         splashScreen.setKeepOnScreenCondition(() -> webNotReady);
 
         // Enable edge-to-edge so the WebView draws under the status and
@@ -51,27 +56,22 @@ public class MainActivity extends BridgeActivity {
         EdgeToEdge.enable(this);
         super.onCreate(savedInstanceState);
 
-        // Lift the splash on the WebView's first visible paint.
-        // onPageCommitVisible fires when the WebView has committed the first
-        // frame with page content on screen — the exact moment the blank dark
-        // window would otherwise give way to the web layer. A safety timeout
-        // guarantees the splash lifts even if the callback never arrives.
-        new Handler(Looper.getMainLooper()).postDelayed(() -> webNotReady = false, SPLASH_MAX_MS);
-
-        if (getBridge() != null) {
-            getBridge()
-                .addWebViewListener(
-                    new WebViewListener() {
-                        @Override
-                        public void onPageCommitVisible(WebView view, String url) {
-                            webNotReady = false;
-                        }
+        // Poll the web-painted flag; lift the splash once set, with a safety
+        // timeout so it can never hang.
+        final Handler handler = new Handler(Looper.getMainLooper());
+        final long deadline = System.currentTimeMillis() + SPLASH_MAX_MS;
+        handler.post(
+            new Runnable() {
+                @Override
+                public void run() {
+                    if (WebReadyPlugin.webPainted || System.currentTimeMillis() >= deadline) {
+                        webNotReady = false;
+                    } else {
+                        handler.postDelayed(this, SPLASH_POLL_MS);
                     }
-                );
-        } else {
-            // No bridge handle (shouldn't happen): don't hold the splash.
-            webNotReady = false;
-        }
+                }
+            }
+        );
     }
 
     // Notification taps deep-link via the `armada://open<path>` data URI set on

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Static Armada crest as a vector, translated from ArmadaCrest.tsx (256x256
+  viewport). Used as the base for the animated splash icon (splash_logo_anim.xml)
+  and animatable via the named group/path ids below:
+    - hullFrame  : the cut-corner hull frame (draws on via trimPathEnd)
+    - bladeGroup : the rose "advancing-A" (fades/scales in, then glows)
+    - wake1/wake2: the cyan wake strokes (sweep on a loop)
+  Colors mirror the app's dark-theme tokens:
+    foreground 42 38% 90% -> #EFE6CE, primary 330 90% 62% -> #F84D96 (rose),
+    accent2 180 90% 55% -> #1AE8E8 (cyan), background #100B15.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+
+    <!-- Cut-corner hull frame. trimPathEnd animates the draw-on. -->
+    <path
+        android:name="hullFrame"
+        android:pathData="M64,16 H232 a8,8 0 0 1 8,8 V192 L192,240 H24 a8,8 0 0 1 -8,-8 V64 Z"
+        android:strokeColor="#EFE6CE"
+        android:strokeWidth="10"
+        android:strokeLineCap="butt"
+        android:strokeLineJoin="miter"
+        android:trimPathStart="0"
+        android:trimPathEnd="0" />
+
+    <!-- The advancing-A blade (rose). Group scales/pivots for the entrance. -->
+    <group
+        android:name="bladeGroup"
+        android:pivotX="128"
+        android:pivotY="128"
+        android:scaleX="0.6"
+        android:scaleY="0.6">
+        <path
+            android:name="blade"
+            android:pathData="M128,56 L180,162 H158 L128,100 L98,162 H76 Z"
+            android:fillColor="#F84D96"
+            android:fillAlpha="0" />
+        <!-- Waterline crossbar (negative cut, painted in the bg color). -->
+        <path
+            android:name="bladeCut"
+            android:pathData="M106,134 H150 L158,150 H98 Z"
+            android:fillColor="#100B15"
+            android:fillAlpha="0" />
+    </group>
+
+    <!-- Cyan wake strokes. trimPath sweeps them left->right on a loop. -->
+    <path
+        android:name="wake1"
+        android:pathData="M88,184 H168"
+        android:strokeColor="#1AE8E8"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:trimPathStart="0"
+        android:trimPathEnd="0" />
+    <path
+        android:name="wake2"
+        android:pathData="M104,200 H152"
+        android:strokeColor="#1AE8E8"
+        android:strokeAlpha="0.7"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:trimPathStart="0"
+        android:trimPathEnd="0" />
+</vector>

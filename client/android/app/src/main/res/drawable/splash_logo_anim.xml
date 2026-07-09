@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Animated Armada crest for the launch splash (API 31+ windowSplashScreen-
+  AnimatedIcon). Approximates ArmadaCrest.tsx's entrance:
+    - the hull frame draws on (trimPathEnd 0 -> 1),
+    - the rose blade fades + scales up (springy),
+    - the cyan wake strokes sweep on after.
+  Total ~1000ms, matched by windowSplashScreenAnimationDuration in styles.xml.
+  The splash is held past this by MainActivity until the WebView paints, so the
+  final frame (full crest) simply sits until the app takes over.
+-->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:drawable="@drawable/crest_vector">
+
+    <!-- Hull frame draws on. -->
+    <target android:name="hullFrame">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="trimPathEnd"
+                android:startOffset="80"
+                android:duration="650"
+                android:valueFrom="0"
+                android:valueTo="1"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_quint" />
+        </aapt:attr>
+    </target>
+
+    <!-- Blade fades in. -->
+    <target android:name="blade">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="fillAlpha"
+                android:startOffset="380"
+                android:duration="420"
+                android:valueFrom="0"
+                android:valueTo="1"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_cubic" />
+        </aapt:attr>
+    </target>
+
+    <!-- Blade cut (waterline) fades in with the blade. -->
+    <target android:name="bladeCut">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="fillAlpha"
+                android:startOffset="380"
+                android:duration="420"
+                android:valueFrom="0"
+                android:valueTo="1"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_cubic" />
+        </aapt:attr>
+    </target>
+
+    <!-- Blade group scales up (springy overshoot). -->
+    <target android:name="bladeGroup">
+        <aapt:attr name="android:animation">
+            <set>
+                <objectAnimator
+                    android:propertyName="scaleX"
+                    android:startOffset="380"
+                    android:duration="500"
+                    android:valueFrom="0.6"
+                    android:valueTo="1"
+                    android:valueType="floatType"
+                    android:interpolator="@android:interpolator/overshoot" />
+                <objectAnimator
+                    android:propertyName="scaleY"
+                    android:startOffset="380"
+                    android:duration="500"
+                    android:valueFrom="0.6"
+                    android:valueTo="1"
+                    android:valueType="floatType"
+                    android:interpolator="@android:interpolator/overshoot" />
+            </set>
+        </aapt:attr>
+    </target>
+
+    <!-- Wake strokes sweep on after the blade settles. -->
+    <target android:name="wake1">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="trimPathEnd"
+                android:startOffset="640"
+                android:duration="340"
+                android:valueFrom="0"
+                android:valueTo="1"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_cubic" />
+        </aapt:attr>
+    </target>
+    <target android:name="wake2">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="trimPathEnd"
+                android:startOffset="720"
+                android:duration="340"
+                android:valueFrom="0"
+                android:valueTo="1"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_cubic" />
+        </aapt:attr>
+    </target>
+</animated-vector>
