@@ -98,9 +98,16 @@ deploy-web:
     - apt-get update -qq && apt-get install -y --no-install-recommends rsync openssh-client >/dev/null
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
     - echo "$DEPLOY_SSH_KEY_BASE64" | base64 -d > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
-    - if [ -n "$DEPLOY_SSH_CONFIG_BASE64" ]; then echo "$DEPLOY_SSH_CONFIG_BASE64" | base64 -d > ~/.ssh/config && chmod 600 ~/.ssh/config; fi
+    - if [ -n "$DEPLOY_SSH_CONFIG_BASE64" ]; then echo "$DEPLOY_SSH_CONFIG_BASE64" | base64 -d > ~/.ssh/config; fi
+    # A command-line `-o StrictHostKeyChecking` is NOT inherited by the ProxyJump
+    # child connection, so with a jump host the bastion's unknown key aborts the
+    # whole thing ("Host key verification failed" / "kex_exchange_identification:
+    # Connection closed"). Putting it in the config as a Host * default applies
+    # it to every hop, and lets the ssh_config keep owning all the plumbing.
+    - printf 'Host *\n\tIdentityFile ~/.ssh/id_ed25519\n\tBatchMode yes\n\tStrictHostKeyChecking accept-new\n' >> ~/.ssh/config
+    - chmod 600 ~/.ssh/config
     - export DEPLOY_TARGET="${DEPLOY_TARGET:-web}"
-    - export RSYNC_SSH="ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+    - export RSYNC_SSH="ssh"
 
     # Two-phase rsync: upload hashed assets first, then index.html and sw.js,
     # so the site never serves an index.html that points at assets that
