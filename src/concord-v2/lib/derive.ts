@@ -146,6 +146,34 @@ function groupKey(label: string, secret: Uint8Array, id: Uint8Array, epoch?: big
   return { sk, pk, convKey };
 }
 
+/**
+ * `groupKey` memo. A single derivation costs one HKDF plus TWO secp256k1
+ * point multiplications (~ms each on a phone), and the app re-derives every
+ * community's full key set on short polls (stream-auth registration each 20s,
+ * subscription and wire rebuilds each 60s/2min) — uncached, that alone was
+ * seconds of main-thread crypto per poll for multi-community users.
+ *
+ * Caching is sound because the derivation is a pure function of
+ * (label, secret, id, epoch) — CORD-02 Appendix A is frozen — and every
+ * consumer treats GroupKeys as read-only (no zeroization exists here).
+ * FIFO-bounded: entries are tiny (~200B) and the working set is
+ * O(communities × channels × held epochs), far under the cap.
+ */
+const groupKeyMemo = new Map<string, GroupKey>();
+const GROUP_KEY_MEMO_MAX = 8192;
+
+function groupKeyCached(label: string, secret: Uint8Array, id: Uint8Array, epoch?: bigint): GroupKey {
+  const memoKey = `${label}|${bytesToHex(secret)}|${bytesToHex(id)}|${epoch ?? ""}`;
+  const hit = groupKeyMemo.get(memoKey);
+  if (hit) return hit;
+  const key = groupKey(label, secret, id, epoch);
+  if (groupKeyMemo.size >= GROUP_KEY_MEMO_MAX) {
+    groupKeyMemo.delete(groupKeyMemo.keys().next().value as string);
+  }
+  groupKeyMemo.set(memoKey, key);
+  return key;
+}
+
 // ── Plane keys (CORD-02 §5, CORD-03 §1, CORD-06 §2) ─────────────────────────
 
 /**
@@ -156,21 +184,21 @@ function groupKey(label: string, secret: Uint8Array, id: Uint8Array, epoch?: big
 export function channelGroupKey(secret: Uint8Array, channelId: Uint8Array, epoch: number | bigint): GroupKey {
   assert32("secret", secret);
   assert32("channelId", channelId);
-  return groupKey(LABEL_CHANNEL, secret, channelId, toEpoch(epoch));
+  return groupKeyCached(LABEL_CHANNEL, secret, channelId, toEpoch(epoch));
 }
 
 /** The Control Plane's group key (community_root-keyed). */
 export function controlGroupKey(communityRoot: Uint8Array, communityId: Uint8Array, epoch: number | bigint): GroupKey {
   assert32("communityRoot", communityRoot);
   assert32("communityId", communityId);
-  return groupKey(LABEL_CONTROL, communityRoot, communityId, toEpoch(epoch));
+  return groupKeyCached(LABEL_CONTROL, communityRoot, communityId, toEpoch(epoch));
 }
 
 /** The Guestbook Plane's group key (community_root-keyed). */
 export function guestbookGroupKey(communityRoot: Uint8Array, communityId: Uint8Array, epoch: number | bigint): GroupKey {
   assert32("communityRoot", communityRoot);
   assert32("communityId", communityId);
-  return groupKey(LABEL_GUESTBOOK, communityRoot, communityId, toEpoch(epoch));
+  return groupKeyCached(LABEL_GUESTBOOK, communityRoot, communityId, toEpoch(epoch));
 }
 
 // ── Voice sub-keys (CORD-07) ─────────────────────────────────────────────────
@@ -187,7 +215,7 @@ export function guestbookGroupKey(communityRoot: Uint8Array, communityId: Uint8A
 export function voiceGroupKey(secret: Uint8Array, channelId: Uint8Array, epoch: number | bigint): GroupKey {
   assert32("secret", secret);
   assert32("channelId", channelId);
-  return groupKey(LABEL_VOICE_SIGNER, secret, channelId, toEpoch(epoch));
+  return groupKeyCached(LABEL_VOICE_SIGNER, secret, channelId, toEpoch(epoch));
 }
 
 /**
@@ -216,7 +244,7 @@ export function voiceSenderKey(mediaKey: Uint8Array, identity: string): Uint8Arr
 /** The dissolution tombstone's group key — community_id-keyed, epoch-free (§9). */
 export function dissolvedGroupKey(communityId: Uint8Array): GroupKey {
   assert32("communityId", communityId);
-  return groupKey(LABEL_DISSOLVED, communityId, ZERO32);
+  return groupKeyCached(LABEL_DISSOLVED, communityId, ZERO32);
 }
 
 /** A private Channel's rekey address for `new_epoch`, keyed by the prior community_root. */
@@ -227,7 +255,7 @@ export function channelRekeyGroupKey(
 ): GroupKey {
   assert32("priorRoot", priorRoot);
   assert32("channelId", channelId);
-  return groupKey(LABEL_REKEY_PSEUDONYM, priorRoot, channelId, toEpoch(newEpoch));
+  return groupKeyCached(LABEL_REKEY_PSEUDONYM, priorRoot, channelId, toEpoch(newEpoch));
 }
 
 /** The base-rotation rekey address for `new_epoch`, keyed by the prior community_root. */
@@ -238,7 +266,7 @@ export function baseRekeyGroupKey(
 ): GroupKey {
   assert32("priorRoot", priorRoot);
   assert32("communityId", communityId);
-  return groupKey(LABEL_BASE_REKEY_PSEUDONYM, priorRoot, communityId, toEpoch(newEpoch));
+  return groupKeyCached(LABEL_BASE_REKEY_PSEUDONYM, priorRoot, communityId, toEpoch(newEpoch));
 }
 
 // ── Coordinates (keyless 32-byte locators) ───────────────────────────────────
