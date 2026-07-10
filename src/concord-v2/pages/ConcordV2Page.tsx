@@ -629,7 +629,9 @@ export function ConcordV2Page() {
 
   // Community-wide "Threads" — threads the user participated in (authored the
   // root or a reply), newest-reply first, from the local rumor cache only.
-  // Lights up when any has replies newer than the user last opened it.
+  // Lights up when any has replies newer than the user last opened it; opening
+  // the Threads pane marks everything in it read (see the auto-mark effect
+  // below).
   const {
     threads,
     isLoading: threadsLoading,
@@ -675,16 +677,65 @@ export function ConcordV2Page() {
   );
   // Opening a thread from the Threads tab: switch to its channel, then open the
   // thread panel once that channel's transport has the root loaded (an effect
-  // below fires when the root appears in `allMessages`). Marks the thread read.
+  // below fires when the root appears in `allMessages`). Marks the thread read
+  // and drops its "new" highlight (the auto-mark below keeps rows lit for the
+  // visit, but actually opening one means it's been read for real).
   const [pendingThread, setPendingThread] = useState<Concord2Thread | null>(null);
   const openThreadFromList = useCallback(
     (thread: Concord2Thread) => {
       markThreadRead(thread.root.id, thread.lastReplyAt);
+      setFreshThreadIds((prev) => {
+        if (!prev.has(thread.root.id)) return prev;
+        const next = new Set(prev);
+        next.delete(thread.root.id);
+        return next;
+      });
       setPendingThread(thread);
       selectChannel(thread.channelIdHex);
       setChannelsOpen(false);
     },
     [selectChannel, markThreadRead],
+  );
+
+  // Having the Threads pane on screen counts as reading it: every listed
+  // thread with unseen replies is marked read (the sidebar dot clears by just
+  // looking — no manual "mark all"), immediately and as new replies or the
+  // initial scan land while the pane stays open. The rows keep their "new"
+  // highlight for the visit, though: `freshThreadIds` snapshots each root as
+  // it's auto-cleared so the visual survives the read map advancing, and
+  // resets on leaving the pane. Visibility-gated like the channel read stamp
+  // below, so a background tab doesn't silently eat unread threads.
+  const [freshThreadIds, setFreshThreadIds] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (view !== "threads") {
+      setFreshThreadIds((prev) => (prev.size === 0 ? prev : new Set()));
+      return;
+    }
+    if (!user || !hasNewThreadReplies) return;
+    const stamp = () => {
+      if (document.visibilityState !== "visible") return;
+      setFreshThreadIds((prev) => {
+        let next: Set<string> | undefined;
+        for (const t of threads) {
+          if (t.hasNew && !prev.has(t.root.id)) (next ??= new Set(prev)).add(t.root.id);
+        }
+        return next ?? prev;
+      });
+      markAllThreadsRead();
+    };
+    stamp();
+    document.addEventListener("visibilitychange", stamp);
+    return () => document.removeEventListener("visibilitychange", stamp);
+  }, [view, user, hasNewThreadReplies, threads, markAllThreadsRead]);
+
+  // What the Threads pane renders: the live list, with the just-auto-cleared
+  // roots still lit as "new" for this visit.
+  const displayedThreads = useMemo(
+    () =>
+      threads.map((t) =>
+        !t.hasNew && freshThreadIds.has(t.root.id) ? { ...t, hasNew: true } : t,
+      ),
+    [threads, freshThreadIds],
   );
   // Let `#channel-name` hashtags in chat jump to that local channel.
   const navChannels = useMemo(
@@ -1370,15 +1421,16 @@ export function ConcordV2Page() {
                   <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
                 </>
               )}
-              {/* Mark all as read — sits next to the Mentions / Threads label
-                  (issue #53). Disabled when there's nothing new. */}
-              {user && (view === "mentions" || view === "threads") && (
+              {/* Mark all as read — sits next to the Mentions label (issue
+                  #53). Disabled when there's nothing new. Threads need no
+                  button: opening that pane marks everything in it read. */}
+              {user && view === "mentions" && (
                 <Button
                   variant="ghost"
                   size="sm"
                   className="ml-1 h-7 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground"
-                  disabled={view === "mentions" ? !hasUnreadMention : !hasNewThreadReplies}
-                  onClick={() => (view === "mentions" ? markAllMentionsRead() : markAllThreadsRead())}
+                  disabled={!hasUnreadMention}
+                  onClick={() => markAllMentionsRead()}
                 >
                   <CheckCheck className="size-3.5" />
                   Mark all as read
@@ -1425,15 +1477,16 @@ export function ConcordV2Page() {
             </button>
             <div className="ml-auto flex items-center gap-0.5">
               {/* Mobile: icon-only mark-all (the labeled button lives next to
-                  the title on desktop). Only on the Mentions / Threads panes. */}
-              {user && (view === "mentions" || view === "threads") && (
+                  the title on desktop). Only on the Mentions pane — Threads
+                  auto-marks on open. */}
+              {user && view === "mentions" && (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="size-8 touch:size-10 sidebar:hidden"
                   aria-label="Mark all as read"
-                  disabled={view === "mentions" ? !hasUnreadMention : !hasNewThreadReplies}
-                  onClick={() => (view === "mentions" ? markAllMentionsRead() : markAllThreadsRead())}
+                  disabled={!hasUnreadMention}
+                  onClick={() => markAllMentionsRead()}
                 >
                   <CheckCheck className="size-4" />
                 </Button>
@@ -1531,7 +1584,7 @@ export function ConcordV2Page() {
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable">
                   <ThreadsView
                     channels={channels}
-                    threads={threads}
+                    threads={displayedThreads}
                     isLoading={threadsLoading}
                     onOpen={openThreadFromList}
                   />
