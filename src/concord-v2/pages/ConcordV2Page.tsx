@@ -1,4 +1,4 @@
-import { AtSign, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { AtSign, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -616,15 +616,16 @@ export function ConcordV2Page() {
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels);
 
   // Community-wide "@ Mentions" — every cached kind-9 that p-tags the user,
-  // across all channels, served from the local rumor cache only.
-  const { mentions, isLoading: mentionsLoading } = useConcord2Mentions(channels);
-  // The "@ Mentions" item lights up like a channel does: it's "unread" when
-  // ANY channel has an unread mention (same read-state the channel rows use),
-  // so opening the channel that mentioned you clears both together.
-  const hasUnreadMention = useMemo(
-    () => Object.values(unreadByChannel).some((u) => u.mention),
-    [unreadByChannel],
-  );
+  // across all channels, served from the local rumor cache only. Its unread
+  // indicator has its OWN read state (not the channel read state), so opening
+  // the Mentions tab (or "mark all read") clears it without visiting every
+  // mentioning channel (issue #53).
+  const {
+    mentions,
+    isLoading: mentionsLoading,
+    hasNew: hasUnreadMention,
+    markAllRead: markAllMentionsRead,
+  } = useConcord2Mentions(channels, community?.idHex);
 
   // Community-wide "Threads" — threads the user participated in (authored the
   // root or a reply), newest-reply first, from the local rumor cache only.
@@ -634,6 +635,7 @@ export function ConcordV2Page() {
     isLoading: threadsLoading,
     hasNew: hasNewThreadReplies,
     markRead: markThreadRead,
+    markAllRead: markAllThreadsRead,
   } = useConcord2Threads(channels);
 
   // Authenticate the connection as this community's per-channel stream keys
@@ -1408,6 +1410,25 @@ export function ConcordV2Page() {
               </div>
             </button>
             <div className="ml-auto flex items-center gap-0.5">
+              {/* Mark all as read — only on the aggregate Mentions / Threads
+                  panes (issue #53). Disabled when there's nothing new. */}
+              {user && (view === "mentions" || view === "threads") && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 touch:size-10"
+                      aria-label="Mark all as read"
+                      disabled={view === "mentions" ? !hasUnreadMention : !hasNewThreadReplies}
+                      onClick={() => (view === "mentions" ? markAllMentionsRead() : markAllThreadsRead())}
+                    >
+                      <CheckCheck className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Mark all as read</TooltipContent>
+                </Tooltip>
+              )}
               {user && channel?.isVoice && (
                 <Tooltip>
                   <TooltipTrigger asChild>

@@ -10,6 +10,7 @@ import type { ChatMsg } from "@/components/chat/transport";
 import {
   loadConcord2ThreadReadState,
   markConcord2ThreadRead,
+  markConcord2ThreadsRead,
   type Concord2ThreadReadMap,
 } from "@/concord-v2/lib/threadReadState2";
 
@@ -49,6 +50,7 @@ export function useConcord2Threads(channels: ChannelV2[]): {
   isLoading: boolean;
   hasNew: boolean;
   markRead: (rootId: string, timestamp: number) => void;
+  markAllRead: () => void;
 } {
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
@@ -164,8 +166,31 @@ export function useConcord2Threads(channels: ChannelV2[]): {
 
   const hasNew = useMemo(() => threads.some((t) => t.hasNew), [threads]);
 
+  // "Mark all as read": advance every currently-loaded thread with unseen
+  // replies to its newest reply, in ONE batched write (not N debounced ones).
+  // Monotonic, like the single-thread `markRead`.
+  const markAllRead = useCallback(() => {
+    if (!pubkey) return;
+    const entries = threads
+      .filter((t) => t.hasNew)
+      .map((t) => [t.root.id, t.lastReplyAt] as const);
+    if (entries.length === 0) return;
+    queryClient.setQueryData<Concord2ThreadReadMap>(threadReadMapKey(pubkey), (prev = {}) => {
+      let next: Concord2ThreadReadMap | undefined;
+      for (const [rootId, ts] of entries) {
+        if ((prev[rootId] ?? 0) >= ts) continue;
+        next ??= { ...prev };
+        next[rootId] = ts;
+      }
+      return next ?? prev;
+    });
+    void markConcord2ThreadsRead(pubkey, entries).then((map) => {
+      queryClient.setQueryData(threadReadMapKey(pubkey), map);
+    });
+  }, [pubkey, threads, queryClient]);
+
   return useMemo(
-    () => ({ threads, isLoading, hasNew, markRead }),
-    [threads, isLoading, hasNew, markRead],
+    () => ({ threads, isLoading, hasNew, markRead, markAllRead }),
+    [threads, isLoading, hasNew, markRead, markAllRead],
   );
 }

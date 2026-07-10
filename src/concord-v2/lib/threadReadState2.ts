@@ -49,3 +49,25 @@ export async function markConcord2ThreadRead(
   await writeFolded(threadReadStateKey(userPubkey), next);
   return next;
 }
+
+/**
+ * Mark many threads read in one write — the "mark all as read" batch (issue
+ * #53). Each `[rootId, timestamp]` is applied monotonically (never rewinds a
+ * thread to an older stamp); one KV write instead of N debounced ones. Returns
+ * the updated map (same reference if nothing advanced).
+ */
+export async function markConcord2ThreadsRead(
+  userPubkey: string,
+  entries: Iterable<readonly [string, number]>,
+): Promise<Concord2ThreadReadMap> {
+  const map = await loadConcord2ThreadReadState(userPubkey);
+  let next: Concord2ThreadReadMap | undefined;
+  for (const [rootId, timestamp] of entries) {
+    if (timestamp <= 0 || (map[rootId] ?? 0) >= timestamp) continue;
+    next ??= { ...map };
+    next[rootId] = timestamp;
+  }
+  if (!next) return map;
+  await writeFolded(threadReadStateKey(userPubkey), next);
+  return next;
+}
