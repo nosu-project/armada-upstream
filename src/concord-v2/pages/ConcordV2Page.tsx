@@ -1,4 +1,4 @@
-import { AtSign, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { AtSign, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -618,8 +618,8 @@ export function ConcordV2Page() {
   // Community-wide "@ Mentions" — every cached kind-9 that p-tags the user,
   // across all channels, served from the local rumor cache only. Its unread
   // indicator has its OWN read state (not the channel read state), so opening
-  // the Mentions tab (or "mark all read") clears it without visiting every
-  // mentioning channel (issue #53).
+  // the Mentions tab clears it without visiting every mentioning channel
+  // (issue #53; see the auto-mark effect below).
   const {
     mentions,
     isLoading: mentionsLoading,
@@ -696,6 +696,22 @@ export function ConcordV2Page() {
     },
     [selectChannel, markThreadRead],
   );
+
+  // Having the Mentions pane on screen counts as reading it, same as Threads
+  // below: the list is flat and newest-first, so the pane being visible means
+  // the newest mention is too — advance the last-seen stamp immediately, and
+  // again as new mentions land while the pane stays open. Visibility-gated so
+  // a background tab doesn't silently eat the badge. (Unlike Threads there's
+  // no per-row "new" highlight to preserve, so no snapshot.)
+  useEffect(() => {
+    if (view !== "mentions" || !user || !hasUnreadMention) return;
+    const stamp = () => {
+      if (document.visibilityState === "visible") markAllMentionsRead();
+    };
+    stamp();
+    document.addEventListener("visibilitychange", stamp);
+    return () => document.removeEventListener("visibilitychange", stamp);
+  }, [view, user, hasUnreadMention, markAllMentionsRead]);
 
   // Having the Threads pane on screen counts as reading it: every listed
   // thread with unseen replies is marked read (the sidebar dot clears by just
@@ -1421,21 +1437,6 @@ export function ConcordV2Page() {
                   <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
                 </>
               )}
-              {/* Mark all as read — sits next to the Mentions label (issue
-                  #53). Disabled when there's nothing new. Threads need no
-                  button: opening that pane marks everything in it read. */}
-              {user && view === "mentions" && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="ml-1 h-7 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground"
-                  disabled={!hasUnreadMention}
-                  onClick={() => markAllMentionsRead()}
-                >
-                  <CheckCheck className="size-3.5" />
-                  Mark all as read
-                </Button>
-              )}
             </div>
 
             {/* Mobile: community avatar + name large, channel muted below */}
@@ -1476,21 +1477,6 @@ export function ConcordV2Page() {
               </div>
             </button>
             <div className="ml-auto flex items-center gap-0.5">
-              {/* Mobile: icon-only mark-all (the labeled button lives next to
-                  the title on desktop). Only on the Mentions pane — Threads
-                  auto-marks on open. */}
-              {user && view === "mentions" && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8 touch:size-10 sidebar:hidden"
-                  aria-label="Mark all as read"
-                  disabled={!hasUnreadMention}
-                  onClick={() => markAllMentionsRead()}
-                >
-                  <CheckCheck className="size-4" />
-                </Button>
-              )}
               {user && channel?.isVoice && (
                 <Tooltip>
                   <TooltipTrigger asChild>
