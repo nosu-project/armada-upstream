@@ -15,11 +15,22 @@
 #   KEY_PASSWORD             upload key password (== store password; PKCS12 needs them equal)
 #   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer used to sign Zapstore releases
 #   ZAPSTORE_CLIENT_KEY      persistent zsp NIP-46 client key (hex) for that bunker
+# Web deploy (deploy-web job), all protected:
+#   DEPLOY_SSH_KEY_BASE64    base64 (one line, maskable) of the private key for
+#                            the rrsync-jailed deploy user
+#   DEPLOY_SSH_CONFIG_BASE64 (optional) base64 of an ssh_config written to
+#                            ~/.ssh/config — carries any site-specific plumbing
+#                            (aliases, ports, intermediate hops)
+#   DEPLOY_TARGET            (optional) rsync destination: user@host, or a Host
+#                            alias from the ssh_config; defaults to "web"
+#   VITE_PLATFORM_RELAYS     wss://armada.buzz — pins the platform relay in the
+#                            HOSTED web build only (tag builds override it to "")
 # These live ONLY in CI/CD variables — never commit the keystore, the passwords,
 # or any generated secrets file to the repo.
 
 stages:
   - test
+  - deploy
   - build
   - release
   - publish
@@ -47,6 +58,57 @@ test:
     - npm run test
     # Fail the pipeline on known-high/critical advisories in dependencies.
     - npm audit --audit-level=high
+
+# ── Deploy the hosted web client (armada.buzz) ──────────────────────────────
+# Builds the SPA and rsyncs it over SSH to an rrsync-jailed deploy user, same
+# pattern as ../agora (see agora's GITLAB_DEPLOY.md). Where those files live
+# and how SSH gets there is deliberately not encoded here: all site-specific
+# plumbing (host aliases, ports, bastion hops) is injected through the
+# protected DEPLOY_* variables, so this job works for any static host —
+# direct or behind a jump — without changes.
+#
+# Vite inlines VITE_* variables at build time; any set as project-level CI/CD
+# variables are already present in the job environment. Do NOT re-declare them
+# here as `KEY: $KEY` — the self-reference overwrites the real value with the
+# literal string "$KEY" whenever the source variable is out of scope. The
+# client defaults are correct for the hosted build; nothing needs to be set.
+deploy-web:
+  stage: deploy
+  image: node:22
+  timeout: 10 minutes
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: never
+    - if: $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH && $DEPLOY_SSH_KEY_BASE64
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+  script:
+    # Build the web app (also copies dist/index.html -> dist/404.html)
+    - npm ci
+    - npm run build
+
+    # Install rsync + ssh client and materialize the SSH environment. The key
+    # and ssh_config arrive base64-encoded so they fit GitLab's masking rules
+    # (single line); ssh reads ~/.ssh/config automatically. The target
+    # defaults to the "web" alias from that config.
+    - apt-get update -qq && apt-get install -y --no-install-recommends rsync openssh-client >/dev/null
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - echo "$DEPLOY_SSH_KEY_BASE64" | base64 -d > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+    - if [ -n "$DEPLOY_SSH_CONFIG_BASE64" ]; then echo "$DEPLOY_SSH_CONFIG_BASE64" | base64 -d > ~/.ssh/config && chmod 600 ~/.ssh/config; fi
+    - export DEPLOY_TARGET="${DEPLOY_TARGET:-web}"
+    - export RSYNC_SSH="ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+
+    # Two-phase rsync: upload hashed assets first, then index.html and sw.js,
+    # so the site never serves an index.html that points at assets that
+    # haven't finished uploading. sw.js lands last for the same reason — it's
+    # a stable filename all browsers re-fetch to check for updates. The
+    # destination ":/" is the rrsync jail root on the web host.
+    - rsync -av --exclude=/sw.js --exclude=/index.html -e "$RSYNC_SSH" dist/ "${DEPLOY_TARGET}:/"
+    - rsync -av -e "$RSYNC_SSH" dist/index.html dist/sw.js "${DEPLOY_TARGET}:/"
 
 # ── Signed Android APK + AAB on version tags ────────────────────────────────
 build-apk:
