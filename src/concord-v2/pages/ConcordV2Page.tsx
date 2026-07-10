@@ -388,7 +388,7 @@ function MentionsView({
   }
 
   return (
-    <div className="flex flex-col py-2">
+    <div className="flex flex-col py-2 px-2">
       {mentions.map((msg) => {
         const channelIdHex = msg.tags.find((t) => t[0] === "channel")?.[1] ?? "";
         const ch = nameByChannel.get(channelIdHex);
@@ -490,7 +490,7 @@ function ThreadsView({
   }
 
   return (
-    <div className="flex flex-col py-2">
+    <div className="flex flex-col py-2 px-2">
       {threads.map((t) => {
         const ch = nameByChannel.get(t.channelIdHex);
         return (
@@ -1370,6 +1370,20 @@ export function ConcordV2Page() {
                   <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
                 </>
               )}
+              {/* Mark all as read — sits next to the Mentions / Threads label
+                  (issue #53). Disabled when there's nothing new. */}
+              {user && (view === "mentions" || view === "threads") && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-1 h-7 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground"
+                  disabled={view === "mentions" ? !hasUnreadMention : !hasNewThreadReplies}
+                  onClick={() => (view === "mentions" ? markAllMentionsRead() : markAllThreadsRead())}
+                >
+                  <CheckCheck className="size-3.5" />
+                  Mark all as read
+                </Button>
+              )}
             </div>
 
             {/* Mobile: community avatar + name large, channel muted below */}
@@ -1410,24 +1424,19 @@ export function ConcordV2Page() {
               </div>
             </button>
             <div className="ml-auto flex items-center gap-0.5">
-              {/* Mark all as read — only on the aggregate Mentions / Threads
-                  panes (issue #53). Disabled when there's nothing new. */}
+              {/* Mobile: icon-only mark-all (the labeled button lives next to
+                  the title on desktop). Only on the Mentions / Threads panes. */}
               {user && (view === "mentions" || view === "threads") && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 touch:size-10"
-                      aria-label="Mark all as read"
-                      disabled={view === "mentions" ? !hasUnreadMention : !hasNewThreadReplies}
-                      onClick={() => (view === "mentions" ? markAllMentionsRead() : markAllThreadsRead())}
-                    >
-                      <CheckCheck className="size-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Mark all as read</TooltipContent>
-                </Tooltip>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 touch:size-10 sidebar:hidden"
+                  aria-label="Mark all as read"
+                  disabled={view === "mentions" ? !hasUnreadMention : !hasNewThreadReplies}
+                  onClick={() => (view === "mentions" ? markAllMentionsRead() : markAllThreadsRead())}
+                >
+                  <CheckCheck className="size-4" />
+                </Button>
               )}
               {user && channel?.isVoice && (
                 <Tooltip>
