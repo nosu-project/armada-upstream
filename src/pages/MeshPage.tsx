@@ -457,7 +457,7 @@ function MeshSidebar({
         }
       />
 
-      {error && (
+      {enabled && error && (
         <div className="px-4 py-2 text-xs text-destructive">
           {error}{" "}
           <button className="underline" onClick={onRetry}>

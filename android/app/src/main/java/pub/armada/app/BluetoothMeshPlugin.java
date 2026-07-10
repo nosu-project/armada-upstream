@@ -108,7 +108,7 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
 
     private void doStart(PluginCall call) {
         try {
-            if (meshService == null) {
+            if (meshService == null || !meshService.isReusable()) {
                 meshService = new BluetoothMeshService(getContext().getApplicationContext());
                 meshService.setDelegate(this);
             }
@@ -137,18 +137,25 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
             call.resolve(ret);
         } catch (Exception e) {
             Log.e(TAG, "Failed to start mesh", e);
-            call.reject("Failed to start mesh: " + e.getMessage());
+            String detail = e.getMessage();
+            if (detail == null || detail.trim().isEmpty()) {
+                detail = e.getClass().getSimpleName();
+            }
+            call.reject("Failed to start mesh: " + detail, e);
         }
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
+        BluetoothMeshService service = meshService;
+        meshService = null;
+        started = false;
         try {
-            if (meshService != null) {
-                meshService.stopServices();
+            if (service != null) {
+                service.setDelegate(null);
+                service.stopServices();
             }
             getContext().stopService(new Intent(getContext(), MeshForegroundService.class));
-            started = false;
         } catch (Exception e) {
             Log.w(TAG, "stop failed", e);
         }
