@@ -4,6 +4,33 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.25.4] - 2026-07-10
+
+Every channel can now host a call — the text/voice split is gone, so you start
+or join a call right from a channel's list row or its chat header. The Mentions
+and Threads tabs now clear their unread badges the moment you open them, no more
+per-item chasing. Bluetooth mesh got steadier on Android: your mesh identity
+survives a device restore, and turning mesh off and back on no longer leaves it
+stuck. Rounding it out are fixes for overflowing quoted text on narrow screens,
+an attachment preview that appears the instant you pick a file, and big
+behind-the-scenes speedups that cut battery and CPU use during long sessions.
+
+### Changed
+- Every channel is now callable: the separate text/voice channel types are gone,
+  and you start or join a call from the channel's list row or chat header
+- Opening the Mentions or Threads tab now marks everything in it as read
+
+### Fixed
+- Bluetooth mesh: your mesh identity is now restored after an Android backup
+  restore, and toggling mesh off then on no longer leaves it unable to restart
+- Long quoted text in replies and embedded notes no longer overflows on narrow
+  screens
+- The attachment preview now shows immediately when you pick a file, instead of
+  only after it finishes processing
+- Tooltips on the server rail no longer stick on touch devices
+- Faster and lighter during long sessions: heavy encryption work is now cached
+  and scoped per community, reducing background CPU and battery drain
+
 ## [0.25.3] - 2026-07-09
 
 A quieter, more respectful release: removing a relay in Settings now actually
