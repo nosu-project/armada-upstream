@@ -151,15 +151,15 @@ export function ReplyContextLine({
   if (!name) return null;
   const content = (
     <>
-      <span className="flex items-center gap-1.5 min-w-0">
+      <span className="flex items-baseline gap-1.5 min-w-0 max-w-full">
         <span className="font-semibold shrink-0">{name}</span>
-        {preview && <span className="truncate">{preview}</span>}
+        {preview && <span className="line-clamp-2 break-words min-w-0">{preview}</span>}
       </span>
       {thumbnail && <span className="mt-0.5">{thumbnail}</span>}
     </>
   );
   const className =
-    "flex flex-col text-[11px] text-muted-foreground/80 mb-0.5 min-w-0 border-l-2 border-muted-foreground/30 pl-2";
+    "flex flex-col text-xs text-muted-foreground/80 mb-0.5 min-w-0 max-w-full border-l-2 border-muted-foreground/30 pl-2";
   if (!onClick) {
     return <div className={className}>{content}</div>;
   }

@@ -117,13 +117,13 @@ export function EmbeddedEventCard({ event, className }: { event: NostrEvent; cla
   return (
     <div
       className={cn(
-        "group block max-w-md rounded-2xl border border-border overflow-hidden",
+        "group block max-w-md w-full rounded-2xl border border-border overflow-hidden",
         "transition-colors hover:bg-secondary/40 my-1.5",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="px-3 py-2 space-y-1">
+      <div className="px-3 py-2 space-y-1 min-w-0">
         {/* Author row */}
         <div className="flex items-center gap-2 min-w-0">
           <ProfilePreviewCard pubkey={event.pubkey}>
@@ -173,9 +173,9 @@ export function EmbeddedEventCard({ event, className }: { event: NostrEvent; cla
               : reactionEmoji}
           </div>
         ) : (
-          <div className="max-h-64 overflow-hidden">
-            {title && <p className="text-sm font-semibold leading-snug mb-0.5">{title}</p>}
-            <ChatContent event={event} className="text-sm leading-relaxed" disableNoteEmbeds />
+          <div className="min-w-0 max-h-64 overflow-hidden">
+            {title && <p className="text-sm font-semibold leading-snug mb-0.5 line-clamp-2">{title}</p>}
+            <ChatContent event={event} className="text-sm leading-relaxed" clampLines={6} disableNoteEmbeds />
           </div>
         )}
 

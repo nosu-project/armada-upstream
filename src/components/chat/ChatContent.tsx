@@ -50,6 +50,10 @@ interface ChatContentProps {
   /** When true, mention chips render the bare display name without an `@`
    *  prefix. Used for /me actions, which read as prose ("Alice slaps Bob"). */
   noMentionAtPrefix?: boolean;
+  /** When set, clamp text-only content to this many lines with a trailing
+   *  ellipsis (used by quoted/embedded cards). Ignored when the content
+   *  contains block media (images/embeds), which a line clamp would break. */
+  clampLines?: number;
 }
 
 /** Bech32 charset used by NIP-19 identifiers. */
@@ -204,7 +208,7 @@ function usableMime(m: string | undefined): string | undefined {
  * cards), nostr: URIs (mentions, embedded note/naddr cards), hashtags,
  * NIP-30 custom emoji, and lightning invoices.
  */
-export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false }: ChatContentProps) {
+export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines }: ChatContentProps) {
   const tokens = useMemo(() => {
     const text = contentOverride ?? event.content;
 
@@ -611,6 +615,21 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     && groupedTokens[0].type === "text"
     && isOnlyEmojisOrCustom(groupedTokens[0].value, emojiMap);
 
+  // A line clamp (display: -webkit-box) would break block-level media, so only
+  // honor `clampLines` when every token is inline text-ish.
+  const clampSafe = clampLines != null && !isEmojiOnly && groupedTokens.every((t) =>
+    t.type === "text" || t.type === "inline-code" || t.type === "quote"
+    || t.type === "nevent-embed" || t.type === "naddr-embed"
+  );
+  const clampClass = clampSafe
+    ? clampLines === 1 ? "line-clamp-1"
+    : clampLines === 2 ? "line-clamp-2"
+    : clampLines === 3 ? "line-clamp-3"
+    : clampLines === 4 ? "line-clamp-4"
+    : clampLines === 5 ? "line-clamp-5"
+    : "line-clamp-6"
+    : undefined;
+
   // Plain <a> for a URL (also the demoted rendering for media/embeds inside
   // quote blocks, where cards would be visually wrong).
   const inlineLink = (key: React.Key, url: string) => {
@@ -842,7 +861,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
   };
 
   const body = (
-    <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, isEmojiOnly && "text-4xl leading-tight")}>
+    <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, clampClass, isEmojiOnly && "text-4xl leading-tight")}>
       {groupedTokens.map((token, i) => renderToken(token, i, i))}
 
       {lightboxIndex !== null && (
