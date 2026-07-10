@@ -9,6 +9,7 @@ import android.util.Base64
 import android.util.Log
 import com.bitchat.android.util.hexEncodedString
 import androidx.core.content.edit
+import javax.crypto.AEADBadTagException
 
 /**
  * Manages persistent identity storage and peer ID rotation - 100% compatible with iOS implementation
@@ -43,8 +44,18 @@ class SecureIdentityStateManager(private val context: Context) {
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
 
-        // Create encrypted shared preferences
-        prefs = EncryptedSharedPreferences.create(
+        prefs = try {
+            createEncryptedPrefs(masterKey)
+        } catch (e: AEADBadTagException) {
+            Log.w(TAG, "Resetting encrypted mesh identity after Keystore authentication failure", e)
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().clear().commit()
+            createEncryptedPrefs(masterKey)
+        }
+    }
+
+    private fun createEncryptedPrefs(masterKey: MasterKey): SharedPreferences {
+        return EncryptedSharedPreferences.create(
             context,
             PREFS_NAME,
             masterKey,

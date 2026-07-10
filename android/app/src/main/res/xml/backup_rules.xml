@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- These files are encrypted with a device-bound Android Keystore key. -->
+    <exclude domain="sharedpref" path="bitchat_crypto_secure.xml" />
+    <exclude domain="sharedpref" path="bitchat_identity.xml" />
+</full-backup-content>

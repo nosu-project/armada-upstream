@@ -16,6 +16,7 @@ import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import androidx.core.content.edit
+import javax.crypto.AEADBadTagException
 
 /**
  * Encryption service that now uses NoiseEncryptionService internally
@@ -58,8 +59,21 @@ open class EncryptionService(private val context: Context) {
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
 
-        // Create encrypted shared preferences
-        prefs = EncryptedSharedPreferences.create(
+        prefs = try {
+            createEncryptedPrefs(masterKey)
+        } catch (e: AEADBadTagException) {
+            // Android backup can restore ciphertext without its device-bound
+            // Keystore key. That data is unrecoverable, so reset only this
+            // mesh identity store and generate a fresh identity below.
+            Log.w(TAG, "Resetting encrypted mesh keys after Keystore authentication failure", e)
+            context.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().clear().commit()
+            createEncryptedPrefs(masterKey)
+        }
+    }
+
+    private fun createEncryptedPrefs(masterKey: MasterKey): SharedPreferences {
+        return EncryptedSharedPreferences.create(
             context,
             SECURE_PREFS_NAME,
             masterKey,
