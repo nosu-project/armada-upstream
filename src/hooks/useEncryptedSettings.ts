@@ -13,8 +13,6 @@ import { EncryptedSettingsSchema, type EncryptedSettings } from "@/lib/schemas";
 const SETTINGS_KIND = 30078;
 /** `d` tag identifying Armada's settings event. */
 const SETTINGS_D = "armada/metadata";
-/** Poll the app relays this often (ms) so other devices' changes flow in. */
-const REFETCH_INTERVAL_MS = 5 * 60 * 1000;
 
 /** Filter matching the current user's settings event. */
 function settingsFilter(pubkey: string): NostrFilter {
@@ -105,9 +103,11 @@ export function useEncryptedSettings() {
       return decodeSettings(user.signer, user.pubkey, event);
     },
     staleTime: 60_000,
-    // Keep the local copy in sync with other devices: poll periodically and
-    // whenever the window regains focus / the query remounts.
-    refetchInterval: REFETCH_INTERVAL_MS,
+    // Cross-device freshness is driven by NostrSync's standing self-state REQ,
+    // which invalidates this query when another device publishes new settings.
+    // Keep focus/mount refetch as a cheap backstop (catches anything the sub
+    // missed while the socket was down), but no periodic poll — the sub is the
+    // push channel now.
     refetchOnWindowFocus: true,
     refetchOnMount: true,
   });

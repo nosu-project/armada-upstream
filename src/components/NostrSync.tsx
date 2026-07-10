@@ -1,4 +1,5 @@
 import { useNostr } from "@nostrify/react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
 import { SYNCED_CONFIG_KEYS, type AppConfig } from "@/contexts/AppContext";
@@ -17,10 +18,35 @@ import { parseBlossomServerList } from "@/lib/blossom";
 import { KIND_BLOSSOM_SERVERS } from "@/hooks/useBlossomServerList";
 import { PINNED_RAIL_RELAYS } from "@/lib/platform";
 import { type EncryptedSettings } from "@/lib/schemas";
+import {
+  KIND_APP_SPECIFIC,
+  queryKeysForSelfEvent,
+  SELF_SYNC_DTAGS,
+  SELF_SYNC_REPLACEABLE_KINDS,
+} from "@/lib/selfSyncKinds";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
+
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /** Debounce for pushing local config changes to the encrypted NIP-78 event. */
 const PUBLISH_DEBOUNCE_MS = 800;
+
+/**
+ * Look-back applied to the standing self-state REQ's `since` on (re)subscribe:
+ * a short window so a replaceable published while we were briefly offline is
+ * caught. Replaceables are latest-wins, so no persisted cursor is needed — we
+ * just want the newest version, and the store dedupes by id.
+ */
+const SELF_SYNC_LOOKBACK_SECONDS = 5 * 60;
+
+/** Coalescing window (ms) for self-state query invalidations. */
+const SELF_SYNC_FLUSH_MS = 60;
+
+/** First value of a `d` tag on an event, if any. */
+function dTagOf(event: NostrEvent): string | undefined {
+  for (const t of event.tags) if (t[0] === "d") return t[1];
+  return undefined;
+}
 
 /** Pick just the synced fields out of AppConfig, dropping undefined values. */
 function syncedSubset(config: AppConfig): Partial<EncryptedSettings> {
@@ -33,21 +59,38 @@ function syncedSubset(config: AppConfig): Partial<EncryptedSettings> {
 }
 
 /**
- * Bridges the user's app config to/from Nostr on login / account switch and
- * whenever it changes. Adapted from Ditto's NostrSync.
+ * The self-state sync. One component owns everything about the LOGGED-IN USER'S
+ * OWN state — the replaceable/addressable events that describe who they are and
+ * what they've joined — keeping it synced across devices in both directions.
+ * (Its sibling {@link ../wire/WireSync} owns CONVERSATION-timeline sync.)
  *
- *  1. Pulls Armada's own encrypted settings (NIP-78, kind 30078,
- *     d="armada/metadata") into AppConfig — the full synced field set
- *     (SYNCED_CONFIG_KEYS) — timestamp-guarded so a stale relay event never
- *     clobbers a fresh local edit. Re-applies whenever a newer remote event
- *     arrives (periodic refetch / another device).
- *  1a. Read-state hydration from the same event.
- *  1b. Hydrates the `addedRelays` cache from the user's NIP-29 server list
- *     (kind 10009 `r` tags), which is the cross-device source of truth.
- *  2. Publishes local config changes back to the encrypted event (debounced),
- *     so every AppConfig edit — not just theme — syncs across devices.
- *  3. Interop: if the user has never picked a theme in Armada, adopt their
- *     Ditto *active profile theme* (kind 16767) so Ditto users feel at home.
+ * Two layers:
+ *
+ * A. Transport / freshness (the standing subscription). A single long-lived REQ
+ *    `{ authors:[me], kinds:[…] }` (plus a `#d`-scoped filter for the two
+ *    addressable kind-30078 documents) streams every new version of the user's
+ *    own lists: follow, mute, NIP-29 servers/channels (10009), Concord V1/V2
+ *    vaults, DM/Blossom relay lists, and Armada's NIP-78 settings. Events land
+ *    in the `armada-events` cache first (the NostrBatcher mirrors `.req()`
+ *    output), then the owning hook's query key is invalidated so it re-reads and
+ *    reconciles through its OWN merge / decrypt-failed guards. This is what makes
+ *    a join/leave/add on another device reach this one in real time — the
+ *    community rail no longer waits for a remount or a staleTime lapse.
+ *
+ * B. Application (this data → runtime state). Adapted from Ditto's NostrSync:
+ *    1. Pulls Armada's encrypted settings (30078, d="armada/metadata") into
+ *       AppConfig (SYNCED_CONFIG_KEYS), timestamp-guarded so a stale relay event
+ *       never clobbers a fresh local edit; re-applies whenever a newer remote
+ *       event arrives (layer A invalidates → the query re-reads → this fires).
+ *    1a. Read-state hydration from the same event.
+ *    1b. Hydrates `addedRelays` from the NIP-29 server list (10009 `r` tags) —
+ *        the cross-device source of truth for the server rail. Re-merged on
+ *        every list change (union only, never replace).
+ *    1c. Blossom media server list (10063) → config.
+ *    2. Publishes local config changes back to the encrypted event (debounced),
+ *       so every AppConfig edit syncs across devices.
+ *    3. Interop: adopt the user's Ditto active profile theme (16767) if they've
+ *       never picked a theme in Armada.
  *
  * Renders nothing.
  */
@@ -59,9 +102,9 @@ export function NostrSync() {
   const { data: groupList } = useUserGroupList();
   const { hydrate: hydrateReadState } = useReadState();
   const { applyCustomTheme } = useTheme();
+  const queryClient = useQueryClient();
 
   const dittoCheckedPubkey = useRef<string | undefined>(undefined);
-  const serversAppliedPubkey = useRef<string | undefined>(undefined);
   const blossomAppliedPubkey = useRef<string | undefined>(undefined);
   // The remote sync timestamp we've most recently folded into local config.
   const appliedSyncTs = useRef<number>(-1);
@@ -80,9 +123,76 @@ export function NostrSync() {
     appliedSyncTs.current = -1;
     pulledForPubkey.current = undefined;
     lastSyncedSnapshot.current = undefined;
-    serversAppliedPubkey.current = undefined;
     blossomAppliedPubkey.current = undefined;
   }, [user?.pubkey]);
+
+  // ─── A. Standing self-state subscription (transport / freshness) ──────
+  // One long-lived REQ for the user's own replaceable/addressable events. Each
+  // event is mirrored into the cache by the batcher, then the owning hook's
+  // query key is invalidated so it re-reads. Echoes (a relay re-emitting the
+  // same replaceable on reconnect) are suppressed by created_at; invalidations
+  // are coalesced so an EOSE catch-up burst is one pass, not one per event.
+  useEffect(() => {
+    const pubkey = user?.pubkey;
+    if (!pubkey) return;
+
+    const controller = new AbortController();
+    const since = Math.floor(Date.now() / 1000) - SELF_SYNC_LOOKBACK_SECONDS;
+
+    // Newest created_at seen per (kind + optional d tag), scoped to this sub.
+    const seen = new Map<string, number>();
+
+    let pendingKeys = new Map<string, readonly string[]>();
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    const flush = () => {
+      flushTimer = undefined;
+      const batch = pendingKeys;
+      pendingKeys = new Map();
+      for (const queryKey of batch.values()) {
+        queryClient.invalidateQueries({ queryKey: [...queryKey] });
+      }
+    };
+    const scheduleInvalidate = (keys: readonly (readonly string[])[]) => {
+      for (const key of keys) pendingKeys.set(key.join("\u0000"), key);
+      if (pendingKeys.size > 0 && flushTimer === undefined) {
+        flushTimer = setTimeout(flush, SELF_SYNC_FLUSH_MS);
+      }
+    };
+
+    const onEvent = (event: NostrEvent) => {
+      const dTag = event.kind === KIND_APP_SPECIFIC ? dTagOf(event) : undefined;
+      const keys = queryKeysForSelfEvent(event.kind, dTag);
+      if (keys.length === 0) return; // cached, but no query watches it (e.g. 10063)
+
+      const seenKey = dTag !== undefined ? `${event.kind}:${dTag}` : String(event.kind);
+      const prev = seen.get(seenKey) ?? 0;
+      if (event.created_at <= prev) return; // echo of a version already handled
+      seen.set(seenKey, event.created_at);
+
+      scheduleInvalidate(keys);
+    };
+
+    const filters: NostrFilter[] = [
+      { authors: [pubkey], kinds: SELF_SYNC_REPLACEABLE_KINDS, since },
+      { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#d": SELF_SYNC_DTAGS, since },
+    ];
+
+    void (async () => {
+      try {
+        for await (const msg of nostr.req(filters, { signal: controller.signal })) {
+          if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
+        }
+      } catch {
+        // Subscription ended (abort / relay drop). NRelay1 reconnects
+        // transparently; an account change re-runs this effect.
+      }
+    })();
+
+    return () => {
+      controller.abort();
+      if (flushTimer !== undefined) clearTimeout(flushTimer);
+    };
+  }, [nostr, user?.pubkey, queryClient]);
 
   // ─── 1. Armada encrypted settings → local config ─────────────────────
   useEffect(() => {
@@ -177,16 +287,19 @@ export function NostrSync() {
   // with [] and the whole server rail would vanish. A union only ever ADDS
   // servers the list knows about; explicit removals update `addedRelays`
   // directly at the call site (ServerPage), so we don't need the list to drive
-  // removals here. Runs once per account after the list query resolves.
+  // removals here.
+  //
+  // Re-runs on EVERY list change (not once per account): the standing
+  // self-state REQ (layer A) invalidates the 10009 query when another device
+  // adds a server, `groupList` re-reads, and this merges the new server into
+  // the rail live. The union + idempotent `updateConfig` make repeated runs
+  // free when nothing changed.
   useEffect(() => {
     if (!user?.pubkey || !groupList) return;
-    if (serversAppliedPubkey.current === user.pubkey) return;
 
     // Nothing trustworthy to merge from: no event yet, or its encrypted items
     // failed to decrypt (servers would read empty). Wait for a real list.
     if (!groupList.event || groupList.decryptFailed) return;
-
-    serversAppliedPubkey.current = user.pubkey;
 
     // Opt-in auto-pinned relays (`PINNED_RAIL_RELAYS`, empty by default) are
     // always in the rail regardless of the list, so they needn't be cached;

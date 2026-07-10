@@ -14,7 +14,6 @@ import { MeshProvider } from "@/components/MeshProvider";
 import { NativeNotifications } from "@/components/NativeNotifications";
 import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
-import { SelfSync } from "@/components/SelfSync";
 import { PublishOutbox } from "@/components/PublishOutbox";
 import { ReadStateProvider } from "@/components/ReadStateProvider";
 import { ScreenSharePicker } from "@/components/ScreenSharePicker";
@@ -58,7 +57,6 @@ export function App() {
             <TooltipProvider>
               <ReadStateProvider>
                 <WireSync />
-                <SelfSync />
                 <NostrSync />
                 <PublishOutbox />
                 <SyncGate />
