@@ -276,7 +276,7 @@ interface ChatComposerProps {
 export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
-  const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
+  const { mutateAsync: uploadFile } = useUploadFile();
   const { emojis: customEmojis } = useCustomEmojis();
   const { toast } = useToast();
   const isMobile = useIsMobile();
@@ -343,6 +343,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
    * restorable from a saved draft.
    */
   const attachmentEncryption = useRef<Map<string, ImetaEncryption & { ox: string }>>(new Map());
+  /**
+   * In-flight upload count. Incremented the instant a file is selected and only
+   * decremented once its upload finishes (or fails), so a placeholder spinner
+   * tile shows immediately — through the slow local pre-upload work (resize,
+   * blurhash, client-side encryption) that runs *before* the network request
+   * flips `useUploadFile`'s `isPending`. Counter (not boolean) because files
+   * can be attached concurrently.
+   */
+  const [pendingUploads, setPendingUploads] = useState(0);
 
   // Poll mode state
   const [mode, setMode] = useState<"post" | "poll">("post");
@@ -552,6 +561,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [draftKey, onCancelReply]);
 
   const handleFileUpload = useCallback(async (file: File) => {
+    // Flip on the placeholder spinner immediately, before the slow local work
+    // (resize/blurhash/encrypt) that precedes the actual network upload.
+    setPendingUploads((n) => n + 1);
     try {
       const isImage = file.type.startsWith("image/");
 
@@ -612,6 +624,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       // rather than dumped into the text; it's appended to content on send.
     } catch {
       toast({ title: "Upload failed", description: "Could not upload file.", variant: "destructive" });
+    } finally {
+      setPendingUploads((n) => Math.max(0, n - 1));
     }
   }, [uploadFile, toast, encryptAttachments]);
 
@@ -1131,7 +1145,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       )}
 
       {/* Attachment previews — uploaded images render as inline thumbnails. */}
-      {(attachments.length > 0 || isUploading) && (
+      {(attachments.length > 0 || pendingUploads > 0) && (
         <div className="flex flex-wrap gap-2 px-3 pt-2 animate-in slide-in-from-top-2 fade-in-0 duration-200">
           {attachments.map((att) => (
             <div
@@ -1158,11 +1172,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </button>
             </div>
           ))}
-          {isUploading && (
-            <div className="size-20 rounded-lg border border-border bg-secondary/40 shrink-0 flex items-center justify-center">
+          {Array.from({ length: pendingUploads }).map((_, i) => (
+            <div
+              key={`pending-${i}`}
+              className="size-20 rounded-lg border border-border bg-secondary/40 shrink-0 flex items-center justify-center"
+            >
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
-          )}
+          ))}
         </div>
       )}
 
@@ -1242,7 +1259,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   <button
                     type="button"
                     aria-label="More options"
-                    disabled={isUploading}
+                    disabled={pendingUploads > 0}
                     className={cn(
                       "p-2 shrink-0 rounded-full transition-colors disabled:opacity-40 flex items-center justify-center size-9",
                       plusOpen || mode === "poll"
@@ -1250,7 +1267,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                         : "text-muted-foreground hover:text-foreground hover:bg-secondary",
                     )}
                   >
-                    {isUploading
+                    {pendingUploads > 0
                       ? <Loader2 className="size-5 animate-spin" />
                       : <Plus className={cn("size-5 transition-transform", plusOpen && "rotate-45")} />}
                   </button>
