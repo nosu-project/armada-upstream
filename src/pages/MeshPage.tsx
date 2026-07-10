@@ -397,15 +397,6 @@ function MeshSidebar({
     <ChannelSidebarView
       className={className}
       title="Mesh"
-      subtitle={
-        available
-          ? enabled
-            ? started
-              ? "Nearby · Noise XX encrypted"
-              : "Starting Bluetooth mesh…"
-            : "Off"
-          : "Unavailable here"
-      }
       addChannelDisabled
       footer={
         <div className="px-3 pb-safe shrink-0 space-y-2">
