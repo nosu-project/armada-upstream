@@ -1,4 +1,5 @@
 import { verifyEvent } from "nostr-tools/pure";
+import type { NostrEvent } from "nostr-tools/pure";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { controlGroupKey, random32 } from "@/concord-v2/lib/derive";
@@ -8,7 +9,9 @@ import {
   onStreamKeysAdded,
   registerStreamKeys,
   signStreamAuths,
+  signStreamAuthsChunked,
   streamPubkeys,
+  streamPubkeysForRelay,
 } from "@/concord-v2/lib/streamAuth";
 
 const RELAY = "wss://relay.example.com";
@@ -68,5 +71,87 @@ describe("streamAuth registry", () => {
     registerStreamKeys([a, b]);
     const events = signStreamAuths("c", RELAY, [a.pk]);
     expect(events.map((e) => e.pubkey)).toEqual([a.pk]);
+  });
+
+  it("scopes keys to their community's relays; unscoped keys sign everywhere", () => {
+    const scoped = makeKey();
+    const other = makeKey();
+    const unscoped = makeKey();
+    registerStreamKeys([scoped], [RELAY]);
+    registerStreamKeys([other], ["wss://elsewhere.example.com"]);
+    registerStreamKeys([unscoped]); // no relays: safe fallback, signs on all
+
+    expect(new Set(streamPubkeysForRelay(RELAY))).toEqual(new Set([scoped.pk, unscoped.pk]));
+    // Default signing (no explicit subset) follows the relay scope.
+    const events = signStreamAuths("ch", RELAY);
+    expect(new Set(events.map((e) => e.pubkey))).toEqual(new Set([scoped.pk, unscoped.pk]));
+    // The other relay gets ITS key plus the unscoped one, never `scoped`.
+    const elsewhere = signStreamAuths("ch", "wss://elsewhere.example.com");
+    expect(new Set(elsewhere.map((e) => e.pubkey))).toEqual(new Set([other.pk, unscoped.pk]));
+  });
+
+  it("relay scoping normalizes URLs (trailing slash, bare host)", () => {
+    const a = makeKey();
+    registerStreamKeys([a], ["wss://relay.example.com/"]);
+    expect(streamPubkeysForRelay("wss://relay.example.com")).toEqual([a.pk]);
+    expect(streamPubkeysForRelay("relay.example.com")).toEqual([a.pk]);
+    expect(streamPubkeysForRelay("wss://unrelated.example.com")).toEqual([]);
+  });
+
+  it("scopes only widen: re-registration adds relays, never removes them", () => {
+    const a = makeKey();
+    registerStreamKeys([a], ["wss://one.example.com"]);
+    // A second community sharing the key on another relay widens the scope…
+    expect(registerStreamKeys([a], ["wss://two.example.com"])).toEqual([a.pk]);
+    // …and re-registering with a subset does NOT narrow it back.
+    expect(registerStreamKeys([a], ["wss://one.example.com"])).toEqual([]);
+    expect(streamPubkeysForRelay("wss://one.example.com")).toEqual([a.pk]);
+    expect(streamPubkeysForRelay("wss://two.example.com")).toEqual([a.pk]);
+    // Unscoped registration widens to everywhere; scoped never narrows it.
+    registerStreamKeys([a]);
+    registerStreamKeys([a], ["wss://one.example.com"]);
+    expect(streamPubkeysForRelay("wss://anywhere.example.com")).toEqual([a.pk]);
+  });
+
+  it("an empty relay list falls back to unscoped, never scope-to-nowhere", () => {
+    const a = makeKey();
+    registerStreamKeys([a], []);
+    expect(streamPubkeysForRelay(RELAY)).toEqual([a.pk]);
+  });
+
+  it("notifies listeners on scope widening (a challenged socket may need re-auth)", () => {
+    const seen: string[][] = [];
+    const a = makeKey();
+    registerStreamKeys([a], ["wss://one.example.com"]);
+    const off = onStreamKeysAdded((added) => seen.push(added));
+    registerStreamKeys([a], ["wss://one.example.com"]); // identical: silent
+    registerStreamKeys([a], ["wss://two.example.com"]); // widened: notify
+    off();
+    expect(seen).toEqual([[a.pk]]);
+  });
+
+  it("signStreamAuthsChunked yields the event loop between chunks", async () => {
+    // 40 keys spans 3 chunks of 16. A macrotask queued at start must run
+    // BEFORE iteration finishes — proving the loop yields instead of
+    // monopolizing the thread (each signature is ~4ms of EC work).
+    const keys = Array.from({ length: 40 }, () => makeKey());
+    registerStreamKeys(keys, [RELAY]);
+
+    let interleaved = false;
+    let done = false;
+    setTimeout(() => {
+      interleaved = !done;
+    }, 0);
+
+    const events: NostrEvent[] = [];
+    for await (const chunk of signStreamAuthsChunked("ch", RELAY)) {
+      events.push(...chunk);
+    }
+    done = true;
+
+    expect(events).toHaveLength(40);
+    expect(new Set(events.map((e) => e.pubkey))).toEqual(new Set(keys.map((k) => k.pk)));
+    for (const ev of events.slice(0, 2)) expect(verifyEvent(ev)).toBe(true);
+    expect(interleaved).toBe(true);
   });
 });

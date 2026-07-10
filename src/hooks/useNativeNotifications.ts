@@ -14,7 +14,7 @@ import {
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
-import { signStreamAuths } from "@/concord-v2/lib/streamAuth";
+import { signStreamAuthsChunked } from "@/concord-v2/lib/streamAuth";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { normalizeRelayUrl } from "@/lib/platform";
 
@@ -319,10 +319,14 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       // Concord V2 stream auth first: an auth-gating relay requires every
       // `authors` entry of the service's kind-1059 REQ to be authenticated on
       // that connection. These signatures are local (derived stream secret
-      // keys, see streamAuth.ts), so they never wait on the user's signer.
+      // keys, see streamAuth.ts) and scoped to the keys THIS relay hosts, so
+      // they never wait on the user's signer and never sign for communities
+      // the relay doesn't carry. Chunked so the burst doesn't block frames.
       try {
-        for (const event of signStreamAuths(challenge, relayUrl)) {
-          await ArmadaNotification.submitAuth({ relayUrl, event });
+        for await (const chunk of signStreamAuthsChunked(challenge, relayUrl)) {
+          for (const event of chunk) {
+            await ArmadaNotification.submitAuth({ relayUrl, event });
+          }
         }
       } catch (err) {
         console.warn("[native-notif] stream AUTH signing failed:", err);

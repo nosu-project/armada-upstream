@@ -6,7 +6,6 @@ import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { rehydrateCommunity, liveEntries } from "@/concord-v2/lib/communityList";
 import { buildConcord2Subs, type Concord2Sub } from "@/concord-v2/lib/concordNotifications2";
 import type { FoldedControl } from "@/concord-v2/lib/control";
-import type { GroupKey } from "@/concord-v2/lib/derive";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 import { readFolded } from "@/lib/foldedCache";
 
@@ -50,20 +49,19 @@ export function useConcord2Subs(): Concord2Sub[] {
     refetchInterval: 60_000,
     queryFn: async () => {
       const subs: Concord2Sub[] = [];
-      const keys: GroupKey[] = [];
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
         if (!community) continue;
         const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
         const built = buildConcord2Subs(community, folded);
         subs.push(...built.subs);
-        keys.push(...built.streamKeys);
+        // Register for NIP-42, scoped to the community's relays: the native
+        // service bridges each relay's AUTH challenge to the WebView, which
+        // signs a kind-22242 per stream key SCOPED TO THAT RELAY (see
+        // useNativeNotifications) — required by relays that gate kind-1059
+        // REQs behind authenticated `authors`.
+        registerStreamKeys(built.streamKeys, community.relays);
       }
-      // Register for NIP-42: the native service bridges each relay's AUTH
-      // challenge to the WebView, which signs a kind-22242 per registered
-      // stream key (see useNativeNotifications) — required by relays that
-      // gate kind-1059 REQs behind authenticated `authors`.
-      registerStreamKeys(keys);
       return subs;
     },
   });

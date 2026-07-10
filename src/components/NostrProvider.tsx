@@ -12,7 +12,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
-import { onStreamKeysAdded, signStreamAuths } from "@/concord-v2/lib/streamAuth";
+import { onStreamKeysAdded, signStreamAuthsChunked, streamPubkeysForRelay } from "@/concord-v2/lib/streamAuth";
 import { warmRumorStore } from "@/concord-v2/lib/rumorStore";
 import { warmInviteInbox } from "@/concord-v2/lib/inviteInbox";
 
@@ -168,19 +168,28 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // without waiting for the next auth-required round-trip.
   const openRelaysRef = useRef<Map<string, { relay: NRelay1; challenge?: string }>>(new Map());
 
-  /** Send NIP-42 AUTH frames for the given stream pubkeys on one relay. */
-  const sendStreamAuths = (
+  /**
+   * Send NIP-42 AUTH frames on one relay for the stream pubkeys scoped to it
+   * (streamAuth's registry knows each key's community relays — a relay never
+   * pays for keys it doesn't host). Signing is chunked with event-loop yields
+   * (~4ms of EC work per signature), and aborts if the socket reopens
+   * mid-flight (the remembered challenge is then a dead nonce).
+   */
+  const sendStreamAuths = async (
     entry: { relay: NRelay1; challenge?: string },
     url: string,
     pubkeys?: string[],
   ) => {
-    if (!entry.challenge) return;
-    const events = signStreamAuths(entry.challenge, url, pubkeys);
-    for (const ev of events) {
-      try {
-        entry.relay.socket.send(JSON.stringify(["AUTH", ev]));
-      } catch {
-        // socket not open yet / closing — the next auth-required round re-sends.
+    const challenge = entry.challenge;
+    if (!challenge) return;
+    for await (const chunk of signStreamAuthsChunked(challenge, url, pubkeys)) {
+      if (entry.challenge !== challenge) return; // stale nonce — a fresh challenge will re-cover
+      for (const ev of chunk) {
+        try {
+          entry.relay.socket.send(JSON.stringify(["AUTH", ev]));
+        } catch {
+          // socket not open yet / closing — the next auth-required round re-sends.
+        }
       }
     }
   };
@@ -287,7 +296,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             const entry = openRelaysRef.current.get(url) ?? { relay };
             entry.challenge = challenge;
             openRelaysRef.current.set(url, entry);
-            sendStreamAuths(entry, url);
+            void sendStreamAuths(entry, url);
 
             const signer = signerRef.current;
             if (!signer) {
@@ -416,18 +425,33 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // `closedByUser` and suppresses reconnect) fires a server-style close, so
   // websocket-ts auto-reconnects, `watchSocketReopen` resets the AUTH
   // bookkeeping, and the relay re-challenges — at which point the `auth`
-  // callback authenticates the user AND every currently-registered stream key
+  // callback authenticates the user AND every stream key scoped to that relay
   // (including the ones that just arrived).
   useEffect(() => {
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let pendingPks = new Set<string>();
     const reconnectChallengedSockets = () => {
       reconnectTimer = undefined;
-      for (const entry of openRelaysRef.current.values()) {
+      const added = pendingPks;
+      pendingPks = new Set();
+      for (const [url, entry] of openRelaysRef.current) {
         if (!entry.challenge) {
           // Never challenged yet: the upcoming first challenge will cover the
-          // new keys (the `auth` callback signs the whole registry).
+          // new keys (the `auth` callback signs the relay's scoped keys).
           continue;
         }
+        // Only bounce sockets the new keys are actually scoped to — a relay
+        // that hosts none of them gains nothing from a reconnect (and each
+        // reconnect costs a full re-auth of that relay's scoped keys).
+        const scoped = new Set(streamPubkeysForRelay(url));
+        let covered = false;
+        for (const pk of added) {
+          if (scoped.has(pk)) {
+            covered = true;
+            break;
+          }
+        }
+        if (!covered) continue;
         // Already authenticated on a spent challenge — replaying AUTH won't add
         // the new authors. Reconnect to earn a fresh challenge that will.
         const underlying = (entry.relay.socket as unknown as {
@@ -443,10 +467,11 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         }
       }
     };
-    const unsubscribe = onStreamKeysAdded(() => {
+    const unsubscribe = onStreamKeysAdded((added) => {
       // Opening a community fires several `registerStreamKeys` calls in quick
       // succession (core keys, per-channel keys, notif-subs). Debounce so the
       // burst collapses into ONE reconnect per socket instead of a thrash.
+      for (const pk of added) pendingPks.add(pk);
       if (reconnectTimer === undefined) {
         reconnectTimer = setTimeout(reconnectChallengedSockets, 250);
       }

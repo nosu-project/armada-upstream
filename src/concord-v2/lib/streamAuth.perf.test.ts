@@ -1,25 +1,22 @@
 /**
- * Performance evidence for NIP-42 stream-auth signing (streamAuth.ts).
+ * Performance evidence + regression guard for NIP-42 stream-auth signing.
  *
- * Theory under test (sibling of the groupKey() churn fixed in derive.ts):
- * `signStreamAuths()` signs a kind-22242 event with `finalizeEvent()` for
- * EVERY registered stream key on EVERY challenge of EVERY relay —
- * NostrProvider's auth callback passes no `pubkeys` subset. The registry holds
- * the keys of ALL communities (core + per-channel × held epochs), so:
+ * History (the bug this pins against): `signStreamAuths()` used to sign a
+ * kind-22242 with `finalizeEvent()` for EVERY registered stream key on EVERY
+ * relay challenge — NostrProvider passed no subset. At a realistic 450-key
+ * registry (10 communities, the derive.perf profile) that measured ~1.5-2s of
+ * synchronous Schnorr signing per challenge (~4ms/signature, phones 5-10x
+ * slower), and the new-key mass reconnect (NostrProvider force-closes
+ * challenged sockets) burned relays × keys: ~6-9s over 4 relays.
  *
- *   - one challenge costs O(total keys) Schnorr signatures, even though a
- *     relay only needs the keys of the communities it actually hosts;
- *   - every socket reopen (mobile reconnect churn) re-issues a challenge;
- *   - registering any new key force-closes EVERY challenged socket
- *     (NostrProvider.tsx:421), so one community join triggers a
- *     relays × keys signing burst.
- *
- * These tests measure the real module at realistic registry scale and pin the
- * fact the fix rests on: cost is linear in the signed set, so per-relay
- * scoping cuts it proportionally. They also pin a NEGATIVE result: signing
- * with the registry's known pubkey (skipping finalizeEvent's getPublicKey)
- * saves ~nothing, because schnorr.sign recomputes the public point internally
- * — that micro-optimization is not worth pursuing.
+ * The fix scopes keys to their community's relays at registration; a relay's
+ * challenge signs only the keys it hosts. The regression test below FAILS if
+ * default signing ever returns to full-registry behavior. Raw per-signature
+ * cost and set-linearity remain measured as evidence, and one NEGATIVE result
+ * is pinned: signing with the registry's known pubkey (skipping
+ * finalizeEvent's getPublicKey) saves ~nothing, because schnorr.sign
+ * recomputes the public point internally — that micro-optimization is not
+ * worth pursuing.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -69,28 +66,67 @@ afterEach(() => _resetStreamAuthRegistry());
 
 // ── The measurements ─────────────────────────────────────────────────────────
 
-describe("NIP-42 stream-auth signing cost (perf evidence)", () => {
-  it("one challenge signs the ENTIRE registry — O(all keys), seconds at scale", { timeout: 120_000 }, () => {
+describe("NIP-42 stream-auth signing cost (perf evidence + regression guard)", () => {
+  it("REGRESSION GUARD: a relay's challenge signs ONLY the keys scoped to it", { timeout: 120_000 }, () => {
+    // 10 communities spread round-robin over 4 relays, exactly how the app
+    // registers them now (registerStreamKeys(keys, community.relays)).
+    const RELAYS = 4;
+    const relayOf = (n: number) => `wss://relay-${n % RELAYS}.example.com`;
     const perCommunity = Array.from({ length: COMMUNITIES }, (_, n) => communityKeys(n));
-    for (const keys of perCommunity) registerStreamKeys(keys);
+    perCommunity.forEach((keys, n) => registerStreamKeys(keys, [relayOf(n)]));
     const total = streamPubkeys().length;
     expect(total).toBe(COMMUNITIES * KEYS_PER_COMMUNITY);
 
-    // Warm-up (noble precompute tables).
-    signStreamAuths("warmup", "wss://relay.example.com", streamPubkeys().slice(0, 10));
+    signStreamAuths("warmup", relayOf(0), perCommunity[0].slice(0, 10).map((k) => k.pk)); // warm-up
 
-    // What NostrProvider.sendStreamAuths does today: no pubkeys subset.
+    // Default signing (what NostrProvider's auth callback does — no subset)
+    // across every relay: the "mass reconnect" worst case.
+    const t0 = performance.now();
+    let signed = 0;
+    const perRelayCounts: number[] = [];
+    for (let r = 0; r < RELAYS; r++) {
+      const events = signStreamAuths(`reconnect-challenge-${r}`, `wss://relay-${r}.example.com`);
+      perRelayCounts.push(events.length);
+      signed += events.length;
+
+      // Every event must belong to a community actually hosted on relay r.
+      const hosted = new Set(
+        perCommunity.flatMap((keys, n) => (n % RELAYS === r ? keys.map((k) => k.pk) : [])),
+      );
+      for (const ev of events) expect(hosted.has(ev.pubkey)).toBe(true);
+    }
+    const burst = performance.now() - t0;
+
+    console.log(
+      `[perf] scoped mass-reconnect burst (${RELAYS} relays, ${total} keys): ${signed} signatures ` +
+        `in ${burst.toFixed(0)}ms — unscoped this was ${RELAYS * total} signatures / measured ~6-9s pre-fix`,
+    );
+
+    // THE guard: each relay signs exactly its hosted communities' keys — the
+    // whole burst totals one registry pass, not relays × registry. If someone
+    // reverts default signing to the full registry, `signed` becomes
+    // RELAYS × total and this fails.
+    expect(signed).toBe(total);
+    // 10 communities round-robin over 4 relays: 3+3+2+2 communities.
+    expect(perRelayCounts).toEqual([3, 3, 2, 2].map((c) => c * KEYS_PER_COMMUNITY));
+  });
+
+  it("raw signing cost is linear in the signed set (why scoping works)", { timeout: 120_000 }, () => {
+    // Registered UNSCOPED (no relays) — the safe fallback still signs
+    // everywhere, which doubles as the pre-fix full-registry measurement.
+    const perCommunity = Array.from({ length: COMMUNITIES }, (_, n) => communityKeys(n));
+    for (const keys of perCommunity) registerStreamKeys(keys);
+    const total = streamPubkeys().length;
+
+    signStreamAuths("warmup", "wss://relay.example.com", streamPubkeys().slice(0, 10)); // warm-up
+
     const t0 = performance.now();
     const events = signStreamAuths("challenge-nonce-1", "wss://relay.example.com");
     const fullPass = performance.now() - t0;
 
-    expect(events.length).toBe(total);
-    expect(verifyEvent(events[0])).toBe(true); // they are real, valid signatures
+    expect(events.length).toBe(total); // unscoped keys still sign on any relay
+    expect(verifyEvent(events[0])).toBe(true); // real, valid signatures
 
-    // The remedy's premise: cost is linear in the signed set, so scoping a
-    // challenge to one community's keys divides the cost by the community
-    // fan-out. Measure a one-community subset (what a single-community relay
-    // actually needs).
     const scopedPks = perCommunity[0].map((k) => k.pk);
     const scopedTimes: number[] = [];
     for (let i = 0; i < 5; i++) {
@@ -102,16 +138,12 @@ describe("NIP-42 stream-auth signing cost (perf evidence)", () => {
     const scopedPass = median(scopedTimes);
 
     console.log(
-      `[perf] signStreamAuths, full registry (${total} keys): ${fullPass.toFixed(0)}ms per challenge — ` +
-        `every socket (re)open per relay; a new-key mass reconnect over 4 relays ≈ ${(fullPass * 4).toFixed(0)}ms ` +
-        `of main-thread signing (phones 5-10x slower). ` +
-        `Scoped to one community (${KEYS_PER_COMMUNITY} keys): ${scopedPass.toFixed(0)}ms ` +
-        `(${(fullPass / scopedPass).toFixed(1)}x cheaper).`,
+      `[perf] signStreamAuths, full registry (${total} keys): ${fullPass.toFixed(0)}ms per challenge; ` +
+        `one community (${KEYS_PER_COMMUNITY} keys): ${scopedPass.toFixed(0)}ms ` +
+        `(${(fullPass / scopedPass).toFixed(1)}x cheaper — phones 5-10x slower throughout)`,
     );
 
-    // Linearity: the full pass must cost ~COMMUNITIES× the scoped pass. Wide
-    // margins for CI noise: at least 3x (measured ~10x), and the scoped pass
-    // beats the full pass by at least 3x.
+    // Linearity, with wide CI margins (measured ~10x for a 10x smaller set).
     expect(fullPass).toBeGreaterThan(scopedPass * 3);
   });
 
@@ -123,7 +155,7 @@ describe("NIP-42 stream-auth signing cost (perf evidence)", () => {
     // point internally anyway (BIP-340 needs it for parity), and noble's
     // precomputed base tables make the extra fixed-base mult cheap. Pinned
     // here so nobody re-proposes the micro-optimization; the real fix is
-    // scoping the signed SET (previous test).
+    // scoping the signed SET (the regression guard above).
     const keys = communityKeys(0);
     registerStreamKeys(keys);
     const pks = keys.map((k) => k.pk);
@@ -164,31 +196,5 @@ describe("NIP-42 stream-auth signing cost (perf evidence)", () => {
     expect(leanEvents[0].pubkey).toBe(current[0].pubkey);
     expect(leanEvents[0].kind).toBe(22242);
     expect(leanEvents[0].tags).toEqual(current[0].tags);
-  });
-
-  it("quantifies the mass-reconnect burst a single new-key registration triggers", { timeout: 120_000 }, () => {
-    for (let n = 0; n < COMMUNITIES; n++) registerStreamKeys(communityKeys(n));
-    const total = streamPubkeys().length;
-
-    // NostrProvider.tsx:421-453: registering ANY new key closes every
-    // already-challenged socket; each reopens, gets a fresh challenge, and
-    // re-signs the FULL registry. Simulate 4 relays' worth of challenges.
-    const RELAYS = 4;
-    signStreamAuths("warmup", "wss://r0", streamPubkeys().slice(0, 10)); // warm-up
-    const t0 = performance.now();
-    let signed = 0;
-    for (let r = 0; r < RELAYS; r++) {
-      signed += signStreamAuths(`reconnect-challenge-${r}`, `wss://relay-${r}.example.com`).length;
-    }
-    const burst = performance.now() - t0;
-
-    console.log(
-      `[perf] mass-reconnect burst (${RELAYS} relays × ${total} keys = ${signed} signatures): ` +
-        `${burst.toFixed(0)}ms of synchronous main-thread signing — triggered by ONE new community/channel/rekey ` +
-        `(phones 5-10x slower: ~${((burst * 5) / 1000).toFixed(1)}-${((burst * 10) / 1000).toFixed(1)}s of jank)`,
-    );
-
-    expect(signed).toBe(RELAYS * total);
-    expect(burst).toBeGreaterThan(0);
   });
 });

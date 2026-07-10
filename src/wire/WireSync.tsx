@@ -99,18 +99,20 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
     refetchIntervalInBackground: false,
     queryFn: async () => {
       const out: Array<{ relays: string[]; channel: ChannelV2 }> = [];
-      const keys: GroupKey[] = [];
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
         if (!community || community.relays.length === 0) continue;
+        const keys: GroupKey[] = [];
         const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
         for (const channel of channelsView(community, folded)) {
           if (channel.streams.length === 0) continue;
           out.push({ relays: community.relays, channel });
           keys.push(...channel.streams.map((s) => s.group));
         }
+        // Scoped per community, so a relay's NIP-42 challenge only signs the
+        // stream keys it actually hosts (see streamAuth.ts).
+        registerStreamKeys(keys, community.relays);
       }
-      registerStreamKeys(keys);
       return out;
     },
   });

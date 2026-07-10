@@ -74,11 +74,10 @@ export function useRegisterAllStreamKeys2(): void {
     let cancelled = false;
 
     const register = async () => {
-      const keys: GroupKey[] = [];
       for (const entry of communities) {
         const community = rehydrateCommunity(entry);
         if (!community) continue;
-        keys.push(...communityCoreKeys(community));
+        const keys: GroupKey[] = communityCoreKeys(community);
         // Per-channel keys from the persisted fold (may be absent on a
         // never-synced community — then only core keys register until it folds).
         try {
@@ -90,8 +89,10 @@ export function useRegisterAllStreamKeys2(): void {
           // No fold yet; core keys above still cover the control plane so the
           // fold can be fetched, after which a later poll picks up its channels.
         }
+        // Scoped to the community's relays: a relay's NIP-42 challenge then
+        // signs only the keys it hosts (see streamAuth.ts).
+        if (!cancelled) registerStreamKeys(keys, community.relays);
       }
-      if (!cancelled) registerStreamKeys(keys);
     };
 
     void register();
@@ -115,7 +116,7 @@ export function useRegisterChannelStreamKeys2(communityId: string | undefined): 
   const channels = useChannels2(community);
 
   useEffect(() => {
-    if (channels.length === 0) return;
-    registerStreamKeys(channelKeys(channels));
-  }, [channels]);
+    if (channels.length === 0 || !community) return;
+    registerStreamKeys(channelKeys(channels), community.relays);
+  }, [channels, community]);
 }
