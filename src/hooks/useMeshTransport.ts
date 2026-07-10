@@ -137,6 +137,7 @@ export function useMeshTransportState(): MeshContextType {
       await BluetoothMesh.stop();
     } finally {
       setStarted(false);
+      setError(null);
     }
   }, []);
 

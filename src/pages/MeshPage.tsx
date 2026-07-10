@@ -249,7 +249,6 @@ export function MeshPage() {
               started={mesh.started}
               incognito={mesh.incognito}
               onToggleIncognito={() => mesh.setIncognito(!mesh.incognito)}
-              onTurnOff={() => mesh.setEnabled(false)}
               onBack={() => setView(null)}
               peerCount={mesh.peers.length}
               membersVisible={membersVisible}
@@ -398,23 +397,11 @@ function MeshSidebar({
     <ChannelSidebarView
       className={className}
       title="Mesh"
-      subtitle={
-        available
-          ? enabled
-            ? started
-              ? "Nearby · Noise XX encrypted"
-              : "Starting Bluetooth mesh…"
-            : "Off"
-          : "Unavailable here"
-      }
       addChannelDisabled
-      preChannels={
-        // The mesh on/off toggle lives in the channel list too: on mobile the
-        // chat pane (which hosts the enable landing state and the header's
-        // power button) is slid away, so this is the only reachable switch.
-        available && (
-          <div className="px-2 pb-1">
-            {enabled ? (
+      footer={
+        <div className="px-3 pb-safe shrink-0 space-y-2">
+          {available && (
+            enabled ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -433,12 +420,8 @@ function MeshSidebar({
                 <Bluetooth className="size-4" />
                 Turn on mesh chat
               </Button>
-            )}
-          </div>
-        )
-      }
-      footer={
-        <div className="px-3 pb-safe shrink-0">
+            )
+          )}
           <LoginArea className="w-full flex" />
         </div>
       }
@@ -457,7 +440,7 @@ function MeshSidebar({
         }
       />
 
-      {error && (
+      {enabled && error && (
         <div className="px-4 py-2 text-xs text-destructive">
           {error}{" "}
           <button className="underline" onClick={onRetry}>
@@ -565,7 +548,6 @@ function ChatHeader({
   started,
   incognito,
   onToggleIncognito,
-  onTurnOff,
   onBack,
   peerCount,
   membersVisible,
@@ -577,7 +559,6 @@ function ChatHeader({
   started: boolean;
   incognito: boolean;
   onToggleIncognito: () => void;
-  onTurnOff: () => void;
   onBack: () => void;
   peerCount: number;
   membersVisible: boolean;
@@ -659,22 +640,6 @@ function ChatHeader({
         <TooltipContent>
           {incognito ? "Incognito on · tap to show your name" : "Incognito off · tap to go anonymous"}
         </TooltipContent>
-      </Tooltip>
-      {/* Turn the mesh off entirely (stops Bluetooth + the background service).
-          Mesh is opt-in, so the off switch lives right where it runs. */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Turn mesh off"
-            className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
-            onClick={onTurnOff}
-          >
-            <Power className="size-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>Turn mesh off</TooltipContent>
       </Tooltip>
       {started ? (
         <Bluetooth className="size-4 text-success shrink-0" />

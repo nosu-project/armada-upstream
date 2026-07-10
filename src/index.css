@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Rail labels are useful with a mouse, but touch focuses the trigger and makes
+ * Radix briefly flash the label after navigation. Keep them hover-only while
+ * preserving each trigger's aria-label for assistive technology. */
+.rail-tooltip-content {
+  display: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .rail-tooltip-content {
+    display: block;
+  }
+}
+
 /*
  * Theme color tokens (--background, --primary, …) are injected at runtime into
  * <style id="theme-vars"> by:

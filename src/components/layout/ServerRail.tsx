@@ -64,6 +64,10 @@ import type {
   RailSlot,
 } from "@/lib/railLayout";
 
+function RailTooltipContent({ className, ...props }: React.ComponentProps<typeof TooltipContent>) {
+  return <TooltipContent className={cn("rail-tooltip-content", className)} {...props} />;
+}
+
 /** Human-ish short name for a relay URL (hostname). */
 function relayHost(url: string): string {
   try {
@@ -583,10 +587,10 @@ function ServerButton({
             )}
           </ContextMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="right" className="font-medium">
+        <RailTooltipContent side="right" className="font-medium">
           {name}
           <span className="block text-xs text-muted-foreground">{url}</span>
-        </TooltipContent>
+        </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
         <ContextMenuItem onSelect={() => toggleCommunityMute(url)}>
@@ -733,9 +737,9 @@ function ConcordButton({
             </NavLink>
           </ContextMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="right" className="font-medium">
+        <RailTooltipContent side="right" className="font-medium">
           {name}
-        </TooltipContent>
+        </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
         <ContextMenuItem onSelect={() => toggleCommunityMute(concord1Key(communityId))}>
@@ -879,9 +883,9 @@ function Concord2Button({
         </NavLink>
           </ContextMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="right" className="font-medium">
+        <RailTooltipContent side="right" className="font-medium">
           {displayName}
-        </TooltipContent>
+        </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
         <ContextMenuItem onSelect={() => toggleCommunityMute(concord2Key(communityId))}>
@@ -1039,12 +1043,12 @@ function RailFolder({
             </button>
           </ContextMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="right" className="font-medium">
+        <RailTooltipContent side="right" className="font-medium">
           {label}
           <span className="block text-xs text-muted-foreground">
             {items.length === 1 ? "1 community" : `${items.length} communities`}
           </span>
-        </TooltipContent>
+        </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
         <ContextMenuItem onSelect={onRenameRequest}>Rename folder</ContextMenuItem>
@@ -1619,9 +1623,9 @@ export function ServerRail({
               </span>
             </NavLink>
           </TooltipTrigger>
-          <TooltipContent side="right" className="font-medium">
+          <RailTooltipContent side="right" className="font-medium">
             Nearby mesh
-          </TooltipContent>
+          </RailTooltipContent>
         </Tooltip>
       )}
 
@@ -1678,9 +1682,9 @@ export function ServerRail({
               </span>
             </NavLink>
           </TooltipTrigger>
-          <TooltipContent side="right" className="font-medium">
+          <RailTooltipContent side="right" className="font-medium">
             Direct messages
-          </TooltipContent>
+          </RailTooltipContent>
         </Tooltip>
       )}
 
@@ -1727,7 +1731,7 @@ export function ServerRail({
             <Plus className="size-5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="right">Add a server or chat</TooltipContent>
+        <RailTooltipContent side="right">Add a server or chat</RailTooltipContent>
       </Tooltip>
 
       <div className="flex-1 min-h-2" />
@@ -1747,7 +1751,7 @@ export function ServerRail({
             <Settings className="size-5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="right">Settings</TooltipContent>
+        <RailTooltipContent side="right">Settings</RailTooltipContent>
       </Tooltip>
 
       <AddDialog open={addOpen} onOpenChange={setAddOpen} />
