@@ -72,9 +72,9 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
 
   const privateKeysById = new Map(community.privateChannels.map((ch) => [bytesToHex(ch.id), ch]));
 
-  // A voice Channel's call coordinates derive from the same (secret, epoch)
-  // that addresses its CURRENT Chat Plane (CORD-07 §1), so the room name and
-  // media root roll with the Channel's key on a rekey.
+  // Every Channel is callable: its call coordinates derive from the same
+  // (secret, epoch) that addresses its CURRENT Chat Plane (CORD-07 §1), so the
+  // room name and media root roll with the Channel's key on a rekey.
   const voiceKeys = (secret: Uint8Array, id: Uint8Array, epoch: bigint): VoiceKeys => ({
     room: voiceGroupKey(secret, id, epoch),
     mediaKey: voiceMediaKey(secret, id, epoch),
@@ -95,8 +95,7 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
         idHex: def.channelIdHex,
         name: def.name,
         isPrivate: false,
-        isVoice: def.voice,
-        voice: def.voice ? voiceKeys(community.root, id, community.rootEpoch) : undefined,
+        voice: voiceKeys(community.root, id, community.rootEpoch),
         streams,
         current: streams[0],
       });
@@ -111,8 +110,7 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
       idHex: def.channelIdHex,
       name: def.name,
       isPrivate: true,
-      isVoice: def.voice,
-      voice: def.voice ? voiceKeys(held.key, id, held.epoch) : undefined,
+      voice: voiceKeys(held.key, id, held.epoch),
       streams: [stream],
       current: stream,
     });
@@ -130,7 +128,7 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
       idHex,
       name: held.name || idHex.slice(0, 8),
       isPrivate: true,
-      isVoice: false,
+      voice: voiceKeys(held.key, held.id, held.epoch),
       streams: [stream],
       current: stream,
     });

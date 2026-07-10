@@ -32,7 +32,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import { openChatBatch } from "@/concord-v2/lib/chat";
-import { bytesToHex, channelGroupKey } from "@/concord-v2/lib/derive";
+import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
 import { KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import {
   ackPendingWraps,
@@ -144,13 +144,14 @@ function makeChannel(): { channel: ChannelV2; idHex: string } {
   const idHex = bytesToHex(channelId);
   const group = channelGroupKey(root, channelId, 0);
   const stream = { epoch: 0n, group };
+  const voice = { room: voiceGroupKey(root, channelId, 0), mediaKey: voiceMediaKey(root, channelId, 0) };
   return {
     channel: {
       id: channelId,
       idHex,
       name: "general",
       isPrivate: false,
-      isVoice: false,
+      voice,
       streams: [stream],
       current: stream,
     },

@@ -215,8 +215,6 @@ export interface FoldedChannel {
   channelIdHex: string;
   name: string;
   isPrivate: boolean;
-  /** Whether the Channel is callable (CORD-07 §1). */
-  voice: boolean;
   deleted: boolean;
 }
 
@@ -477,7 +475,6 @@ export function foldControlState(editions: ParsedEdition[], communityId: Uint8Ar
       channelIdHex: eid,
       name: meta.name,
       isPrivate: meta.private === true,
-      voice: meta.voice === true,
       deleted: meta.deleted === true,
     });
   }

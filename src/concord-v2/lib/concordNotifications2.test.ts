@@ -31,7 +31,7 @@ describe("buildConcord2Subs", () => {
   it("builds one sub per readable channel with per-epoch streams + conv keys", () => {
     const { community, generalId } = mint();
     const folded = foldedWith(
-      [{ channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, voice: false, deleted: false }],
+      [{ channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, deleted: false }],
       "Fleet Renamed",
     );
 
@@ -73,7 +73,7 @@ describe("buildConcord2Subs", () => {
   it("skips deleted channels and communities without relays", () => {
     const { community, generalId } = mint();
     const folded = foldedWith([
-      { channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, voice: false, deleted: true },
+      { channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, deleted: true },
     ]);
     expect(buildConcord2Subs(community, folded).subs).toHaveLength(0);
 

@@ -61,7 +61,7 @@ function makeCommunity(n: number, heldRootCount: number): CommunityV2 {
   };
 }
 
-function makeFolded(communityN: number, channelCount: number, voiceEvery: number): FoldedControl {
+function makeFolded(communityN: number, channelCount: number): FoldedControl {
   const channels = new Map<string, FoldedChannel>();
   for (let i = 0; i < channelCount; i++) {
     const idHex = bytesToHex(b32(`channel-${communityN}-${i}`));
@@ -69,7 +69,6 @@ function makeFolded(communityN: number, channelCount: number, voiceEvery: number
       channelIdHex: idHex,
       name: `channel-${i}`,
       isPrivate: false,
-      voice: voiceEvery > 0 && i % voiceEvery === 0,
       deleted: false,
     });
   }
@@ -100,7 +99,7 @@ function registerAllPass(communities: CommunityV2[], folds: FoldedControl[]): nu
     derived += coreKeys(communities[i]).length;
     for (const channel of channelsView(communities[i], folds[i])) {
       derived += channel.streams.length;
-      if (channel.voice) derived += 1; // voiceGroupKey (voiceMediaKey is HKDF-only)
+      derived += 1; // voiceGroupKey per channel (voiceMediaKey is HKDF-only)
     }
   }
   return derived;
@@ -169,7 +168,7 @@ describe("derivation cost (perf guard)", () => {
     // A moderately active user: 10 communities, 20 channels each, 2 held root
     // epochs (one past rekey retained), a voice channel per 5.
     const communities = Array.from({ length: 10 }, (_, i) => makeCommunity(i, 2));
-    const folds = communities.map((_, i) => makeFolded(i, 20, 5));
+    const folds = communities.map((_, i) => makeFolded(i, 20));
 
     const t0 = performance.now();
     const derived = registerAllPass(communities, folds);

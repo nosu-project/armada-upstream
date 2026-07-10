@@ -1,7 +1,7 @@
 /**
  * Concord V2 voice — CORD-07.
  *
- * A voice Channel is any Channel whose metadata carries `"voice": true`. Two
+ * Every Channel is callable — a call is simply started in it. Two
  * sub-keys derive from the Channel's secret (CORD-07 §1, see derive.ts):
  * `voice_key` (its pk is the SFU room name, its sk signs token grants) and
  * `voice_media_key` (the root of per-sender media encryption). Anyone holding

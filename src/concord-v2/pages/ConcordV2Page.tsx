@@ -1,4 +1,4 @@
-import { AtSign, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { AtSign, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -267,9 +267,9 @@ function ChannelRow2({
   onSelect: () => void;
   onJoinVoice: (channel: ChannelV2, broker: string | null, fold?: VoicePresenceFold) => void;
 }) {
-  // Voice channels (CORD-07): live presence drives the Discord-style nested
-  // roster under the row, and the rendezvous broker is resolved ahead of the
-  // click so joining is instant. Both hooks no-op for text channels.
+  // Every Channel is callable (CORD-07): live presence drives the Discord-style
+  // nested roster under the row whenever a call is active, and the rendezvous
+  // broker is resolved ahead of the click so joining a call is instant.
   const fold = useVoicePresence2(community, channel);
   const { data: broker } = useVoiceBroker2(channel, fold);
   const { voiceRoomPubkeys } = useCall();
@@ -283,53 +283,89 @@ function ChannelRow2({
   // desync. Folded presence remains the source for calls you're not in.
   const participants = inCall && voiceRoomPubkeys ? voiceRoomPubkeys : foldedParticipants;
 
-  const Icon = channel.isVoice ? Volume2 : channel.isPrivate ? Lock : Hash;
+  const Icon = channel.isPrivate ? Lock : Hash;
   const hasUnread = Boolean(unread);
   const hasMention = Boolean(unread?.mention);
-  const occupied = channel.isVoice && participants.length > 0;
+  // A call is live in this channel when anyone is present.
+  const occupied = participants.length > 0;
   return (
     <ContextMenu>
       <ContextMenuTrigger className="block">
         <div>
-          <button
-            type="button"
-            onClick={() => {
-              onSelect();
-              // Discord-style: clicking a voice channel joins its call (and opens
-              // its chat via onSelect).
-              if (channel.isVoice && !inCall) onJoinVoice(channel, broker ?? null, fold);
-            }}
+          <div
             className={cn(
-              // Slack-style selection: the active channel sits on a filled primary
-              // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
-              "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
-              !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
-              // Unread (but not selected) channels read brighter + bold (Slack).
-              // Muted channels never bold — their unread is deliberately silent.
-              !active && hasUnread && !muted && "text-foreground font-semibold",
-              // Muted channels read dimmer (Discord-style).
-              !active && muted && "opacity-60",
-              active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
+              "group/row relative flex w-full items-center",
+              !active && "hover:bg-foreground/5 clip-corner-lg",
+              active && "clip-corner-lg bg-primary text-primary-foreground",
             )}
           >
-            <Icon className={cn("size-4 shrink-0", occupied && !active && "text-success")} />
-            <span className="truncate flex-1 min-w-0">{channel.name}</span>
-            {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
-            {muted && <BellOff className="size-3 shrink-0 opacity-60" aria-label="Muted" />}
-            {/* Mention indicator: an "@" pill. Plain unread is conveyed by the row's
-                brighter + bold text (no dot). */}
-            {hasMention ? (
-              <span
-                className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
-                aria-label="You were mentioned"
+            <button
+              type="button"
+              onClick={() => {
+                onSelect();
+              }}
+              className={cn(
+                // Slack-style selection: the active channel sits on a filled primary
+                // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
+                "flex flex-1 min-w-0 items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
+                !active && "text-muted-foreground group-hover/row:text-foreground",
+                // Unread (but not selected) channels read brighter + bold (Slack).
+                // Muted channels never bold — their unread is deliberately silent.
+                !active && hasUnread && !muted && "text-foreground font-semibold",
+                // Muted channels read dimmer (Discord-style).
+                !active && muted && "opacity-60",
+                active && "font-medium",
+              )}
+            >
+              <Icon className={cn("size-4 shrink-0", occupied && !active && "text-success")} />
+              <span className="truncate flex-1 min-w-0">{channel.name}</span>
+              {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
+              {muted && <BellOff className="size-3 shrink-0 opacity-60" aria-label="Muted" />}
+              {/* Mention indicator: an "@" pill. Plain unread is conveyed by the row's
+                  brighter + bold text (no dot). */}
+              {hasMention ? (
+                <span
+                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                  aria-label="You were mentioned"
+                >
+                  @
+                </span>
+              ) : null}
+            </button>
+            {/* Quick call CTA (Discord-style): join/start a call in this channel
+                without leaving the list. Always visible while a call is live;
+                otherwise appears on hover/focus (desktop only — touch devices
+                have no hover, so it stays hidden there until a call is live). */}
+            {!inCall && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onJoinVoice(channel, broker ?? null, fold);
+                }}
+                aria-label={occupied ? "Join call" : "Start call"}
+                title={occupied ? "Join call" : "Start call"}
+                className={cn(
+                  "shrink-0 flex items-center justify-center size-7 mr-1 rounded transition-opacity",
+                  "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100",
+                  // No hover on touch devices: keep it hidden there unless a call
+                  // is already live in the channel.
+                  !occupied && "touch:hidden",
+                  occupied && "opacity-100",
+                  active
+                    ? "text-primary-foreground hover:bg-primary-foreground/20"
+                    : "text-muted-foreground hover:text-foreground hover:bg-foreground/10",
+                  occupied && !active && "text-success",
+                )}
               >
-                @
-              </span>
-            ) : null}
-          </button>
+                <Phone className="size-3.5" />
+              </button>
+            )}
+          </div>
           {/* Discord-style nested voice roster: who's in the call, under the row
-              (with live speaking rings while you're in it). */}
-          {channel.isVoice && <VoiceParticipantList participants={participants} speaking={speaking} muted={mutedVoice} />}
+              (with live speaking rings while you're in it). Shown whenever a
+              call is live in the channel. */}
+          {occupied && <VoiceParticipantList participants={participants} speaking={speaking} muted={mutedVoice} />}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
@@ -395,9 +431,7 @@ function MentionsView({
         return (
           <div key={msg.id} className="pb-1">
             <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
-              {ch?.isVoice ? (
-                <Volume2 className="size-3 shrink-0" />
-              ) : ch?.isPrivate ? (
+              {ch?.isPrivate ? (
                 <Lock className="size-3 shrink-0" />
               ) : (
                 <Hash className="size-3 shrink-0" />
@@ -496,9 +530,7 @@ function ThreadsView({
         return (
           <div key={t.root.id} className="pb-1">
             <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
-              {ch?.isVoice ? (
-                <Volume2 className="size-3 shrink-0" />
-              ) : ch?.isPrivate ? (
+              {ch?.isPrivate ? (
                 <Lock className="size-3 shrink-0" />
               ) : (
                 <Hash className="size-3 shrink-0" />
@@ -855,7 +887,7 @@ export function ConcordV2Page() {
       if (!resolved) {
         // The broker query may still be loading, or a transient probe failure
         // cached `null` — re-run the rendezvous live instead of refusing.
-        const roomHex = ch.voice?.room.pk;
+        const roomHex = ch.voice.room.pk;
         resolved = roomHex
           ? await resolveVoiceBroker(roomHex, fold ?? { present: [], claims: new Map() })
           : null;
@@ -876,14 +908,12 @@ export function ConcordV2Page() {
   const navigateTo = useNavigate();
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState("");
-  const [newChannelVoice, setNewChannelVoice] = useState(false);
 
   // Close the inline create-channel form when switching communities — the
   // user's MANAGE_CHANNELS permission doesn't carry over.
   useEffect(() => {
     setCreatingChannel(false);
     setNewChannelName("");
-    setNewChannelVoice(false);
     setCommunityMenuOpen(false);
   }, [communityId]);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -1049,10 +1079,9 @@ export function ConcordV2Page() {
     const name = newChannelName.trim();
     if (!name || !community) return;
     try {
-      const { channelIdHex: created } = await createChannel({ name, voice: newChannelVoice });
+      const { channelIdHex: created } = await createChannel({ name });
       selectChannel(created);
       setNewChannelName("");
-      setNewChannelVoice(false);
       setCreatingChannel(false);
     } catch {
       // keep the input open so the user can retry
@@ -1286,51 +1315,16 @@ export function ConcordV2Page() {
             }}
             className="mx-2 my-1 p-1.5 space-y-1.5 clip-corner-lg bg-foreground/5"
           >
-            {/* Channel type: an explicit Text / Voice segmented choice (the
-                CORD-07 `voice` flag is minted with the channel; Discord-style). */}
-            <div className="flex gap-1" role="radiogroup" aria-label="Channel type">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={!newChannelVoice}
-                onClick={() => setNewChannelVoice(false)}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 py-1 text-xs font-medium clip-corner-lg transition-colors",
-                  !newChannelVoice
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-foreground/5 text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Hash className="size-3.5" />
-                Text
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={newChannelVoice}
-                onClick={() => setNewChannelVoice(true)}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 py-1 text-xs font-medium clip-corner-lg transition-colors",
-                  newChannelVoice
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-foreground/5 text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Volume2 className="size-3.5" />
-                Voice
-              </button>
-            </div>
             <div className="flex items-center gap-1">
               <Input
                 value={newChannelName}
                 onChange={(e) => setNewChannelName(e.target.value)}
-                placeholder={newChannelVoice ? "e.g. lounge, music, game-night" : "e.g. general, memes, dev-talk"}
+                placeholder="e.g. general, memes, dev-talk"
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
                     setCreatingChannel(false);
                     setNewChannelName("");
-                    setNewChannelVoice(false);
                   }
                 }}
                 className="h-7 text-sm"
@@ -1339,7 +1333,7 @@ export function ConcordV2Page() {
                 type="submit"
                 size="icon"
                 className="size-7 shrink-0 clip-corner-lg"
-                aria-label={newChannelVoice ? "Create voice channel" : "Create text channel"}
+                aria-label="Create channel"
                 disabled={isAddingChannel || !newChannelName.trim()}
               >
                 {isAddingChannel ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
@@ -1427,9 +1421,7 @@ export function ConcordV2Page() {
                 </>
               ) : (
                 <>
-                  {channel?.isVoice ? (
-                    <Volume2 className="size-5 text-muted-foreground shrink-0" />
-                  ) : channel?.isPrivate ? (
+                  {channel?.isPrivate ? (
                     <Lock className="size-5 text-muted-foreground shrink-0" />
                   ) : (
                     <Hash className="size-5 text-muted-foreground shrink-0" />
@@ -1463,9 +1455,7 @@ export function ConcordV2Page() {
                     </>
                   ) : (
                     <>
-                      {channel?.isVoice ? (
-                        <Volume2 className="size-3 shrink-0" />
-                      ) : channel?.isPrivate ? (
+                      {channel?.isPrivate ? (
                         <Lock className="size-3 shrink-0" />
                       ) : (
                         <Hash className="size-3 shrink-0" />
@@ -1477,7 +1467,7 @@ export function ConcordV2Page() {
               </div>
             </button>
             <div className="ml-auto flex items-center gap-0.5">
-              {user && channel?.isVoice && (
+              {user && view === "channel" && channel && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

@@ -3,7 +3,7 @@ import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import { buildV2CommentTags, foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
-import { bytesToHex, channelGroupKey } from "@/concord-v2/lib/derive";
+import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
 import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
@@ -15,7 +15,8 @@ const channelIdHex = bytesToHex(channelId);
 function makeChannel(): ChannelV2 {
   const group = channelGroupKey(root, channelId, 0);
   const stream = { epoch: 0n, group };
-  return { id: channelId, idHex: channelIdHex, name: "general", isPrivate: false, isVoice: false, streams: [stream], current: stream };
+  const voice = { room: voiceGroupKey(root, channelId, 0), mediaKey: voiceMediaKey(root, channelId, 0) };
+  return { id: channelId, idHex: channelIdHex, name: "general", isPrivate: false, voice, streams: [stream], current: stream };
 }
 
 function signer(sk = generateSecretKey()) {

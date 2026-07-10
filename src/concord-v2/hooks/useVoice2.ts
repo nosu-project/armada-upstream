@@ -73,7 +73,7 @@ export function useVoicePresence2(
   const latest = useRef(new Map<string, VoicePresenceEntry>());
 
   const channelIdHex = channel?.idHex ?? null;
-  const currentPk = channel?.isVoice ? channel.current.group.pk : undefined;
+  const currentPk = channel?.current.group.pk;
 
   useEffect(() => {
     setFold(EMPTY_FOLD);
@@ -250,7 +250,7 @@ export function useVoiceBroker2(
   channel: ChannelV2 | undefined,
   fold: VoicePresenceFold,
 ): { data: string | null | undefined; isLoading: boolean } {
-  const roomHex = channel?.voice?.room.pk;
+  const roomHex = channel?.voice.room.pk;
   const candidates = useMemo(
     () => (roomHex ? rendezvousCandidates(roomHex, fold, ownAvServers()) : []),
     [roomHex, fold],
@@ -259,7 +259,7 @@ export function useVoiceBroker2(
 
   return useQuery<string | null>({
     queryKey: ["concord2", "av-broker", channel?.idHex ?? null, candidatesKey],
-    enabled: Boolean(channel?.isVoice && roomHex),
+    enabled: Boolean(roomHex),
     staleTime: 60_000,
     queryFn: async ({ signal }) => {
       for (const origin of candidates) {
@@ -284,7 +284,7 @@ export function useAvToken2(
   return useQuery<AvToken>({
     queryKey: ["concord2", "av-token", channel?.idHex ?? null, channel?.current.epoch.toString(), broker],
     enabled: enabled && Boolean(channel?.voice && broker),
-    queryFn: async () => fetchAvToken(broker!, channel!.voice!.room),
+    queryFn: async () => fetchAvToken(broker!, channel!.voice.room),
     staleTime: Infinity,
     gcTime: 0,
     refetchOnMount: false,

@@ -686,7 +686,7 @@ function ConcordVoiceRoom({
   const applied = useRef(new Map<string, string>());
   useEffect(() => {
     if (!tokenData) return;
-    const mediaKey = channel.voice?.mediaKey;
+    const mediaKey = channel.voice.mediaKey;
     if (!mediaKey) return;
     const room = e2ee.room;
 
@@ -736,7 +736,7 @@ function ConcordVoiceRoom({
   const migrated = useRef(false);
   useEffect(() => {
     if (!tokenData || migrated.current) return;
-    const roomHex = channel.voice?.room.pk;
+    const roomHex = channel.voice.room.pk;
     if (!roomHex) return;
     const winner = rendezvousCandidates(roomHex, fold, [])[0];
     const occupiedByOther = fold.present.some(

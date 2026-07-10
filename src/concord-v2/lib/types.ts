@@ -85,8 +85,6 @@ export interface CommunityMetadata {
 export interface ChannelMetadata {
   name: string;
   private: boolean;
-  /** Marks the Channel callable (CORD-07 §1); absent means false. */
-  voice?: boolean;
   /** Terminal: the id is never reused; clients drop the Channel from display. */
   deleted?: boolean;
   custom?: Record<string, unknown>;
@@ -137,9 +135,9 @@ export interface CommunityV2 {
 }
 
 /**
- * A voice Channel's call coordinates (CORD-07 §1), derived from the same
+ * A Channel's call coordinates (CORD-07 §1), derived from the same
  * (secret, epoch) that addresses its Chat Plane — so they rotate exactly when
- * the Channel's key does.
+ * the Channel's key does. Every Channel is callable.
  */
 export interface VoiceKeys {
   /** The SFU room keypair: `pk` IS the room name, `sk` signs token grants. */
@@ -154,10 +152,8 @@ export interface ChannelV2 {
   idHex: string;
   name: string;
   isPrivate: boolean;
-  /** Whether the Channel is callable (ChannelMetadata `voice`, CORD-07 §1). */
-  isVoice: boolean;
-  /** Present exactly when `isVoice`: the current epoch's call coordinates. */
-  voice?: VoiceKeys;
+  /** The current epoch's call coordinates — every Channel is callable (CORD-07 §1). */
+  voice: VoiceKeys;
   /** Stream keys across every held epoch, newest first (reads span rekeys). */
   streams: Array<{ epoch: bigint; group: GroupKey }>;
   /** The current write coordinate. */

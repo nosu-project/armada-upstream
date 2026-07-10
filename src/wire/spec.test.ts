@@ -15,7 +15,6 @@ function v2Channel(idByte: number, pks: string[]): ChannelV2 {
     idHex,
     name: "general",
     isPrivate: false,
-    isVoice: false,
     streams: pks.map((pk, i) => ({
       epoch: BigInt(i),
       group: { pk } as unknown as ChannelV2["streams"][number]["group"],
