@@ -2,6 +2,7 @@ import { Loader2, Search, UserRoundCheck } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useState } from "react";
 
+import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
@@ -121,8 +122,11 @@ function ProfileRow({
       </div>
 
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold">
-          <EmojifiedText tags={profile.event.tags}>{displayName}</EmojifiedText>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="truncate text-sm font-semibold">
+            <EmojifiedText tags={profile.event.tags}>{displayName}</EmojifiedText>
+          </div>
+          <BotPill metadata={metadata} />
         </div>
         <div className="truncate font-mono text-[11px] text-muted-foreground">{identifier}</div>
       </div>

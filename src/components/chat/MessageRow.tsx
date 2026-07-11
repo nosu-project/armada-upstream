@@ -3,6 +3,7 @@ import { memo } from "react";
 
 import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
+import { BotPill } from "@/components/BotPill";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -212,6 +213,7 @@ export const MessageRow = memo(function MessageRow({
                 </button>
               </ProfilePreviewCard>
             )}
+            <BotPill metadata={metadata} />
             {label && (
               <Badge variant="secondary" className="text-[10px] font-medium shrink min-w-0 max-w-[35%]">
                 <span className="truncate">{label}</span>
