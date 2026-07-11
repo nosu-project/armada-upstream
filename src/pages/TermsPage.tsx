@@ -11,7 +11,7 @@ export function TermsPage() {
     <main className="flex-1 min-w-0 flex flex-col safe-area-top">
       {/* Header — a detached floating command bar matching the settings page chrome. */}
       <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={() => navigate("/settings")}>
+        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={() => navigate(-1)}>
           <ArrowLeft className="size-5" />
         </Button>
         <h1 className="font-semibold truncate leading-tight">Terms of Service</h1>
