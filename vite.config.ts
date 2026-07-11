@@ -32,6 +32,26 @@ function getCommitTag(): string {
 }
 
 /**
+ * The marketing version (X.Y.Z) for this build. Source of truth is the git tag
+ * (per the release skill, package.json is never bumped). When on a tagged
+ * commit, the tag minus its `v` prefix is used. For pre-release/dev builds, the
+ * latest version from CHANGELOG.md is used so the footer matches the changelog
+ * page (the caller appends a `+` suffix for untagged builds).
+ */
+function getVersion(): string {
+  const tag = getCommitTag();
+  if (tag) return tag.replace(/^v/, "");
+  try {
+    const changelog = fs.readFileSync(path.resolve(__dirname, "CHANGELOG.md"), "utf-8");
+    const match = changelog.match(/^## \[([^\]]+)\]/m);
+    if (match) return match[1];
+  } catch {
+    // fall through
+  }
+  return "0.0.0";
+}
+
+/**
  * Serves the repo-root CHANGELOG.md at /CHANGELOG.md in dev and copies it into
  * the build output, so the in-app changelog page and version-update toast can
  * fetch it without maintaining a duplicate copy in public/.
@@ -102,9 +122,7 @@ export default defineConfig({
   },
   plugins: [react(), buildStamp(), serveChangelog()],
   define: {
-    "import.meta.env.VERSION": JSON.stringify(
-      JSON.parse(fs.readFileSync(path.resolve(__dirname, "package.json"), "utf-8")).version,
-    ),
+    "import.meta.env.VERSION": JSON.stringify(getVersion()),
     "import.meta.env.BUILD_DATE": JSON.stringify(new Date().toISOString()),
     "import.meta.env.COMMIT_SHA": JSON.stringify(getCommitSha()),
     "import.meta.env.COMMIT_TAG": JSON.stringify(getCommitTag()),
