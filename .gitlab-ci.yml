@@ -249,10 +249,12 @@ build-desktop-web:
   variables:
     # No baked-in relays: a rogue client starts empty and the user adds servers.
     VITE_PLATFORM_RELAYS: ""
-    # App relays still seed non-NIP-29 traffic (profiles/lists); user-editable.
-    VITE_APP_RELAYS: ${VITE_APP_RELAYS}
-    # App Blossom media servers seed uploads; user-editable in Settings.
-    VITE_APP_BLOSSOM_SERVERS: ${VITE_APP_BLOSSOM_SERVERS}
+    # Vite inlines VITE_* variables at build time; any set as project-level
+    # CI/CD variables are already present in the job environment. Do NOT
+    # re-declare them here as `KEY: $KEY` — the self-reference overwrites the
+    # real value with the literal string "$KEY" whenever the source variable is
+    # out of scope (see deploy-web). The client defaults are correct for the
+    # sovereign desktop build; nothing else needs to be set.
   cache:
     key:
       files:
