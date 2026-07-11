@@ -490,16 +490,18 @@ export function ConcordPage() {
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
-  // Close the thread panel when the active channel changes — otherwise it
-  // stays open showing a now-stale root, stops receiving new replies (the
-  // channel's transport is scoped to the selected channel), and a reply typed
-  // into it ends up posted top-level in the wrong channel. Computed
-  // synchronously during render (same pattern as `navKey` above) so the panel
-  // never paints a stale frame after the switch.
-  const [threadChannelKey, setThreadChannelKey] = useState(currentChannelIdHex);
-  if (threadChannelKey !== currentChannelIdHex) {
-    setThreadChannelKey(currentChannelIdHex);
+  // Close the thread panel when the channel or community changes. The scope
+  // key includes `communityId` because the page is reused across concord
+  // switches (no route `key`), and `currentChannelIdHex` alone can lag during
+  // the transition. `lastThreadRoot` is cleared here (not just via the
+  // slide-out timeout) because the timeout only re-runs when `threadRoot`
+  // changes; if the panel was already closed, it wouldn't fire.
+  const threadScopeKey = `${communityId}\u0000${currentChannelIdHex ?? ""}`;
+  const [threadChannelKey, setThreadChannelKey] = useState(threadScopeKey);
+  if (threadChannelKey !== threadScopeKey) {
+    setThreadChannelKey(threadScopeKey);
     setThreadRoot(undefined);
+    setLastThreadRoot(undefined);
   }
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   // The single message whose tap-to-reveal toolbar is open (touch only). Mirrors

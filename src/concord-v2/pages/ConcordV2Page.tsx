@@ -951,18 +951,20 @@ export function ConcordV2Page() {
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
-  // Close the thread panel when the active channel changes — otherwise it
-  // stays open showing a now-stale root and stops receiving new replies (the
-  // channel's transport, and thus `threadRepliesFor`, is scoped to the
-  // selected channel, so a thread from a different channel is orphaned).
-  // Computed synchronously during render (same pattern as `navKey` above) so
-  // the panel never paints a stale frame after the switch. Skipped while a
-  // Threads-tab open is in flight for this very switch (`pendingThread`): it
-  // will (re)open its own thread once the target channel's root has loaded.
-  const [threadChannelKey, setThreadChannelKey] = useState(channel?.idHex);
-  if (threadChannelKey !== channel?.idHex) {
-    setThreadChannelKey(channel?.idHex);
-    if (!pendingThread) setThreadRoot(undefined);
+  // Close the thread panel when the channel or community changes. The scope
+  // key includes `communityId` because the page is reused across concord
+  // switches (no route `key`), and `channel?.idHex` alone can lag during the
+  // transition. `lastThreadRoot` is cleared here (not just via the slide-out
+  // timeout) because the timeout only re-runs when `threadRoot` changes; if
+  // the panel was already closed, it wouldn't fire.
+  const threadScopeKey = `${communityId}\u0000${channel?.idHex ?? ""}`;
+  const [threadChannelKey, setThreadChannelKey] = useState(threadScopeKey);
+  if (threadChannelKey !== threadScopeKey) {
+    setThreadChannelKey(threadScopeKey);
+    if (!pendingThread) {
+      setThreadRoot(undefined);
+      setLastThreadRoot(undefined);
+    }
   }
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
