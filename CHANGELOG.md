@@ -4,6 +4,38 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.26.0] - 2026-07-11
+
+Your account now stays in sync across devices automatically — joins, mutes,
+follows, and settings made on one device reach the others without a manual
+refetch. You can now delete your account right from Settings, with a guided
+checklist of what gets removed from the network. A built-in changelog page
+replaces the old "what's new" guesswork: a toast lets you know when an update
+landed and links to the full release notes, now browsable in-app. Privacy
+Policy and Terms of Service pages are reachable from the settings footer.
+Several smaller fixes round out the release: the swipe-to-reveal gesture is
+consistent again, thread state no longer leaks when switching between Concord
+communities, and message context menus flip upward instead of dropping into
+the composer.
+
+### Added
+- Cross-device sync: your follow list, mute list, server and channel
+  memberships, Concord communities, relay lists, and app settings now stay
+  continuously in sync across all your devices
+- Delete account from Settings, with a guided checklist of what gets removed
+- In-app changelog page with full release notes, linked from the Settings
+  version footer
+- Toast notification when a new version is available
+- Privacy Policy and Terms of Service pages, linked from the Settings footer
+
+### Fixed
+- Swipe-to-reveal gesture is consistent across all list rows again
+- Thread panel state no longer leaks when switching between Concord communities
+- Message context menus flip upward instead of dropping into the composer
+- Concord communities now populate correctly on a fresh login
+- Back button on Settings sub-pages (changelog, terms, privacy) no longer
+  loops back to the page you came from
+
 ## [0.25.4] - 2026-07-10
 
 Every channel can now host a call — the text/voice split is gone, so you start
