@@ -9,6 +9,7 @@ import {
 } from "@/lib/coldLaunchDeepLink";
 import { BootSplash } from "@/components/brand/BootSplash";
 import { MainLayout } from "@/components/layout/MainLayout";
+import { VersionCheck } from "@/components/VersionCheck";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
@@ -28,10 +29,13 @@ const GroupPage = lazy(() => import("@/pages/GroupPage").then((m) => ({ default:
 const InvitePage = lazy(() => import("@/concord-v1/pages/InvitePage"));
 const InviteV2Page = lazy(() => import("@/concord-v2/pages/InviteV2Page"));
 const MeshPage = lazy(() => import("@/pages/MeshPage"));
+const ChangelogPage = lazy(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage })));
 const NotFound = lazy(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound })));
+const PrivacyPolicyPage = lazy(() => import("@/pages/PrivacyPolicyPage").then((m) => ({ default: m.PrivacyPolicyPage })));
 const ServerPage = lazy(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage })));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const SharePage = lazy(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage })));
+const TermsPage = lazy(() => import("@/pages/TermsPage").then((m) => ({ default: m.TermsPage })));
 const WelcomePage = lazy(() => import("@/pages/WelcomePage").then((m) => ({ default: m.WelcomePage })));
 
 /**
@@ -171,10 +175,11 @@ function NotificationNavigation() {
 export function AppRouter() {
   useWarmRouteChunks();
   return (
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <NotificationNavigation />
-      {/* Lazy route chunks paint the branded splash while they load, never a
-          blank frame. */}
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <NotificationNavigation />
+        <VersionCheck />
+        {/* Lazy route chunks paint the branded splash while they load, never a
+            blank frame. */}
       <Suspense fallback={<BootSplash />}>
         <Routes>
           <Route element={<MainLayout />}>
@@ -191,6 +196,9 @@ export function AppRouter() {
             <Route path="/invite" element={<InvitePage />} />
             <Route path="/invite/:naddr" element={<InviteV2Page />} />
             <Route path="/about" element={<AboutPage />} />
+            <Route path="/changelog" element={<ChangelogPage />} />
+            <Route path="/privacy" element={<PrivacyPolicyPage />} />
+            <Route path="/terms" element={<TermsPage />} />
             <Route path="/share" element={<SharePage />} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
             <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />

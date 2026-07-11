@@ -14,6 +14,14 @@ interface ImportMetaEnv {
   readonly VITE_DEFAULT_AUTO_GAIN_CONTROL?: string;
   readonly VITE_DEFAULT_RNNOISE?: string;
   readonly VITE_SANDBOX_DOMAIN?: string;
+  /** Semver version from package.json (e.g., "0.25.4"). */
+  readonly VERSION: string;
+  /** ISO 8601 timestamp of when the app was built. */
+  readonly BUILD_DATE: string;
+  /** Short git commit SHA. Empty string if unavailable. */
+  readonly COMMIT_SHA: string;
+  /** Git tag for the current commit (e.g., "v0.25.4"). Empty string if untagged (pre-release build). */
+  readonly COMMIT_TAG: string;
 }
 
 interface ImportMeta {

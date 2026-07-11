@@ -1,22 +1,27 @@
 import {
+  AlertTriangle,
   Anchor,
   ArrowLeft,
   Bell,
   ChevronDown,
   ChevronRight,
   Download,
+  FileText,
   Image,
   MessageSquareLock,
   Mic,
   Palette,
+  ScrollText,
   Search,
   Server,
+  Shield,
   UserCircle,
   Waypoints,
   Wrench,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { lazy, Suspense } from "react";
 
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ConcordResyncCard } from "@/concord-v1/components/ConcordResyncCard";
@@ -49,6 +54,10 @@ import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
+const RequestToVanishDialog = lazy(() =>
+  import("@/components/RequestToVanishDialog").then((m) => ({ default: m.RequestToVanishDialog })),
+);
+
 type SectionId =
   | "account"
   | "profile"
@@ -62,7 +71,8 @@ type SectionId =
   | "media"
   | "advanced"
   | "install"
-  | "about";
+  | "about"
+  | "danger";
 
 interface NavItem {
   id: SectionId;
@@ -103,6 +113,7 @@ export function SettingsPage() {
     getAudioProcessing(),
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const { canInstall, install } = useInstallPrompt();
   const setVoiceToggle = (key: keyof AudioProcessingPrefs) => (value: boolean) => {
     setVoiceProcessing((prev) => {
@@ -226,10 +237,14 @@ export function SettingsPage() {
       appItems.push({ id: "install", title: "Install app", icon: Download, inline: true });
     }
     appItems.push({ id: "about", title: "About", icon: Anchor, inline: true });
-    return [
+    const groups: NavGroup[] = [
       { heading: "User settings", items: userItems },
       { heading: "App settings", items: appItems },
     ];
+    if (user) {
+      groups.push({ heading: "Danger zone", items: [{ id: "danger", title: "Delete account", icon: AlertTriangle, inline: true }] });
+    }
+    return groups;
   }, [user, canInstall]);
 
   /** The row(s) inside one section's chrome card. */
@@ -430,6 +445,16 @@ export function SettingsPage() {
             <ChevronRight className="size-4 text-muted-foreground" />
           </SettingsRow>
         );
+      case "danger":
+        return (
+          <SettingsRow
+            label="Delete Account"
+            description="Permanently remove your identity and request data deletion from relays."
+            onClick={() => setDeleteAccountOpen(true)}
+          >
+            <AlertTriangle className="size-4 text-destructive" />
+          </SettingsRow>
+        );
     }
   };
 
@@ -497,6 +522,40 @@ export function SettingsPage() {
               </div>
             </section>
           ))}
+
+          {user && (
+            <Suspense fallback={null}>
+              <RequestToVanishDialog open={deleteAccountOpen} onOpenChange={setDeleteAccountOpen} />
+            </Suspense>
+          )}
+
+          {/* Bottom ornament */}
+          <div className="flex items-center gap-2 px-6 pt-2 pb-1">
+            <div className="h-px flex-1 bg-gradient-to-r from-transparent via-primary/20 to-primary/30" />
+            <svg width="22" height="22" viewBox="0 0 256 256" fill="none" aria-hidden className="text-primary/30 shrink-0">
+              <path d="M128 56 L180 162 H158 L128 100 L98 162 H76 Z" fill="currentColor" />
+              <path d="M106 134 H150 L158 150 H98 Z" fill="hsl(var(--background))" />
+            </svg>
+            <div className="h-px flex-1 bg-gradient-to-l from-transparent via-primary/20 to-primary/30" />
+          </div>
+
+          {/* Version footer — links to the changelog, with terms/privacy beside it */}
+          <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground/50 select-none pt-1 pb-2">
+            <Link to="/changelog" className="flex items-center gap-1 hover:text-muted-foreground transition-colors">
+              <ScrollText className="size-3" />
+              v{import.meta.env.VERSION}{import.meta.env.COMMIT_TAG ? "" : "+"} ({new Date(import.meta.env.BUILD_DATE).toLocaleDateString()})
+            </Link>
+            <span aria-hidden className="text-muted-foreground/30">·</span>
+            <Link to="/terms" className="flex items-center gap-1 hover:text-muted-foreground transition-colors">
+              <FileText className="size-3" />
+              Terms
+            </Link>
+            <span aria-hidden className="text-muted-foreground/30">·</span>
+            <Link to="/privacy" className="flex items-center gap-1 hover:text-muted-foreground transition-colors">
+              <Shield className="size-3" />
+              Privacy
+            </Link>
+          </div>
         </div>
       </div>
     </main>

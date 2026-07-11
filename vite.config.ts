@@ -1,8 +1,71 @@
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+
+/**
+ * Short commit SHA — prefer CI env var, fall back to git. Empty string if
+ * unavailable (e.g. no git repo).
+ */
+function getCommitSha(): string {
+  if (process.env.CI_COMMIT_SHORT_SHA) return process.env.CI_COMMIT_SHORT_SHA;
+  try {
+    return execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Git tag for the current commit — prefer CI env var, fall back to git. Empty
+ * string if untagged (pre-release build).
+ */
+function getCommitTag(): string {
+  if (process.env.CI_COMMIT_TAG) return process.env.CI_COMMIT_TAG;
+  try {
+    return execSync("git describe --exact-match --tags HEAD 2>/dev/null", { encoding: "utf-8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Serves the repo-root CHANGELOG.md at /CHANGELOG.md in dev and copies it into
+ * the build output, so the in-app changelog page and version-update toast can
+ * fetch it without maintaining a duplicate copy in public/.
+ */
+function serveChangelog(): Plugin {
+  const root = path.resolve(__dirname, "CHANGELOG.md");
+  return {
+    name: "armada-serve-changelog",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url !== "/CHANGELOG.md" && req.url !== "/CHANGELOG.md/") return next();
+        try {
+          const stat = fs.statSync(root);
+          if (stat.isFile()) {
+            res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+            res.end(fs.readFileSync(root, "utf-8"));
+            return;
+          }
+        } catch {
+          // fall through
+        }
+        next();
+      });
+    },
+    writeBundle(options) {
+      const outDir = options.dir ?? path.resolve("dist");
+      try {
+        fs.copyFileSync(root, path.join(outDir, "CHANGELOG.md"));
+      } catch {
+        // no changelog — skip
+      }
+    },
+  };
+}
 
 /**
  * Stamps each build with a unique id:
@@ -37,7 +100,15 @@ export default defineConfig({
     host: "::",
     port: 8080,
   },
-  plugins: [react(), buildStamp()],
+  plugins: [react(), buildStamp(), serveChangelog()],
+  define: {
+    "import.meta.env.VERSION": JSON.stringify(
+      JSON.parse(fs.readFileSync(path.resolve(__dirname, "package.json"), "utf-8")).version,
+    ),
+    "import.meta.env.BUILD_DATE": JSON.stringify(new Date().toISOString()),
+    "import.meta.env.COMMIT_SHA": JSON.stringify(getCommitSha()),
+    "import.meta.env.COMMIT_TAG": JSON.stringify(getCommitTag()),
+  },
   test: {
     globals: true,
     environment: "jsdom",
