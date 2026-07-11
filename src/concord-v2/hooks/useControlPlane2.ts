@@ -13,12 +13,15 @@ import {
   type FoldedControl,
 } from "@/concord-v2/lib/control";
 import { channelsView } from "@/concord-v2/lib/community";
-import { bytesToHex, dissolvedGroupKey, grantLocator, hex32, type GroupKey } from "@/concord-v2/lib/derive";
+import { bytesToHex, dissolvedGroupKey, grantLocator, hex32 } from "@/concord-v2/lib/derive";
 import type { AuthorityCitation } from "@/concord-v2/lib/edition";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
-import { queryByStreams, readStreamCursor, updateStreamCursor, writeOpened, peekPendingWraps, ackPendingWraps } from "@/concord-v2/lib/rumorStore";
+import { openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
+import { queryByStreams, writeOpened, peekPendingWraps, ackPendingWraps } from "@/concord-v2/lib/rumorStore";
 import { openWrap, type OpenedEvent, type Rumor, type StreamSigner } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
+import { logSync } from "@/lib/syncLog";
+import { onWireScopes } from "@/wire/bus";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -29,53 +32,16 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
  */
 export const controlFoldKey = (idHex: string) => `concord2-fold:${idHex}`;
 
-/** The persisted per-community, PER-RELAY control-plane sync cursor scope. */
-const controlCursorScope = (idHex: string, relayUrl: string) => `control:${idHex}|${relayUrl}`;
-
-/** Merge two opened-event sets by rumor id (a partial round must not drop editions). */
-function mergeOpened(a: OpenedEvent[], b: OpenedEvent[]): OpenedEvent[] {
-  const byId = new Map<string, OpenedEvent>();
-  for (const e of a) byId.set(e.rumorId, e);
-  for (const e of b) byId.set(e.rumorId, e);
-  return [...byId.values()];
-}
-
 /** The relay filter selecting a community's control plane across held epochs. */
 function controlFilter(community: CommunityV2, limit = 500): NostrFilter {
   return { kinds: [KIND_WRAP], authors: controlGroups(community).map((g) => g.pk), limit };
 }
 
-/** Decrypt raw control wraps under the held control groups into opened editions. */
-function openControlRaw(wraps: NostrEvent[], groups: GroupKey[]): OpenedEvent[] {
-  const byPk = new Map(groups.map((g) => [g.pk, g]));
-  const out: OpenedEvent[] = [];
-  for (const wrap of wraps) {
-    const group = byPk.get(wrap.pubkey);
-    if (!group) continue;
-    try {
-      out.push(openWrap(wrap, group));
-    } catch {
-      // not ours / malformed
-    }
-  }
-  return out;
-}
-
 /**
- * Fetch the community's Control Plane: the editions at the control stream
- * address(es), read local-first from the decrypted opened-event cache and
- * refreshed from the relays. Roster, metadata, channels, banlist, and registries
- * are all folds of this SAME set.
- *
- * Wraps are NEVER persisted: incoming kind-1059 control wraps are decrypted once
- * (into opened editions carrying their signed seal for compaction) and written
- * to the opened-event store, which this query reads back with a `#stream` filter
- * and no decrypt. A persisted `since` cursor means editions already seen are
- * never refetched.
- *
- * `active` gates the NETWORK fetch (and the poll), not the local read. The rail
- * renders one button per community and only needs the icon/name from the
- * persisted fold snapshot, so rail buttons pass `active = false`.
+ * Fetch the community's Control Plane. Wraps are decrypted once into the
+ * opened-event store; this query reads back from it with no decrypt. A
+ * persisted `since` cursor means editions already seen are never refetched.
+ * `active` gates the network fetch, not the local read.
  */
 export function useControlEvents2(community: CommunityV2 | undefined, active = true) {
   const { nostr } = useNostr();
@@ -85,31 +51,40 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
   const epochSig = community?.heldRoots.map((r) => r.epoch.toString()).join(",") ?? "";
   const queryKey = ["concord2", "control", cidHex, epochSig] as const;
 
-  // Seed from the opened-event cache regardless of `active` — a local read that
-  // lets the fold (and thus the rail icon) paint from cache without any network.
+  // Seed from the opened-event cache (paints rail icons without network).
+  // Re-seeds on the `c2ctl:<id>` wire bus when the background sweep stores
+  // new editions — a rail button with active=false can't be reached by
+  // invalidation, so the bus is its only wake-up.
   useEffect(() => {
     if (!community) return;
     let cancelled = false;
-    void (async () => {
-      if ((queryClient.getQueryData<OpenedEvent[]>(queryKey)?.length ?? 0) > 0) return;
+    const seed = async (merge: boolean) => {
+      if (!merge && (queryClient.getQueryData<OpenedEvent[]>(queryKey)?.length ?? 0) > 0) return;
       const cached = await queryByStreams(controlGroups(community).map((g) => g.pk));
-      if (cancelled || cached.length === 0) return;
-      queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => (old && old.length > 0 ? old : cached));
-    })();
+      if (cancelled) return;
+      logSync(
+        "control",
+        `${community.idHex.slice(0, 8)} store seed${merge ? " (bus re-seed)" : ""}: ${cached.length} opened edition(s)`,
+      );
+      if (cached.length === 0) return;
+      queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) =>
+        merge ? mergeOpened(old ?? [], cached) : old && old.length > 0 ? old : cached,
+      );
+    };
+    void seed(false);
+    const scope = `c2ctl:${community.idHex}`;
+    const unsubscribe = onWireScopes((scopes) => {
+      if (scopes.has(scope)) void seed(true);
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cidHex, epochSig, queryClient]);
 
-  // Live subscription (open community only): stream new editions as they land.
-  // Each wrap is decrypted, written to the opened cache, and merged into the
-  // same query the fold reads; the poll below is a gap-filler for dropped subs.
-  // NOTE: live events deliberately do NOT advance any sync cursor — a shared
-  // cursor advanced by the fastest event would make the poll's `since` skip an
-  // older edition still in flight from a lagging relay, permanently (a missed
-  // unban/rekey edition corrupts the fold forever — issue #19). Cursors only
-  // advance from each relay's OWN query results below.
+  // Live subscription (open community only). Live events do NOT advance
+  // any cursor — cursors only advance from relay query results (issue #19).
   useEffect(() => {
     if (!community || !active) return;
     const controller = new AbortController();
@@ -124,7 +99,7 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
             signal: controller.signal,
           })) {
             if (msg[0] === "EVENT") {
-              const opened = openControlRaw([msg[2] as NostrEvent], groups);
+              const opened = openPlaneWraps([msg[2] as NostrEvent], groups);
               if (opened.length === 0) continue;
               writeOpened(opened);
               queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], opened));
@@ -143,74 +118,33 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
     queryKey,
     enabled: Boolean(community) && active,
     staleTime: 15_000,
-    // The live `req` above is the primary path; this poll is only a gap-filler
-    // for events a dropped subscription missed, so it runs slowly and never
-    // while the tab is hidden. Per-relay cursors guarantee no edition is
-    // skipped regardless of the interval (issue #19).
+    // The live `req` is the primary path; this poll is a gap-filler.
     refetchInterval: active ? 5 * 60_000 : false,
     refetchIntervalInBackground: false,
-    queryFn: async ({ signal }) => {
+    queryFn: async () => {
       const groups = controlGroups(community!);
-      // Drain any wraps the native service parked (it can't decrypt) into the
-      // opened-event cache first.
+      // Drain wraps the native service parked (it can't decrypt).
       const parked = await peekPendingWraps(groups.map((g) => g.pk));
       if (parked.length > 0) {
-        const opened = openControlRaw(parked, groups);
+        const opened = openPlaneWraps(parked, groups);
         writeOpened(opened);
-        // Only acknowledge (delete) the wraps that actually decoded; the rest
-        // stay parked for a retry (e.g. after a rekey catch-up delivers the
-        // missing group key). The store prunes stale leftovers by age.
+        // Only ack wraps that decoded; the rest stay parked for a retry.
         const openedWrapIds = new Set(opened.map((o) => o.wrapId));
         ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
       }
-      // Fetch with a PER-RELAY `since` cursor: each relay's cursor reflects
-      // only what THAT relay has delivered, so a relay that was down or
-      // lagging is re-asked from its own last position — a fast relay can
-      // never advance a shared cursor past an edition a slow relay still owes
-      // us (the since-skip bug, issue #19). An edition chain is append-only;
-      // one missed edition (an unban, a rekey chunk) corrupts state forever.
-      const base = controlFilter(community!);
-      const results = await Promise.all(
-        community!.relays.map(async (url) => {
-          const scope = controlCursorScope(community!.idHex, url);
-          const cursor = await readStreamCursor(scope);
-          const filter: NostrFilter = cursor?.newest ? { ...base, since: cursor.newest } : base;
-          try {
-            const events = await nostr
-              .relay(url)
-              .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
-            if (events.length > 0) {
-              await updateStreamCursor(scope, {
-                newest: Math.max(...events.map((e) => e.created_at)),
-              });
-            }
-            return events;
-          } catch {
-            // Failed/aborted — the cursor stays put, so the next poll re-asks
-            // this relay for the same region.
-            return [] as NostrEvent[];
-          }
-        }),
-      );
-      const fresh = openControlRaw(results.flat(), groups);
-      if (fresh.length > 0) writeOpened(fresh);
-      // Union the stored set with what we already hold + this round's fresh
-      // editions: an edition chain is append-only, a short read must never drop.
+      // Fetch via the shared plane-sweep discipline (per-relay cursors,
+      // auth-gated, coalesced with the global sweep).
+      const fresh = await sweepControl(nostr, community!);
       const stored = await queryByStreams(groups.map((g) => g.pk));
       const prev = queryClient.getQueryData<OpenedEvent[]>(queryKey) ?? [];
-      return mergeOpened(mergeOpened(prev, stored), fresh);
+      return mergeOpened(prev, stored, fresh);
     },
   });
 }
 
 /**
  * The Control Plane replayed into current state (roster, metadata, channels,
- * banlist, registries). Folded OFF the render path with a persisted snapshot,
- * so a large control plane never gates the first paint.
- *
- * `active` is forwarded to the network fetch (see {@link useControlEvents2});
- * when false the fold still resolves from the persisted snapshot, so the rail
- * icon/name paints without any control-plane REQ.
+ * banlist, registries). Folded off the render path with a persisted snapshot.
  */
 export function useControlFold2(community: CommunityV2 | undefined, active = true) {
   const control = useControlEvents2(community, active);
@@ -221,7 +155,12 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
     () => {
       if (!community || !events) return undefined;
       const editions = openControlEditions(events);
-      return foldControlState(editions, community.id, community.owner);
+      const folded = foldControlState(editions, community.id, community.owner);
+      logSync(
+        "fold",
+        `${community.idHex.slice(0, 8)}: ${events.length} opened → ${editions.length} edition(s); name=${folded.metadata?.name ?? "∅"} icon=${folded.metadata?.icon ? "yes" : "no"} channels=${folded.channels.size} banned=${folded.banned.size} heads=${folded.heads.size}`,
+      );
+      return folded;
     },
     [community, events],
   );
@@ -272,7 +211,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
             .catch(() => [] as NostrEvent[]),
         ),
       );
-      const opened = openControlRaw(results.flat(), [group]);
+      const opened = openPlaneWraps(results.flat(), [group]);
       if (opened.length > 0) writeOpened(opened);
       return opened.some((o) => isDissolvedOpened(o, community!.owner));
     },

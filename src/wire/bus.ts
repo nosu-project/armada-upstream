@@ -13,6 +13,8 @@
  *   - `dm`                   — a kind-4 DM arrived
  *   - `c1:<channelIdHex>`    — a Concord V1 channel's sealed history changed
  *   - `c2:<channelIdHex>`    — a Concord V2 channel's rumor store changed
+ *   - `c2ctl:<communityIdHex>` — a Concord V2 community's decrypted control
+ *     plane changed (the background sweep stored new editions)
  *
  * Emissions are coalesced on a short window so a backfill writing hundreds of
  * events produces one notification burst, not hundreds of invalidations.

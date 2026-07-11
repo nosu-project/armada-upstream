@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -21,8 +21,9 @@ import {
 import { KIND_COMMUNITY_LIST } from "@/concord-v2/lib/kinds";
 import { NIP44_MAX_PLAINTEXT } from "@/concord-v2/lib/stream";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { logSync } from "@/lib/syncLog";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
 
 /**
@@ -37,10 +38,10 @@ import type { NUser } from "@nostrify/react/login";
  * strictly-increasing `created_at`.
  */
 
-type ListData = { event: NostrEvent | null; list: CommunityList; decryptFailed?: boolean };
+export type ListData = { event: NostrEvent | null; list: CommunityList; decryptFailed?: boolean };
 type PersistedList = { event: NostrEvent | null; list: CommunityList };
 
-const listQueryKey = (pubkey: string | undefined) => ["concord2", "list", pubkey] as const;
+export const listQueryKey = (pubkey: string | undefined) => ["concord2", "list", pubkey] as const;
 const foldKeyOf = (pubkey: string) => `concord2-list:${pubkey}`;
 
 /** Decode-once memo for the list decrypt, keyed by event id. */
@@ -80,6 +81,47 @@ async function readListEvent(
   return work;
 }
 
+/**
+ * Fetch the newest kind-13302 list event and merge it into the cached list.
+ * Shared by the hook's queryFn and the post-login gate. Merge-never-replace
+ * so a short relay read can't drop rooms; persists the merged plaintext to
+ * the folded cache.
+ */
+export async function syncCommunityList2(
+  nostr: { query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]> },
+  user: NUser,
+  queryClient: QueryClient,
+  signal?: AbortSignal,
+): Promise<ListData> {
+  const queryKey = listQueryKey(user.pubkey);
+  const events = await nostr.query(
+    [{ kinds: [KIND_COMMUNITY_LIST], authors: [user.pubkey], limit: 1 }],
+    { signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(8000)]) },
+  );
+  const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+  const prev = queryClient.getQueryData<ListData>(queryKey);
+
+  if (latest && prev?.event?.id === latest.id && !prev.decryptFailed) return prev;
+
+  const { list, decryptFailed } = await readListEvent(latest, user.signer, user.pubkey);
+  logSync(
+    "list2",
+    `relay fetch: event=${latest ? latest.id.slice(0, 8) : "none"} entries=${list.entries.length} decryptFailed=${decryptFailed}`,
+  );
+  if (decryptFailed) {
+    // Never let an undecryptable read clobber a populated list (the keys
+    // live here; a wrongful empty would vanish the rooms).
+    return prev ?? { event: latest, list: EMPTY_COMMUNITY_LIST, decryptFailed: true };
+  }
+
+  // Merge, never replace: a transient short relay read can't drop rooms;
+  // the deterministic merge still honors genuine tombstones.
+  const merged = prev ? mergeCommunityLists(prev.list, list) : list;
+  const next: ListData = { event: latest, list: merged, decryptFailed: false };
+  if (latest) void writeFolded(foldKeyOf(user.pubkey), { event: latest, list: merged } satisfies PersistedList);
+  return next;
+}
+
 /** Query the latest V2 Community List, plaintext-cache-first. */
 export function useCommunityList2() {
   const { nostr } = useNostr();
@@ -102,6 +144,7 @@ export function useCommunityList2() {
       const persisted = await readFolded<PersistedList>(foldKey);
       if (cancelled) return;
       if (persisted) {
+        logSync("list2", `boot from folded cache: ${persisted.list.entries.length} entry(ies)`);
         queryClient.setQueryData<ListData>(queryKey, { event: persisted.event ?? null, list: persisted.list });
         return;
       }
@@ -126,30 +169,7 @@ export function useCommunityList2() {
     queryKey,
     enabled: Boolean(user?.signer.nip44),
     staleTime: 30_000,
-    queryFn: async ({ signal }) => {
-      const events = await nostr.query(
-        [{ kinds: [KIND_COMMUNITY_LIST], authors: [user!.pubkey], limit: 1 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-      );
-      const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-      const prev = queryClient.getQueryData<ListData>(queryKey);
-
-      if (latest && prev?.event?.id === latest.id && !prev.decryptFailed) return prev;
-
-      const { list, decryptFailed } = await readListEvent(latest, user!.signer, user!.pubkey);
-      if (decryptFailed) {
-        // Never let an undecryptable read clobber a populated list (the keys
-        // live here; a wrongful empty would vanish the rooms).
-        return prev ?? { event: latest, list: EMPTY_COMMUNITY_LIST, decryptFailed: true };
-      }
-
-      // Merge, never replace: a transient short relay read can't drop rooms;
-      // the deterministic merge still honors genuine tombstones.
-      const merged = prev ? mergeCommunityLists(prev.list, list) : list;
-      const next: ListData = { event: latest, list: merged, decryptFailed: false };
-      if (foldKey && latest) void writeFolded(foldKey, { event: latest, list: merged } satisfies PersistedList);
-      return next;
-    },
+    queryFn: ({ signal }) => syncCommunityList2(nostr, user!, queryClient, signal),
   });
 }
 

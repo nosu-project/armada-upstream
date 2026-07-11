@@ -18,7 +18,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
 
@@ -37,6 +37,14 @@ import { buildRumor, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/st
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
 import { useControlEvents2 } from "./useControlPlane2";
+
+import { _configureAuthWaitForTests } from "@/concord-v2/lib/planeSync";
+
+// These tests exercise the cursor discipline, not planeSync's NIP-42 auth
+// gate (planeSync.test.ts owns that) — let the sweeps' REQs fly immediately.
+beforeAll(() => {
+  _configureAuthWaitForTests({ settleMs: 0, maxWaitMs: 0 });
+});
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 

@@ -16,44 +16,16 @@ import {
   sealGuestbook,
   type CoalescedMember,
 } from "@/concord-v2/lib/guestbook";
-import { KIND_WRAP } from "@/concord-v2/lib/kinds";
-import { queryByStreams, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
-import { openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
+import { mergeOpened, sweepGuestbook } from "@/concord-v2/lib/planeSync";
+import { queryByStreams } from "@/concord-v2/lib/rumorStore";
+import type { OpenedEvent } from "@/concord-v2/lib/stream";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
-import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
-import type { NostrEvent } from "@nostrify/nostrify";
-
-/** The persisted per-community, PER-RELAY guestbook sync cursor scope. */
-const guestbookCursorScope = (idHex: string, relayUrl: string) => `guestbook:${idHex}|${relayUrl}`;
-
-/** Decrypt raw guestbook wraps under the held groups into opened events. */
-function openGuestbookRaw(wraps: NostrEvent[], groups: GroupKey[]): OpenedEvent[] {
-  const byPk = new Map(groups.map((g) => [g.pk, g]));
-  const out: OpenedEvent[] = [];
-  for (const wrap of wraps) {
-    const group = byPk.get(wrap.pubkey);
-    if (!group) continue;
-    try {
-      out.push(openWrap(wrap, group));
-    } catch {
-      // not ours / malformed
-    }
-  }
-  return out;
-}
-
 /**
- * The Guestbook Plane (CORD-02 §5): membership motion, coalesced flat. It's
- * off-consensus — nothing gates on it — so it polls lazily and lags without
- * harm. `observed` (author → newest ms seen publishing) merges in observably-
- * present authors; the Banlist subtracts.
- *
- * Wraps are never persisted: incoming kind-1059 guestbook wraps are decrypted
- * once into the opened-event cache (keyed by the guestbook stream address) and
- * read back with a `#stream` query; a persisted `since` cursor means motions
- * already seen are never refetched.
+ * The Guestbook Plane (CORD-02 §5): membership motion, coalesced flat.
+ * Off-consensus, so it polls lazily. Fetch/decrypt/cursor via
+ * {@link sweepGuestbook}; wraps decrypted once into the opened-event cache.
  */
 export function useGuestbook2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
@@ -64,45 +36,10 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
     enabled: Boolean(community),
     staleTime: 30_000,
     refetchInterval: 60_000,
-    queryFn: async ({ signal }) => {
-      const groups = guestbookGroups(community!);
-      const base: { kinds: number[]; authors: string[]; limit: number } = {
-        kinds: [KIND_WRAP],
-        authors: groups.map((g) => g.pk),
-        limit: 500,
-      };
-
-      // PER-RELAY `since` cursors (see useControlPlane2): a fast relay must
-      // never advance a shared cursor past a motion a lagging relay still owes
-      // us, or that motion is skipped forever.
-      const results = await Promise.all(
-        community!.relays.map(async (url) => {
-          const scope = guestbookCursorScope(community!.idHex, url);
-          const cursor = await readStreamCursor(scope);
-          const filter = cursor?.newest ? { ...base, since: cursor.newest } : base;
-          try {
-            const events = await nostr
-              .relay(url)
-              .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
-            if (events.length > 0) {
-              await updateStreamCursor(scope, {
-                newest: Math.max(...events.map((e) => e.created_at)),
-              });
-            }
-            return events;
-          } catch {
-            // Failed/aborted — the cursor stays put; the next poll re-asks.
-            return [] as NostrEvent[];
-          }
-        }),
-      );
-      const fresh = openGuestbookRaw(results.flat(), groups);
-      if (fresh.length > 0) writeOpened(fresh);
-      const stored = await queryByStreams(groups.map((g) => g.pk));
-      const byId = new Map<string, OpenedEvent>();
-      for (const e of stored) byId.set(e.rumorId, e);
-      for (const e of fresh) byId.set(e.rumorId, e);
-      return [...byId.values()];
+    queryFn: async () => {
+      const fresh = await sweepGuestbook(nostr, community!);
+      const stored = await queryByStreams(guestbookGroups(community!).map((g) => g.pk));
+      return mergeOpened(stored, fresh);
     },
   });
 

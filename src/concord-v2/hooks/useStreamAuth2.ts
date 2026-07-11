@@ -15,6 +15,7 @@ import { rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { channelsView } from "@/concord-v2/lib/community";
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import { readFolded } from "@/lib/foldedCache";
+import { logSync } from "@/lib/syncLog";
 
 /**
  * The stream keys the client must NIP-42-authenticate as to READ a community's
@@ -74,6 +75,8 @@ export function useRegisterAllStreamKeys2(): void {
     let cancelled = false;
 
     const register = async () => {
+      // Gather all keys first, then register in one burst — one swap per relay.
+      const batches: Array<{ keys: GroupKey[]; relays: string[]; idHex: string }> = [];
       for (const entry of communities) {
         const community = rehydrateCommunity(entry);
         if (!community) continue;
@@ -89,9 +92,19 @@ export function useRegisterAllStreamKeys2(): void {
           // No fold yet; core keys above still cover the control plane so the
           // fold can be fetched, after which a later poll picks up its channels.
         }
+        batches.push({ keys, relays: community.relays, idHex: community.idHex });
+      }
+      if (cancelled) return;
+      for (const batch of batches) {
         // Scoped to the community's relays: a relay's NIP-42 challenge then
         // signs only the keys it hosts (see streamAuth.ts).
-        if (!cancelled) registerStreamKeys(keys, community.relays);
+        const changed = registerStreamKeys(batch.keys, batch.relays);
+        if (changed.length > 0) {
+          logSync(
+            "auth",
+            `registered ${changed.length} new stream key(s) for ${batch.idHex.slice(0, 8)} (${batch.keys.length} derivable, ${batch.relays.length} relay(s))`,
+          );
+        }
       }
     };
 

@@ -1,31 +1,25 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { acceptInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
 import { capRelays, type Community } from "@/concord-v1/lib/types";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
+import { STREAM_AUTH_SETTLE_MS } from "@/concord-v2/lib/planeSync";
+import { onStreamKeysAdded } from "@/concord-v2/lib/streamAuth";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { syncControlPlane } from "@/lib/controlPlaneSync";
+import { logSync } from "@/lib/syncLog";
 import { useAppContext } from "@/hooks/useAppContext";
 
 /**
- * Sync the control plane of EVERY Concord community (V1 + V2) on pageload.
- *
- * The per-community control hooks only fetch the community you've opened, so
- * rosters/metadata/channels/banlists of every OTHER community stay stale until
- * visited. This runs one batched sweep — two relay filters total, one for all
- * V1 communities and one for all V2 — gated by a single shared cursor, storing
- * results where the per-community hooks read them back (see
- * {@link syncControlPlane}).
- *
- * Driven by a `useQuery` keyed on membership identity, so it runs once the
- * lists load and re-runs only when membership/epochs change — not on every
- * render. `refetchOnWindowFocus`/`staleTime` inherit the app defaults; the
- * sweep is cheap (two filters, shared `since` cursor).
+ * Sync the control plane of every Concord community (V1 + V2) on pageload.
+ * The NIP-42 auth hold lives inside planeSync, where it covers every caller.
+ * Driven by a `useQuery` keyed on membership identity; the sweep is
+ * cursor-gated, so a re-run is cheap.
  */
 function useControlPlaneSync(): void {
   const { nostr } = useNostr();
@@ -92,6 +86,29 @@ function useControlPlaneSync(): void {
       return sig;
     },
   });
+
+  // Re-sweep backstop: a REQ that left before a socket swap can complete
+  // auth-filtered-empty. `lastRun` starts at mount so the first wave doesn't
+  // double-sweep — planeSync already holds the initial sweep for it.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let lastRun = Date.now();
+    const MIN_INTERVAL_MS = 60_000;
+    const unsubscribe = onStreamKeysAdded(() => {
+      if (timer !== undefined) return; // a backstop re-sweep is already scheduled
+      const wait = Math.max(STREAM_AUTH_SETTLE_MS, lastRun + MIN_INTERVAL_MS - Date.now());
+      timer = setTimeout(() => {
+        timer = undefined;
+        lastRun = Date.now();
+        logSync("sweep", "stream-key registration settled — re-running the plane sweep");
+        queryClient.invalidateQueries({ queryKey: ["control-plane-sync"] });
+      }, wait);
+    });
+    return () => {
+      unsubscribe();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [queryClient]);
 }
 
 /**

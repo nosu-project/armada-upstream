@@ -13,6 +13,8 @@ import { channelPseudonym } from "@/concord-v1/lib/derive";
 import { acceptInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import type { Channel, Community } from "@/concord-v1/lib/types";
+import { listQueryKey, syncCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
+import { liveEntries } from "@/concord-v2/lib/communityList";
 import {
   KIND_GROUP_CHAT,
   KIND_USER_GROUPS,
@@ -20,6 +22,7 @@ import {
   type GroupRef,
 } from "@/lib/nip29";
 import { EncryptedSettingsSchema } from "@/lib/schemas";
+import { logSync } from "@/lib/syncLog";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -46,13 +49,15 @@ const MAX_CATCHUP_CHANNELS = 8;
 /** Cap on Concord communities we eagerly catch up. */
 const MAX_CATCHUP_COMMUNITIES = 6;
 
-/** Overall timeout for the whole sync so a dead relay never traps the user. */
-const SYNC_TIMEOUT_MS = 12_000;
+/**
+ * Overall timeout for the whole sync so a dead relay never traps the user.
+ */
+const SYNC_TIMEOUT_MS = 20_000;
 /** Per-step network timeout. */
 const STEP_TIMEOUT_MS = 8_000;
 
 /** A phase of the post-login sync. */
-export type SyncPhase = "settings" | "groups" | "messages" | "concord" | "done";
+export type SyncPhase = "settings" | "groups" | "messages" | "concord" | "communities" | "done";
 
 /** One line in the boot-log terminal the SyncGate renders. */
 export interface SyncLogLine {
@@ -76,6 +81,7 @@ const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
   groups: "mounting channel directory",
   messages: "syncing recent transmissions",
   concord: "decrypting community vault",
+  communities: "restoring encrypted communities",
 };
 
 /** Held epoch keys for a channel, newest-first (mirrors useConcordChannel). */
@@ -131,6 +137,9 @@ async function catchUpConcordChannel(
  *   4. Catch up on Concord (encrypted communities): decrypt the membership list,
  *      rehydrate each community, and decrypt its channels' newest messages,
  *      priming the ["concord","channel",…] caches useConcordChannelMessages reads.
+ *   5. Fetch + decrypt the Concord V2 Community List (kind 13302) and seed
+ *      the ["concord2","list"] cache. Stream-key registration and the
+ *      plane sweep follow from this seed.
  *
  * Every step is best-effort and bounded by a timeout — the gate must never trap
  * a user behind a slow or unreachable relay. Returns `{ phase, label, done }`.
@@ -180,6 +189,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     /** Open a phase: push an in-progress line, return its id. */
     const begin = (phase: Exclude<SyncPhase, "done">): string => {
       const id = `${phase}`;
+      logSync("gate", `phase "${phase}" started`);
       log.push({ id, text: PHASE_OPENING[phase] });
       if (!cancelled) setState({ phase, log: [...log], done: false });
       return id;
@@ -187,6 +197,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
 
     /** Resolve a phase line with a status chip. */
     const resolve = (id: string, status: string, tone: SyncLogLine["tone"] = "ok") => {
+      logSync("gate", `phase "${id}" resolved: ${status}`);
       const line = log.find((l) => l.id === id);
       if (line) {
         line.status = status;
@@ -354,6 +365,30 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           // Best-effort; never block login on Concord.
         }
         resolve(cId, `${communityCount} ${communityCount === 1 ? "community" : "communities"}`);
+      }
+      if (cancelled) return;
+
+      // ── 5. Concord V2: seed the community list, then stop. ───────────────
+      // Stream-key registration and the plane sweep follow from this seed;
+      // sweeping here would spend the NIP-42 challenge before keys register.
+      if (user.signer.nip44) {
+        const vId = begin("communities");
+        let v2Count = 0;
+        try {
+          const listData = await syncCommunityList2(nostr, user, queryClient, stepSignal());
+          logSync(
+            "gate",
+            `v2 list fetched: event=${listData.event ? listData.event.id.slice(0, 8) : "none"} entries=${listData.list.entries.length} live=${liveEntries(listData.list).length} decryptFailed=${Boolean(listData.decryptFailed)}`,
+          );
+          if (!cancelled && !listData.decryptFailed) {
+            queryClient.setQueryData(listQueryKey(pubkey), listData);
+          }
+          v2Count = liveEntries(listData.list).length;
+        } catch (err) {
+          // Best-effort; never block login on Concord.
+          logSync("gate", `v2 list fetch FAILED: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        resolve(vId, `${v2Count} ${v2Count === 1 ? "community" : "communities"}`);
       }
       if (cancelled) return;
 

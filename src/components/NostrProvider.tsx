@@ -12,7 +12,9 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
+import { logSync } from "@/lib/syncLog";
 import { onStreamKeysAdded, signStreamAuthsChunked, streamPubkeysForRelay } from "@/concord-v2/lib/streamAuth";
+import { whenRelaySweepsIdle } from "@/concord-v2/lib/planeSync";
 import { warmRumorStore } from "@/concord-v2/lib/rumorStore";
 import { warmInviteInbox } from "@/concord-v2/lib/inviteInbox";
 
@@ -158,22 +160,15 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // flood the bunker. Set after each successful sign.
   const authCooldownRef = useRef<Map<string, number>>(new Map());
 
-  // Open relay handles + the latest NIP-42 challenge each one issued. Concord
-  // V2 authenticates the connection as its DERIVED stream keys (not the user):
-  // a kind-1059 REQ at a stream address only passes an auth-gating relay
-  // (ditto-relay's default AUTH_KINDS=4,1059) once every `authors` entry — the
-  // stream pubkeys — is authenticated on THIS connection. We remember each
-  // relay's challenge so newly-registered stream keys (a fresh community join,
-  // an added channel, a rekey) can be authenticated on an ALREADY-open socket
-  // without waiting for the next auth-required round-trip.
+  // Per-relay NIP-42 challenge + auth bookkeeping. Concord V2 authenticates
+  // as derived stream keys: a kind-1059 REQ passes an auth-gating relay
+  // only once every `authors` entry is authenticated on the socket.
   const openRelaysRef = useRef<Map<string, { relay: NRelay1; challenge?: string }>>(new Map());
 
   /**
-   * Send NIP-42 AUTH frames on one relay for the stream pubkeys scoped to it
-   * (streamAuth's registry knows each key's community relays — a relay never
-   * pays for keys it doesn't host). Signing is chunked with event-loop yields
-   * (~4ms of EC work per signature), and aborts if the socket reopens
-   * mid-flight (the remembered challenge is then a dead nonce).
+   * Send NIP-42 AUTH frames for the stream pubkeys scoped to this relay.
+   * Signing is chunked with event-loop yields; aborts if the socket reopens
+   * mid-flight (the challenge is then a dead nonce).
    */
   const sendStreamAuths = async (
     entry: { relay: NRelay1; challenge?: string },
@@ -195,22 +190,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   };
 
   /**
-   * Reset a relay's NIP-42 state whenever its underlying WebSocket (re)opens
-   * (#45): a reconnected socket is a brand-new, UNAUTHENTICATED session, but
-   * NRelay1 (through @nostrify/nostrify 0.54.0, see soapbox-pub/nostrify#31)
-   * carries the previous session's auth bookkeeping across reconnects —
-   * `authRetriedSubs`/`authRetriedEvents` still contain ids that already used
-   * their single auth-retry, so an auth-gating relay's first `CLOSED:
-   * auth-required` PERMANENTLY deletes the subscription, and `authPromise`
-   * may still be the settled promise of the dead session. On top of that, our
-   * own per-relay AUTH cooldown could swallow the new connection's one and
-   * only challenge during a reconnect storm, and the remembered stream-key
-   * challenge is a stale nonce.
-   *
-   * Clearing all of it on every socket open makes a reconnect behave exactly
-   * like a first connection: the fresh challenge signs immediately (no
-   * cooldown), gated subs get their auth-retry back, and the stream keys
-   * re-authenticate off the NEW challenge when it arrives.
+   * Reset a relay's NIP-42 state on socket reopen (#45): a reconnected socket
+   * is a fresh unauthenticated session, but NRelay1 carries stale auth
+   * bookkeeping across reconnects. Clearing everything on open makes a
+   * reconnect behave like a first connection.
    */
   const watchSocketReopen = (relay: NRelay1, url: string) => {
     const internals = relay as unknown as {
@@ -238,10 +221,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         // No listener support — reconnects fall back to nostrify's behavior.
       }
     };
-    // websocket-ts re-emits "open" on every automatic reconnect of the same
-    // Websocket instance, but NRelay1.wake() REPLACES `relay.socket` outright
-    // after an idle close — intercept the assignment so the replacement socket
-    // is watched too.
+    // websocket-ts re-emits "open" on reconnect, but NRelay1.wake() REPLACES
+    // relay.socket — intercept the assignment so the replacement is watched too.
     let currentSocket = relay.socket;
     attach(currentSocket);
     try {
@@ -296,6 +277,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             const entry = openRelaysRef.current.get(url) ?? { relay };
             entry.challenge = challenge;
             openRelaysRef.current.set(url, entry);
+            logSync(
+              "auth",
+              `NIP-42 challenge from ${url} — signing user + ${streamPubkeysForRelay(url).length} stream key(s)`,
+            );
             void sendStreamAuths(entry, url);
 
             const signer = signerRef.current;
@@ -408,63 +393,76 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     };
   }, []);
 
-  // When Concord V2 registers new stream keys (a community opens, a channel is
-  // added, an epoch rotates), authenticate them on every already-open socket.
-  //
-  // Auth-gating relays (ditto-relay's default `AUTH_KINDS=4,1059`) authenticate
-  // a connection's `authors` ONLY at the single NIP-42 challenge they issue per
-  // socket; a stream AUTH replayed on that already-consumed challenge is
-  // ignored. So for a socket that has NOT yet been challenged we just send the
-  // new stream AUTHs (they'll ride the upcoming first challenge, or the relay
-  // challenges on the next gated REQ). But for a socket that ALREADY consumed
-  // its challenge, replay is a no-op at the relay — the newly-registered stream
-  // stays unauthenticated and its kind-1059 backfill silently returns empty
-  // until the process restarts with a fresh socket. To make late registration
-  // behave like a restart WITHOUT one, force a reconnect: closing the UNDERLYING
-  // browser socket (not the websocket-ts wrapper, whose `close()` sets
-  // `closedByUser` and suppresses reconnect) fires a server-style close, so
-  // websocket-ts auto-reconnects, `watchSocketReopen` resets the AUTH
-  // bookkeeping, and the relay re-challenges — at which point the `auth`
-  // callback authenticates the user AND every stream key scoped to that relay
-  // (including the ones that just arrived).
+  // When Concord V2 registers new stream keys, authenticate them on
+  // already-open sockets. A spent challenge can't be replayed, so for a
+  // socket that already consumed its challenge we swap the socket: close
+  // the websocket-ts wrapper and wake the relay for a fresh connection with
+  // a fresh challenge covering all registered keys.
   useEffect(() => {
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let pendingPks = new Set<string>();
+    /** Per-relay: when we last swapped its socket for a re-auth. */
+    const lastSwapAt = new Map<string, number>();
+    /** Per-relay: a trailing swap scheduled for when the cooldown expires. */
+    const pendingSwaps = new Map<string, ReturnType<typeof setTimeout>>();
+    /**
+     * Minimum spacing between swaps of the same relay. Registration arrives
+     * in waves — coalescing within the cooldown avoids rapid reconnects.
+     */
+    const SWAP_COOLDOWN_MS = 15_000;
+    /** Per-relay: a swap parked on {@link whenRelaySweepsIdle}. */
+    const deferredSwaps = new Set<string>();
+    let unmounted = false;
+
+    const swapSocket = (url: string) => {
+      const entry = openRelaysRef.current.get(url);
+      if (!entry?.challenge) return;
+      lastSwapAt.set(url, Date.now());
+      // Close the wrapper (not the browser socket) for an instant reconnect —
+      // a graceful close handshake can stall 10+ seconds with no close event.
+      logSync("auth", `new stream keys scoped to ${url} — swapping its challenged socket for a fresh challenge`);
+      try {
+        entry.relay.socket.close();
+        (entry.relay as unknown as { wake?: () => void }).wake?.();
+      } catch {
+        // No socket / already closing — the next REQ's wake() (or the next
+        // gated REQ's challenge) picks up the new keys.
+      }
+    };
+
+    /**
+     * Swap only once the relay has no sweep in flight.
+     */
+    const swapWhenIdle = (url: string) => {
+      if (deferredSwaps.has(url)) return; // a parked swap already covers this wave
+      deferredSwaps.add(url);
+      void whenRelaySweepsIdle(url).then(() => {
+        deferredSwaps.delete(url);
+        if (!unmounted) swapSocket(url);
+      });
+    };
+
     const reconnectChallengedSockets = () => {
       reconnectTimer = undefined;
       const added = pendingPks;
       pendingPks = new Set();
       for (const [url, entry] of openRelaysRef.current) {
-        if (!entry.challenge) {
-          // Never challenged yet: the upcoming first challenge will cover the
-          // new keys (the `auth` callback signs the relay's scoped keys).
+        if (!entry.challenge) continue;
+        // Only swap sockets the new keys are scoped to.
+        const scoped = new Set(streamPubkeysForRelay(url));
+        if (![...added].some((pk) => scoped.has(pk))) continue;
+        // Already authenticated on a spent challenge — swap for a fresh one.
+        if (pendingSwaps.has(url)) continue; // a trailing swap already covers this wave
+        const sinceLast = Date.now() - (lastSwapAt.get(url) ?? 0);
+        if (sinceLast < SWAP_COOLDOWN_MS) {
+          const t = setTimeout(() => {
+            pendingSwaps.delete(url);
+            swapWhenIdle(url);
+          }, SWAP_COOLDOWN_MS - sinceLast);
+          pendingSwaps.set(url, t);
           continue;
         }
-        // Only bounce sockets the new keys are actually scoped to — a relay
-        // that hosts none of them gains nothing from a reconnect (and each
-        // reconnect costs a full re-auth of that relay's scoped keys).
-        const scoped = new Set(streamPubkeysForRelay(url));
-        let covered = false;
-        for (const pk of added) {
-          if (scoped.has(pk)) {
-            covered = true;
-            break;
-          }
-        }
-        if (!covered) continue;
-        // Already authenticated on a spent challenge — replaying AUTH won't add
-        // the new authors. Reconnect to earn a fresh challenge that will.
-        const underlying = (entry.relay.socket as unknown as {
-          _underlyingWebsocket?: { close(code?: number, reason?: string): void };
-        })._underlyingWebsocket;
-        try {
-          // A non-1000 code reads as an abnormal (server-side) close, so
-          // websocket-ts reconnects instead of treating it as user-closed.
-          underlying?.close(4000, "reauth: new stream keys");
-        } catch {
-          // No underlying socket / already closing — the fresh connect that
-          // follows (or the next gated REQ's challenge) picks up the new keys.
-        }
+        swapWhenIdle(url);
       }
     };
     const unsubscribe = onStreamKeysAdded((added) => {
@@ -477,8 +475,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       }
     });
     return () => {
+      unmounted = true;
       unsubscribe();
       if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+      for (const t of pendingSwaps.values()) clearTimeout(t);
     };
     // Reads only refs; stable for the provider's lifetime.
   }, []);
