@@ -9,7 +9,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { fetchCreatorDmRelays } from "@/lib/creatorRelays";
 import { APP_RELAYS } from "@/lib/platform";
-import { unusableRelaysReason } from "@/lib/relayUsability";
+import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
 import { toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord-v2/lib/communityList";
 import { mintCommunity } from "@/concord-v2/lib/community";
 import {
@@ -105,13 +105,17 @@ export function useCommunityActions2() {
       // inbox relays are curated for sealed, privacy-expecting traffic like
       // Concord's. Fall back to the user's configured app relays when no DM
       // relay list is published (and to the deployment defaults if that
-      // list was emptied).
+      // list was emptied). Prefer the wss:// subset: a stray ws:// dev relay
+      // sealed into the bundle is permanently unreachable for every member on
+      // a secure origin, however reachable it is for the creator (#47).
       const dmRelays = await fetchCreatorDmRelays(nostr, user.pubkey);
-      const relays = dmRelays.length > 0
-        ? dmRelays
-        : config.appRelays.length > 0
-          ? config.appRelays
-          : APP_RELAYS;
+      const relays = preferPortableRelays(
+        dmRelays.length > 0
+          ? dmRelays
+          : config.appRelays.length > 0
+            ? config.appRelays
+            : APP_RELAYS,
+      );
       const { community, generalChannelId } = mintCommunity(trimmed, user.pubkey, relays);
 
       // Genesis: two owner-signed editions, nothing more (CORD-02 §1).
