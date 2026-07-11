@@ -3,9 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /** Min horizontal travel (px) before we claim the gesture from the scroller. */
 const CLAIM_THRESHOLD = 10;
 /** Fraction of the pane width past which a release commits. */
-const COMMIT_FRACTION = 0.4;
+const COMMIT_FRACTION = 0.25;
 /** Flick velocity (px/ms) that commits regardless of distance. */
-const COMMIT_VELOCITY = 0.4;
+const COMMIT_VELOCITY = 0.3;
 
 export interface EdgeSwipeState {
   /**
@@ -82,6 +82,10 @@ export function useEdgeSwipe({
   const claimed = useRef(false);
   const rejected = useRef(false);
   const pointerId = useRef<number | null>(null);
+  // Mirror of the latest dragX kept in a ref so `finish` always sees the value
+  // from the most recent pointermove, even if React hasn't re-rendered (and
+  // re-bound `finish`) by the time `pointerup` fires on a quick flick.
+  const dragXRef = useRef(0);
 
   // Sign that turns raw horizontal delta into "progress toward target":
   // opening tracks rightward (+dx), closing tracks leftward (−dx).
@@ -91,6 +95,7 @@ export function useEdgeSwipe({
     claimed.current = false;
     rejected.current = false;
     pointerId.current = null;
+    dragXRef.current = 0;
     setState({ dragX: 0, dragging: false });
   }, []);
 
@@ -129,7 +134,12 @@ export function useEdgeSwipe({
 
       if (!claimed.current) {
         // Mostly-vertical (scroll) or wrong-direction move → not our gesture.
-        if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > CLAIM_THRESHOLD) {
+        // Require dy to *substantially* dominate dx (1.5x) so a thumb swiping
+        // in a slight arc isn't permanently rejected at the first move — the
+        // browser withholds early pointermove events under `touch-action:
+        // pan-y` until it disambiguates, so the first event we see may already
+        // have accumulated a bit of dy.
+        if (Math.abs(dy) > Math.abs(dx) * 1.5 && Math.abs(dy) > CLAIM_THRESHOLD) {
           rejected.current = true;
           return;
         }
@@ -150,6 +160,7 @@ export function useEdgeSwipe({
       lastT.current = now;
 
       const clamped = Math.max(0, Math.min(dx, widthRef.current));
+      dragXRef.current = clamped;
       setState({ dragX: clamped, dragging: true });
     },
     [sign],
@@ -159,7 +170,7 @@ export function useEdgeSwipe({
     (e: React.PointerEvent) => {
       if (pointerId.current !== e.pointerId) return;
       const wasClaimed = claimed.current;
-      const dragged = state.dragX;
+      const dragged = dragXRef.current;
       const v = velocity.current;
       reset();
       if (!wasClaimed) return;
@@ -167,7 +178,7 @@ export function useEdgeSwipe({
         dragged > widthRef.current * COMMIT_FRACTION || v > COMMIT_VELOCITY;
       if (committed) onCommit();
     },
-    [onCommit, reset, state.dragX],
+    [onCommit, reset],
   );
 
   // Safety net: if the gesture is interrupted (pointercancel) clean up.

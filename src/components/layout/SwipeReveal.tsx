@@ -30,8 +30,10 @@ interface SwipeRevealProps {
  * Discord-style swipe-to-reveal layout for the mobile chat screens. The chat
  * pane is a full-screen overlay:
  *
- * - Drag from the left edge → the chat slides right; release past the
- *   threshold and it slides fully out, revealing the list (`onReveal`).
+ * - Drag rightward from anywhere on the chat pane → the chat slides right;
+ *   release past the threshold and it slides fully out, revealing the list
+ *   (`onReveal`). On Android the system back gesture is the reliable way to
+ *   start a reveal, since the OS reserves the screen edges for its own nav.
  * - When revealed, drag the list left (or tap the chat-return affordance) →
  *   the chat slides back (`onClose`).
  *
