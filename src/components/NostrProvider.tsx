@@ -300,27 +300,39 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             // A fresh challenge must be signed. Two guards keep a relay that
             // re-challenges on every retried REQ from flooding the (slow, remote)
             // bunker: (a) collapse a concurrent burst onto one in-flight sign;
-            // (b) rate-limit per relay — within the window, REFUSE the extra
-            // challenge (let nostrify retry later) rather than signing it or, worse,
-            // returning a stale signature.
+            // (b) rate-limit per relay — within the window, DELAY the sign
+            // until the window ends rather than refusing it. Refusing was
+            // fatal mid-session: NRelay1's doAuth swallows the rejection and
+            // each sub/publish gets ONE auth-retry (reset only on socket
+            // reopen), so a challenge dropped inside the window could kill a
+            // gated sub until the next reconnect. The delayed sign uses the
+            // relay's LATEST challenge at fire time — the nonce we were called
+            // with may be superseded by then.
             const inFlight = authInFlightRef.current.get(url);
             if (inFlight) return inFlight;
-            const cooldownUntil = authCooldownRef.current.get(url) ?? 0;
-            if (Date.now() < cooldownUntil) {
-              throw new Error(`AUTH throttled for ${url}`);
-            }
-            const signing = signer.signEvent({
-              kind: 22242,
-              content: "",
-              tags: [
-                ["relay", url],
-                ["challenge", challenge],
-              ],
-              created_at: Math.floor(Date.now() / 1000),
-            }).then((ev) => {
-              authCacheRef.current.set(url, { challenge, event: ev, signedAt: Date.now() });
-              authCooldownRef.current.set(url, Date.now() + AUTH_MIN_INTERVAL_MS);
-              return ev;
+            const wait = (authCooldownRef.current.get(url) ?? 0) - Date.now();
+            const signing = (wait > 0
+              ? new Promise<void>((resolve) => setTimeout(resolve, wait))
+              : Promise.resolve()
+            ).then(() => {
+              const current = openRelaysRef.current.get(url)?.challenge ?? challenge;
+              const liveSigner = signerRef.current;
+              if (!liveSigner) {
+                throw new Error("AUTH failed: no signer available (user not logged in)");
+              }
+              return liveSigner.signEvent({
+                kind: 22242,
+                content: "",
+                tags: [
+                  ["relay", url],
+                  ["challenge", current],
+                ],
+                created_at: Math.floor(Date.now() / 1000),
+              }).then((ev) => {
+                authCacheRef.current.set(url, { challenge: current, event: ev, signedAt: Date.now() });
+                authCooldownRef.current.set(url, Date.now() + AUTH_MIN_INTERVAL_MS);
+                return ev;
+              });
             }).finally(() => {
               authInFlightRef.current.delete(url);
             });
