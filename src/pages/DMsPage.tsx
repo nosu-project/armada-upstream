@@ -44,6 +44,7 @@ import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
+import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
@@ -199,6 +200,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
+  const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { transport, encryptedIds, decryptVisible, send } = useDmTransport(peer);
   const { messages } = transport;
   const { markRead } = useReadState();
@@ -373,6 +375,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   }, [muteUser, peer, name, toast, onBack]);
 
   return (
+    <ComposerBoundsProvider value={composerBoundsRef}>
     <div className="flex flex-col flex-1 min-h-0">
       <header className="h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         {/* Mobile back → returns to the rail + conversation list (the shared
@@ -601,6 +604,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </ComposerBoundsProvider>
   );
 }
 

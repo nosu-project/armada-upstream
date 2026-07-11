@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
+import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
@@ -624,6 +625,7 @@ export function ConcordV2Page() {
   const { communityId, channelId: routeChannelId } = useParams<{ communityId: string; channelId: string }>();
   const { user } = useCurrentUser();
   const isTouchDevice = useIsTouch();
+  const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { config, updateConfig } = useAppContext();
   const { mutedChannels, isCommunityMuted, toggleCommunityMute, toggleConcordChannelMute } = useMutes();
   const lastChannelKey = communityId ? `c2:${communityId}` : "";
@@ -1546,6 +1548,7 @@ export function ConcordV2Page() {
           <CallStageSlot active={inThisVoice} />
 
           <div className="relative flex flex-1 min-h-0">
+            <ComposerBoundsProvider value={composerBoundsRef}>
             <div className="flex-1 min-w-0 flex flex-col">
               {view === "mentions" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable">
@@ -1625,6 +1628,7 @@ export function ConcordV2Page() {
                 </>
               )}
             </div>
+            </ComposerBoundsProvider>
 
             {/* Thread panel. Desktop: in-flow sibling whose width animates open.
                 Mobile: overlays the chat. Mirrors GroupChat. */}

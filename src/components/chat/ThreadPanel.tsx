@@ -1,6 +1,6 @@
 import { Braces, Copy, Link2, Loader2, MessagesSquare, Trash2, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
@@ -26,6 +26,7 @@ import {
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime } from "@/lib/formatTime";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -72,6 +73,7 @@ function ThreadMessage({
   onDelete?: (event: ChatMsg) => void;
 }) {
   const { user } = useCurrentUser();
+  const composerBoundsRef = useComposerBoundsRef();
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(event.pubkey, metadata);
@@ -138,7 +140,7 @@ function ThreadMessage({
           )}
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-52">
+      <ContextMenuContent className="w-52" collisionPadding={getComposerCollisionPadding(composerBoundsRef)}>
         <ContextMenuItem onSelect={() => writeClipboardText(event.content).catch(() => undefined)}>
           <Copy className="mr-2 size-4" /> Copy text
         </ContextMenuItem>
@@ -253,8 +255,10 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   const isRumor = transport.isRumor ?? false;
   const canModerate = transport.canModerate;
   const onDelete = transport.deleteMessage;
+  const composerBoundsRef = useRef<HTMLElement | null>(null);
 
   return (
+    <ComposerBoundsProvider value={composerBoundsRef}>
     <aside className="flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome">
       <div className="flex items-center justify-between px-2 py-1 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -323,5 +327,6 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
         </div>
       )}
     </aside>
+    </ComposerBoundsProvider>
   );
 }

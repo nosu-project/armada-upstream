@@ -27,6 +27,7 @@ import { StickerPicker } from "@/components/chat/StickerPicker";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useApps } from "@/hooks/useApps";
 import { useChatScope } from "@/hooks/useChatScope";
@@ -275,6 +276,7 @@ interface ChatComposerProps {
  */
 export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
   const { user } = useCurrentUser();
+  const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile } = useUploadFile();
   const { emojis: customEmojis } = useCustomEmojis();
@@ -1097,6 +1099,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   return (
     <div
+      ref={(node) => { composerBoundsRef.current = node; }}
       className="relative shrink-0 pb-[var(--safe-area-pad-bottom,0px)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}

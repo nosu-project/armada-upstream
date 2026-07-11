@@ -5,6 +5,7 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
+import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpers";
@@ -296,6 +297,7 @@ export function ConcordPage() {
   const { communityId, channelId: routeChannelId } = useParams<{ communityId: string; channelId: string }>();
   const { user } = useCurrentUser();
   const isTouchDevice = useIsTouch();
+  const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { config, updateConfig } = useAppContext();
   const { mutedChannels, isCommunityMuted, toggleCommunityMute, toggleConcordChannelMute } = useMutes();
   // Storage key for this community's last-opened channel (local preference).
@@ -955,6 +957,7 @@ export function ConcordPage() {
           value={community && channel ? { kind: "concord", community, channel } : undefined}
         >
         <div className="relative flex flex-1 min-h-0">
+          <ComposerBoundsProvider value={composerBoundsRef}>
           <div className="flex-1 min-w-0 flex flex-col">
             <MessageTimeline
               key={channel ? bytesToHex(channel.id) : "none"}
@@ -1014,6 +1017,7 @@ export function ConcordPage() {
               />
             )}
           </div>
+          </ComposerBoundsProvider>
 
           {/* Thread panel. Desktop: in-flow sibling whose width animates open.
               Mobile: overlays the chat (absolute). Mirrors GroupChat. */}

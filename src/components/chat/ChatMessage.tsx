@@ -29,6 +29,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
 import { dittoEventUrl } from "@/lib/dittoUrl";
@@ -364,6 +365,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
 }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
+  const composerBoundsRef = useComposerBoundsRef();
   const author = useAuthor(identityOverride ? undefined : event.pubkey);
   const scopedName = useScopedDisplayName(identityOverride ? undefined : event.pubkey, author.data?.metadata);
   const displayName = identityOverride?.name ?? scopedName;
@@ -665,7 +667,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       </ContextMenuTrigger>
       {/* Discord-style right-click menu, mirroring the hover toolbar's
           capability gating. */}
-      <ContextMenuContent className="w-52">
+      <ContextMenuContent className="w-52" collisionPadding={getComposerCollisionPadding(composerBoundsRef)}>
         {canWrite && !isEditing && onOpenThread && (
           <ContextMenuItem onSelect={() => onOpenThread(event)}>
             <Reply className="mr-2 size-4" /> Reply

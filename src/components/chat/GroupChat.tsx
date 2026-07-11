@@ -10,6 +10,7 @@ import LoginDialog from "@/components/auth/LoginDialog";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEvent } from "@/hooks/useEvent";
@@ -191,6 +192,7 @@ interface GroupChatProps {
  */
 export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, searchQuery = "", scrollToMessageRef }: GroupChatProps) {
   const { user } = useCurrentUser();
+  const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { data: groupDetails } = useGroup(relayUrl, groupId);
   const channelName = groupDetails?.group?.name;
   const {
@@ -467,6 +469,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
 
   return (
     <div className="relative flex flex-1 min-h-0 min-w-0">
+      <ComposerBoundsProvider value={composerBoundsRef}>
       <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
         {/* Search results replace the timeline in-place when searching. */}
         {searching ? (
@@ -597,6 +600,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           onClose={() => setSignupDialogOpen(false)}
         />
       </div>
+      </ComposerBoundsProvider>
 
       {/* Thread panel. Desktop: in-flow sibling whose width animates open.
           Mobile: overlays the chat (absolute). */}
