@@ -13,6 +13,7 @@ import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { VoicePresence } from "@/components/VoicePresence";
+import { BotPill } from "@/components/BotPill";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -136,8 +137,11 @@ function ConversationRow({
         </AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
-        <div className={cn("text-sm truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
-          {name}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className={cn("text-sm truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
+            {name}
+          </div>
+          <BotPill metadata={metadata} />
         </div>
         {preview && (
           <div className={cn("text-xs truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
@@ -395,7 +399,10 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             {name[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
-        <h1 className="font-semibold truncate flex-1 min-w-0">{name}</h1>
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <h1 className="font-semibold truncate min-w-0">{name}</h1>
+          <BotPill metadata={author.data?.metadata} />
+        </div>
         {/* Who's in this DM's voice room (others, not us) — shown whether or
             not we've joined, so the peer waiting in a call is visible. */}
         {dmOthersInVoice.length > 0 && (

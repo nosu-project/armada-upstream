@@ -3,6 +3,7 @@ import { AtSign, Ban, Copy, Crown, IdCard, MoreVertical, Shield, ShieldOff, Smil
 import { useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { BotPill } from "@/components/BotPill";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { StatusDialog } from "@/components/dialogs/StatusDialog";
 import { Button } from "@/components/ui/button";
@@ -278,6 +279,7 @@ function MemberRow({
           Mod
         </span>
       ) : null}
+      <BotPill metadata={metadata} />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button

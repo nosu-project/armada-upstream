@@ -1,6 +1,7 @@
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
@@ -261,8 +262,11 @@ function MentionItem({
       </Avatar>
 
       <div className="flex-1 min-w-0">
-        <div className="font-semibold text-sm truncate">
-          <EmojifiedText tags={profile.event.tags}>{displayName}</EmojifiedText>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="font-semibold text-sm truncate">
+            <EmojifiedText tags={profile.event.tags}>{displayName}</EmojifiedText>
+          </div>
+          <BotPill metadata={metadata} />
         </div>
         <div className="text-xs text-muted-foreground truncate font-mono text-[11px]">
           {identifier}

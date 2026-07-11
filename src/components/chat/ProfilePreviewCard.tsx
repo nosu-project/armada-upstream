@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
+import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -84,10 +85,13 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
         </div>
 
         {/* Name */}
-        <div className="font-bold text-[15px] truncate">
-          {author.data?.event
-            ? <EmojifiedText tags={author.data.event.tags}>{displayName}</EmojifiedText>
-            : displayName}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="font-bold text-[15px] truncate">
+            {author.data?.event
+              ? <EmojifiedText tags={author.data.event.tags}>{displayName}</EmojifiedText>
+              : displayName}
+          </div>
+          <BotPill metadata={metadata} />
         </div>
 
         {/* NIP-38 status */}
