@@ -7,8 +7,8 @@ All notable changes to Armada are documented here. The format follows
 ## [0.27.0] - 2026-07-12
 
 Armada can now send Bitcoin to other users: Lightning zaps from a wallet you
-connect in Settings, plus on-chain payments that keep the recipient's address
-private. Messages in Concord communities can be edited after sending. Bot
+connect in Settings, plus on-chain payments whose attribution is sealed
+privately into the channel tally. Messages in Concord communities can be edited after sending. Bot
 accounts show a Bot badge next to their name wherever you see them. Tapping a
 thread-reply notification now opens the thread directly, and the app lands on
 your actual first community after login instead of a server you didn't pick.
@@ -18,7 +18,8 @@ out the release.
 ### Added
 - Send Lightning zaps to other users, publicly in servers and privately in
   Concord communities, from a Lightning wallet you connect in Settings
-- Send on-chain Bitcoin payments that keep the recipient's address private
+- Send on-chain Bitcoin payments, with the zap attribution sealed privately
+  into the channel tally
 - Edit your own messages in Concord communities after sending
 - Wallet settings to connect and manage Lightning wallets and configure Bitcoin
   payment options
