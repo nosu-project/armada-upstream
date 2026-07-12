@@ -4,6 +4,49 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.27.0] - 2026-07-12
+
+Armada can now send Bitcoin to other users: Lightning zaps from a wallet you
+connect in Settings, plus on-chain payments that keep the recipient's address
+private. Messages in Concord communities can be edited after sending. Bot
+accounts show a Bot badge next to their name wherever you see them. Tapping a
+thread-reply notification now opens the thread directly, and the app lands on
+your actual first community after login instead of a server you didn't pick.
+Plus reaction removal, safe-area padding, and Android back-gesture fixes round
+out the release.
+
+### Added
+- Send Lightning zaps to other users, publicly in servers and privately in
+  Concord communities, from a Lightning wallet you connect in Settings
+- Send on-chain Bitcoin payments that keep the recipient's address private
+- Edit your own messages in Concord communities after sending
+- Wallet settings to connect and manage Lightning wallets and configure Bitcoin
+  payment options
+- Bot accounts show a Bot badge next to their name in chat, the member list,
+  profile cards, mentions, and DMs
+- Your custom emoji list now syncs across your devices
+
+### Changed
+- Tapping a thread-reply notification opens the thread panel directly, instead
+  of just the channel
+- After login, the app lands on the first item in your arranged community rail
+  — not always the first server
+- Opening a server's home page no longer auto-redirects into a channel
+
+### Fixed
+- Tapping a reaction you already added removes it instead of doing nothing
+- Notifications for the channel or thread you're currently viewing are now
+  suppressed
+- Thread unread highlights clear when you open the thread from the chat timeline
+- Image lightboxes close on the Android back gesture instead of navigating away
+- Content in mentions, threads, DMs, and settings no longer scrolls under the
+  home indicator or nav bar
+- Replies whose original message isn't loaded are reachable from the Threads tab
+  instead of cluttering the timeline
+- Relay authentication no longer drops mid-session when a relay throttles a
+  challenge or closes a subscription, which could stall live updates on desktop
+  and web until restart
+
 ## [0.26.0] - 2026-07-11
 
 Your account now stays in sync across devices automatically — joins, mutes,
