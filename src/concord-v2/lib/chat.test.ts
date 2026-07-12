@@ -1,12 +1,20 @@
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { buildV2CommentTags, foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
 import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { MOCK_PREIMAGE as ZAP_PREIMAGE, paymentHashOf } from "@/test/bolt11Mock";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
+
+// Synthetic "lnmock…" invoices decode to controlled sections so the CORD.md
+// fold can be tested without a bolt11 encoder (shared with zaps.test.ts).
+vi.mock("light-bolt11-decoder", async (importOriginal) => {
+  const { mockBolt11Decoder } = await import("@/test/bolt11Mock");
+  return mockBolt11Decoder(await importOriginal<typeof import("light-bolt11-decoder")>());
+});
 
 const root = new Uint8Array(32).fill(3);
 const channelId = new Uint8Array(32).fill(5);
@@ -179,5 +187,82 @@ describe("chat plane (CORD-03)", () => {
     const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, otherEpoch, alice), otherEpoch);
     const opened = await openChatBatch([wrap], channel);
     expect(opened.length).toBe(0);
+  });
+
+  it("folds verified CORD.md zaps and drops forged ones", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+    const carol = signer();
+
+    const msg = chatRumor(alice, KIND_MESSAGE, "zap me", 1000);
+    const zapTags = (preimage: string, msats: string, bolt11 = `lnmock${msats}`) => [
+      ["e", msg.id],
+      ["p", alice.pubkey],
+      ["k", "9"],
+      ["amount", msats],
+      ["bolt11", bolt11],
+      ["preimage", preimage],
+    ];
+    // Bob's zap: valid preimage, matching amount.
+    const goodZap = chatRumor(bob, KIND_ZAP, "gm ⚡", 2000, zapTags(ZAP_PREIMAGE, "21000"));
+    // Carol's forgery: wrong preimage for the invoice's payment hash.
+    const forgedZap = chatRumor(
+      carol,
+      KIND_ZAP,
+      "",
+      3000,
+      zapTags("99".repeat(32), "500000", `lnmock500000:h${paymentHashOf("88".repeat(32))}`),
+    );
+
+    const wraps = await Promise.all([
+      wrapChat(msg, channel, alice),
+      wrapChat(goodZap, channel, bob),
+      wrapChat(forgedZap, channel, carol),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+
+    const zaps = folded.zaps.get(msg.id);
+    expect(zaps?.length).toBe(1);
+    expect(zaps?.[0]).toMatchObject({ pubkey: bob.pubkey, sats: 21, comment: "gm ⚡" });
+    // The zap rumor is not a timeline message.
+    expect(folded.messages.map((m) => m.content)).toEqual(["zap me"]);
+  });
+
+  it("counts a payment once: a replayed proof never re-enters the tally", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+    const mallory = signer();
+
+    const m1 = chatRumor(alice, KIND_MESSAGE, "zap me", 1000);
+    const m2 = chatRumor(alice, KIND_MESSAGE, "me too", 1100);
+    const zapTags = (targetId: string) => [
+      ["e", targetId],
+      ["p", alice.pubkey],
+      ["k", "9"],
+      ["amount", "21000"],
+      ["bolt11", "lnmock21000"],
+      ["preimage", ZAP_PREIMAGE],
+    ];
+    // Bob pays once and announces (earliest ms — the deterministic winner).
+    const paid = chatRumor(bob, KIND_ZAP, "", 2000, zapTags(m1.id));
+    // Mallory saw bob's preimage in the plane and replays the same proof as
+    // her own zap — on the same message and on a different one.
+    const replaySame = chatRumor(mallory, KIND_ZAP, "", 3000, zapTags(m1.id));
+    const replayOther = chatRumor(mallory, KIND_ZAP, "", 4000, zapTags(m2.id));
+
+    const wraps = await Promise.all([
+      wrapChat(m1, channel, alice),
+      wrapChat(m2, channel, alice),
+      wrapChat(paid, channel, bob),
+      wrapChat(replaySame, channel, mallory),
+      wrapChat(replayOther, channel, mallory),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+
+    expect(folded.zaps.get(m1.id)?.length).toBe(1);
+    expect(folded.zaps.get(m1.id)?.[0].pubkey).toBe(bob.pubkey);
+    expect(folded.zaps.get(m2.id)).toBeUndefined();
   });
 });
