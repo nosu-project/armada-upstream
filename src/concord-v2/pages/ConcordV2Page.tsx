@@ -1656,7 +1656,7 @@ export function ConcordV2Page() {
             <ComposerBoundsProvider value={composerBoundsRef}>
             <div className="flex-1 min-w-0 flex flex-col">
               {view === "mentions" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
                   <MentionsView
                     channels={channels}
                     mentions={mentions}
@@ -1665,7 +1665,7 @@ export function ConcordV2Page() {
                   />
                 </div>
               ) : view === "threads" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
                   <ThreadsView
                     channels={channels}
                     threads={displayedThreads}

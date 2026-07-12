@@ -484,7 +484,7 @@ export function SettingsPage() {
         <h1 className="font-semibold truncate leading-tight">Settings</h1>
       </header>
 
-      <div className="flex-1 min-h-0 overflow-y-auto safe-area-bottom">
+      <div className="flex-1 min-h-0 overflow-y-auto pb-safe">
         <div className="max-w-2xl mx-auto px-4 sm:px-6 pb-12 pt-4 space-y-6">
           {navGroups.map((group) => (
             <section key={group.heading} className="space-y-1.5">

@@ -795,7 +795,7 @@ function NewDMPane({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-3 space-y-0.5">
+      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-safe space-y-0.5">
         {recipients.length > 0 ? (
           recipients.map((r, index) =>
             r.resolved ? (
