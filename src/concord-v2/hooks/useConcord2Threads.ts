@@ -7,12 +7,26 @@ import { foldTimeline, replyTargetOf, type OpenedChat } from "@/concord-v2/lib/c
 import { openedToChatMsg } from "@/concord-v2/hooks/useTransport2";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { ChatMsg } from "@/components/chat/transport";
+import type { NostrEvent } from "@nostrify/nostrify";
 import {
   loadConcord2ThreadReadState,
   markConcord2ThreadRead,
   markConcord2ThreadsRead,
   type Concord2ThreadReadMap,
 } from "@/concord-v2/lib/threadReadState2";
+
+/**
+ * Whether the thread root is a tombstone (a synthetic placeholder for a root
+ * message that hasn't been decoded/loaded yet). Checked by the ThreadPanel so
+ * it can render a "message not loaded" placeholder instead of the root's
+ * content/avatar.
+ */
+export function isTombstoneRoot(root: ChatMsg): boolean {
+  return root.pubkey === TOMBSTONE_PUBKEY;
+}
+
+/** Synthetic pubkey used to mark a tombstone root (never a real one). */
+const TOMBSTONE_PUBKEY = "\u0000tombstone";
 
 /** A thread the current user has participated in, summarized for the tab. */
 export interface Concord2Thread {
@@ -100,10 +114,7 @@ export function useConcord2Threads(channels: ChannelV2[]): {
 
       for (const [rootId, replies] of repliesByRoot) {
         const rootMsg = byId.get(rootId);
-        // Orphan root (older than the scan window / undecoded): no root to
-        // render or open a panel for.
-        if (!rootMsg) continue;
-        const authoredRoot = rootMsg.author === pubkey;
+        const authoredRoot = rootMsg?.author === pubkey;
         const authoredReply = replies.some((r) => r.author === pubkey);
         if (!authoredRoot && !authoredReply) continue;
 
@@ -121,8 +132,16 @@ export function useConcord2Threads(channels: ChannelV2[]): {
           }
         }
 
+        // Orphan root (older than the scan window / undecoded): create a
+        // tombstone so the thread is still listed and reachable. The
+        // ThreadPanel renders a placeholder for the root; when the real root
+        // eventually loads, it replaces the tombstone naturally.
+        const rootChatMsg: ChatMsg = rootMsg
+          ? openedToChatMsg(rootMsg)
+          : makeTombstoneRoot(rootId);
+
         out.push({
-          root: openedToChatMsg(rootMsg),
+          root: rootChatMsg,
           rootId,
           newestReplyAuthor: newest.author,
           channelIdHex: idHex,
@@ -193,4 +212,24 @@ export function useConcord2Threads(channels: ChannelV2[]): {
     () => ({ threads, isLoading, hasNew, markRead, markAllRead }),
     [threads, isLoading, hasNew, markRead, markAllRead],
   );
+}
+
+/**
+ * Create a synthetic placeholder `ChatMsg` for a thread root that hasn't been
+ * decoded/loaded yet. The ThreadPanel detects tombstone roots (via
+ * {@link isTombstoneRoot}) and renders a "message not loaded" placeholder
+ * instead of the root's content/avatar. The real root replaces the tombstone
+ * naturally once it loads (the next scan picks it up from `byId`).
+ */
+function makeTombstoneRoot(rootId: string): ChatMsg {
+  const ev: NostrEvent = {
+    id: rootId,
+    pubkey: TOMBSTONE_PUBKEY,
+    created_at: 0,
+    kind: 9,
+    tags: [],
+    content: "",
+    sig: "",
+  };
+  return ev;
 }

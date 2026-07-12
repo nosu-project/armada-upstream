@@ -84,6 +84,26 @@ export interface ArmadaNotificationPlugin {
     listener: (data: { inner: string; z: string; outerId: string }) => void,
   ): Promise<PluginListenerHandle>;
   /**
+   * Tell the running service which roomKey(s) the WebView is currently showing
+   * (so it can suppress redundant notifications for those rooms — the live
+   * timeline already paints the message). Pass an empty array when the app is
+   * backgrounded or on a non-chat screen. The value is volatile: it lives
+   * only on the running service instance, so killing the app or the service
+   * immediately resumes notifications. Mentions still notify on an active
+   * room (a deliberate @-ping deserves attention even on the visible channel).
+   *
+   * A set (not a single key) because a Concord V1 channel can span multiple
+   * rekey epochs, each with its own `z` pseudonym — and thus multiple
+   * roomKeys — all of which are "active" simultaneously.
+   *
+   * Room-key shapes (must match the service's enqueueRoomMessage keys):
+   *   - NIP-29 group: `h:<relayUrl>|<groupId>`
+   *   - Concord V1:   `z:<pseudonym>`
+   *   - Concord V2:   `c2:<channelIdHex>`
+   *   - DM:           `dm:<peerPubkey>`
+   */
+  setActiveRooms(options: { roomKeys: string[] }): Promise<void>;
+  /**
    * Configure (and start/stop) the background service. Passing `enabled: false`
    * or omitting pubkey/relays stops the service and clears stored config.
    */

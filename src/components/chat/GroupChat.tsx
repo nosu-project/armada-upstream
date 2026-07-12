@@ -1,5 +1,6 @@
 import { Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
@@ -25,6 +26,7 @@ import { useGroupReactions } from "@/hooks/useReactions";
 import { useZapReceipts } from "@/hooks/useZapReceipts";
 import { useGroupThreads, useSendThreadReply } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";
+import { useActiveRoom } from "@/hooks/useActiveRoom";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
@@ -251,6 +253,39 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     [],
   );
   const [threadRoot, setThreadRoot] = useState<NostrEvent | undefined>(undefined);
+
+  // Tell the native notification service this NIP-29 room (and, if a thread
+  // panel is open, that specific thread) is on screen, so it suppresses
+  // redundant tray entries. Cleared on unmount/background. The roomKey shapes
+  // must match the service: `h:<relayUrl>|<groupId>` for the room,
+  // `h:<relayUrl>|<groupId>:t:<rootId>` for a specific open thread.
+  useActiveRoom(
+    relayUrl && groupId ? `h:${relayUrl}|${groupId}` : undefined,
+    relayUrl && groupId && threadRoot ? `h:${relayUrl}|${groupId}:t:${threadRoot.id}` : undefined,
+  );
+
+  // Auto-open the thread panel when arrived via a notification deep-link
+  // (`?thread=<rootId>` — the service appends it for kind-1111 replies). Only
+  // fires once per `thread` param: when the root message is in the loaded
+  // window we open its thread; otherwise we clear the param so a later load
+  // doesn't snap to it after the user has scrolled.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const threadParam = searchParams.get("thread");
+  useEffect(() => {
+    if (!threadParam || threadRoot) return;
+    const root = messages.find((m) => m.id === threadParam);
+    if (root) {
+      setThreadRoot(root);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("thread");
+          return next;
+        },
+        { replace: true },
+      );
+    }
+  }, [threadParam, threadRoot, messages, setSearchParams]);
 
   // Reaction and zap tallies resolve over the timeline PLUS the open thread's
   // replies (kind-1111 comments, which aren't in the timeline), so a reply's

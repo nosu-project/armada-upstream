@@ -1,7 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { ChevronDown, ChevronLeft, Bell, BellOff, Hash, Loader2, LogOut, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
@@ -34,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useActiveRoom } from "@/hooks/useActiveRoom";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useConcordActions } from "@/concord-v1/hooks/useConcordActions";
@@ -56,6 +57,7 @@ import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommu
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/concord-v1/lib/roles";
+import { channelZs } from "@/concord-v1/lib/concordNotifications";
 import { type Channel, type Community, type CommunityImage } from "@/concord-v1/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 
@@ -421,6 +423,13 @@ export function ConcordPage() {
   const { transport: baseTransport, reactionsFor, allMessages } = useConcordTransport(community, channel, canWrite, iAmOwner);
   const { mutateAsync: send } = useSendConcordMessage(community, channel);
 
+  // Tell the native notification service this Concord V1 channel is on screen,
+  // so it suppresses redundant tray entries (the live timeline already paints
+  // each message). A V1 channel maps to one `z` pseudonym per held rekey epoch
+  // (each is its own roomKey on the service side), so we pass the whole set.
+  // Cleared on unmount/background.
+  useActiveRoom(channel ? channelZs(channel).map((z) => `z:${z}`) : undefined);
+
   // Per-channel unread badges, computed purely from the local event store
   // (which the wire keeps fed with every channel's sealed outers).
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord1Unread(community);
@@ -517,6 +526,28 @@ export function ConcordPage() {
     setThreadAutoFocus(focusReply);
     setThreadRoot(event);
   }, []);
+
+  // Auto-open the thread panel when arrived via a notification deep-link
+  // (`?thread=<rootId>` — the service appends it for kind-1111 Concord
+  // replies). Mirrors the NIP-29 GroupChat behavior: fires once per param,
+  // then clears it so a later load doesn't snap back.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const threadParam = searchParams.get("thread");
+  useEffect(() => {
+    if (!threadParam || threadRoot) return;
+    const root = allMessages.find((m) => m.id === threadParam);
+    if (root) {
+      openThread(root);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("thread");
+          return next;
+        },
+        { replace: true },
+      );
+    }
+  }, [threadParam, threadRoot, allMessages, openThread, setSearchParams]);
 
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {

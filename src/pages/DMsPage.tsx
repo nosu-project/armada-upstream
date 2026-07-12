@@ -35,6 +35,7 @@ import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useMuteUser } from "@/hooks/useMuteList";
+import { useActiveRoom } from "@/hooks/useActiveRoom";
 import {
   useDMConversations,
   useDMSupport,
@@ -1051,6 +1052,12 @@ export function DMsPage() {
   );
 
   const activePeer = rawPeer ? resolvePubkey(rawPeer) : undefined;
+
+  // Tell the native notification service this DM thread is on screen, so it
+  // suppresses redundant tray entries (the live timeline already paints each
+  // message). Cleared on unmount/background. The roomKey shape must match the
+  // service's `enqueueRoomMessage` key: `dm:<peerPubkey>`.
+  useActiveRoom(activePeer ? `dm:${activePeer}` : undefined);
 
   // The peer whose thread is mounted. It lags behind `activePeer` so the thread
   // stays rendered while it slides out on mobile (back navigation), then it's

@@ -164,6 +164,23 @@ public class NotificationRelayService extends Service {
     // same notification instead of stacking a new one per event.
     private final Map<String, RoomNotif> roomNotifs = new HashMap<>();
 
+    /**
+     * The roomKey(s) the WebView is currently showing on screen (set via
+     * {@code ArmadaNotification.setActiveRooms}), or empty when the app is
+     * backgrounded / on a non-chat screen. Held on the live instance only —
+     * never persisted — so killing the WebView or the service immediately
+     * resumes notifications. When a message arrives for an active room we
+     * suppress the notification (it's redundant: the live timeline already
+     * shows it). Mentions are still surfaced, since a mention is a deliberate
+     * @-ping even on the visible channel.
+     *
+     * A Set (not a single String) because a Concord V1 channel can span
+     * multiple rekey epochs, each with its own {@code z} pseudonym — and thus
+     * multiple roomKeys — all of which are "active" simultaneously.
+     */
+    private static volatile Set<String> activeRoomKeys =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
 
     // pubkey → resolved profile (kind 0). Cached for the service lifetime so we
     // don't re-fetch the same author's name/avatar on every notification.
@@ -282,6 +299,24 @@ public class NotificationRelayService extends Service {
         NotificationRelayService svc = instance;
         if (svc == null) return;
         svc.handler.post(() -> svc.deliverAuth(relayUrl, eventJson));
+    }
+
+    /**
+     * Record the roomKey(s) the WebView is currently showing (empty = not on a
+     * chat screen / app backgrounded). Called from the plugin's
+     * {@code setActiveRooms} bridge method. Suppresses redundant notifications
+     * for the rooms the user is already looking at.
+     */
+    static void setActiveRooms(Set<String> roomKeys) {
+        Set<String> next = roomKeys != null ? roomKeys : new HashSet<>();
+        // Copy into a ConcurrentHashMap-backed set so reads from the WebSocket
+        // thread (handleEvent → isActivelyViewed) never race a concurrent
+        // write from the Capacitor bridge thread. A plain HashSet can lose
+        // visibility of puts across threads even with a volatile reference.
+        Set<String> concurrent = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+        concurrent.addAll(next);
+        activeRoomKeys = concurrent;
+        if (BuildConfig.DEBUG) Log.d(TAG, "setActiveRooms: " + concurrent);
     }
 
     private void deliverAuth(String relayUrl, String eventJson) {
@@ -1301,7 +1336,7 @@ public class NotificationRelayService extends Service {
                 enqueueRoomMessage(
                         "z:" + z, room, url != null ? url : "/", /*isGroup=*/true,
                         /*senderPubkey=*/null, "Someone", /*picture=*/null,
-                        "New message", System.currentTimeMillis());
+                        "New message", System.currentTimeMillis(), /*mention=*/false);
                 return;
             }
 
@@ -1316,7 +1351,7 @@ public class NotificationRelayService extends Service {
             if (author.equals(userPubkey)) {
                 return; // our own message echoed back
             }
-            boolean mentionsMe = pTags(inner).contains(userPubkey);
+            boolean mentionsMe = isMentioned(inner, userPubkey);
             // Concord rooms reuse the group-message prefs: always notify on a
             // mention; otherwise honour the all-messages toggle.
             if (!(mentionsMe ? prefBool("mentions", true) : prefBool("allGroupMessages", true))) {
@@ -1328,17 +1363,24 @@ public class NotificationRelayService extends Service {
             final boolean fMention = mentionsMe;
             final String preview = truncate(inner.optString("content"));
             final long fTs = (cts > 0 ? cts * 1000L : System.currentTimeMillis());
+            // A kind-1111 comment (threaded reply) carries its thread root in the
+            // uppercase `E` tag. Append it to the deep-link so the WebView can
+            // open the thread panel on tap instead of just the channel.
+            final String threadRoot = innerKindCommentRoot(inner);
+            // SYNCHRONOUS active-room suppression: check before the async profile
+            // fetch so the decision is immediate (no race with the Capacitor
+            // bridge). A mention always breaks through.
+            if (isActivelyViewed("z:" + fZ, threadRoot, fMention)) {
+                return;
+            }
             resolveAuthor(author, relayUrl, profile -> {
                 String name = displayName(profile, author);
                 String picture = profile != null ? profile.picture : null;
-                // The room is the conversation title (MessagingStyle); a mention
-                // is reflected in the line text so it stands out in the thread.
-                String text = !preview.isEmpty() ? preview : "Sent a message";
-                if (fMention) text = "@you " + text;
+                String text = buildMessageText(preview, fMention, threadRoot != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fRoom + " / " + name);
                 enqueueRoomMessage(
-                        "z:" + fZ, fRoom, fUrl, /*isGroup=*/true,
-                        author, name, picture, text, fTs);
+                        "z:" + fZ, fRoom, appendThreadParam(fUrl, threadRoot), /*isGroup=*/true,
+                        author, name, picture, text, fTs, fMention);
             });
             return;
         }
@@ -1367,21 +1409,26 @@ public class NotificationRelayService extends Service {
                 enqueueRoomMessage(
                         "c2:" + st.channelId, st.name, st.url, /*isGroup=*/true,
                         /*senderPubkey=*/null, "Someone", /*picture=*/null,
-                        "New message", System.currentTimeMillis());
+                        "New message", System.currentTimeMillis(), /*mention=*/false);
                 return;
             }
 
-            // Every chat-plane kind rides an identical wrap; only actual
-            // messages (rumor kind 9) notify — reactions/edits/deletes stay
-            // silent, mirroring the V1 policy of subscribing messages only.
-            if (rumor.optInt("kind", -1) != 9) {
+            // Every chat-plane kind rides an identical wrap. Only messages
+            // (kind 9) and thread replies (kind 1111) notify — reactions
+            // (7), edits (5/3302), deletes (5) and other chat-plane kinds
+            // stay silent. V1 has no such filter (it notifies for every
+            // decrypted inner); V2 is tighter because it subscribes to ALL
+            // kind-1059 wraps, including non-message chat-plane traffic the
+            // WebView handles silently.
+            int rumorKind = rumor.optInt("kind", -1);
+            if (rumorKind != 9 && rumorKind != 1111) {
                 return;
             }
             final String author2 = rumor.optString("pubkey");
             if (author2.equals(userPubkey)) {
                 return; // our own message echoed back
             }
-            boolean mentionsMe2 = pTags(rumor).contains(userPubkey);
+            boolean mentionsMe2 = isMentioned(rumor, userPubkey);
             // Concord rooms reuse the group-message prefs: always notify on a
             // mention; otherwise honour the all-messages toggle.
             if (!(mentionsMe2 ? prefBool("mentions", true) : prefBool("allGroupMessages", true))) {
@@ -1392,15 +1439,24 @@ public class NotificationRelayService extends Service {
             final String preview2 = truncate(rumor.optString("content"));
             final long rts = rumor.optLong("created_at", 0);
             final long fTs2 = (rts > 0 ? rts * 1000L : System.currentTimeMillis());
+            // A kind-1111 comment (threaded reply) carries its thread root in the
+            // uppercase `E` tag. Append it to the deep-link so the WebView can
+            // open the thread panel on tap instead of just the channel.
+            final String threadRoot2 = innerKindCommentRoot(rumor);
+            // SYNCHRONOUS active-room suppression: check before the async profile
+            // fetch so the decision is immediate (no race with the Capacitor
+            // bridge). A mention always breaks through.
+            if (isActivelyViewed("c2:" + fSt.channelId, threadRoot2, fMention2)) {
+                return;
+            }
             resolveAuthor(author2, relayUrl, profile -> {
                 String name = displayName(profile, author2);
                 String picture = profile != null ? profile.picture : null;
-                String text = !preview2.isEmpty() ? preview2 : "Sent a message";
-                if (fMention2) text = "@you " + text;
+                String text = buildMessageText(preview2, fMention2, threadRoot2 != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2: " + fSt.name + " / " + name);
                 enqueueRoomMessage(
-                        "c2:" + fSt.channelId, fSt.name, fSt.url, /*isGroup=*/true,
-                        author2, name, picture, text, fTs2);
+                        "c2:" + fSt.channelId, fSt.name, appendThreadParam(fSt.url, threadRoot2),
+                        /*isGroup=*/true, author2, name, picture, text, fTs2, fMention2);
             });
             return;
         }
@@ -1424,6 +1480,21 @@ public class NotificationRelayService extends Service {
 
         final boolean mention = mentionsMe;
         final long fTs = (ts > 0 ? ts * 1000L : System.currentTimeMillis());
+        // For NIP-29 kind-1111 thread replies, the thread root lives in the
+        // uppercase `E` tag (NIP-22). We append it to the deep-link so the
+        // WebView can auto-open the thread panel on tap.
+        final String nip29ThreadRoot = kind == 1111 ? tagValue(event, "E") : null;
+        // Pre-compute the NIP-29 room key for the synchronous active-room check
+        // below (so we don't need to re-extract the group id inside the callback).
+        final String nip29GroupId = tagValue(event, "h");
+        final String nip29RoomKey = nip29GroupId != null
+                ? "h:" + relayUrl + "|" + nip29GroupId : null;
+        // SYNCHRONOUS active-room suppression: check before the async profile
+        // fetch so the decision is immediate (no race with the Capacitor
+        // bridge). A mention always breaks through.
+        if (isActivelyViewed(nip29RoomKey, nip29ThreadRoot, mention)) {
+            return;
+        }
         // Resolve the author's name + avatar, then feed a per-room message line.
         // MessagingStyle shows WHO via the sender Person, so the line is just the
         // message/verb; the room name is the conversation title.
@@ -1432,35 +1503,31 @@ public class NotificationRelayService extends Service {
             final String picture = profile != null ? profile.picture : null;
             String line;
             String url;
-            // The NIP-29 group this happened in (kinds 9/7/1111). Null for DMs.
-            String groupId = null;
             switch (kind) {
                 case 9: {
-                    groupId = tagValue(event, "h");
                     line = truncate(event.optString("content"));
                     if (line.isEmpty()) line = "Sent a message";
                     if (mention) line = "@you " + line;
-                    url = groupId != null
-                            ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(groupId)
+                    url = nip29GroupId != null
+                            ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
                     break;
                 }
                 case 7: {
                     line = "Reacted " + reactionEmoji(event) + " to your message";
-                    groupId = tagValue(event, "h");
-                    url = groupId != null
-                            ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(groupId)
+                    url = nip29GroupId != null
+                            ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
                     break;
                 }
                 case 1111: {
-                    line = truncate(event.optString("content"));
-                    if (line.isEmpty()) line = "Replied to you";
-                    else line = "↪ " + line;
-                    groupId = tagValue(event, "h");
-                    url = groupId != null
-                            ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(groupId)
+                    line = buildMessageText(truncate(event.optString("content")), mention, true);
+                    url = nip29GroupId != null
+                            ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
+                    // Deep-link to the specific thread (uppercase `E` root id) so
+                    // a tap opens the thread panel, not just the channel.
+                    url = appendThreadParam(url, nip29ThreadRoot);
                     break;
                 }
                 case 4:
@@ -1474,25 +1541,66 @@ public class NotificationRelayService extends Service {
             final String fName = name;
             final String fLine = line;
             final String fUrl = url;
-            if (groupId == null) {
+            if (nip29GroupId == null) {
                 // DM: the conversation is 1:1 with the sender, so the sender's
                 // name is the room title and it's not a "group" conversation.
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm from=" + fName);
                 enqueueRoomMessage(
                         "dm:" + author, fName, fUrl, /*isGroup=*/false,
-                        author, fName, picture, fLine, fTs);
+                        author, fName, picture, fLine, fTs, mention);
                 return;
             }
             // Resolve the group's display name; it becomes the conversation title.
-            final String fGroupId = groupId;
-            resolveGroupName(groupId, relayUrl, groupName -> {
+            resolveGroupName(nip29GroupId, relayUrl, groupName -> {
                 String roomTitle = (groupName != null && !groupName.isEmpty()) ? groupName : "Group";
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " room=" + roomTitle);
                 enqueueRoomMessage(
-                        "h:" + relayUrl + "|" + fGroupId, roomTitle, fUrl, /*isGroup=*/true,
-                        author, fName, picture, fLine, fTs);
+                        nip29RoomKey, roomTitle, fUrl, /*isGroup=*/true,
+                        author, fName, picture, fLine, fTs, mention);
             });
         });
+    }
+
+    /**
+     * Synchronous active-room check: returns true if the user is currently
+     * viewing this room (channel-level suppression) or this specific thread
+     * (thread-level suppression), so the caller can skip the notification
+     * before any async work (profile fetch, group-name resolve). A mention
+     * always returns false — a deliberate @-ping deserves attention even on
+     * the visible channel.
+     *
+     * @param roomKey    the channel-level roomKey (e.g. "c2:<id>", "z:<z>", "h:<relay>|<group>")
+     * @param threadRoot the thread root id (uppercase `E` tag), or null for a top-level message
+     * @param mention    whether this message @-mentions the user
+     */
+    private boolean isActivelyViewed(String roomKey, String threadRoot, boolean mention) {
+        if (mention) return false;
+        if (roomKey == null) return false;
+        Set<String> active = activeRoomKeys;
+        if (active.contains(roomKey)) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "SUPPRESS (channel active): " + roomKey);
+            return true;
+        }
+        if (threadRoot != null) {
+            String threadKey = roomKey + ":t:" + threadRoot;
+            if (active.contains(threadKey)) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "SUPPRESS (thread active): " + threadKey);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Build the notification line text for a message. Thread replies get a
+     * Signal-style "Replied in thread: <preview>" prefix instead of the bare
+     * content, so the notification makes sense without the parent message's
+     * context.
+     */
+    private static String buildMessageText(String preview, boolean mention, boolean isThreadReply) {
+        String text = !preview.isEmpty() ? preview : (isThreadReply ? "Replied in thread" : "Sent a message");
+        if (isThreadReply && !preview.isEmpty()) text = "Replied in thread: " + text;
+        return text;
     }
 
     /** Display name from a resolved profile, falling back to a short npub-ish id. */
@@ -1570,13 +1678,26 @@ public class NotificationRelayService extends Service {
      * @param senderPubkey  message author (for the MessagingStyle Person key)
      * @param senderName    author display name
      * @param senderPicture author avatar URL (resolved async; optional)
-     * @param text          the message line (already truncated/verb-substituted)
-     * @param timestampMs   message time in ms (for ordering in the expansion)
+      * @param text          the message line (already truncated/verb-substituted)
+      * @param timestampMs   message time in ms (for ordering in the expansion)
+     * @param mention       true if this message @-mentioned the user (bypasses
+     *                      the active-room suppression — a mention is a deliberate
+     *                      ping even on the channel the user is currently viewing)
      */
     private void enqueueRoomMessage(
             String roomKey, String roomTitle, String url, boolean isGroup,
             String senderPubkey, String senderName, String senderPicture,
-            String text, long timestampMs) {
+            String text, long timestampMs, boolean mention) {
+        // Suppress the notification entirely when the user is already looking at
+        // this room — the live `relayEvent`/`concordMessage` feed already
+        // painted the message in the timeline, so a tray entry would be
+        // redundant. A mention still fires: it's an explicit @-ping that
+        // deserves attention even on the visible channel. The active-room keys
+        // are volatile (live only on the running service instance), so killing
+        // the app or the service immediately resumes notifications.
+        if (!mention && roomKey != null && activeRoomKeys.contains(roomKey)) {
+            return;
+        }
         // Build the Person now (without an avatar); post immediately, then re-post
         // with the avatar once loaded so image I/O never delays the notification.
         Bitmap cachedAvatar = senderPicture != null ? avatarCache.get(senderPicture) : null;
@@ -1616,6 +1737,16 @@ public class NotificationRelayService extends Service {
         if (room == null) {
             room = new RoomNotif(roomKey, hashId(roomKey));
             roomNotifs.put(roomKey, room);
+        }
+        // If the room's notification was dismissed (swiped / tapped away) since
+        // its last message, start a FRESH notification rather than appending to
+        // the dismissed message history — otherwise a new message in a room the
+        // user already cleared would resurrect the old lines they dismissed.
+        // Only checked on a genuine new line (replaceLast=false); an in-place
+        // avatar refresh (replaceLast=true) re-uses the just-added line.
+        if (!replaceLast && !room.messages.isEmpty() && !isNotifActive(manager, room.notifId)) {
+            room.messages.clear();
+            room.lastTimestampMs = timestampMs;
         }
         room.title = roomTitle;
         room.url = url;
@@ -1672,6 +1803,24 @@ public class NotificationRelayService extends Service {
             }
         } catch (Exception ignored) {
             // getActiveNotifications can throw on some OEM builds — best-effort.
+        }
+    }
+
+    /**
+     * Whether the notification id is still in the status bar (i.e. has NOT been
+     * dismissed by the user). API 23+; returns true (assume active) on older
+     * devices or when getActiveNotifications throws on an OEM build, so we never
+     * spuriously clear a room's history on a device that can't actually tell us.
+     */
+    private boolean isNotifActive(NotificationManager manager, int notifId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        try {
+            for (android.service.notification.StatusBarNotification sbn : manager.getActiveNotifications()) {
+                if (sbn.getId() == notifId) return true;
+            }
+            return false;
+        } catch (Exception ignored) {
+            return true;
         }
     }
 
@@ -1956,6 +2105,48 @@ public class NotificationRelayService extends Service {
         return out;
     }
 
+    /**
+     * Whether the user is genuinely @-mentioned in this event. A kind-1111
+     * NIP-22 comment carries structural `p` tags for the thread root author
+     * and immediate parent author — these are thread pointers, NOT mentions,
+     * so a reply in the user's own thread would otherwise always look like a
+     * mention. We strip the uppercase `P` (root author) and the lowercase `p`
+     * tags that duplicate the `e`/`E` parent author pubkeys before checking.
+     */
+    private boolean isMentioned(JSONObject event, String userPubkey) {
+        if (userPubkey == null) return false;
+        JSONArray tags = event.optJSONArray("tags");
+        if (tags == null) return false;
+
+        // For kind-1111 comments, collect the structural pubkeys to exclude.
+        Set<String> structural = null;
+        if (event.optInt("kind", -1) == 1111) {
+            structural = new HashSet<>();
+            for (int i = 0; i < tags.length(); i++) {
+                JSONArray tag = tags.optJSONArray(i);
+                if (tag == null || tag.length() < 2) continue;
+                String name = tag.optString(0);
+                // Uppercase P = thread root author (structural).
+                if ("P".equals(name)) structural.add(tag.optString(1));
+                // Lowercase e/E parent pointer: 4th element is the author pubkey.
+                if ("e".equals(name) || "E".equals(name)) {
+                    if (tag.length() > 3) structural.add(tag.optString(3));
+                }
+            }
+        }
+
+        for (int i = 0; i < tags.length(); i++) {
+            JSONArray tag = tags.optJSONArray(i);
+            if (tag == null || tag.length() < 2) continue;
+            if (!"p".equals(tag.optString(0))) continue;
+            String pk = tag.optString(1);
+            if (!userPubkey.equals(pk)) continue;
+            if (structural != null && structural.contains(pk)) continue;
+            return true;
+        }
+        return false;
+    }
+
     private static String tagValue(JSONObject event, String name) {
         JSONArray tags = event.optJSONArray("tags");
         if (tags == null) return null;
@@ -1966,6 +2157,30 @@ public class NotificationRelayService extends Service {
             }
         }
         return null;
+    }
+
+    /**
+     * For a decrypted Concord inner (V1 or V2), return the thread-root id when
+     * the inner is a NIP-22 kind-1111 comment (uppercase `E` tag), else null.
+     * Used to deep-link a thread-reply notification to its thread panel.
+     */
+    private static String innerKindCommentRoot(JSONObject inner) {
+        if (inner == null) return null;
+        if (inner.optInt("kind", -1) != 1111) return null;
+        return tagValue(inner, "E");
+    }
+
+    /**
+     * Append {@code ?thread=<rootId>} to a deep-link url when {@code rootId} is
+     * non-empty, so the WebView can auto-open the thread panel on tap. No-op
+     * (returns the url unchanged) when there's no thread root (a top-level
+     * message, an opaque/undecryptable event, or a malformed inner).
+     */
+    private static String appendThreadParam(String url, String rootId) {
+        if (url == null) return null;
+        if (rootId == null || rootId.isEmpty()) return url;
+        String sep = url.indexOf('?') >= 0 ? "&" : "?";
+        return url + sep + "thread=" + uriEncode(rootId);
     }
 
     private static String truncate(String s) {

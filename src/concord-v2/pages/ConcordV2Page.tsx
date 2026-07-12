@@ -1,6 +1,6 @@
 import { AtSign, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -35,6 +35,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useActiveRoom } from "@/hooks/useActiveRoom";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -860,6 +861,9 @@ export function ConcordV2Page() {
   const { transport: baseTransport, reactionsFor, allMessages } = useTransport2(community, channel, canWrite, canModerateMessages);
   const { mutateAsync: send } = useSendMessage2(community, channel);
 
+  // (useActiveRoom is called below, after `threadRoot` is defined, so it can
+  // also pass thread-level keys for notification suppression.)
+
   // Fulfil a pending mention jump: once the target channel is active AND its
   // timeline has loaded the target message, scroll+highlight it, then clear
   // the target. `scrollToMessage` is a no-op if the row isn't mounted yet, so
@@ -993,6 +997,16 @@ export function ConcordV2Page() {
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const toggleActive = useCallback((id: string) => setActiveId((cur) => (cur === id ? undefined : id)), []);
 
+  // Tell the native notification service this channel (and, if a thread panel
+  // is open, that specific thread) is on screen, so it suppresses redundant
+  // tray entries. Cleared on unmount/background. The roomKey shapes must match
+  // the service: `c2:<channelIdHex>` for the channel, `c2:<channelIdHex>:t:<rootId>`
+  // for a specific open thread.
+  useActiveRoom(
+    channel?.idHex ? `c2:${channel.idHex}` : undefined,
+    channel?.idHex && threadRoot ? `c2:${channel.idHex}:t:${threadRoot.id}` : undefined,
+  );
+
   // Member list: the coalesced Guestbook (joins) ∪ observed authors ∪ roster,
   // minus the banned — the Complete Memberlist (CORD-02 §5).
   const memberAdmins = useMemo(() => {
@@ -1063,6 +1077,28 @@ export function ConcordV2Page() {
     openThread(loaded);
     setPendingThread(null);
   }, [pendingThread, channel?.idHex, allMessages, openThread]);
+
+  // Auto-open the thread panel when arrived via a notification deep-link
+  // (`?thread=<rootId>` — the service appends it for kind-1111 Concord
+  // replies). Mirrors the NIP-29 GroupChat behavior: fires once per param,
+  // then clears it so a later load doesn't snap back.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const threadParam = searchParams.get("thread");
+  useEffect(() => {
+    if (!threadParam || threadRoot || view !== "channel") return;
+    const root = allMessages.find((m) => m.id === threadParam);
+    if (root) {
+      openThread(root);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("thread");
+          return next;
+        },
+        { replace: true },
+      );
+    }
+  }, [threadParam, threadRoot, view, allMessages, openThread, setSearchParams]);
 
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {

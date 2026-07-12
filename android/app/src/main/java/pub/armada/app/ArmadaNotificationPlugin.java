@@ -349,6 +349,42 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
     }
 
+    /**
+     * Tell the running service which roomKey(s) the WebView is currently
+     * showing (so it can suppress redundant notifications for those rooms — the
+     * live timeline already paints the message). Pass an empty array / omit
+     * when the app is backgrounded or on a non-chat screen. The value is
+     * volatile: it lives only on the running service instance, so killing the
+     * app or the service immediately resumes notifications.
+     *
+     * A set (not a single key) because a Concord V1 channel can span multiple
+     * rekey epochs, each with its own {@code z} pseudonym — and thus multiple
+     * roomKeys — all of which are "active" simultaneously.
+     *
+     * Room-key shapes (must match the service's enqueueRoomMessage keys):
+     *   - NIP-29 group: {@code "h:<relayUrl>|<groupId>"}
+     *   - Concord V1:   {@code "z:<pseudonym>"}
+     *   - Concord V2:   {@code "c2:<channelIdHex>"}
+     *   - DM:           {@code "dm:<peerPubkey>"}
+     */
+    @PluginMethod
+    public void setActiveRooms(PluginCall call) {
+        JSArray arr = call.getArray("roomKeys");
+        java.util.Set<String> set = new java.util.HashSet<>();
+        if (arr != null) {
+            try {
+                for (int i = 0; i < arr.length(); i++) {
+                    String k = arr.optString(i);
+                    if (k != null && !k.isEmpty()) set.add(k);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to read roomKeys", e);
+            }
+        }
+        NotificationRelayService.setActiveRooms(set);
+        call.resolve();
+    }
+
     @PluginMethod
     public void configure(PluginCall call) {
         boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", false));
