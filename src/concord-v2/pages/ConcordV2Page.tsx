@@ -154,6 +154,10 @@ interface ChatMessage2Props {
   onDelete: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
+  isEditing: boolean;
+  onEdit: ((event: ChatMsg) => void) | undefined;
+  onEditSubmit: ((event: ChatMsg, content: string) => Promise<void>) | undefined;
+  onEditCancel: () => void;
 }
 
 /** Memoized per-message binding (mirrors V1's ConcordChatMessage). A normal
@@ -178,6 +182,10 @@ const ChatMessage2 = memo(function ChatMessage2({
   onDelete,
   onRetry,
   onDiscard,
+  isEditing,
+  onEdit,
+  onEditSubmit,
+  onEditCancel,
 }: ChatMessage2Props) {
   const threadInfo = threadSummary(replies);
   // Concord V2 messages are unsigned rumors sealed at the channel's stream
@@ -213,6 +221,10 @@ const ChatMessage2 = memo(function ChatMessage2({
       onDelete={onDelete}
       onRetry={onRetry ? () => onRetry(event) : undefined}
       onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
+      isEditing={isEditing}
+      onEdit={onEdit}
+      onEditSubmit={onEditSubmit}
+      onEditCancel={onEditCancel}
     />
   );
 });
@@ -978,6 +990,7 @@ export function ConcordV2Page() {
   }
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
+  const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const toggleActive = useCallback((id: string) => setActiveId((cur) => (cur === id ? undefined : id)), []);
 
   // Member list: the coalesced Guestbook (joins) ∪ observed authors ∪ roster,
@@ -1087,6 +1100,24 @@ export function ConcordV2Page() {
     );
     await send({ content, extraTags });
     setReplyTo(undefined);
+  };
+
+  const handleEditSubmit = async (original: ChatMsg, content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed || trimmed === original.content.trim()) {
+      setEditingId(undefined);
+      return;
+    }
+    setEditingId(undefined);
+    try {
+      await transport.editMessage?.(original, trimmed);
+    } catch {
+      toast({
+        title: "Edit failed",
+        description: "Could not publish the edit.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleCreateChannel = async () => {
@@ -1619,6 +1650,10 @@ export function ConcordV2Page() {
                         onDelete={transport.deleteMessage}
                         onRetry={transport.retry}
                         onDiscard={transport.discard}
+                        isEditing={editingId === msg.id}
+                        onEdit={canWrite ? (e) => setEditingId(e.id) : undefined}
+                        onEditSubmit={handleEditSubmit}
+                        onEditCancel={() => setEditingId(undefined)}
                       />
                       );
                     }}

@@ -622,7 +622,9 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       kind = KIND_MESSAGE,
       replyTo,
       target,
+      targetKind,
       extraTags,
+      ms,
     }: {
       content: string;
       /** 9 message (default), 7 reaction, 5 delete, 3302 edit, 1111 thread reply. */
@@ -635,22 +637,30 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       replyTo?: { id: string; kind: number; pubkey: string; tags: string[][] };
       /** `e`-target for reactions / deletes / edits. */
       target?: string;
+      /** Kind of the `e`-target for deletes (NIP-09 `k` tag); defaults to message. */
+      targetKind?: number;
       /** Extra rumor tags appended verbatim (NIP-30 emoji, NIP-92 imeta, …). */
       extraTags?: string[][];
+      /**
+       * Override the rumor's millisecond timestamp (e.g. an edit republishes
+       * with the original's `ms` so it keeps its place in the timeline).
+       * Defaults to the current time.
+       */
+      ms?: number;
     }) => {
       if (!user) throw new Error("Sign in to send a message.");
       if (!community || !channel) throw new Error("No channel selected.");
 
       // A threaded reply is a NIP-22 comment (kind 1111), not a kind-9 message.
       const effectiveKind = replyTo ? KIND_COMMENT : kind;
-      const ms = Date.now();
+      const effectiveMs = ms ?? Date.now();
       const tags: string[][] = [...channelBindingTags(channel.idHex, channel.current.epoch)];
       if (replyTo) tags.push(...buildV2CommentTags(replyTo));
       if (target) tags.push(["e", target]);
-      if (kind === KIND_DELETE && target) tags.push(["k", KIND_MESSAGE.toString()]);
+      if (kind === KIND_DELETE && target) tags.push(["k", String(targetKind ?? KIND_MESSAGE)]);
       if (extraTags) tags.push(...extraTags);
 
-      const rumor: Rumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms });
+      const rumor: Rumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms: effectiveMs });
       const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
       const wrap = wrapSeal(seal, channel.current.group);
 
@@ -661,7 +671,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
         kind: effectiveKind,
         content,
         tags,
-        ms,
+        ms: effectiveMs,
         createdAt: rumor.created_at,
         wrapId: wrap.id,
         streamPk: wrap.pubkey,

@@ -251,7 +251,7 @@ export function SettingsPage() {
       groups.push({ heading: "Danger zone", items: [{ id: "danger", title: "Delete account", icon: AlertTriangle, inline: true }] });
     }
     return groups;
-  }, [user, canInstall]);
+  }, [user, canInstall, config.zapsEnabled]);
 
   /** The row(s) inside one section's chrome card. */
   const sectionBody = (id: SectionId): ReactNode => {

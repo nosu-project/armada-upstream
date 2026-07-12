@@ -15,6 +15,7 @@
  */
 
 import { renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
 import type { OpenedChat } from "@/concord-v2/lib/chat";
@@ -43,6 +44,7 @@ vi.mock("@/concord-v2/hooks/useChannel2", () => ({
   useSendMessage2: () => ({ mutateAsync: async () => ({}) }),
   useMessageActions2: () => ({ retry: () => {}, discard: () => {}, deleteMessage: () => {} }),
   useSendStatus2: () => ({}),
+  channelKey: (id: string | null) => ["concord2", "channel", id] as const,
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: undefined }),
@@ -88,7 +90,11 @@ describe("useTransport2 — issue #19 (orphan replies are unreachable)", () => {
     const normal = chat("33".repeat(32), "ordinary top-level message", 3_000_000);
     h.folded = { messages: [reply, normal], reactions: new Map(), zaps: new Map() };
 
-    const { result } = renderHook(() => useTransport2(community, channel, true, false));
+    const { result } = renderHook(() => useTransport2(community, channel, true, false), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>
+      ),
+    });
     const { transport } = result.current;
 
     // Everything the UI can possibly render: the top-level rows plus the
@@ -114,7 +120,11 @@ describe("useTransport2 — issue #19 (orphan replies are unreachable)", () => {
     ]);
     h.folded = { messages: [parent, inline], reactions: new Map(), zaps: new Map() };
 
-    const { result } = renderHook(() => useTransport2(community, channel, true, false));
+    const { result } = renderHook(() => useTransport2(community, channel, true, false), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>
+      ),
+    });
     const { transport } = result.current;
 
     // The inline reply renders as a top-level row, not bucketed into a thread.

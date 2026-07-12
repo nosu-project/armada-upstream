@@ -85,6 +85,7 @@ function ReactionPill({
       key: tally.key,
       content: tally.key === "👍" ? "+" : tally.key,
       emojiUrl: tally.url,
+      mineEventId: tally.mineEventId,
     });
 
   return (

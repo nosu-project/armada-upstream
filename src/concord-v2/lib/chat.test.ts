@@ -173,6 +173,72 @@ describe("chat plane (CORD-03)", () => {
     expect(tally.get(":pepe:")?.url).toBe("https://x/pepe.png");
   });
 
+  it("removes a reaction when its rumor is deleted in-batch (kind-5 self-delete)", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    const msg = chatRumor(alice, KIND_MESSAGE, "react to me", 1000);
+    const r1 = chatRumor(bob, KIND_REACTION, "🔥", 1100, [["e", msg.id], ["p", alice.pubkey], ["k", "9"]]);
+    // Bob deletes his own reaction rumor.
+    const del = chatRumor(bob, KIND_DELETE, "", 1200, [["e", r1.id], ["k", "7"]]);
+
+    const wraps = await Promise.all([
+      wrapChat(msg, channel, alice),
+      wrapChat(r1, channel, bob),
+      wrapChat(del, channel, bob),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+    expect(folded.reactions.get(msg.id)).toBeUndefined();
+  });
+
+  it("normalizes + and 👍 to the same reaction key", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    const msg = chatRumor(alice, KIND_MESSAGE, "react to me", 1000);
+    const r1 = chatRumor(alice, KIND_REACTION, "+", 1100, [["e", msg.id]]);
+    const r2 = chatRumor(bob, KIND_REACTION, "👍", 1200, [["e", msg.id]]);
+
+    const wraps = await Promise.all([
+      wrapChat(msg, channel, alice),
+      wrapChat(r1, channel, alice),
+      wrapChat(r2, channel, bob),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+    const tally = folded.reactions.get(msg.id)!;
+    expect(tally.size).toBe(1);
+    expect(tally.get("👍")?.reactors.size).toBe(2);
+  });
+
+  it("keeps a reaction removed across fold invocations (relay echo)", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    const msg = chatRumor(alice, KIND_MESSAGE, "react to me", 1000);
+    const r1 = chatRumor(bob, KIND_REACTION, "🔥", 1100, [["e", msg.id]]);
+    const del = chatRumor(bob, KIND_DELETE, "", 1200, [["e", r1.id], ["k", "7"]]);
+
+    // First fold: reaction + delete in the same batch.
+    const wraps1 = await Promise.all([
+      wrapChat(msg, channel, alice),
+      wrapChat(r1, channel, bob),
+      wrapChat(del, channel, bob),
+    ]);
+    foldTimeline(await openChatBatch(wraps1, channel));
+
+    // Second fold: only the reaction (simulating a relay echo re-adding it
+    // after the store's NIP-09 removed it in a prior write batch).
+    const wraps2 = await Promise.all([
+      wrapChat(msg, channel, alice),
+      wrapChat(r1, channel, bob),
+    ]);
+    const folded2 = foldTimeline(await openChatBatch(wraps2, channel));
+    expect(folded2.reactions.get(msg.id)).toBeUndefined();
+  });
+
   it("silently skips wraps from epochs we don't hold", async () => {
     const channel = makeChannel();
     const alice = signer();

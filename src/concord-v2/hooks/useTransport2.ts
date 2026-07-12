@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   useChannelTimeline2,
@@ -8,9 +9,10 @@ import {
 } from "@/concord-v2/hooks/useChannel2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
-import { KIND_COMMENT, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { markReactionDeleted, type OpenedChat } from "@/concord-v2/lib/chat";
+import { channelKey } from "@/concord-v2/hooks/useChannel2";
 import { zapRumorTags, type ZapTally } from "@/lib/zaps";
-import type { OpenedChat } from "@/concord-v2/lib/chat";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
 import { stableZapsFor, toChatMsg } from "@/components/chat/transport";
@@ -62,6 +64,7 @@ export function useTransport2(
   allMessages: ChatMsg[];
 } {
   const { user } = useCurrentUser();
+  const queryClient = useQueryClient();
   const { folded, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline2(community, channel);
   const { mutateAsync: send } = useSendMessage2(community, channel);
   const { retry, discard, deleteMessage } = useMessageActions2(community, channel);
@@ -143,12 +146,14 @@ export function useTransport2(
     for (const [targetId, byEmoji] of folded.reactions) {
       const tallies: ReactionTally[] = [];
       for (const [emoji, entry] of byEmoji) {
+        const mine = Boolean(user && entry.reactors.has(user.pubkey));
         tallies.push({
           key: emoji,
           url: entry.url,
           count: entry.reactors.size,
-          pubkeys: [...entry.reactors],
-          mine: Boolean(user && entry.reactors.has(user.pubkey)),
+          pubkeys: [...entry.reactors.keys()],
+          mine,
+          mineEventId: mine ? entry.reactors.get(user!.pubkey) : undefined,
         });
       }
       tallies.sort((a, b) => b.count - a.count);
@@ -157,18 +162,39 @@ export function useTransport2(
     return out;
   }, [folded.reactions, user]);
 
+  const channelIdHex = channel?.idHex ?? null;
+
   const reactionsFor = useMemo(() => {
     const reactCache = new Map<string, (input: ReactInput) => void>();
     const reactFor = (id: string) => {
       let fn = reactCache.get(id);
       if (!fn) {
         fn = (input: ReactInput) => {
-          void send({
-            content: input.content,
-            kind: KIND_REACTION,
-            target: id,
-            extraTags: customEmojiReactionTags(input.content, input.emojiUrl),
-          }).catch(() => {});
+          if (input.mineEventId) {
+            // Removing: mark the reaction as deleted IMMEDIATELY so the fold
+            // skips it on the next render (before the kind-5 delete rumor is
+            // even sealed). Also strip it from the query cache so the fold
+            // doesn't see it at all.
+            markReactionDeleted(input.mineEventId);
+            queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old = []) =>
+              old.filter((m) => m.rumorId !== input.mineEventId),
+            );
+            // Seal + publish the kind-5 delete rumor (the store's NIP-09
+            // removes it durably; the mark above handles the optimistic case).
+            void send({
+              content: "",
+              kind: KIND_DELETE,
+              target: input.mineEventId,
+              targetKind: KIND_REACTION,
+            }).catch(() => {});
+          } else {
+            void send({
+              content: input.content,
+              kind: KIND_REACTION,
+              target: id,
+              extraTags: customEmojiReactionTags(input.content, input.emojiUrl),
+            }).catch(() => {});
+          }
         };
         reactCache.set(id, fn);
       }
@@ -183,7 +209,7 @@ export function useTransport2(
       objCache.set(id, { tallies, value });
       return value;
     };
-  }, [talliesById, send]);
+  }, [talliesById, send, queryClient, channelIdHex]);
 
   // CORD.md zap tallies from the fold (only VERIFIED zaps ever reach it).
   const zapTalliesById = useMemo(() => {
@@ -255,6 +281,23 @@ export function useTransport2(
     [send],
   );
 
+  // Concord edit: a kind-3302 rumor targeting the original message's rumor
+  // id. The fold applies the latest author-matching edit (non-destructive —
+  // the original keeps its id, so reactions, replies, and quotes stay intact).
+  const editMessage = useCallback(
+    async (original: ChatMsg, content: string) => {
+      const trimmed = content.trim();
+      if (!trimmed || trimmed === original.content.trim()) return;
+      await send({
+        content: trimmed,
+        kind: KIND_EDIT,
+        target: original.id,
+        targetKind: original.kind,
+      });
+    },
+    [send],
+  );
+
   const transport = useMemo<ChatTransport>(
     () => ({
       messages: topLevel,
@@ -269,6 +312,7 @@ export function useTransport2(
       retry: (event: ChatMsg) => retry(event.id),
       discard,
       deleteMessage: (event: ChatMsg) => deleteMessage(event.id),
+      editMessage,
       replyCountFor,
       reactionsFor,
       zapsFor,
@@ -277,7 +321,7 @@ export function useTransport2(
       threadRepliesFor,
       sendThreadReply,
     }),
-    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, threadRepliesFor, sendThreadReply],
+    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, threadRepliesFor, sendThreadReply],
   );
 
   return { transport, reactionsFor, allMessages: messages };

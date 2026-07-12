@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
-import { KIND_REACTION } from "@/lib/nip29";
+import { KIND_DELETE, KIND_REACTION } from "@/lib/nip29";
 
 import type { MessageReactions } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -26,8 +26,8 @@ export interface ReactionTally {
   pubkeys: string[];
   /** Whether the current user reacted with this key. */
   mine: boolean;
-  /** The current user's reaction event for this key (used to retract it). */
-  mineEvent?: NostrEvent;
+  /** The current user's reaction event id for this key (used to retract it). */
+  mineEventId?: string;
 }
 
 export interface ReactInput {
@@ -37,6 +37,11 @@ export interface ReactInput {
   content: string;
   /** Custom emoji image URL when reacting with a `:shortcode:`. */
   emojiUrl?: string;
+  /**
+   * When set, remove the user's prior reaction (by its event id) instead of
+   * adding a new one — publishes a NIP-09 kind-5 deletion targeting it.
+   */
+  mineEventId?: string;
 }
 
 /**
@@ -53,8 +58,12 @@ export function customEmojiReactionTags(content: string, emojiUrl?: string): str
 }
 
 /** Normalize a kind 7 reaction's content into a display key. */
-function reactionKey(event: NostrEvent): string {
-  const content = event.content;
+export function reactionKey(event: NostrEvent): string {
+  return reactionContentKey(event.content);
+}
+
+/** Normalize raw reaction content into a display key (`+`/`` → 👍, `-` → 👎). */
+export function reactionContentKey(content: string): string {
   if (content === "+" || content === "") return "👍";
   if (content === "-") return "👎";
   return content;
@@ -82,7 +91,7 @@ function tallyReactions(reactions: NostrEvent[], userPubkey: string | undefined)
     if (url && !tally.url) tally.url = url;
     if (userPubkey && reaction.pubkey === userPubkey) {
       tally.mine = true;
-      tally.mineEvent = reaction;
+      tally.mineEventId = reaction.id;
     }
     byKey.set(key, tally);
   }
@@ -198,15 +207,32 @@ export function useGroupReactions(
   }, [nostr, relayUrl, groupId, idsSig, queryClient]);
 
   const react = useMutation({
-    mutationFn: async ({ target, content, emojiUrl }: { target: NostrEvent } & ReactInput) => {
-      const tags: string[][] = [
-        ["e", target.id],
-        ["p", target.pubkey],
-        ["k", String(target.kind)],
-        ["h", groupId!],
-        ...customEmojiReactionTags(content, emojiUrl),
-      ];
-      await createEvent({ kind: KIND_REACTION, content, tags, relay: relayUrl });
+    mutationFn: async ({ target, content, emojiUrl, mineEventId }: { target: NostrEvent } & ReactInput) => {
+      if (mineEventId) {
+        // Removing: publish a NIP-09 kind-5 deletion of the user's prior
+        // reaction event. The store self-applies NIP-09 (same-author delete),
+        // so the reaction is removed from the local cache immediately; the
+        // relay enforces author-only deletion on its side.
+        await createEvent({
+          kind: KIND_DELETE,
+          content: "",
+          tags: [
+            ["e", mineEventId],
+            ["k", String(KIND_REACTION)],
+            ["h", groupId!],
+          ],
+          relay: relayUrl,
+        });
+      } else {
+        const tags: string[][] = [
+          ["e", target.id],
+          ["p", target.pubkey],
+          ["k", String(target.kind)],
+          ["h", groupId!],
+          ...customEmojiReactionTags(content, emojiUrl),
+        ];
+        await createEvent({ kind: KIND_REACTION, content, tags, relay: relayUrl });
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey });

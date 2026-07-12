@@ -15,6 +15,7 @@
 import type { NostrEvent } from "nostr-tools/pure";
 
 import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { reactionContentKey } from "@/hooks/useReactions";
 import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
@@ -153,9 +154,9 @@ export interface ChatModeration {
   canDelete: (deleter: string, author: string) => boolean;
 }
 
-/** A tallied reaction: reactors plus the NIP-30 custom-emoji URL (if any). */
+/** A tallied reaction: reactors (pubkey→rumorId) plus the NIP-30 custom-emoji URL (if any). */
 export interface ReactionEntry {
-  reactors: Set<string>;
+  reactors: Map<string, string>;
   url?: string;
 }
 
@@ -175,6 +176,30 @@ export interface FoldedTimeline {
  */
 const zapVerdicts = new Map<string, string | null>();
 const ZAP_VERDICT_CAP = 8192;
+
+/**
+ * Session-scoped set of reaction rumor ids that have been deleted by a kind-5.
+ * The rumor store's NIP-09 only processes deletes within the same write
+ * batch — a reaction re-delivered by a relay echo (in a later batch) gets
+ * re-added to the store. This set lets the fold skip such re-delivered
+ * reactions across fold invocations, so a removed reaction stays removed
+ * even when the store forgets the deletion. Capped to bound memory.
+ */
+const deletedReactionIds = new Set<string>();
+const DELETED_REACTION_CAP = 8192;
+
+/**
+ * Mark a reaction rumor id as deleted NOW, before the kind-5 delete rumor is
+ * sealed and inserted into the cache. The fold skips any reaction whose id is
+ * in this set, so the removal is immediate (no waiting for the async send to
+ * complete and the fold to re-run with the delete event).
+ */
+export function markReactionDeleted(rumorId: string): void {
+  if (deletedReactionIds.size >= DELETED_REACTION_CAP) {
+    deletedReactionIds.delete(deletedReactionIds.values().next().value as string);
+  }
+  deletedReactionIds.add(rumorId);
+}
 
 /**
  * Fold a batch of opened chat events into the channel timeline: drop banned
@@ -211,9 +236,20 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
       // NIP-09 shape: possibly several `e` targets.
       for (const t of ev.tags) {
         if (t[0] !== "e" || !t[1]) continue;
-        let authors = deletes.get(t[1]);
-        if (!authors) deletes.set(t[1], (authors = new Set()));
+        const target = t[1];
+        let authors = deletes.get(target);
+        if (!authors) deletes.set(target, (authors = new Set()));
         authors.add(ev.author);
+        // Track deleted reaction rumor ids across fold invocations so a
+        // relay-echoed reaction (re-added to the store in a later write
+        // batch) stays removed. The `k` tag identifies the target kind.
+        const kTag = ev.tags.find(([n]) => n === "k")?.[1];
+        if (kTag === String(KIND_REACTION)) {
+          if (deletedReactionIds.size >= DELETED_REACTION_CAP) {
+            deletedReactionIds.delete(deletedReactionIds.values().next().value as string);
+          }
+          deletedReactionIds.add(target);
+        }
       }
       continue;
     }
@@ -228,12 +264,16 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
     if (ev.kind === KIND_REACTION) {
       const target = eTargetOf(ev);
       if (!target || !ev.content) continue;
+      // Skip reactions whose kind-5 delete we've seen in a previous fold
+      // invocation (the store may have re-added them via a relay echo).
+      if (deletedReactionIds.has(ev.rumorId)) continue;
+      const key = reactionContentKey(ev.content);
       const url = ev.tags.find((t) => t[0] === "emoji")?.[2];
       let byEmoji = reactions.get(target);
       if (!byEmoji) reactions.set(target, (byEmoji = new Map()));
-      let entry = byEmoji.get(ev.content);
-      if (!entry) byEmoji.set(ev.content, (entry = { reactors: new Set() }));
-      entry.reactors.add(ev.author);
+      let entry = byEmoji.get(key);
+      if (!entry) byEmoji.set(key, (entry = { reactors: new Map() }));
+      entry.reactors.set(ev.author, ev.rumorId);
       if (url && !entry.url) entry.url = url;
       continue;
     }
@@ -313,6 +353,23 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
       deleters.has(msg.author) ||
       (moderation && [...deleters].some((d) => moderation.canDelete(d, msg.author)));
     if (deleted) byId.delete(id);
+  }
+
+  // In-batch reaction deletes: a kind-5 targeting a reaction rumor removes
+  // that reactor from the tally (the store's NIP-09 handles the persistent
+  // case; this covers a delete folded alongside its target before the store
+  // async-removes it).
+  for (const [targetId, byEmoji] of reactions) {
+    for (const [emoji, entry] of byEmoji) {
+      for (const [pubkey, rumorId] of entry.reactors) {
+        const deleters = deletes.get(rumorId);
+        if (deleters && deleters.has(pubkey)) {
+          entry.reactors.delete(pubkey);
+        }
+      }
+      if (entry.reactors.size === 0) byEmoji.delete(emoji);
+    }
+    if (byEmoji.size === 0) reactions.delete(targetId);
   }
 
   // Zaps: one payment counts once, earliest rumor (ms, then id) winning
