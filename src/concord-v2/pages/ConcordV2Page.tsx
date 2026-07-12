@@ -69,7 +69,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
 
 import { threadSummary } from "@/components/chat/transport";
-import type { ChatMsg, MessageReactions, MessageZaps, SendStatus, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
@@ -138,6 +138,7 @@ interface ChatMessage2Props {
   reactions: MessageReactions;
   zaps: MessageZaps | undefined;
   onSendZap: ((target: ChatMsg, payment: ZapPayment) => Promise<void>) | undefined;
+  onSendOnchainZap: ((target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>) | undefined;
   /** This message's thread replies (stable ref from the transport), for the badge. */
   replies: ChatMsg[];
   continuation: boolean;
@@ -163,6 +164,7 @@ const ChatMessage2 = memo(function ChatMessage2({
   reactions,
   zaps,
   onSendZap,
+  onSendOnchainZap,
   replies,
   continuation,
   canWrite,
@@ -197,6 +199,7 @@ const ChatMessage2 = memo(function ChatMessage2({
       zapEnabled={Boolean(onSendZap)}
       zaps={zaps}
       onSendZap={onSendZap}
+      onSendOnchainZap={onSendOnchainZap}
       sendStatus={sendStatus}
       continuation={continuation}
       active={active}
@@ -1598,6 +1601,7 @@ export function ConcordV2Page() {
                         reactions={reactionsFor(msg.id)}
                         zaps={transport.zapsFor?.(msg.id)}
                         onSendZap={transport.sendZap}
+                        onSendOnchainZap={transport.sendOnchainZap}
                         replies={transport.threadRepliesFor?.(msg.id) ?? EMPTY_REPLIES}
                         continuation={continuation}
                         canWrite={transport.canWrite}

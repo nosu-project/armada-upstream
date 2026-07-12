@@ -43,6 +43,8 @@ export const KIND_EDIT = 3302;
  * unverified zaps never enter tallies.
  */
 export const KIND_ZAP = 9735;
+/** On-chain Bitcoin zap attribution (NIP-? §8333 shape, sealed as a rumor). */
+export const KIND_ONCHAIN_ZAP = 8333;
 /** WebXDC peer signal. */
 export const KIND_WEBXDC = 3310;
 /** Typing indicator — ephemeral rumor (rides a 21059 wrap). */

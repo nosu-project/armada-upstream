@@ -44,11 +44,12 @@ import {
 } from "@/lib/paymentTargets";
 import { ZAP_PRESETS, formatSats } from "@/lib/zaps";
 
-import type { ChatMsg, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
 interface ZapDialogImplProps {
   target: ChatMsg;
   sendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
+  sendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
   onDone: () => void;
 }
 
@@ -69,7 +70,7 @@ function methodTitle(method: DialogMethod | undefined): string {
 }
 
 /** The zap dialog body — method switcher + Lightning/Bitcoin/generic panes. */
-export default function ZapDialogImpl({ target, sendZap, onDone }: ZapDialogImplProps) {
+export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone }: ZapDialogImplProps) {
   const { config } = useAppContext();
   const { toast } = useToast();
   const { webln } = useWallet();
@@ -303,6 +304,7 @@ export default function ZapDialogImpl({ target, sendZap, onDone }: ZapDialogImpl
           <OnchainZapContent
             target={target}
             bitcoinTarget={bitcoinOverride}
+            sendOnchainZap={sendOnchainZap}
             onSuccess={({ txid, amountSats }) => setSuccess({ kind: "onchain", amountSats, txid })}
             onClose={onDone}
           />

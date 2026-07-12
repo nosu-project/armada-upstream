@@ -10,7 +10,15 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { formatSats } from "@/lib/zaps";
 import { cn } from "@/lib/utils";
 
-import type { ZapEntry, ZapTally } from "@/lib/zaps";
+import type { ZapEntry, ZapRail, ZapTally } from "@/lib/zaps";
+
+/** A small indicator for the payment rail. */
+function RailIcon({ rail }: { rail: ZapRail }) {
+  if (rail === "onchain") {
+    return <span className="text-[13px] leading-none text-orange-500 font-bold">₿</span>;
+  }
+  return <Zap className="size-3.5 fill-current text-amber-500" />;
+}
 
 /** One zapper row (avatar + name + amount + comment) inside the detail popover. */
 function ZapperRow({ zap }: { zap: ZapEntry }) {
@@ -18,7 +26,7 @@ function ZapperRow({ zap }: { zap: ZapEntry }) {
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(zap.pubkey, metadata);
   return (
-    <div className="flex items-start gap-2 px-2 py-1">
+    <div className="flex items-start gap-2.5 px-3 py-1.5">
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0 mt-0.5">
         <AvatarImage src={metadata?.picture} alt={displayName} />
         <AvatarFallback className="bg-amber-500/20 text-amber-500 text-[9px]">
@@ -26,11 +34,12 @@ function ZapperRow({ zap }: { zap: ZapEntry }) {
         </AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-center gap-2">
           <span className="text-xs truncate">{displayName}</span>
           <span className="text-xs font-semibold tabular-nums text-amber-500">
             {formatSats(zap.sats)}
           </span>
+          <RailIcon rail={zap.rail} />
         </div>
         {zap.comment && (
           <p className="text-[11px] text-muted-foreground break-words">{zap.comment}</p>
@@ -90,7 +99,7 @@ export function ZapPill({
             {formatSats(tally.totalSats)} sats · {tally.count} {tally.count === 1 ? "zap" : "zaps"}
           </span>
         </div>
-        <div className="max-h-48 overflow-y-auto py-1">
+        <div className="max-h-52 overflow-y-auto py-0.5">
           {tally.zaps.map((zap) => (
             <ZapperRow key={zap.id} zap={zap} />
           ))}

@@ -32,9 +32,14 @@ function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, cap = 4096): V {
 }
 
 export const KIND_ZAP_RECEIPT = 9735;
+/** On-chain Bitcoin zap attribution (kind 8333). */
+export const KIND_ONCHAIN_ZAP = 8333;
 
 /** Preset amounts (sats) for the zap dialog. */
 export const ZAP_PRESETS = [21, 100, 500, 1000, 5000, 21000];
+
+/** How the sats were sent. */
+export type ZapRail = "lightning" | "onchain";
 
 /** One counted zap on a message. */
 export interface ZapEntry {
@@ -44,6 +49,8 @@ export interface ZapEntry {
   pubkey: string;
   sats: number;
   comment: string;
+  /** The payment rail: Lightning (NIP-57) or on-chain Bitcoin (kind 8333). */
+  rail: ZapRail;
 }
 
 /** Aggregated zaps for one message. */
@@ -183,7 +190,7 @@ export function tallyZaps(
       seenHashes.add(paymentHash);
     }
     seen.add(receipt.id);
-    zaps.push({ id: receipt.id, pubkey: request.pubkey, sats, comment: request.content ?? "" });
+    zaps.push({ id: receipt.id, pubkey: request.pubkey, sats, comment: request.content ?? "", rail: "lightning" });
   }
   zaps.sort((a, b) => b.sats - a.sats);
   return {
@@ -249,4 +256,32 @@ export function zapRumorTags(opts: {
     ["bolt11", opts.bolt11],
     ["preimage", opts.preimage],
   ];
+}
+
+// ── CORD.md: on-chain zap rumors (kind 8333) ─────────────────────────────────
+
+/**
+ * Verify a CORD.md on-chain zap rumor. Unlike Lightning zaps there is no
+ * preimage proof — the "proof" is the Bitcoin transaction itself, which lives
+ * on a public ledger anyone can check independently. Here we only validate
+ * structural integrity: kind 8333, a well-formed `i` tag (`bitcoin:tx:<txid>`),
+ * and a positive `amount` tag. The txid is the dedup key (one tx = one zap),
+ * returned on success so the fold can count each tx at most once per channel.
+ *
+ * Channel/epoch binding is the plane decoder's job (it checks every chat
+ * rumor); this checks only what is on-chain-zap-specific. Never throws.
+ */
+export function verifyOnchainZapRumor(rumor: {
+  kind: number;
+  tags: string[][];
+}): string | null {
+  if (rumor.kind !== KIND_ONCHAIN_ZAP) return null;
+  const find = (name: string) => rumor.tags.find((t) => t[0] === name)?.[1];
+  const i = find("i");
+  const amount = Number(find("amount"));
+  if (!i || !i.startsWith("bitcoin:tx:")) return null;
+  const txid = i.slice("bitcoin:tx:".length);
+  if (!/^[0-9a-f]{64}$/.test(txid)) return null;
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return txid;
 }

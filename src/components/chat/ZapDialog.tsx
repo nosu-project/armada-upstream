@@ -2,7 +2,7 @@ import { lazy, Suspense } from "react";
 
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 
-import type { ChatMsg, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
 /**
  * Lazy shell for the zap dialog: the trigger (a toolbar button) renders with
@@ -15,11 +15,13 @@ export interface ZapDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   target: ChatMsg;
-  /** CORD.md announcement publisher (Concord v2); absent = NIP-57 surface. */
+  /** CORD.md lightning zap announcement publisher (Concord v2); absent = NIP-57. */
   sendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
+  /** CORD.md on-chain zap announcement publisher (Concord v2); absent = public kind 8333. */
+  sendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
 }
 
-export function ZapDialog({ open, onOpenChange, target, sendZap }: ZapDialogProps) {
+export function ZapDialog({ open, onOpenChange, target, sendZap, sendOnchainZap }: ZapDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -29,7 +31,7 @@ export function ZapDialog({ open, onOpenChange, target, sendZap }: ZapDialogProp
       >
         {open && (
           <Suspense fallback={<div className="h-64" />}>
-            <LazyZapDialogImpl target={target} sendZap={sendZap} onDone={() => onOpenChange(false)} />
+            <LazyZapDialogImpl target={target} sendZap={sendZap} sendOnchainZap={sendOnchainZap} onDone={() => onOpenChange(false)} />
           </Suspense>
         )}
       </DialogContent>

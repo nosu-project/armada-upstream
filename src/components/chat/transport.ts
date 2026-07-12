@@ -105,6 +105,21 @@ export interface ZapPayment {
 }
 
 /**
+ * A settled on-chain Bitcoin zap, handed by the zap dialog to a transport
+ * whose on-chain zap announcement is a sealed chat-plane event (Concord v2).
+ * NIP-29 has no publish step — the public kind 8333 event is the
+ * announcement — so its transport omits {@link ChatTransport.sendOnchainZap}.
+ */
+export interface OnchainZapAnnouncement {
+  /** The broadcast Bitcoin transaction id. */
+  txid: string;
+  /** Amount sent in satoshis. */
+  amountSats: number;
+  /** Optional comment from the payer. */
+  comment: string;
+}
+
+/**
  * The capability surface a chat timeline/message/composer consumes. Required
  * members are the irreducible minimum (list + identity + send); everything else
  * is an optional capability gated by presence.
@@ -171,6 +186,14 @@ export interface ChatTransport {
    * manual QR, which never reveals the preimage).
    */
   sendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
+  /**
+   * Announce a settled on-chain Bitcoin zap for this message, for transports
+   * whose announcement is a sealed chat-plane event (Concord v2). When
+   * present, the on-chain zap hook seals the kind 8333 attribution rumor into
+   * the channel instead of publishing a public Nostr event (which would leak
+   * community/channel context). Absent = publish publicly via relays (NIP-29).
+   */
+  sendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
   /** Open the threaded-replies panel for a message. */
   openThread?: (event: ChatMsg, focusReply?: boolean) => void;
 

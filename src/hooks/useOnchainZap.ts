@@ -89,6 +89,10 @@ export function useOnchainZap(
   target: NostrEvent,
   onSuccess?: (result: OnchainZapResult) => void,
   recipientOverride?: BitcoinRecipientOverride,
+  /** Private announcement publisher (Concord v2). When present, the kind 8333
+   *  attribution is sealed into the channel as a rumor instead of published
+   *  to public relays (which would leak community/channel context). */
+  sendOnchainZap?: (target: NostrEvent, announcement: { txid: string; amountSats: number; comment: string }) => Promise<void>,
 ) {
   const { user } = useCurrentUser();
   const { canSignPsbt, signPsbt } = useBitcoinSigner();
@@ -192,8 +196,17 @@ export function useOnchainZap(
         return { txid, amountSats, fee };
       }
 
-      // Publish kind 8333 event
+      // Publish the kind 8333 attribution. When a private announcement
+      // publisher is present (Concord v2), seal it into the channel as a
+      // rumor instead of publishing to public relays — the txid is already
+      // on a public ledger, but the Nostr event leaks community/channel context.
       setProgress('publishing');
+
+      if (sendOnchainZap) {
+        await sendOnchainZap(target, { txid, amountSats, comment });
+        return { txid, amountSats, fee };
+      }
+
       const isAddressable = target.kind >= 30000 && target.kind < 40000;
 
       const tags: string[][] = [

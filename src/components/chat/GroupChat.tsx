@@ -106,6 +106,7 @@ function Nip29ChatMessage({
       zapEnabled={Boolean(transport.zapsFor)}
       zaps={transport.zapsFor?.(event.id)}
       onSendZap={transport.sendZap}
+      onSendOnchainZap={transport.sendOnchainZap}
       sendStatus={transport.sendStatusFor?.(event.id)}
       highlight={highlight}
       isEditing={isEditing}

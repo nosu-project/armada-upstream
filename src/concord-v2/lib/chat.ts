@@ -14,8 +14,8 @@
 
 import type { NostrEvent } from "nostr-tools/pure";
 
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
-import { verifyZapRumor, type ZapEntry } from "@/lib/zaps";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 
@@ -198,9 +198,10 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
   // author's legitimate one).
   const edits = new Map<string, Array<{ author: string; content: string; ms: number }>>();
   const reactions = new Map<string, Map<string, ReactionEntry>>();
-  // Verified zap candidates, deduped by payment hash after the loop: an
-  // announced preimage is visible to every member, so without this anyone
-  // could replay someone else's proof and inflate tallies (CORD.md §4).
+  // Verified zap candidates, deduped by payment hash (Lightning) or txid
+  // (on-chain) after the loop: an announced proof or txid is visible to every
+  // member, so without this anyone could replay someone else's and inflate
+  // tallies (CORD.md §4).
   const zapCandidates: Array<{ target: string; hash: string; ms: number; entry: ZapEntry }> = [];
 
   for (const ev of opened) {
@@ -258,6 +259,29 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
           pubkey: ev.author,
           sats: Math.floor(msats / 1000),
           comment: ev.content,
+          rail: "lightning",
+        },
+      });
+      continue;
+    }
+    if (ev.kind === KIND_ONCHAIN_ZAP) {
+      const target = eTargetOf(ev);
+      if (!target) continue;
+      // On-chain zaps have no preimage — the txid on a public ledger is the
+      // proof. Dedup by txid so one tx counts once per channel.
+      const txid = verifyOnchainZapRumor({ kind: ev.kind, tags: ev.tags });
+      if (!txid) continue;
+      const sats = Number(ev.tags.find((t) => t[0] === "amount")?.[1]);
+      zapCandidates.push({
+        target,
+        hash: txid,
+        ms: ev.ms,
+        entry: {
+          id: ev.rumorId,
+          pubkey: ev.author,
+          sats,
+          comment: ev.content,
+          rail: "onchain",
         },
       });
       continue;

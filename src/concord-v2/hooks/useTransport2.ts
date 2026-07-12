@@ -8,13 +8,13 @@ import {
 } from "@/concord-v2/hooks/useChannel2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
-import { KIND_COMMENT, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { zapRumorTags, type ZapTally } from "@/lib/zaps";
 import type { OpenedChat } from "@/concord-v2/lib/chat";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
 import { stableZapsFor, toChatMsg } from "@/components/chat/transport";
-import type { ChatMsg, ChatTransport, MessageReactions, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, ChatTransport, MessageReactions, OnchainZapAnnouncement, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
 
 /** Shared empty tally array, so messages with no reactions keep a stable prop. */
 const EMPTY_TALLIES: ReactionTally[] = [];
@@ -227,6 +227,34 @@ export function useTransport2(
     [send],
   );
 
+  // Seal the on-chain Bitcoin zap attribution (kind 8333) into the channel as
+  // a rumor — publishing it publicly would leak the target event id and
+  // community context. The txid is on a public ledger already; the Nostr
+  // attribution is the part that must stay private.
+  const sendOnchainZap = useCallback(
+    async (target: ChatMsg, announcement: OnchainZapAnnouncement) => {
+      const isAddressable = target.kind >= 30000 && target.kind < 40000;
+      const tags: string[][] = [
+        ["i", `bitcoin:tx:${announcement.txid}`],
+        ["p", target.pubkey],
+        ["amount", String(announcement.amountSats)],
+      ];
+      if (isAddressable) {
+        const dTag = target.tags.find(([n]) => n === "d")?.[1] ?? "";
+        tags.push(["a", `${target.kind}:${target.pubkey}:${dTag}`]);
+      }
+      tags.push(["k", String(target.kind)]);
+      tags.push(["alt", `Bitcoin zap: ${announcement.amountSats.toLocaleString()} sats`]);
+      await send({
+        content: announcement.comment,
+        kind: KIND_ONCHAIN_ZAP,
+        target: target.id,
+        extraTags: tags,
+      });
+    },
+    [send],
+  );
+
   const transport = useMemo<ChatTransport>(
     () => ({
       messages: topLevel,
@@ -245,10 +273,11 @@ export function useTransport2(
       reactionsFor,
       zapsFor,
       sendZap,
+      sendOnchainZap,
       threadRepliesFor,
       sendThreadReply,
     }),
-    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage, replyCountFor, reactionsFor, zapsFor, sendZap, threadRepliesFor, sendThreadReply],
+    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, threadRepliesFor, sendThreadReply],
   );
 
   return { transport, reactionsFor, allMessages: messages };

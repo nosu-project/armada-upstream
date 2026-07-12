@@ -187,3 +187,60 @@ In the Armada client:
   totals.
 - `client/src/concord-v2/hooks/useTransport2.ts` — seals and publishes the Zap
   rumor (`sendZap`).
+
+---
+
+## On-Chain Zaps
+
+A courtesy extension: Bitcoin on-chain zaps sealed into the Chat Plane so the
+Nostr attribution stays private. The transaction is on a public ledger by
+nature; this extension just keeps the *who-zapped-what-in-which-channel* off
+public relays.
+
+Every Nostr pubkey is a valid Bitcoin Taproot address (both are secp256k1
+x-only Schnorr keys), so this works for any user without Lightning setup.
+
+### Event
+
+Kind `8333` rumor on the Chat Plane, sealed like any message:
+
+```jsonc
+{
+  "kind": 8333,
+  "content": "optional comment",
+  "tags": [
+    ["channel", "<channel_id>"],          // CORD-03 binding
+    ["epoch", "0"],
+    ["ms", "417"],
+    ["i", "bitcoin:tx:<txid>"],
+    ["e", "<zapped message rumor id>"],
+    ["p", "<recipient pubkey>"],
+    ["k", "9"],
+    ["amount", "5000"]                    // sats (not millisats)
+  ]
+}
+```
+
+### Verification
+
+- `i` tag is `bitcoin:tx:<64-char hex txid>`.
+- `amount` is a positive integer.
+- Channel/epoch binding per CORD-03.
+- One txid counts once per Channel (deterministic winner on collision).
+
+No in-rumor cryptographic proof — the transaction itself is the proof, and
+any member can look it up on-chain. Integrity rests on the payer's seal
+signature, same as every chat message.
+
+### Privacy
+
+- Bitcoin network sees the tx (inherent to L1).
+- Nostr network sees nothing — no public kind 8333.
+- Silent-payment sends (`sp1…`) publish no event at all (naming the txid would
+  re-link the recipient).
+
+### Signer support
+
+nsec signs locally; NIP-07 extension via `signPsbt`; NIP-46 bunker via
+`sign_psbt` RPC. Unsupported signers fall back to a BIP-21 QR (the sats still
+arrive, but no tally is posted).

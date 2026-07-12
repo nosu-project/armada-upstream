@@ -36,7 +36,7 @@ import { writeClipboardText } from "@/lib/clipboard";
 import { dittoEventUrl } from "@/lib/dittoUrl";
 import { cn } from "@/lib/utils";
 
-import type { ChatMsg, ChatTransport, MessageReactions, MessageZaps, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, ChatTransport, MessageReactions, MessageZaps, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
 /**
  * Consecutive replies from the same author within this window collapse into a
@@ -56,6 +56,7 @@ function ThreadMessage({
   zaps,
   zapEnabled = false,
   onSendZap,
+  onSendOnchainZap,
   canReact,
   canModerate = false,
   isRumor = false,
@@ -70,6 +71,7 @@ function ThreadMessage({
   zapEnabled?: boolean;
   /** CORD.md announcement publisher (Concord v2); absent = NIP-57 public surface. */
   onSendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
+  onSendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
   canReact: boolean;
   /** Whether the current user may delete others' messages (moderation). */
   canModerate?: boolean;
@@ -229,7 +231,7 @@ function ThreadMessage({
       </ContextMenuContent>
     </ContextMenu>
     {zapOpen && (
-      <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} />
+      <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} sendOnchainZap={onSendOnchainZap} />
     )}
     {rumorJson !== null && (
       <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
@@ -299,6 +301,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   const zapsFor = transport.zapsFor;
   const zapEnabled = Boolean(transport.zapsFor);
   const onSendZap = transport.sendZap;
+  const onSendOnchainZap = transport.sendOnchainZap;
   const isRumor = transport.isRumor ?? false;
   const canModerate = transport.canModerate;
   const onDelete = transport.deleteMessage;
@@ -320,7 +323,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable space-y-1">
-        <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} />
+        <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} />
         <div className="flex items-center gap-2 px-3 py-1">
           <div className="h-px flex-1 bg-border/60" />
           {!isLoading && (
@@ -347,7 +350,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
               prev.pubkey === reply.pubkey &&
               reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
             return (
-              <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} />
+              <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} />
             );
           })
         )}

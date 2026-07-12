@@ -41,7 +41,7 @@ import { isMeAction, meActionText } from "@/lib/slashCommands";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
-import type { ChatMsg, MessageReactions, MessageZaps, SendStatus, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ReactNode } from "react";
 
@@ -266,6 +266,8 @@ export interface ChatMessageProps {
    * dialog; absent means the NIP-57 public-receipt flow.
    */
   onSendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
+  /** CORD.md on-chain zap announcement publisher (Concord v2). */
+  onSendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
   /** Optimistic send status, if this message is locally-published & unconfirmed. */
   sendStatus?: SendStatus;
   /** Search term to highlight in the message body (search-results mode). */
@@ -356,6 +358,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   zapEnabled,
   zaps,
   onSendZap,
+  onSendOnchainZap,
   sendStatus,
   highlight,
   isEditing,
@@ -782,7 +785,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       </ContextMenuContent>
     </ContextMenu>
     {zapOpen && (
-      <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} />
+      <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} sendOnchainZap={onSendOnchainZap} />
     )}
     {rumorJson !== null && (
       <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
