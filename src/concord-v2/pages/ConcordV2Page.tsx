@@ -1031,7 +1031,14 @@ export function ConcordV2Page() {
   const openThread = useCallback((event: ChatMsg, focusReply = false) => {
     setThreadAutoFocus(focusReply);
     setThreadRoot(event);
-  }, []);
+    // Mark the thread read up to its newest reply so the Threads tab clears
+    // its "new" highlight no matter which entry point opened it (inline
+    // reply badge, reply icon, /thread command, or the Threads-tab list).
+    // `openThreadFromList` stamps eagerly on click; this is the catch-all.
+    const replies = baseTransport.threadRepliesFor?.(event.id) ?? EMPTY_REPLIES;
+    const latest = replies.length > 0 ? replies[replies.length - 1].created_at : event.created_at;
+    markThreadRead(event.id, latest);
+  }, [baseTransport, markThreadRead]);
 
   // Inline-reply plumbing: a by-id lookup over the decoded set (rumors aren't
   // relay-fetchable, so the "replying to …" line resolves the parent locally),
@@ -1074,6 +1081,25 @@ export function ConcordV2Page() {
     () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),
     [canWrite, openThread],
   );
+
+  // Keep the open thread's read stamp advancing as new replies land while its
+  // panel is on screen — mirrors the channel read effect above so the Threads
+  // tab's "new" highlight clears for replies that arrive mid-view, not just
+  // for replies that were present at open time. Visibility-gated so a
+  // backgrounded tab doesn't silently eat the badge.
+  const threadRootId = threadRoot?.id;
+  useEffect(() => {
+    if (!user || !threadRootId) return;
+    const replies = transport.threadRepliesFor?.(threadRootId) ?? EMPTY_REPLIES;
+    const latest = replies.length > 0 ? replies[replies.length - 1].created_at : threadRoot?.created_at ?? 0;
+    if (latest <= 0) return;
+    const stamp = () => {
+      if (document.visibilityState === "visible") markThreadRead(threadRootId, latest);
+    };
+    stamp();
+    document.addEventListener("visibilitychange", stamp);
+    return () => document.removeEventListener("visibilitychange", stamp);
+  }, [user, threadRootId, threadRoot?.created_at, transport, markThreadRead]);
 
   const moderation = useModeration2(community, memberPubkeys);
 
