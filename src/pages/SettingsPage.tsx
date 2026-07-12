@@ -233,7 +233,7 @@ export function SettingsPage() {
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
       { id: "media", title: "Media servers", icon: Image },
     ];
-    if (user) {
+    if (user && config.zapsEnabled) {
       appItems.push({ id: "wallet", title: "Wallet", icon: Zap });
     }
     if (user && CONCORD_ENABLED) {

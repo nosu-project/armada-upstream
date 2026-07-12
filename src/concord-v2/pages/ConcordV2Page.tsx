@@ -1600,8 +1600,8 @@ export function ConcordV2Page() {
                         event={msg}
                         reactions={reactionsFor(msg.id)}
                         zaps={transport.zapsFor?.(msg.id)}
-                        onSendZap={transport.sendZap}
-                        onSendOnchainZap={transport.sendOnchainZap}
+                        onSendZap={config.zapsEnabled ? transport.sendZap : undefined}
+                        onSendOnchainZap={config.zapsEnabled ? transport.sendOnchainZap : undefined}
                         replies={transport.threadRepliesFor?.(msg.id) ?? EMPTY_REPLIES}
                         continuation={continuation}
                         canWrite={transport.canWrite}

@@ -154,6 +154,12 @@ export interface AppConfig {
    * strictly local; see WalletProvider).
    */
   defaultZapAmount: number;
+  /**
+   * Whether zap/wallet/financial features are enabled in the UI. When off,
+   * all zap buttons, the wallet dialog, and the wallet settings section are
+   * hidden. Synced across devices so a deployment-wide preference propagates.
+   */
+  zapsEnabled: boolean;
 }
 
 export interface AppContextType {
@@ -186,6 +192,7 @@ export const SYNCED_CONFIG_KEYS = [
   "mutedCommunities",
   "mutedChannels",
   "defaultZapAmount",
+  "zapsEnabled",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
 export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
@@ -209,6 +216,7 @@ export const defaultConfig: AppConfig = {
   meshIncognito: true,
   meshEnabled: false,
   defaultZapAmount: 100,
+  zapsEnabled: true,
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);

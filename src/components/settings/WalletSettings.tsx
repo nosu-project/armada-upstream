@@ -5,6 +5,7 @@ import { nwcWalletPubkey } from "@/lib/walletStorage";
 import { DEFAULT_ESPLORA_APIS, readEsploraApis, writeEsploraApis } from "@/lib/esploraStorage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -86,6 +87,18 @@ export function WalletSettings() {
 
   return (
     <>
+      <SettingsRow
+        label="Enable zaps & wallet"
+        description="Show zap buttons, the wallet dialog, and wallet settings. Synced across devices."
+      >
+        <Switch
+          checked={config.zapsEnabled}
+          onCheckedChange={(checked) => updateConfig((c) => ({ ...c, zapsEnabled: checked }))}
+        />
+      </SettingsRow>
+
+      {config.zapsEnabled && (
+        <>
       <SettingsRow>
         <div className="space-y-2">
           <div className="text-sm font-medium">Connect a wallet (NWC)</div>
@@ -226,6 +239,8 @@ export function WalletSettings() {
           </Button>
         </div>
       </SettingsRow>
+        </>
+      )}
     </>
   );
 }

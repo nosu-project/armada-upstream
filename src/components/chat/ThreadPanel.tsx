@@ -26,6 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -297,9 +298,10 @@ interface ThreadPanelProps {
 export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, autoFocus = false, onClose }: ThreadPanelProps) {
   const replies = transport.threadRepliesFor?.(root.id) ?? [];
   const isLoading = transport.threadLoading?.(root.id) ?? false;
+  const { config } = useAppContext();
   const reactionsFor = transport.reactionsFor;
   const zapsFor = transport.zapsFor;
-  const zapEnabled = Boolean(transport.zapsFor);
+  const zapEnabled = config.zapsEnabled && Boolean(transport.zapsFor);
   const onSendZap = transport.sendZap;
   const onSendOnchainZap = transport.sendOnchainZap;
   const isRumor = transport.isRumor ?? false;

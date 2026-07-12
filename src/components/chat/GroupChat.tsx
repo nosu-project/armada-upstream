@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEvent } from "@/hooks/useEvent";
 import { useGroup } from "@/hooks/useGroup";
@@ -95,6 +96,7 @@ function Nip29ChatMessage({
   onJumpToReply,
   onReply,
 }: Nip29ChatMessageProps) {
+  const { config } = useAppContext();
   const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
   return (
     <ChatMessage
@@ -103,7 +105,7 @@ function Nip29ChatMessage({
       canModerate={transport.canModerate}
       pollContext={{ relayUrl, groupId }}
       reactions={transport.reactionsFor?.(event.id)}
-      zapEnabled={Boolean(transport.zapsFor)}
+      zapEnabled={config.zapsEnabled && Boolean(transport.zapsFor)}
       zaps={transport.zapsFor?.(event.id)}
       onSendZap={transport.sendZap}
       onSendOnchainZap={transport.sendOnchainZap}
