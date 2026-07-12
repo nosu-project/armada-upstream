@@ -18,7 +18,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useMutes } from "@/hooks/useMutes";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
@@ -26,7 +25,6 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shareOrigin } from "@/lib/shareOrigin";
-import { pickDefaultChannel } from "@/lib/utils";
 
 /**
  * Server home (drill-down level 1). On mobile the server rail + channel list
@@ -36,52 +34,18 @@ import { pickDefaultChannel } from "@/lib/utils";
 export function ServerPage() {
   const { server } = useParams<{ server: string }>();
   const navigate = useNavigate();
-  const { config, updateConfig } = useAppContext();
+  const { updateConfig } = useAppContext();
   const { user } = useCurrentUser();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const relayUrl = server ? routeParamToRelay(server) : undefined;
   const [profileOpen, setProfileOpen] = useState(false);
   const { isCommunityMuted, toggleCommunityMute } = useMutes();
-  const isDesktop = useIsDesktop();
   const serverMuted = Boolean(relayUrl && isCommunityMuted(relayUrl));
 
   const { data: groups, isLoading, isError, relayInfo } = useRelayGroups(relayUrl);
 
   if (!relayUrl) {
     return <Navigate to="/" replace />;
-  }
-
-  // Desktop (Discord-style): landing on a server opens the room you last had
-  // open there (or a "general"/first channel), because the channel list stays
-  // visible in the sidebar beside the chat — you never lose sight of it.
-  //
-  // Mobile is a single-pane drill-down: auto-diving into a channel would skip
-  // the channel list entirely and drop you straight into chat. So on mobile we
-  // stop here and show the channel list; tapping a channel opens the chat (and
-  // backing out returns here). Only auto-redirect on desktop.
-  //
-  // Redirect SYNCHRONOUSLY (render a <Navigate replace>) the instant a default
-  // channel is known — including on the very first render when `groups` is
-  // already seeded from the IndexedDB cache. Doing this in render instead of a
-  // post-paint `useEffect` avoids painting ServerPage's channel list first and
-  // then swapping it for GroupPage. `replace` keeps the bare server URL out of
-  // history.
-  const defaultChannel =
-    isDesktop && groups && groups.length > 0
-      ? pickDefaultChannel(
-          groups,
-          config.lastChannelByServer[relayUrl],
-          (g) => g.id,
-          (g) => g.name,
-        )
-      : undefined;
-  if (defaultChannel) {
-    return (
-      <Navigate
-        to={`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(defaultChannel.id)}`}
-        replace
-      />
-    );
   }
 
   const isPinned = PINNED_RAIL_RELAYS.includes(relayUrl);
