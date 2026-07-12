@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useSwipeToDismiss } from "@/hooks/useSwipeToDismiss";
 
 /** Fullscreen viewer for a single already-decrypted image URL.
@@ -11,6 +12,13 @@ import { useSwipeToDismiss } from "@/hooks/useSwipeToDismiss";
  * banner/avatar previews behave identically. */
 export function ImageLightbox2({ src, onClose }: { src: string; onClose: () => void }) {
   const { containerRef, handlers } = useSwipeToDismiss(onClose);
+
+  // System back (Android gesture/button) closes the lightbox instead of
+  // navigating the underlying screen.
+  useAndroidBack(() => {
+    onClose();
+    return true;
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,13 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
   const hasMultiple = images.length > 1;
   const canGoNext = currentIndex < images.length - 1;
   const canGoPrev = currentIndex > 0;
+
+  // System back (Android gesture/button) closes the lightbox instead of
+  // navigating the underlying screen.
+  useAndroidBack(() => {
+    onClose();
+    return true;
+  });
 
   // Lock body scroll while open.
   useEffect(() => {
