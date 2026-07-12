@@ -13,6 +13,7 @@ import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { purgeClientStorage } from "@/lib/purgeClientStorage";
 import { clearWalletStorage } from "@/lib/walletStorage";
+import { clearEsploraStorage } from "@/lib/esploraStorage";
 
 export type { NostrConnectParams, NostrConnectStatus };
 export { generateNostrConnectParams, generateNostrConnectURI } from "@nostrify/react/login";
@@ -99,6 +100,7 @@ export function useLoginActions() {
         // The removed account's NWC wallet secrets must not outlive it —
         // purgeClientStorage below only runs on the FINAL logout.
         clearWalletStorage(login.pubkey);
+        clearEsploraStorage(login.pubkey);
       }
       // Drop the in-memory DM render memo so it can't be read after logout or
       // by the next account. (The persistent decrypt cache is per-pubkey and is
