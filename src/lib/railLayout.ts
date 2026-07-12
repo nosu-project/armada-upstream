@@ -18,6 +18,8 @@
  * them.
  */
 
+import { relayToRouteParam } from "@/lib/platform";
+
 /** A single ungrouped community/server in the rail. */
 export interface RailItemNode {
   type: "item";
@@ -67,6 +69,22 @@ export function flattenLayout(nodes: RailLayoutNode[]): string[] {
     else out.push(...node.keys);
   }
   return out;
+}
+
+/**
+ * Map a stable rail item key to its React Router path, or `null` if the key
+ * isn't a recognized community/server key. NIP-29 servers use their normalized
+ * relay URL as the key; Concord V1/V2 use `c1:`/`c2:`-prefixed community ids.
+ */
+export function railKeyToRoute(key: string): string | null {
+  if (key.startsWith("c1:")) {
+    return `/c1/${encodeURIComponent(key.slice("c1:".length))}`;
+  }
+  if (key.startsWith("c2:")) {
+    return `/c/${encodeURIComponent(key.slice("c2:".length))}`;
+  }
+  // NIP-29 server (key = normalized relay URL).
+  return `/s/${relayToRouteParam(key)}`;
 }
 
 /**

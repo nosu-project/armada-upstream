@@ -9,6 +9,7 @@ import {
   mergeLayout,
   normalizeLayout,
   planDrop,
+  railKeyToRoute,
   renameFolder,
   type RailLayoutNode,
   type RailSlot,
@@ -168,6 +169,28 @@ describe("flattenLayout", () => {
       "c",
       "d",
     ]);
+  });
+});
+
+describe("railKeyToRoute", () => {
+  it("maps a NIP-29 server key (relay URL) to /s/<param>", () => {
+    expect(railKeyToRoute("wss://relay.example.com")).toBe(
+      "/s/relay.example.com",
+    );
+  });
+
+  it("maps a Concord V1 key to /c1/<id>", () => {
+    const id = "abc123";
+    expect(railKeyToRoute(`c1:${id}`)).toBe(`/c1/${id}`);
+  });
+
+  it("maps a Concord V2 key to /c/<id>", () => {
+    const id = "deadbeef";
+    expect(railKeyToRoute(`c2:${id}`)).toBe(`/c/${id}`);
+  });
+
+  it("URL-encodes special characters in community ids", () => {
+    expect(railKeyToRoute("c2:with/slash")).toBe("/c/with%2Fslash");
   });
 });
 

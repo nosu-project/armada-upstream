@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
@@ -18,7 +18,8 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { toast } from "@/hooks/useToast";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { saveNsec } from "@/lib/credentialManager";
-import { relayToRouteParam } from "@/lib/platform";
+import { normalizeRelayUrl, PINNED_RAIL_RELAYS } from "@/lib/platform";
+import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
 import { cn } from "@/lib/utils";
 
 /**
@@ -125,18 +126,46 @@ export function WelcomePage() {
     }
   };
 
-  // A signed-in user with a server never sees onboarding: redirect onto their
-  // first server. We never auto-dive into the deployment's platform relay —
-  // that's infrastructure, entered via an invite/server link like any other
-  // community. `config.addedRelays` is the fast/offline cache; the synced
-  // kind-10009 list is the cross-device source of truth, consulted directly
-  // so we redirect the moment it resolves.
-  const firstServer = config.addedRelays[0] ?? groupList?.servers[0];
+  // A signed-in user with a community never sees onboarding: redirect onto
+  // the FIRST item of their arranged community rail — NIP-29 servers AND
+  // Concord V1/V2 communities intermixed in the order they chose (the same
+  // list the far-left rail renders). `addedRelays` alone is NIP-29-only, so a
+  // user whose first rail item is a Concord community would otherwise be
+  // bounced into a NIP-29 server. The persisted `railLayout` (seeded from the
+  // legacy flat `railOrder`) lives in app config and is available
+  // synchronously, so the redirect commits without racing the rail's async
+  // load. `mergeLayout` seeds the working order from `railOrder` and appends
+  // any live NIP-29 server the layout doesn't yet know about.
+  const liveServers = useMemo(
+    () =>
+      [...PINNED_RAIL_RELAYS, ...config.addedRelays]
+        .map((u) => normalizeRelayUrl(u))
+        .filter((u): u is string => Boolean(u)),
+    [config.addedRelays],
+  );
+  const firstRoute = useMemo(() => {
+    const servers = new Set(liveServers);
+    const groupServers = groupList?.servers ?? [];
+    const ordered = flattenLayout(
+      mergeLayout(config.railLayout, config.railOrder, liveServers),
+    );
+    for (const key of ordered) {
+      if (!key.startsWith("c1:") && !key.startsWith("c2:")) {
+        const live =
+          servers.has(key) ||
+          groupServers.some((s) => normalizeRelayUrl(s) === key);
+        if (!live) continue;
+      }
+      const route = railKeyToRoute(key);
+      if (route) return route;
+    }
+    return null;
+  }, [config.railLayout, config.railOrder, liveServers, groupList?.servers]);
   if (user && !online && mesh.available) {
     return <Navigate to="/mesh" replace />;
   }
-  if (user && firstServer) {
-    return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
+  if (user && firstRoute) {
+    return <Navigate to={firstRoute} replace />;
   }
 
   // ── Wizard step 1: generate the key ─────────────────────────────────────

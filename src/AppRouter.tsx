@@ -1,5 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
 import {
@@ -15,7 +15,8 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { relayToRouteParam } from "@/lib/platform";
+import { normalizeRelayUrl, PINNED_RAIL_RELAYS } from "@/lib/platform";
+import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
 // so the boot bundle carries only the shell + the landing route's code. This is
@@ -78,6 +79,47 @@ function HomeRedirect() {
     [],
   );
 
+  // Land on the first item of the user's *arranged* community rail — NIP-29
+  // servers AND Concord V1/V2 communities intermixed in the order they chose
+  // (the same list the far-left rail renders). `addedRelays` alone is NIP-29-
+  // only, so a user whose first rail item is a Concord community would get
+  // bounced into a NIP-29 server instead. The persisted `railLayout` (seeded
+  // from the legacy flat `railOrder`) lives in app config and is therefore
+  // available synchronously on the first render — before the Concord lists
+  // rehydrate from their folded cache — so the redirect commits to the right
+  // destination without racing the rail's async load. `mergeLayout` seeds the
+  // working order from `railOrder` and appends any live NIP-29 server the
+  // layout doesn't yet know about (a fresh user who never reordered).
+  const liveServers = useMemo(
+    () =>
+      [...PINNED_RAIL_RELAYS, ...config.addedRelays].map((u) =>
+        normalizeRelayUrl(u),
+      ).filter((u): u is string => Boolean(u)),
+    [config.addedRelays],
+  );
+  const firstRoute = useMemo(() => {
+    const servers = new Set(liveServers);
+    const groupServers = groupList?.servers ?? [];
+    const ordered = flattenLayout(
+      mergeLayout(config.railLayout, config.railOrder, liveServers),
+    );
+    for (const key of ordered) {
+      // A NIP-29 server key (relay URL) is only a valid landing target if the
+      // user still has it: the layout keeps stale keys (a since-removed
+      // server) deliberately, so skip those. Concord keys are always navigable
+      // (their page handles a still-loading / tombstoned community).
+      if (!key.startsWith("c1:") && !key.startsWith("c2:")) {
+        const live =
+          servers.has(key) ||
+          groupServers.some((s) => normalizeRelayUrl(s) === key);
+        if (!live) continue;
+      }
+      const route = railKeyToRoute(key);
+      if (route) return route;
+    }
+    return null;
+  }, [config.railLayout, config.railOrder, liveServers, groupList?.servers]);
+
   if (!state.ready) {
     // Launch URL not yet known — committing to a default destination here
     // would lose the race against the deep link, so hold the redirect. Show
@@ -107,20 +149,13 @@ function HomeRedirect() {
     }
   }
 
-  // Prefer landing on a server the user has actually joined/added — never the
-  // deployment's platform relay by fiat (that's infrastructure, not a community
-  // the user belongs to; it's entered via an invite/server link like any other).
-  // `config.addedRelays` is the fast/offline cache; the synced kind-10009 list
-  // is the cross-device source of truth, consulted directly so we redirect the
-  // moment it resolves after login.
-  const firstServer = config.addedRelays[0] ?? groupList?.servers[0];
-  if (!firstServer) {
-    // Signed in but no server yet (fresh account). The mesh is the home where
-    // it exists (Android); otherwise show the getting-started screen so the
-    // user can accept an invite or add a server — NOT a bare app shell.
+  if (!firstRoute) {
+    // Signed in but no community yet (fresh account). The mesh is the home
+    // where it exists (Android); otherwise show the getting-started screen so
+    // the user can accept an invite or add a server — NOT a bare app shell.
     return <Navigate to={mesh.available ? "/mesh" : "/welcome"} replace />;
   }
-  return <Navigate to={`/s/${relayToRouteParam(firstServer)}`} replace />;
+  return <Navigate to={firstRoute} replace />;
 }
 
 /**
