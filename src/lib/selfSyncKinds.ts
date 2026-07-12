@@ -40,6 +40,8 @@ export const KIND_USER_GROUPS = 10009;
 export const KIND_DM_RELAYS = 10050;
 /** BUD-03 Blossom media server list (10063). */
 export const KIND_BLOSSOM_SERVERS = 10063;
+/** NIP-51 user custom emoji list (10030). */
+export const KIND_USER_EMOJIS = 10030;
 /** Concord V2 community list — the membership vault (CORD-02, 13302). */
 export const KIND_COMMUNITY_LIST_V2 = 13302;
 /** Concord V2 invite list — the creator's minted-link bookkeeping (CORD-05, 13303). */
@@ -63,6 +65,7 @@ export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_USER_GROUPS,
   KIND_DM_RELAYS,
   KIND_BLOSSOM_SERVERS,
+  KIND_USER_EMOJIS,
   KIND_COMMUNITY_LIST_V2,
   KIND_INVITE_LIST_V2,
 ];
@@ -95,6 +98,8 @@ export function queryKeysForSelfEvent(kind: number, dTag: string | undefined): r
       // NostrSync pulls this directly (not via a keyed query); nothing to
       // invalidate, but caching the event is still worthwhile.
       return [];
+    case KIND_USER_EMOJIS:
+      return [["custom-emojis"]];
     case KIND_COMMUNITY_LIST_V2:
       return [["concord2", "list"]];
     case KIND_INVITE_LIST_V2:
