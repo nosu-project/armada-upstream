@@ -2,7 +2,7 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import { useState } from 'react';
-import { ChevronDown, IdCard, LogOut, Smile, UserIcon, UserPlus } from 'lucide-react';
+import { ChevronDown, IdCard, LogOut, Smile, UserIcon, UserPlus, Wallet } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,8 +17,11 @@ import { useLoggedInAccounts, type Account } from '@/hooks/useLoggedInAccounts';
 import { useServerScope } from '@/contexts/ServerScopeContext';
 import { ServerProfileDialog } from '@/components/dialogs/ServerProfileDialog';
 import { StatusDialog } from '@/components/dialogs/StatusDialog';
+import { WalletDialog } from '@/components/dialogs/WalletDialog';
 import { clearRenderedPlaintext } from '@/hooks/dmRenderCache';
 import { purgeClientStorage } from '@/lib/purgeClientStorage';
+import { clearWalletStorage } from '@/lib/walletStorage';
+import { useAppContext } from '@/hooks/useAppContext';
 
 interface AccountSwitcherProps {
   onAddAccountClick: () => void;
@@ -26,7 +29,9 @@ interface AccountSwitcherProps {
 
 export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const { currentUser, otherUsers, isLoading, setLogin, removeLogin } = useLoggedInAccounts();
+  const { config } = useAppContext();
   const [isOpen, setIsOpen] = useState(false);
+  const [walletOpen, setWalletOpen] = useState(false);
   // The server (relay) currently being viewed, if any. Drives the optional
   // "Server identity" item (per-server nickname/label/color).
   const serverScope = useServerScope();
@@ -45,6 +50,9 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
     // Use setTimeout to ensure the dropdown closes before removing login
     setTimeout(() => {
       removeLogin(currentUser.id);
+      // The removed account's NWC wallet secrets must not outlive it (the
+      // full purge below only runs on the final logout).
+      clearWalletStorage(currentUser.pubkey);
       clearRenderedPlaintext();
       if (isLastAccount) {
         void purgeClientStorage().finally(() => window.location.assign('/welcome'));
@@ -98,6 +106,15 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
+        {config.zapsEnabled && (
+          <DropdownMenuItem
+            onClick={() => { setIsOpen(false); setWalletOpen(true); }}
+            className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
+          >
+            <Wallet className='w-4 h-4' />
+            <span>Wallet</span>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem
           onClick={() => setStatusOpen(true)}
           className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
@@ -138,6 +155,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
       />
     )}
     <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />
+    <WalletDialog open={walletOpen} onOpenChange={setWalletOpen} />
     </>
   );
 }

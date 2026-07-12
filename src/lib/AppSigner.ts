@@ -1,6 +1,7 @@
 import { type DBSchema, type IDBPDatabase, openDB } from "idb";
 
 import type { NostrSigner } from "@nostrify/nostrify";
+import type { BtcSigner } from "@/lib/bitcoin-signers";
 
 // ============================================================================
 // AppSigner — the app-facing Nostr signer.
@@ -86,6 +87,20 @@ export class AppSigner implements NostrSigner {
 
   getRelays(): Promise<Record<string, { read: boolean; write: boolean }>> {
     return this.#upstream.getRelays?.() ?? Promise.resolve({});
+  }
+
+  /**
+   * Forward PSBT signing to the upstream when it supports it (the BTC-enabled
+   * signer variants from `@/lib/bitcoin-signers`). `useBitcoinSigner` probes
+   * this via `hasBtcSigning` — the AppSigner wrapper is transparent for the
+   * PSBT surface, just as it is for `getPublicKey`/`signEvent`/`getRelays`.
+   */
+  signPsbt(psbtHex: string): Promise<string> {
+    const upstream = this.#upstream as Partial<BtcSigner>;
+    if (typeof upstream.signPsbt !== "function") {
+      return Promise.reject(new Error("This signer does not support PSBT signing."));
+    }
+    return upstream.signPsbt(psbtHex);
   }
 
   nip04?: CryptoMethods;

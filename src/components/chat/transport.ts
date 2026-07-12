@@ -16,6 +16,7 @@
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
 import type { SendStatus } from "@/hooks/useGroupMessages";
+import type { ZapTally } from "@/lib/zaps";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 export type { ReactInput, ReactionTally, SendStatus };
@@ -62,6 +63,60 @@ export function toChatMsg(m: {
 export interface MessageReactions {
   tallies: ReactionTally[];
   react: (input: ReactInput) => void;
+}
+
+/** Per-message zap state, resolved by the transport for one message. */
+export interface MessageZaps {
+  tally: ZapTally;
+}
+
+/**
+ * Wrap a tally lookup in a per-id object cache so unchanged rows keep a
+ * stable {@link MessageZaps} prop (preserves React.memo). Shared by both
+ * transports' `zapsFor`.
+ */
+export function stableZapsFor(
+  get: (id: string) => ZapTally | undefined,
+): (id: string) => MessageZaps | undefined {
+  const cache = new Map<string, { tally: ZapTally; value: MessageZaps }>();
+  return (id) => {
+    const tally = get(id);
+    if (!tally) return undefined;
+    const hit = cache.get(id);
+    if (hit && hit.tally === tally) return hit.value;
+    const value: MessageZaps = { tally };
+    cache.set(id, { tally, value });
+    return value;
+  };
+}
+
+/**
+ * A settled lightning payment, handed by the shared zap dialog to a transport
+ * whose zap announcement is its own event (Concord v2's sealed CORD.md rumor).
+ * NIP-29 has no publish step — the LNURL provider's public receipt is the
+ * announcement — so its transport omits {@link ChatTransport.sendZap}.
+ */
+export interface ZapPayment {
+  amountMsats: number;
+  bolt11: string;
+  /** Payment proof; present when the payer's wallet returned it (NWC/WebLN). */
+  preimage?: string;
+  comment: string;
+}
+
+/**
+ * A settled on-chain Bitcoin zap, handed by the zap dialog to a transport
+ * whose on-chain zap announcement is a sealed chat-plane event (Concord v2).
+ * NIP-29 has no publish step — the public kind 8333 event is the
+ * announcement — so its transport omits {@link ChatTransport.sendOnchainZap}.
+ */
+export interface OnchainZapAnnouncement {
+  /** The broadcast Bitcoin transaction id. */
+  txid: string;
+  /** Amount sent in satoshis. */
+  amountSats: number;
+  /** Optional comment from the payer. */
+  comment: string;
 }
 
 /**
@@ -118,6 +173,27 @@ export interface ChatTransport {
   replyCountFor?: (id: string) => number;
   /** Resolved reaction tallies + toggle for a message id (batched per room). */
   reactionsFor?: (id: string) => MessageReactions;
+  /**
+   * Aggregated zaps for a message id. Presence enables the zap button; the
+   * payment itself runs in the shared dialog (it needs only the author's
+   * lightning address), while this feeds the ⚡ total chip.
+   */
+  zapsFor?: (id: string) => MessageZaps | undefined;
+  /**
+   * Announce a settled zap payment for this message, for transports whose
+   * announcement is a chat-plane event (Concord v2 / CORD.md). When present,
+   * the dialog REQUIRES a proof-returning payment method (NWC/WebLN — no
+   * manual QR, which never reveals the preimage).
+   */
+  sendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
+  /**
+   * Announce a settled on-chain Bitcoin zap for this message, for transports
+   * whose announcement is a sealed chat-plane event (Concord v2). When
+   * present, the on-chain zap hook seals the kind 8333 attribution rumor into
+   * the channel instead of publishing a public Nostr event (which would leak
+   * community/channel context). Absent = publish publicly via relays (NIP-29).
+   */
+  sendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
   /** Open the threaded-replies panel for a message. */
   openThread?: (event: ChatMsg, focusReply?: boolean) => void;
 

@@ -51,3 +51,16 @@ export async function share(opts: {
   }
   return false;
 }
+
+/**
+ * Open an external URL. On native, use the share sheet (the WebView's
+ * `window.open` doesn't always hand off to the system browser); on web,
+ * open in a new tab.
+ */
+export async function openUrl(url: string): Promise<void> {
+  if (native) {
+    await Share.share({ url });
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}

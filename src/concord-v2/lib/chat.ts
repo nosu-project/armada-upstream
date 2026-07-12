@@ -14,7 +14,8 @@
 
 import type { NostrEvent } from "nostr-tools/pure";
 
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 
@@ -163,7 +164,17 @@ export interface FoldedTimeline {
   messages: OpenedChat[];
   /** target rumor id → emoji → tally. */
   reactions: Map<string, Map<string, ReactionEntry>>;
+  /** target rumor id → VERIFIED zaps (CORD.md §4; unverified never enter). */
+  zaps: Map<string, ZapEntry[]>;
 }
+
+/**
+ * Per-rumor CORD.md verdict cache (payment hash when valid, null when not).
+ * A rumor's tags never change, so each zap is hashed/decoded once per session
+ * no matter how many folds re-run over it. Capped to bound memory.
+ */
+const zapVerdicts = new Map<string, string | null>();
+const ZAP_VERDICT_CAP = 8192;
 
 /**
  * Fold a batch of opened chat events into the channel timeline: drop banned
@@ -187,6 +198,11 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
   // author's legitimate one).
   const edits = new Map<string, Array<{ author: string; content: string; ms: number }>>();
   const reactions = new Map<string, Map<string, ReactionEntry>>();
+  // Verified zap candidates, deduped by payment hash (Lightning) or txid
+  // (on-chain) after the loop: an announced proof or txid is visible to every
+  // member, so without this anyone could replay someone else's and inflate
+  // tallies (CORD.md §4).
+  const zapCandidates: Array<{ target: string; hash: string; ms: number; entry: ZapEntry }> = [];
 
   for (const ev of opened) {
     if (moderation?.banned.has(ev.author)) continue;
@@ -221,6 +237,55 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
       if (url && !entry.url) entry.url = url;
       continue;
     }
+    if (ev.kind === KIND_ZAP) {
+      const target = eTargetOf(ev);
+      if (!target) continue;
+      let verdict = zapVerdicts.get(ev.rumorId);
+      if (verdict === undefined) {
+        if (zapVerdicts.size >= ZAP_VERDICT_CAP) {
+          zapVerdicts.delete(zapVerdicts.keys().next().value as string);
+        }
+        verdict = verifyZapRumor({ kind: ev.kind, tags: ev.tags });
+        zapVerdicts.set(ev.rumorId, verdict);
+      }
+      if (!verdict) continue;
+      const msats = Number(ev.tags.find((t) => t[0] === "amount")?.[1]);
+      zapCandidates.push({
+        target,
+        hash: verdict,
+        ms: ev.ms,
+        entry: {
+          id: ev.rumorId,
+          pubkey: ev.author,
+          sats: Math.floor(msats / 1000),
+          comment: ev.content,
+          rail: "lightning",
+        },
+      });
+      continue;
+    }
+    if (ev.kind === KIND_ONCHAIN_ZAP) {
+      const target = eTargetOf(ev);
+      if (!target) continue;
+      // On-chain zaps have no preimage — the txid on a public ledger is the
+      // proof. Dedup by txid so one tx counts once per channel.
+      const txid = verifyOnchainZapRumor({ kind: ev.kind, tags: ev.tags });
+      if (!txid) continue;
+      const sats = Number(ev.tags.find((t) => t[0] === "amount")?.[1]);
+      zapCandidates.push({
+        target,
+        hash: txid,
+        ms: ev.ms,
+        entry: {
+          id: ev.rumorId,
+          pubkey: ev.author,
+          sats,
+          comment: ev.content,
+          rail: "onchain",
+        },
+      });
+      continue;
+    }
     if (ev.kind === KIND_MESSAGE || ev.kind === KIND_COMMENT) {
       // kind-9 top-level messages and kind-1111 threaded replies both land in
       // the timeline pool; the reader splits them by their NIP-22 root pointer.
@@ -250,8 +315,22 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
     if (deleted) byId.delete(id);
   }
 
+  // Zaps: one payment counts once, earliest rumor (ms, then id) winning
+  // deterministically so every member folds the same tally.
+  const zaps = new Map<string, ZapEntry[]>();
+  const claimedHashes = new Set<string>();
+  zapCandidates.sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.entry.id < b.entry.id ? -1 : 1));
+  for (const { target, hash, entry } of zapCandidates) {
+    if (claimedHashes.has(hash)) continue;
+    claimedHashes.add(hash);
+    let list = zaps.get(target);
+    if (!list) zaps.set(target, (list = []));
+    list.push(entry);
+  }
+
   return {
     messages: [...byId.values()].sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1)),
     reactions,
+    zaps,
   };
 }

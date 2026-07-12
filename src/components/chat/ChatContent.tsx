@@ -1,5 +1,5 @@
 import { nip19 } from "nostr-tools";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
@@ -27,7 +27,10 @@ import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, mimeFromExt } from 
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
+import { bolt11AmountSats, formatSats } from "@/lib/zaps";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+import { useToast } from "@/hooks/useToast";
+import { useWallet } from "@/hooks/useWallet";
 
 import type { AddrCoords } from "@/hooks/useEvent";
 import type { ImetaEncryption, ImetaEntry } from "@/lib/imeta";
@@ -1134,23 +1137,94 @@ function TruncatedNostrLink({ encode }: { encode: () => string }) {
 /** Compact copyable chip for BOLT11 lightning invoices. */
 function LightningInvoice({ invoice }: { invoice: string }) {
   const [copied, setCopied] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const [paid, setPaid] = useState(false);
+  // Anyone can paste a large invoice into chat, so paying is a two-step,
+  // amount-visible action: first tap arms ("Confirm 21k sats?"), second tap
+  // pays, and the armed state disarms after a few seconds. Amountless
+  // invoices are never one-tap payable.
+  const [armed, setArmed] = useState(false);
+  const disarmTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(disarmTimer.current), []);
+  const { activeConnection, payWithNWC, webln } = useWallet();
+  const { toast } = useToast();
+  const amountSats = useMemo(() => bolt11AmountSats(invoice), [invoice]);
+  const canPay = Boolean(activeConnection || webln) && amountSats !== null;
+
+  const handlePay = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (paying || paid) return;
+    if (!armed) {
+      setArmed(true);
+      clearTimeout(disarmTimer.current);
+      disarmTimer.current = setTimeout(() => setArmed(false), 4000);
+      return;
+    }
+    clearTimeout(disarmTimer.current);
+    setArmed(false);
+    setPaying(true);
+    try {
+      if (activeConnection) {
+        await payWithNWC(invoice);
+      } else {
+        await webln!.enable();
+        await webln!.sendPayment(invoice);
+      }
+      setPaid(true);
+      toast({ title: "Invoice paid ⚡" });
+    } catch (err) {
+      toast({
+        title: "Payment failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setPaying(false);
+    }
+  };
 
   return (
-    <button
-      type="button"
-      className="inline-flex items-center gap-1.5 max-w-full my-1 px-2.5 py-1 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs hover:bg-amber-500/20 transition-colors"
-      onClick={(e) => {
-        e.stopPropagation();
-        writeClipboardText(invoice).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        }, () => undefined);
-      }}
-      title="Copy lightning invoice"
-    >
-      <span aria-hidden>⚡</span>
-      <span className="truncate font-mono">{invoice.slice(0, 24)}…</span>
-      <span className="shrink-0">{copied ? "Copied!" : "Copy"}</span>
-    </button>
+    <span className="inline-flex items-center gap-1 max-w-full my-1">
+      <button
+        type="button"
+        className="inline-flex items-center gap-1.5 min-w-0 px-2.5 py-1 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs hover:bg-amber-500/20 transition-colors"
+        onClick={(e) => {
+          e.stopPropagation();
+          writeClipboardText(invoice).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          }, () => undefined);
+        }}
+        title="Copy lightning invoice"
+      >
+        <span aria-hidden>⚡</span>
+        <span className="truncate font-mono">
+          {amountSats !== null ? `${formatSats(amountSats)} sats` : invoice.slice(0, 24) + "…"}
+        </span>
+        <span className="shrink-0">{copied ? "Copied!" : "Copy"}</span>
+      </button>
+      {canPay && (
+        <button
+          type="button"
+          className={cn(
+            "shrink-0 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors disabled:opacity-60",
+            armed
+              ? "border-amber-500 bg-amber-500 text-amber-950 hover:bg-amber-400"
+              : "border-amber-500 bg-amber-500/20 text-amber-500 hover:bg-amber-500/30",
+          )}
+          onClick={handlePay}
+          disabled={paying || paid}
+          title="Pay with your connected wallet"
+        >
+          {paid
+            ? "Paid ✓"
+            : paying
+              ? "Paying…"
+              : armed
+                ? `Confirm ${formatSats(amountSats!)} sats?`
+                : "Pay"}
+        </button>
+      )}
+    </span>
   );
 }

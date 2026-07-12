@@ -1,0 +1,505 @@
+import { ChevronDown, Copy, ExternalLink, HelpCircle, Loader2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+
+import { OnchainZapContent } from "@/components/OnchainZapContent";
+import { GenericPaymentContent } from "@/components/GenericPaymentContent";
+import { PaymentMethodIcon } from "@/components/PaymentMethodIcon";
+import { ZapSuccessScreen } from "@/components/ZapSuccessScreen";
+import { Button } from "@/components/ui/button";
+import {
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { QRCodeCanvas } from "@/components/ui/qrcode";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useAppContext } from "@/hooks/useAppContext";
+import { useAuthor } from "@/hooks/useAuthor";
+import { useBitcoinSigner } from "@/hooks/useBitcoinSigner";
+import { useEsploraApis } from "@/hooks/useEsploraApis";
+import { usePaymentTargets } from "@/hooks/usePaymentTargets";
+import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { useToast } from "@/hooks/useToast";
+import { useWallet } from "@/hooks/useWallet";
+import { useZap } from "@/hooks/useZap";
+import { canZap } from "@/lib/canZap";
+import { writeClipboardText } from "@/lib/clipboard";
+import {
+  fetchBtcPrice,
+} from "@/lib/bitcoinMoney";
+import {
+  PAYMENT_METHODS,
+  findBitcoinTarget,
+  findLightningTarget,
+  isSilentPaymentLike,
+  type PaymentMethodDef,
+  type PaymentTarget,
+} from "@/lib/paymentTargets";
+import { ZAP_PRESETS, formatSats } from "@/lib/zaps";
+
+import type { ChatMsg, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
+
+interface ZapDialogImplProps {
+  target: ChatMsg;
+  sendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
+  sendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
+  onDone: () => void;
+}
+
+const PRESETS = ZAP_PRESETS.slice(0, 5);
+
+type DialogMethodId = string;
+
+interface DialogMethod {
+  id: DialogMethodId;
+  def: PaymentMethodDef;
+  target?: PaymentTarget;
+}
+
+function methodTitle(method: DialogMethod | undefined): string {
+  if (!method) return "Send Bitcoin";
+  if (method.def.kind === "bitcoin") return "Send Bitcoin";
+  return method.def.label;
+}
+
+/** The zap dialog body — method switcher + Lightning/Bitcoin/generic panes. */
+export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone }: ZapDialogImplProps) {
+  const { config } = useAppContext();
+  const { toast } = useToast();
+  const { webln } = useWallet();
+  const author = useAuthor(target.pubkey);
+  const metadata = author.data?.metadata;
+  const displayName = useScopedDisplayName(target.pubkey, metadata);
+
+  const isPrivate = Boolean(sendZap);
+  const hasLightning = canZap(metadata);
+
+  // NIP-A3 payment targets. Only fetch once the dialog is open (the parent
+  // already gates the mount on `open`).
+  const { targets: paymentTargets } = usePaymentTargets(target.pubkey);
+  const lightningTarget = useMemo(() => findLightningTarget(paymentTargets), [paymentTargets]);
+  const bitcoinTarget = useMemo(() => findBitcoinTarget(paymentTargets), [paymentTargets]);
+  const bitcoinOverride = useMemo(
+    () =>
+      bitcoinTarget
+        ? {
+            value: bitcoinTarget.authority,
+            mode: isSilentPaymentLike(bitcoinTarget.authority) ? ("sp" as const) : ("onchain" as const),
+          }
+        : undefined,
+    [bitcoinTarget],
+  );
+
+  const genericTargets = useMemo(
+    () => paymentTargets.filter((t) => t.type !== "bitcoin" && t.type !== "lightning"),
+    [paymentTargets],
+  );
+
+  // Bitcoin capability probe — determines whether the on-chain pane is
+  // usable or falls back to the unsupported-signer QR view.
+  const { capability: btcCapability } = useBitcoinSigner();
+  const bitcoinUnsupported = btcCapability === "unsupported";
+
+  // Build the ordered method list.
+  const methods = useMemo<DialogMethod[]>(() => {
+    const list: DialogMethod[] = [{ id: "bitcoin", def: PAYMENT_METHODS.bitcoin }];
+    if (hasLightning || lightningTarget) {
+      list.push({ id: "lightning", def: PAYMENT_METHODS.lightning });
+    }
+    for (const t of genericTargets) {
+      list.push({ id: t.type, def: PAYMENT_METHODS[t.type], target: t });
+    }
+    return list;
+  }, [hasLightning, lightningTarget, genericTargets]);
+
+  const defaultMethodId: DialogMethodId =
+    bitcoinUnsupported && (hasLightning || lightningTarget) ? "lightning" : "bitcoin";
+  const [activeMethod, setActiveMethod] = useState<DialogMethodId>(defaultMethodId);
+  const currentMethod = methods.find((m) => m.id === activeMethod) ?? methods[0];
+
+  // Success state — replaces the method UI when set.
+  const [success, setSuccess] = useState<
+    | { kind: "onchain"; amountSats: number; txid: string }
+    | { kind: "lightning"; amountSats: number }
+    | null
+  >(null);
+
+  const esploraApis = useEsploraApis();
+  const { data: btcPrice } = useQuery({
+    queryKey: ["btc-price", esploraApis],
+    queryFn: ({ signal }) => fetchBtcPrice(esploraApis, signal),
+    staleTime: 30_000,
+  });
+
+  // ── Lightning state ──
+  const [amount, setAmount] = useState<number>(config.defaultZapAmount || PRESETS[1]);
+  const [editingAmount, setEditingAmount] = useState(false);
+  const [error, setError] = useState("");
+  const amountInputRef = useRef<HTMLInputElement>(null);
+
+  const { zap, status, invoice } = useZap({
+    target,
+    recipient: { pubkey: target.pubkey, metadata },
+    sendZap,
+  });
+
+  const busy = status === "resolving" || status === "paying";
+  const showingInvoice = status === "manual" && invoice;
+
+  useEffect(() => {
+    if (editingAmount) {
+      amountInputRef.current?.focus();
+      amountInputRef.current?.select();
+    }
+  }, [editingAmount]);
+
+  const commitAmountEdit = useCallback(() => setEditingAmount(false), []);
+
+  const handleLightningZap = async () => {
+    setError("");
+    if (amount <= 0) { setError("Enter an amount."); return; }
+    try {
+      const outcome = await zap(amount, "");
+      if (outcome === "paid") {
+        setSuccess({ kind: "lightning", amountSats: amount });
+      } else if (outcome === "unproven") {
+        toast({
+          title: `Sent ${formatSats(amount)} sats ⚡`,
+          description:
+            "The payment went through, but this wallet can't provide the proof needed to show a private zap tally here. Use a wallet like Alby Hub, Coinos, or lnbits to have private zaps counted.",
+        });
+        setSuccess({ kind: "lightning", amountSats: amount });
+      }
+      // "manual" keeps the dialog open — the QR view renders below.
+    } catch (e) {
+      toast({
+        title: "Zap failed",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCopy = () => {
+    if (invoice) {
+      void writeClipboardText(invoice);
+      toast({ title: "Invoice copied" });
+    }
+  };
+
+  const openInWallet = () => {
+    if (invoice) window.location.href = `lightning:${invoice}`;
+  };
+
+  return (
+    <>
+      <div className="flex items-center justify-between px-4 h-12">
+        <DialogTitle className="text-base font-semibold flex items-center gap-1.5 min-w-0">
+          {success ? (
+            "Success"
+          ) : showingInvoice ? (
+            "Lightning Payment"
+          ) : methods.length > 1 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 min-w-0 rounded-md px-1 -mx-1 hover:bg-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                  aria-label="Switch payment method"
+                >
+                  <PaymentMethodIcon method={currentMethod?.def} />
+                  <span className="truncate">{methodTitle(currentMethod)}</span>
+                  <ChevronDown className="size-4 shrink-0 opacity-70" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-44" onClick={(e) => e.stopPropagation()}>
+                {methods.map((m) => (
+                  <DropdownMenuItem
+                    key={m.id}
+                    onSelect={() => setActiveMethod(m.id)}
+                    className="gap-2"
+                  >
+                    <PaymentMethodIcon method={m.def} />
+                    <span>{m.def.label}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <span className="truncate">
+              {isPrivate ? "Private Zap" : `Zap ${displayName}`}
+            </span>
+          )}
+          {isPrivate && !showingInvoice && !success && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label="How private zaps work"
+                >
+                  <HelpCircle className="size-4 shrink-0" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" side="bottom" className="w-72 p-3 text-xs leading-relaxed text-foreground/80">
+                Payment proof (preimage) is sealed into the channel so members verify the zap locally. No public receipt, no relay tally.
+              </PopoverContent>
+            </Popover>
+          )}
+        </DialogTitle>
+        <button
+          type="button"
+          onClick={onDone}
+          className="p-1.5 -mr-1.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+          aria-label="Close"
+        >
+          <X className="size-5" />
+        </button>
+      </div>
+
+      <div className="overflow-y-auto max-h-[calc(95vh-3rem)]">
+        {success ? (
+          <ZapSuccessScreen
+            recipientPubkey={target.pubkey}
+            amountSats={success.amountSats}
+            btcPrice={btcPrice}
+            txid={success.kind === "onchain" ? success.txid : undefined}
+            onClose={onDone}
+          />
+        ) : showingInvoice ? (
+          <LightningInvoiceView
+            invoice={invoice!}
+            amount={amount}
+            webln={!!webln}
+            busy={busy}
+            onPay={handleLightningZap}
+            onCopy={handleCopy}
+            onOpenInWallet={openInWallet}
+          />
+        ) : currentMethod?.def.kind === "lightning" ? (
+          <LightningZapPane
+            amount={amount}
+            setAmount={setAmount}
+            editingAmount={editingAmount}
+            setEditingAmount={setEditingAmount}
+            amountInputRef={amountInputRef}
+            commitAmountEdit={commitAmountEdit}
+            error={error}
+            setError={setError}
+            busy={busy}
+            status={status}
+            onZap={handleLightningZap}
+          />
+        ) : currentMethod?.def.kind === "generic" && currentMethod.target ? (
+          <GenericPaymentContent method={currentMethod.def} target={currentMethod.target} />
+        ) : (
+          // Default: native Bitcoin
+          <OnchainZapContent
+            target={target}
+            bitcoinTarget={bitcoinOverride}
+            sendOnchainZap={sendOnchainZap}
+            onSuccess={({ txid, amountSats }) => setSuccess({ kind: "onchain", amountSats, txid })}
+            onClose={onDone}
+          />
+        )}
+      </div>
+    </>
+  );
+}
+
+// ── Lightning pane (amount + presets + send) ──────────────────────────────
+
+interface LightningZapPaneProps {
+  amount: number;
+  setAmount: (n: number) => void;
+  editingAmount: boolean;
+  setEditingAmount: (v: boolean) => void;
+  amountInputRef: React.RefObject<HTMLInputElement | null>;
+  commitAmountEdit: () => void;
+  error: string;
+  setError: (s: string) => void;
+  busy: boolean;
+  status: string;
+  onZap: () => void;
+}
+
+function LightningZapPane({
+  amount,
+  setAmount,
+  editingAmount,
+  setEditingAmount,
+  amountInputRef,
+  commitAmountEdit,
+  error,
+  setError,
+  busy,
+  status,
+  onZap,
+}: LightningZapPaneProps) {
+  return (
+    <div className="grid gap-3 px-4 py-4 w-full overflow-hidden">
+      <div className="flex flex-col items-center pt-2">
+        {editingAmount ? (
+          <div className="flex items-baseline justify-center">
+            <input
+              ref={amountInputRef}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              value={amount || ""}
+              onChange={(e) => { setAmount(Number(e.target.value)); setError(""); }}
+              onBlur={commitAmountEdit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); commitAmountEdit(); }
+              }}
+              aria-label="Amount in sats"
+              className="bg-transparent border-0 outline-none text-4xl font-semibold text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              style={{ width: `${Math.max(2, String(amount).length + 1)}ch` }}
+            />
+            <span className="text-4xl font-semibold text-muted-foreground"> sats</span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditingAmount(true)}
+            aria-label="Edit amount"
+            className="flex items-baseline justify-center rounded-md px-2 -mx-2 hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+          >
+            <span className="text-4xl font-semibold tabular-nums">
+              {formatSats(amount)}
+            </span>
+            <span className="text-4xl font-semibold text-muted-foreground"> sats</span>
+          </button>
+        )}
+      </div>
+
+      <ToggleGroup
+        type="single"
+        value={PRESETS.includes(amount) ? String(amount) : ""}
+        onValueChange={(v) => { if (v) { setAmount(Number(v)); setError(""); setEditingAmount(false); } }}
+        className="grid grid-cols-5 gap-1 w-full"
+      >
+        {PRESETS.map((preset) => (
+          <ToggleGroupItem
+            key={preset}
+            value={String(preset)}
+            className="h-8 min-w-0 text-xs font-semibold px-1"
+          >
+            {formatSats(preset)}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      <Button
+        type="button"
+        onClick={onZap}
+        disabled={busy || amount <= 0}
+        className="w-full"
+      >
+        {busy ? (
+          <>
+            <Loader2 className="size-4 mr-1.5 animate-spin" />
+            {status === "resolving" ? "Creating invoice…" : "Paying…"}
+          </>
+        ) : (
+          `Send ${formatSats(amount)} sats`
+        )}
+      </Button>
+    </div>
+  );
+}
+
+// ── Lightning invoice (QR) view ───────────────────────────────────────────
+
+interface LightningInvoiceViewProps {
+  invoice: string;
+  amount: number;
+  webln: boolean;
+  busy: boolean;
+  onPay: () => void;
+  onCopy: () => void;
+  onOpenInWallet: () => void;
+}
+
+function LightningInvoiceView({
+  invoice,
+  amount,
+  webln,
+  busy,
+  onPay,
+  onCopy,
+  onOpenInWallet,
+}: LightningInvoiceViewProps) {
+  return (
+    <div className="grid gap-3 px-4 py-4 w-full overflow-hidden">
+      <div className="flex flex-col items-center pt-1">
+        <div className="text-3xl font-semibold tabular-nums">
+          {formatSats(amount)} sats
+        </div>
+      </div>
+
+      <div className="flex justify-center">
+        <div className="bg-white p-3 rounded-xl" aria-label="Lightning invoice QR code">
+          <QRCodeCanvas value={invoice.toUpperCase()} size={220} level="M" className="block" />
+        </div>
+      </div>
+
+      <div className="flex gap-2 min-w-0">
+        <Input
+          value={invoice}
+          readOnly
+          aria-label="Lightning invoice"
+          className="font-mono text-xs min-w-0 flex-1 overflow-hidden text-ellipsis"
+          onClick={(e) => e.currentTarget.select()}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={onCopy}
+          className="shrink-0"
+          aria-label="Copy invoice"
+        >
+          <Copy className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div className="grid gap-2">
+        {webln && (
+          <Button type="button" onClick={onPay} disabled={busy} className="w-full">
+            {busy ? (
+              <>
+                <Loader2 className="size-4 mr-1.5 animate-spin" />
+                Processing…
+              </>
+            ) : (
+              "Pay with WebLN"
+            )}
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant={webln ? "outline" : "default"}
+          onClick={onOpenInWallet}
+          className="w-full"
+        >
+          <ExternalLink className="h-4 w-4 mr-2" />
+          Open in Lightning Wallet
+        </Button>
+      </div>
+
+      <p className="text-[11px] text-muted-foreground text-center">
+        Scan the QR or copy the invoice to pay with any Lightning wallet.
+      </p>
+    </div>
+  );
+}
