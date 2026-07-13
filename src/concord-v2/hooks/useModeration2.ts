@@ -59,11 +59,17 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
     );
   };
 
-  /** Strip every role from a member (Role Removal). Best-effort. */
+  /**
+   * Strip every role from a member (Role Removal). Best-effort — skipped when
+   * the fold would drop it (a revoke needs MANAGE_ROLES + strict outrank,
+   * CORD-04 §5; a KICK/BAN holder without it still kicks/bans, the target just
+   * keeps their rank until an authorized strip lands).
+   */
   const stripRoles = async (target: string) => {
     if (!user || !community) return;
     const hasGrant = folded?.roster.grants.some((g) => g.member === target && g.roleIds.length > 0);
     if (!hasGrant) return;
+    if (!canActOn(target, Permissions.MANAGE_ROLES)) return;
     const head = folded?.heads.get(bytesToHex(grantLocator(community.id, hex32(target))));
     await publishEdition2(
       nostr,

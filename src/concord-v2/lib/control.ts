@@ -46,8 +46,10 @@ import {
   emptyRoles,
   grantFromJSON,
   grantToJSON,
+  hasPermission,
   isAuthorized,
   MAX_ROLES_PER_COMMUNITY,
+  outranks,
   Permissions,
   roleFromJSON,
   roleToJSON,
@@ -302,6 +304,11 @@ function pickHead(
   return undefined;
 }
 
+/** Order role/grant candidates oldest version first (the admissibility walk). */
+function byVersionAsc(a: { parsed: ParsedEdition }, b: { parsed: ParsedEdition }): number {
+  return a.parsed.version < b.parsed.version ? -1 : a.parsed.version > b.parsed.version ? 1 : 0;
+}
+
 /**
  * The delegation fixpoint (CORD-04 §2): start with the owner authorized (their
  * rank comes from the community_id, not any fold), then admit role/grant
@@ -310,6 +317,13 @@ function pickHead(
  * one settles it, so a forger's garbage edition can't suppress a legit head.
  * Anything whose signer never becomes authorized is dropped (the
  * self-promotion / forged-delegation defense).
+ *
+ * Editing is ACTING ON A TARGET (CORD-04 §5): besides outranking what an
+ * edition hands out, a non-owner signer must strictly outrank what it REPLACES
+ * — the standing role position, or the rank a grant's predecessor conferred —
+ * or a revoke (empty role_ids) / demotion would be free to anyone. Each
+ * entity's candidates are walked version-ascending so the "standing" state is
+ * itself an admissible edition, never a forger's plant.
  */
 function authorizeDelegation(
   roleCandidates: Map<string, Array<{ role: Role; author: string; parsed: ParsedEdition }>>,
@@ -332,39 +346,58 @@ function authorizeDelegation(
     changed = false;
 
     // Roles: the owner may define any role (position ≥ 1 — the top is not
-    // mintable, enforced at parse); a non-owner needs MANAGE_ROLES and must
-    // strictly outrank the position they mint.
+    // mintable, enforced at parse); a non-owner needs MANAGE_ROLES, must
+    // strictly outrank the position they mint, AND must strictly outrank the
+    // standing position they replace (no repositioning a role above you).
     for (const [eid, candidates] of roleCandidates) {
       if (settledRoles.has(eid)) continue;
-      for (const { role, author, parsed } of candidates) {
-        const ok = author === ownerHex || canActOnPosition(roster, author, ownerHex, role.position, Permissions.MANAGE_ROLES);
-        if (!ok) continue;
-        roster.roles.push(role);
-        settledRoles.add(eid);
-        settle(parsed);
-        changed = true;
-        break;
+      const admissible = new Set<ParsedEdition>();
+      let standing: number | undefined; // the admissible predecessor's position
+      for (const { role, author, parsed } of [...candidates].sort(byVersionAsc)) {
+        const mintOk = author === ownerHex || canActOnPosition(roster, author, ownerHex, role.position, Permissions.MANAGE_ROLES);
+        const replaceOk = author === ownerHex || standing === undefined || outranks(roster, author, ownerHex, standing);
+        if (!mintOk || !replaceOk) continue;
+        admissible.add(parsed);
+        standing = role.position;
       }
+      // The fold's candidate priority (chain-verified head first), gated.
+      const pick = candidates.find((c) => admissible.has(c.parsed));
+      if (!pick) continue;
+      roster.roles.push(pick.role);
+      settledRoles.add(eid);
+      settle(pick.parsed);
+      changed = true;
     }
 
-    // Grants: honored only if the signer outranks every Role handed out.
+    // Grants: a non-owner needs MANAGE_ROLES, must strictly outrank every
+    // Role handed out, AND must strictly outrank the target's standing rank —
+    // a revoke (empty role_ids) or demotion acts ON the member (CORD-04 §5/§6),
+    // so it is never free to a lower rank (or to no rank at all).
     for (const [eid, candidates] of grantCandidates) {
       if (settledGrants.has(eid)) continue;
-      for (const { grant, author, parsed } of candidates) {
+      const admissible = new Set<ParsedEdition>();
+      let standing: number | undefined; // the rank the admissible predecessor conferred
+      for (const { grant, author, parsed } of [...candidates].sort(byVersionAsc)) {
         const positions = grant.roleIds
           .map((rid) => roster.roles.find((r) => r.roleId === rid)?.position)
           .filter((p): p is number => p !== undefined);
         const allKnown = positions.length === grant.roleIds.length;
         const ok =
           author === ownerHex ||
-          (allKnown && positions.every((pos) => canActOnPosition(roster, author, ownerHex, pos, Permissions.MANAGE_ROLES)));
+          (allKnown &&
+            hasPermission(roster, author, Permissions.MANAGE_ROLES) &&
+            positions.every((pos) => outranks(roster, author, ownerHex, pos)) &&
+            (standing === undefined || outranks(roster, author, ownerHex, standing)));
         if (!ok) continue;
-        roster.grants.push(grant);
-        settledGrants.add(eid);
-        settle(parsed);
-        changed = true;
-        break;
+        admissible.add(parsed);
+        standing = positions.length ? Math.min(...positions) : undefined;
       }
+      const pick = candidates.find((c) => admissible.has(c.parsed));
+      if (!pick) continue;
+      roster.grants.push(pick.grant);
+      settledGrants.add(eid);
+      settle(pick.parsed);
+      changed = true;
     }
   }
 

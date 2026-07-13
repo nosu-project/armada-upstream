@@ -17,7 +17,7 @@ import {
 } from "@/concord-v2/lib/control";
 import { bytesToHex, communityIdOf, controlGroupKey, hex32, random32 } from "@/concord-v2/lib/derive";
 import { rewrapSeal } from "@/concord-v2/lib/stream";
-import { adminRole, badgeOf, hasPermission, isAdmin, moderatorRole, Permissions } from "@/concord-v2/lib/roles";
+import { adminRole, badgeOf, hasPermission, isAdmin, moderatorRole, Permissions, type Role } from "@/concord-v2/lib/roles";
 
 function signer(sk = generateSecretKey()) {
   return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
@@ -154,6 +154,143 @@ describe("control plane fold (CORD-04)", () => {
     const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
     expect(badgeOf(folded.roster, mod.pubkey)).toBe("moderator");
     expect(badgeOf(folded.roster, friend.pubkey)).toBeUndefined();
+  });
+
+  it("a roleless member cannot revoke a grant (an empty role_ids edition needs authority)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const rando = signer();
+
+    const adm = adminRole(bytesToHex(random32()));
+    const roleWrap = await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner);
+    const grantWrap = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    // The forged revoke chains off the REAL head (any member can read the plane).
+    const [grantV1] = openControlWraps([grantWrap], [control]);
+    const revokeWrap = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [] }, { actorPubkey: rando.pubkey, version: 2n, prevHash: grantV1.selfHash }),
+      control,
+      rando,
+    );
+
+    const folded = foldControlState(openControlWraps([roleWrap, grantWrap, revokeWrap], [control]), communityId, owner.pubkey);
+    expect(isAdmin(folded.roster, admin.pubkey)).toBe(true); // the revoke was dropped
+  });
+
+  it("a lower-ranked MANAGE_ROLES holder cannot strip or demote a grant above their rank", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const lt = signer(); // position 2, holds MANAGE_ROLES
+    const admin1 = signer(); // strip target
+    const admin2 = signer(); // demote target
+    const newbie = signer();
+
+    const adm = adminRole(bytesToHex(random32()));
+    const ltRole: Role = { roleId: bytesToHex(random32()), name: "Lieutenant", position: 2, permissions: Permissions.MANAGE_ROLES, scope: { kind: "server" }, color: 0 };
+    const lowRole: Role = { roleId: bytesToHex(random32()), name: "Helper", position: 3, permissions: 0n, scope: { kind: "server" }, color: 0 };
+
+    const wraps: NostrEvent[] = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(buildRoleEdition(ltRole, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(buildRoleEdition(lowRole, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      // The lieutenant's own authority settles BEFORE the victims' entities.
+      await sealEdition(buildGrantEdition(communityId, { member: lt.pubkey, roleIds: [ltRole.roleId] }, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+    ];
+    const g1 = await sealEdition(buildGrantEdition(communityId, { member: admin1.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }), control, owner);
+    const g2 = await sealEdition(buildGrantEdition(communityId, { member: admin2.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }), control, owner);
+    const [g1v1] = openControlWraps([g1], [control]);
+    const [g2v1] = openControlWraps([g2], [control]);
+    wraps.push(
+      g1,
+      g2,
+      // Strip admin1 — dropped (a revoke acts on a rank the lieutenant doesn't outrank).
+      await sealEdition(
+        buildGrantEdition(communityId, { member: admin1.pubkey, roleIds: [] }, { actorPubkey: lt.pubkey, version: 2n, prevHash: g1v1.selfHash }),
+        control,
+        lt,
+      ),
+      // Demote admin2 to the Helper role — dropped (outranking the role handed OUT is not enough).
+      await sealEdition(
+        buildGrantEdition(communityId, { member: admin2.pubkey, roleIds: [lowRole.roleId] }, { actorPubkey: lt.pubkey, version: 2n, prevHash: g2v1.selfHash }),
+        control,
+        lt,
+      ),
+      // A fresh grant BELOW the lieutenant's rank — honored.
+      await sealEdition(
+        buildGrantEdition(communityId, { member: newbie.pubkey, roleIds: [lowRole.roleId] }, { actorPubkey: lt.pubkey, version: 1n }),
+        control,
+        lt,
+      ),
+    );
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(isAdmin(folded.roster, admin1.pubkey)).toBe(true);
+    expect(badgeOf(folded.roster, admin2.pubkey)).toBe("admin");
+    expect(folded.roster.grants.some((g) => g.member === newbie.pubkey && g.roleIds.includes(lowRole.roleId))).toBe(true);
+  });
+
+  it("a lower-ranked MANAGE_ROLES holder cannot reposition a role above their rank", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const lt = signer();
+
+    const adm = adminRole(bytesToHex(random32()));
+    const ltRole: Role = { roleId: bytesToHex(random32()), name: "Lieutenant", position: 2, permissions: Permissions.MANAGE_ROLES, scope: { kind: "server" }, color: 0 };
+    const mrole = moderatorRole(bytesToHex(random32())); // minted by the ADMIN (position 2)
+
+    const modV1 = await sealEdition(buildRoleEdition(mrole, { actorPubkey: admin.pubkey, version: 1n }), control, admin);
+    const [modV1Parsed] = openControlWraps([modV1], [control]);
+    const wraps: NostrEvent[] = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(buildRoleEdition(ltRole, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(buildGrantEdition(communityId, { member: lt.pubkey, roleIds: [ltRole.roleId] }, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      modV1,
+      // The lieutenant (position 2) shoves the peer Moderator role to position 5 — dropped.
+      await sealEdition(
+        buildRoleEdition({ ...mrole, position: 5, permissions: 0n }, { actorPubkey: lt.pubkey, version: 2n, prevHash: modV1Parsed.selfHash }),
+        control,
+        lt,
+      ),
+    ];
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    const settled = folded.roster.roles.find((r) => r.roleId === mrole.roleId);
+    expect(settled?.position).toBe(2);
+    expect(settled?.permissions).toBe(mrole.permissions);
+  });
+
+  it("an outranking MANAGE_ROLES holder's revoke still lands", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const mod = signer();
+
+    const adm = adminRole(bytesToHex(random32()));
+    const mrole = moderatorRole(bytesToHex(random32()));
+    const modGrant = await sealEdition(
+      buildGrantEdition(communityId, { member: mod.pubkey, roleIds: [mrole.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const [modGrantV1] = openControlWraps([modGrant], [control]);
+    const wraps: NostrEvent[] = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(buildRoleEdition(mrole, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      modGrant,
+      // The admin (position 1) strips the moderator (rank 2) — honored.
+      await sealEdition(
+        buildGrantEdition(communityId, { member: mod.pubkey, roleIds: [] }, { actorPubkey: admin.pubkey, version: 2n, prevHash: modGrantV1.selfHash }),
+        control,
+        admin,
+      ),
+    ];
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(badgeOf(folded.roster, mod.pubkey)).toBeUndefined();
+    expect(isAdmin(folded.roster, admin.pubkey)).toBe(true);
   });
 
   it("refuses a downgrade: a replayed stale banlist never wins", async () => {
