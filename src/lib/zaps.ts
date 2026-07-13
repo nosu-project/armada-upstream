@@ -201,6 +201,48 @@ export function tallyZaps(
   };
 }
 
+// ── NIP-29: public on-chain zap events (kind 8333) ──────────────────────────
+
+/**
+ * Fold public kind-8333 on-chain zap events for ONE target message into a
+ * tally. Unlike Lightning receipts, the proof is the Bitcoin transaction
+ * itself (on a public ledger), so we validate only structural integrity and
+ * dedup by txid (one tx = one zap). The sender's pubkey is the event author
+ * (the event is self-signed); the amount comes from the `amount` tag.
+ */
+export function tallyOnchainZaps(
+  events: NostrEvent[],
+  targetId: string,
+  userPubkey?: string,
+): ZapTally {
+  const seenTxids = new Set<string>();
+  const zaps: ZapEntry[] = [];
+  for (const event of events) {
+    if (event.kind !== KIND_ONCHAIN_ZAP) continue;
+    if (!event.tags.some((t) => t[0] === "e" && t[1] === targetId)) continue;
+    const txid = verifyOnchainZapRumor({ kind: event.kind, tags: event.tags });
+    if (!txid) continue;
+    if (seenTxids.has(txid)) continue;
+    seenTxids.add(txid);
+    const sats = Number(event.tags.find((t) => t[0] === "amount")?.[1]);
+    if (!Number.isFinite(sats) || sats <= 0) continue;
+    zaps.push({
+      id: event.id,
+      pubkey: event.pubkey,
+      sats,
+      comment: event.content ?? "",
+      rail: "onchain",
+    });
+  }
+  zaps.sort((a, b) => b.sats - a.sats);
+  return {
+    totalSats: zaps.reduce((sum, z) => sum + z.sats, 0),
+    count: zaps.length,
+    mine: Boolean(userPubkey && zaps.some((z) => z.pubkey === userPubkey)),
+    zaps,
+  };
+}
+
 // ── CORD.md: sealed zap rumors ────────────────────────────────────────────────
 
 /**

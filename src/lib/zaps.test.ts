@@ -9,6 +9,7 @@ import {
   formatSats,
   receiptAmountSats,
   receiptZapRequest,
+  tallyOnchainZaps,
   tallyZaps,
   verifyZapRumor,
   zapRumorTags,
@@ -151,6 +152,73 @@ describe("tallyZaps", () => {
 
   it("drops receipts with no invoice to carry the amount", () => {
     expect(tallyZaps([receipt({ requestAmountMsats: 21000 })], "target1").count).toBe(0);
+  });
+});
+
+// ── On-chain zap events (kind 8333) — NIP-29 public attribution ────────────
+
+let onchainId = 0;
+function onchainEvent(opts: {
+  id?: string;
+  targetId?: string;
+  txid?: string;
+  amountSats?: number;
+  comment?: string;
+  pubkey?: string;
+}): NostrEvent {
+  const txid = opts.txid ?? "ab".repeat(32);
+  return {
+    id: opts.id ?? `onchain${onchainId++}`,
+    kind: 8333,
+    pubkey: opts.pubkey ?? "dd".repeat(32),
+    content: opts.comment ?? "",
+    created_at: 0,
+    sig: "",
+    tags: [
+      ["i", `bitcoin:tx:${txid}`],
+      ["p", "bb".repeat(32)],
+      ["e", opts.targetId ?? "target1"],
+      ["amount", String(opts.amountSats ?? 1000)],
+    ],
+  };
+}
+
+describe("tallyOnchainZaps", () => {
+  it("sums, sorts desc, dedupes by txid, and detects mine", () => {
+    const tally = tallyOnchainZaps(
+      [
+        onchainEvent({ id: "e1", txid: "11".repeat(32), amountSats: 500, pubkey: "ee".repeat(32) }),
+        onchainEvent({ id: "e2", txid: "11".repeat(32), amountSats: 500 }), // dupe txid
+        onchainEvent({ id: "e3", txid: "22".repeat(32), amountSats: 2000, comment: "nice", pubkey: "ff".repeat(32) }),
+      ],
+      "target1",
+      "ff".repeat(32),
+    );
+    expect(tally.count).toBe(2);
+    expect(tally.totalSats).toBe(2500);
+    expect(tally.zaps[0].sats).toBe(2000);
+    expect(tally.zaps[0].comment).toBe("nice");
+    expect(tally.mine).toBe(true);
+  });
+
+  it("drops events whose e tag names a different target", () => {
+    const tally = tallyOnchainZaps(
+      [onchainEvent({ targetId: "other", txid: "33".repeat(32) })],
+      "target1",
+    );
+    expect(tally.count).toBe(0);
+  });
+
+  it("drops malformed events (bad kind, missing i tag, bad amount)", () => {
+    const good = onchainEvent({ txid: "44".repeat(32) });
+    const badKind = { ...onchainEvent({ txid: "55".repeat(32) }), kind: 9 };
+    const noI = onchainEvent({ txid: "66".repeat(32) });
+    noI.tags = noI.tags.filter((t) => t[0] !== "i");
+    const noAmount = onchainEvent({ txid: "77".repeat(32) });
+    noAmount.tags = noAmount.tags.filter((t) => t[0] !== "amount");
+    const tally = tallyOnchainZaps([good, badKind, noI, noAmount], "target1");
+    expect(tally.count).toBe(1);
+    expect(tally.zaps[0].rail).toBe("onchain");
   });
 });
 
