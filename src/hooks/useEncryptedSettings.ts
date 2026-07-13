@@ -88,8 +88,15 @@ export function useEncryptedSettings() {
 
       const event = events.sort((a, b) => b.created_at - a.created_at)[0];
 
-      // Relay miss (offline, slow, or first load): fall back to the locally
-      // cached copy in NIndexedDB so the last-known config still applies.
+      // No event from the relay (offline, slow, EOSE before it arrived, or a
+      // genuine first load): fall back to the locally cached copy in
+      // NIndexedDB so the last-known config still applies. IMPORTANT: because
+      // `nostr.query` swallows relay errors/timeouts and returns whatever it
+      // collected before EOSE, a `null` result here does NOT prove the user
+      // has no settings — it may just mean we failed to read them. NostrSync
+      // treats this ambiguity conservatively and never opens its outgoing-
+      // publish gate off a null pull (it requires a positively observed remote
+      // settings event first).
       if (!event) {
         const store = await eventStore;
         const cached = await store.query([settingsFilter(user.pubkey)]);
@@ -156,6 +163,13 @@ export function useEncryptedSettings() {
     isLoading: settings.isLoading,
     /** True once the query has resolved at least once (event or cache miss). */
     isFetched: settings.isFetched,
+    /**
+     * True once the settings query has completed a successful pull (the query
+     * never rejects — NPool swallows relay errors — so in practice this tracks
+     * "the first fetch has resolved"). NostrSync waits for this before acting,
+     * but does NOT treat it as proof the remote was read; see its publish gate.
+     */
+    isSuccess: settings.isSuccess,
     refetch: settings.refetch,
     updateSettings: updateSettings.mutateAsync,
     hasNip44Support: !!user?.signer.nip44,

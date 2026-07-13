@@ -98,7 +98,7 @@ export function NostrSync() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
-  const { settings, updateSettings, hasNip44Support, isFetched } = useEncryptedSettings();
+  const { settings, updateSettings, hasNip44Support, isSuccess } = useEncryptedSettings();
   const { data: groupList } = useUserGroupList();
   const { hydrate: hydrateReadState } = useReadState();
   const { applyCustomTheme } = useTheme();
@@ -198,10 +198,12 @@ export function NostrSync() {
   useEffect(() => {
     if (!user?.pubkey) return;
 
-    // Wait for the settings query to resolve at least once. Once it has, we can
-    // start publishing local changes (there's nothing newer to pull that would
-    // clobber them). `settings` is null when it resolved with no event.
-    if (!isFetched) return;
+    // Wait for the settings pull to complete at least once. The real guard
+    // against clobbering a good remote config with local defaults is below
+    // (we open the publish gate only after positively observing a remote
+    // event, and section 2 refuses to publish with a null base) — this just
+    // avoids acting on an in-flight query.
+    if (!isSuccess) return;
 
     const remoteTs = settings?.lastSync ?? 0;
     const localTs = Math.max(getLocalSettingsSync(user.pubkey), getLastSettingsWrite());
@@ -237,13 +239,47 @@ export function NostrSync() {
       appliedSyncTs.current = remoteTs;
     }
 
-    pulledForPubkey.current = user.pubkey;
-  }, [user?.pubkey, settings, isFetched, updateConfig]);
+    // Open the outgoing-publish gate ONLY once we have positively observed the
+    // user's own remote settings event. Rationale:
+    //
+    //   • `nostr.query` (NPool) silently swallows relay errors/timeouts and
+    //     returns whatever it collected before a 1s EOSE — so a slow or dead
+    //     relay yields an empty result indistinguishable from "no event". We
+    //     must never treat that ambiguity as license to publish.
+    //   • `updateSettings` builds the new 30078 event by merging the local
+    //     synced subset over `settings.data ?? {}`. If `settings` is null
+    //     (no remote observed), that base is empty, so the published event
+    //     DROPS every key not present in local defaults — a replaceable-event
+    //     wipe of the user's real config, stamped newest so it wins on every
+    //     device. This is the bug.
+    //   • A user with no metadata event simply runs on app defaults. There is
+    //     nothing to sync and no reason to fabricate a config for them.
+    //
+    // So: no observed remote event → gate stays closed → we never auto-publish.
+    // The gate opens the moment we read a real event (this session, or a prior
+    // one via the persisted local sync marker), after which genuine user edits
+    // publish and merge safely over the known-good remote base.
+    const observedRemote = settings !== null || getLocalSettingsSync(user.pubkey) > 0;
+    if (observedRemote) {
+      pulledForPubkey.current = user.pubkey;
+    }
+  }, [user?.pubkey, settings, isSuccess, updateConfig]);
 
   // ─── 2. Local config → encrypted settings (debounced publish) ─────────
-  // Every AppConfig edit (theme, relays, orders, last-open channel, …) is
-  // pushed to the NIP-78 event so it syncs across devices. Gated on having
-  // completed the initial pull to avoid clobbering the remote with defaults.
+  // A DIRECT user config edit (theme, relays, orders, last-open channel, …) is
+  // pushed to the NIP-78 event so it syncs across devices. This is the ONLY
+  // place Armada broadcasts a settings event, and it must fire only for a real
+  // user mutation — never off boot-time or sync-driven config changes:
+  //
+  //   • `pulledForPubkey` gates on having observed the user's remote event, so
+  //     we never publish a merge that would drop keys we simply failed to read
+  //     (the initial-sync wipe).
+  //   • Sync-driven mutations (sections 1 / 1b / 1c) keep `lastSyncedSnapshot`
+  //     in lockstep, so the diff below can only ever reflect a user edit.
+  //   • As a last belt-and-braces guard we require a non-null `settings` base
+  //     at publish time: `updateSettings` merges the patch over `settings.data`,
+  //     and merging over null would replace the remote event with just the
+  //     local subset — the very wipe we're preventing.
   useEffect(() => {
     if (!user?.pubkey || !hasNip44Support) return;
     if (pulledForPubkey.current !== user.pubkey) return;
@@ -257,6 +293,11 @@ export function NostrSync() {
     }
     if (snapshot === lastSyncedSnapshot.current) return;
 
+    // Never publish while we lack a known-good remote base to merge over —
+    // doing so would replace the user's real settings event with only the
+    // local synced subset, dropping every key we haven't observed.
+    if (settings === null) return;
+
     if (publishTimer.current) clearTimeout(publishTimer.current);
     publishTimer.current = setTimeout(() => {
       lastSyncedSnapshot.current = snapshot;
@@ -268,7 +309,7 @@ export function NostrSync() {
     return () => {
       if (publishTimer.current) clearTimeout(publishTimer.current);
     };
-  }, [user?.pubkey, hasNip44Support, config, updateSettings]);
+  }, [user?.pubkey, hasNip44Support, config, settings, updateSettings]);
 
   // ─── 1a. Read-state (unread/mention) → local read-state cache ─────────
   // Merge-hydrate (max timestamp wins) so synced reads from other devices
@@ -312,7 +353,15 @@ export function NostrSync() {
       const have = new Set(current.addedRelays);
       const missing = fromList.filter((url) => !have.has(url));
       if (missing.length === 0) return current;
-      return { ...current, addedRelays: [...current.addedRelays, ...missing] };
+      const next = { ...current, addedRelays: [...current.addedRelays, ...missing] };
+      // This is a SYNC-DRIVEN mutation (hydrating the user's own 10009 server
+      // list into the local cache), not a user edit. Keep the publish baseline
+      // in lockstep so the publish watcher never mistakes it for one and
+      // broadcasts it back out. We only ever broadcast direct user edits.
+      if (pulledForPubkey.current === user.pubkey) {
+        lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));
+      }
+      return next;
     });
   }, [user?.pubkey, groupList, updateConfig]);
 
@@ -342,10 +391,16 @@ export function NostrSync() {
         if (servers.length === 0) return;
         updateConfig((current) => {
           if (event.created_at <= current.blossomServerMetadata.updatedAt) return current;
-          return {
+          const next = {
             ...current,
             blossomServerMetadata: { servers, updatedAt: event.created_at },
           };
+          // Sync-driven (hydrating the user's own 10063 list), not a user edit
+          // — keep the publish baseline in lockstep so it isn't broadcast back.
+          if (pulledForPubkey.current === user.pubkey) {
+            lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));
+          }
+          return next;
         });
       } catch {
         // Relay error — keep the local cache.
