@@ -4,6 +4,44 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.27.1] - 2026-07-13
+
+A reliability and messaging release. Sending a message in an encrypted
+community now shows it immediately with a pending badge instead of swallowing
+it when remote signing is slow or fails, and signing in with a remote signer
+(such as Amber) no longer dies silently on Android. Login now decrypts your
+recent channel history before opening — no more empty rooms while catch-up
+runs — with a slim in-chat status bar that names what's still catching up.
+Plus fixes for private zaps that silently failed to seal, on-chain zaps
+missing in self-hosted rooms, and initial sync overwriting your settings.
+
+### Added
+- A slim in-chat sync status bar names the background catch-up in flight
+  ("Syncing #general — 84 messages") and hides once the channel is caught up
+
+### Changed
+- After login, the app now decrypts your recent channel history before
+  opening, so rooms are populated instead of empty while catch-up finishes
+
+### Fixed
+- Messages you send in encrypted communities now appear immediately with a
+  pending badge instead of vanishing when remote signing is slow or fails; a
+  failed send shows a retryable state and a "Message not sent" notice rather
+  than disappearing silently
+- Signing in with a remote signer (such as Amber) no longer dies silently on
+  Android, and lost signer responses recover in seconds instead of hanging
+  forever
+- The app no longer goes blank until you restart it when a background sync
+  step silently wedges; stuck history pulls and dead live updates now
+  self-recover
+- Initial sync no longer overwrites your synced settings across relays and
+  devices when the settings read comes back empty
+- Private zaps in encrypted communities now reliably seal and appear for
+  everyone, even when the wallet's payment acknowledgement is slow or lost,
+  and private zaps again require a connected wallet
+- On-chain Bitcoin zaps now appear under the reactions row in self-hosted
+  server rooms, not just in Concord communities
+
 ## [0.27.0] - 2026-07-12
 
 Armada can now send Bitcoin to other users: Lightning zaps from a wallet you
