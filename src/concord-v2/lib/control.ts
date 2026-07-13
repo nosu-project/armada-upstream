@@ -47,6 +47,7 @@ import {
   grantFromJSON,
   grantToJSON,
   hasPermission,
+  highestPosition,
   isAuthorized,
   MAX_ROLES_PER_COMMUNITY,
   outranks,
@@ -254,12 +255,19 @@ function pushEdition(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdit
  *   1. the chain-verified fold head first (refuse-downgrade, contiguity — the
  *      steady-state answer, and the compaction case too: a re-wrapped head
  *      with a dangling `prev` is still the lowest-anchored walk's top);
- *   2. then the remaining per-version winners, DESCENDING — the bootstrap
- *      candidates a fresh joiner may accept when (and only when) a
- *      higher-priority candidate fails the caller's authority gate. "The
- *      highest authority-verified head" (CORD-04 §1) requires gating before
- *      choosing, or a forger could suppress a legit entity with garbage at a
- *      higher (or dangling lower) version.
+ *   2. then EVERY remaining edition, version-DESCENDING (equal versions by
+ *      rumor id, the fold's tiebreak winner first) — the candidates a client
+ *      may accept when (and only when) a higher-priority candidate fails the
+ *      caller's authority gate. "The highest authority-verified head"
+ *      (CORD-04 §1) requires gating before choosing, or a forger could
+ *      suppress a legit entity with garbage at a higher (or dangling lower)
+ *      version.
+ *
+ * Equal-version fork SIBLINGS are all kept: the tiebreak (lower rumor id) is
+ * grindable, so evicting the loser here would let an id-mined fork of the
+ * chain tip suppress the real edition before any authority gate ever saw it
+ * (an unauthorized banlist fork emptying the banlist, a low-rank grant fork
+ * revoking an admin). The tiebreak orders siblings; the gate decides.
  *
  * The caller picks the first candidate that passes its gate and records it in
  * `heads`.
@@ -268,23 +276,24 @@ function headCandidates(editions: ParsedEdition[]): ParsedEdition[] {
   const folds: Edition[] = editions.map(toFoldEdition);
   const result = fold(folds, 0n);
   const ordered: ParsedEdition[] = [];
-  if (result.head !== null) ordered.push(editions[result.head]);
-  const rest = editions
-    .map((e, i) => ({ e, i }))
-    .filter(({ i }) => i !== result.head)
-    .sort((a, b) => {
-      if (a.e.version !== b.e.version) return a.e.version > b.e.version ? -1 : 1;
-      return bytesToHex(a.e.rumorId) < bytesToHex(b.e.rumorId) ? -1 : 1;
-    })
-    .map(({ e }) => e);
-  // Deduplicate per version (the fold's equal-version winner rule).
-  const seenVersions = new Set<string>(ordered.map((e) => e.version.toString()));
-  for (const e of rest) {
-    const v = e.version.toString();
-    if (seenVersions.has(v)) continue;
-    seenVersions.add(v);
-    ordered.push(e);
+  const seenRumors = new Set<string>();
+  if (result.head !== null) {
+    ordered.push(editions[result.head]);
+    seenRumors.add(bytesToHex(editions[result.head].rumorId));
   }
+  const rest = editions
+    .filter((e) => {
+      // A compaction re-wrap carries the same rumor — one candidacy per rumor.
+      const id = bytesToHex(e.rumorId);
+      if (seenRumors.has(id)) return false;
+      seenRumors.add(id);
+      return true;
+    })
+    .sort((a, b) => {
+      if (a.version !== b.version) return a.version > b.version ? -1 : 1;
+      return bytesToHex(a.rumorId) < bytesToHex(b.rumorId) ? -1 : 1;
+    });
+  ordered.push(...rest);
   return ordered;
 }
 
@@ -309,6 +318,17 @@ function byVersionAsc(a: { parsed: ParsedEdition }, b: { parsed: ParsedEdition }
   return a.parsed.version < b.parsed.version ? -1 : a.parsed.version > b.parsed.version ? 1 : 0;
 }
 
+/** Version-ascending groups; equal-version fork siblings share a group. */
+function versionGroups<T extends { parsed: ParsedEdition }>(candidates: T[]): T[][] {
+  const groups: T[][] = [];
+  for (const c of [...candidates].sort(byVersionAsc)) {
+    const last = groups[groups.length - 1];
+    if (last && last[0].parsed.version === c.parsed.version) last.push(c);
+    else groups.push([c]);
+  }
+  return groups;
+}
+
 /**
  * The delegation fixpoint (CORD-04 §2): start with the owner authorized (their
  * rank comes from the community_id, not any fold), then admit role/grant
@@ -323,7 +343,17 @@ function byVersionAsc(a: { parsed: ParsedEdition }, b: { parsed: ParsedEdition }
  * — the standing role position, or the rank a grant's predecessor conferred —
  * or a revoke (empty role_ids) / demotion would be free to anyone. Each
  * entity's candidates are walked version-ascending so the "standing" state is
- * itself an admissible edition, never a forger's plant.
+ * itself an admissible edition, never a forger's plant. Equal-version fork
+ * siblings settle to ONE winner per version, highest authority first — the
+ * grindable rumor-id tiebreak never lets a lower rank evict its superior's
+ * edition.
+ *
+ * The fold must be a function of the edition SET, never its arrival order:
+ * entities are processed in sorted-eid order, and an entity DEFERS while any
+ * state its gate reads is still pending — a handed-out role definition, or a
+ * candidate author's own rank source (their grant entity). A stalled fixpoint
+ * freezes those deferrals one at a time (a still-pending dependency is then
+ * provably dead or cyclic), so it always terminates.
  */
 function authorizeDelegation(
   roleCandidates: Map<string, Array<{ role: Role; author: string; parsed: ParsedEdition }>>,
@@ -335,11 +365,58 @@ function authorizeDelegation(
   const roster = emptyRoles();
   const settledRoles = new Set<string>();
   const settledGrants = new Set<string>();
+  // Deterministic processing order — never keyed to edition arrival.
+  const roleEids = [...roleCandidates.keys()].sort();
+  const grantEids = [...grantCandidates.keys()].sort();
+  // member → their grant entity: the rank source the author-deferral watches.
+  const grantEidOfMember = new Map<string, string>();
+  for (const [eid, cands] of grantCandidates) {
+    if (cands.length > 0) grantEidOfMember.set(cands[0].grant.member, eid);
+  }
   let changed = true;
+  // While false, a grant handing out a role that still has unsettled candidates
+  // WAITS (that role may yet reach the roster and set the standing rank). Once
+  // the fixpoint can settle no more roles, the flag flips: any still-unsettled
+  // role is provably dead, so the grants blocked only on dead roles resolve
+  // (and drop, since a dead role confers nothing) instead of hanging forever.
+  let rolesFrozen = false;
+  // While false, an entity with a candidate whose author's own grant entity is
+  // unsettled WAITS — the author's rank decides that candidate's admissibility,
+  // so settling early would key the roster to edition ARRIVAL order (a real
+  // admin's revoke dropped because their grant folded later). Flipped only
+  // after a stall with roles already frozen: what's left is dead or a genuine
+  // revocation cycle, resolved in sorted-eid order (deterministic either way).
+  let ranksFrozen = false;
 
   const settle = (p: ParsedEdition) => {
     heads.set(bytesToHex(p.entityId), { version: p.version, hash: p.selfHash });
     headEditions.set(bytesToHex(p.entityId), p);
+  };
+
+  /** Is a non-owner author's rank still undetermined (their grant entity pending)? */
+  const rankPending = (author: string, selfEid?: string): boolean => {
+    if (author === ownerHex) return false;
+    const aeid = grantEidOfMember.get(author);
+    // An entity never waits on itself: a self-grant's only possible rank source
+    // is the entity being decided, which is exactly the self-promotion the
+    // fixpoint exists to drop.
+    return aeid !== undefined && aeid !== selfEid && !settledGrants.has(aeid);
+  };
+
+  /**
+   * Equal-version fork siblings, highest authority first: the owner, then rank
+   * (lower position), then the fold's rumor-id tiebreak. The id is grindable;
+   * authority is not — so a fork can only displace an edition its author could
+   * have overwritten anyway.
+   */
+  const authorityFirst = (a: { author: string; parsed: ParsedEdition }, b: { author: string; parsed: ParsedEdition }): number => {
+    const rank = (author: string) => (author === ownerHex ? -1 : (highestPosition(roster, author) ?? Number.MAX_SAFE_INTEGER));
+    const ra = rank(a.author);
+    const rb = rank(b.author);
+    if (ra !== rb) return ra - rb;
+    const ia = bytesToHex(a.parsed.rumorId);
+    const ib = bytesToHex(b.parsed.rumorId);
+    return ia < ib ? -1 : ia > ib ? 1 : 0;
   };
 
   while (changed) {
@@ -349,16 +426,21 @@ function authorizeDelegation(
     // mintable, enforced at parse); a non-owner needs MANAGE_ROLES, must
     // strictly outrank the position they mint, AND must strictly outrank the
     // standing position they replace (no repositioning a role above you).
-    for (const [eid, candidates] of roleCandidates) {
+    for (const eid of roleEids) {
       if (settledRoles.has(eid)) continue;
+      const candidates = roleCandidates.get(eid)!;
+      if (!ranksFrozen && candidates.some((c) => rankPending(c.author))) continue;
       const admissible = new Set<ParsedEdition>();
       let standing: number | undefined; // the admissible predecessor's position
-      for (const { role, author, parsed } of [...candidates].sort(byVersionAsc)) {
-        const mintOk = author === ownerHex || canActOnPosition(roster, author, ownerHex, role.position, Permissions.MANAGE_ROLES);
-        const replaceOk = author === ownerHex || standing === undefined || outranks(roster, author, ownerHex, standing);
-        if (!mintOk || !replaceOk) continue;
-        admissible.add(parsed);
-        standing = role.position;
+      for (const group of versionGroups(candidates)) {
+        for (const { role, author, parsed } of [...group].sort(authorityFirst)) {
+          const mintOk = author === ownerHex || canActOnPosition(roster, author, ownerHex, role.position, Permissions.MANAGE_ROLES);
+          const replaceOk = author === ownerHex || standing === undefined || outranks(roster, author, ownerHex, standing);
+          if (!mintOk || !replaceOk) continue;
+          admissible.add(parsed);
+          standing = role.position;
+          break; // one winner per version — a fork sibling can't sidestep it
+        }
       }
       // The fold's candidate priority (chain-verified head first), gated.
       const pick = candidates.find((c) => admissible.has(c.parsed));
@@ -373,30 +455,61 @@ function authorizeDelegation(
     // Role handed out, AND must strictly outrank the target's standing rank —
     // a revoke (empty role_ids) or demotion acts ON the member (CORD-04 §5/§6),
     // so it is never free to a lower rank (or to no rank at all).
-    for (const [eid, candidates] of grantCandidates) {
+    //
+    // The standing walk reads role POSITIONS and author RANKS, so a grant may
+    // only settle once every role its candidates hand out AND every candidate
+    // author's own grant entity has stopped being PENDING. Otherwise a
+    // predecessor handing out a not-yet-settled role would compute an empty
+    // `standing` (a low-rank revoke chained behind it settling vacuously), and
+    // a not-yet-ranked author's legitimate revoke would drop as inadmissible —
+    // either way the very holes the gate closes, re-opened by fold ORDER.
+    for (const eid of grantEids) {
       if (settledGrants.has(eid)) continue;
+      const candidates = grantCandidates.get(eid)!;
+      // A referenced role is unresolved iff it still has live role candidates
+      // that haven't settled; such a grant entity waits for a later pass — but
+      // only until roles are frozen (past that, an unsettled role is dead).
+      const rolePending = (rid: string) => roleCandidates.has(rid) && !settledRoles.has(rid);
+      if (!rolesFrozen && candidates.some((c) => c.grant.roleIds.some(rolePending))) continue;
+      if (!ranksFrozen && candidates.some((c) => rankPending(c.author, eid))) continue;
+
       const admissible = new Set<ParsedEdition>();
       let standing: number | undefined; // the rank the admissible predecessor conferred
-      for (const { grant, author, parsed } of [...candidates].sort(byVersionAsc)) {
-        const positions = grant.roleIds
-          .map((rid) => roster.roles.find((r) => r.roleId === rid)?.position)
-          .filter((p): p is number => p !== undefined);
-        const allKnown = positions.length === grant.roleIds.length;
-        const ok =
-          author === ownerHex ||
-          (allKnown &&
-            hasPermission(roster, author, Permissions.MANAGE_ROLES) &&
-            positions.every((pos) => outranks(roster, author, ownerHex, pos)) &&
-            (standing === undefined || outranks(roster, author, ownerHex, standing)));
-        if (!ok) continue;
-        admissible.add(parsed);
-        standing = positions.length ? Math.min(...positions) : undefined;
+      for (const group of versionGroups(candidates)) {
+        for (const { grant, author, parsed } of [...group].sort(authorityFirst)) {
+          const positions = grant.roleIds
+            .map((rid) => roster.roles.find((r) => r.roleId === rid)?.position)
+            .filter((p): p is number => p !== undefined);
+          const allKnown = positions.length === grant.roleIds.length;
+          const ok =
+            author === ownerHex ||
+            (allKnown &&
+              hasPermission(roster, author, Permissions.MANAGE_ROLES) &&
+              positions.every((pos) => outranks(roster, author, ownerHex, pos)) &&
+              (standing === undefined || outranks(roster, author, ownerHex, standing)));
+          if (!ok) continue;
+          admissible.add(parsed);
+          standing = positions.length ? Math.min(...positions) : undefined;
+          break; // one winner per version
+        }
       }
       const pick = candidates.find((c) => admissible.has(c.parsed));
       if (!pick) continue;
       roster.grants.push(pick.grant);
       settledGrants.add(eid);
       settle(pick.parsed);
+      changed = true;
+    }
+
+    // The fixpoint stalled with deferrals still holding entities back: flip
+    // one freeze latch (roles first — a rank source may itself be blocked only
+    // on a dead role) and let another round resolve them. Each latch only ever
+    // moves its gate later and flips once, so termination is preserved.
+    if (!changed && !rolesFrozen) {
+      rolesFrozen = true;
+      changed = true;
+    } else if (!changed && !ranksFrozen) {
+      ranksFrozen = true;
       changed = true;
     }
   }
