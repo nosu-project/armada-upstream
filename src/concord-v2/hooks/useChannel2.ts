@@ -592,10 +592,12 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 // ── Sending ──────────────────────────────────────────────────────────────────
 
 /**
- * Send one chat-plane rumor: build (with the channel/epoch binding), sign the
- * seal with the user's real identity, wrap under the CURRENT epoch's stream
- * key, optimistically insert, and broadcast fire-and-forget. Only a total
- * broadcast failure marks it failed (retryable).
+ * Send one chat-plane rumor: build (with the channel/epoch binding),
+ * optimistically insert as "pending" IMMEDIATELY, then sign the seal with the
+ * user's real identity (a remote round-trip for NIP-46 logins), wrap under
+ * the CURRENT epoch's stream key, and broadcast fire-and-forget. The pending
+ * badge clears once a relay accepts the wrap; a sign OR broadcast failure
+ * marks the message "failed" (retry/discard) — it never silently vanishes.
  */
 export function useSendMessage2(community: CommunityV2 | undefined, channel: ChannelV2 | undefined) {
   const { nostr } = useNostr();
@@ -669,13 +671,13 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       if (extraTags) tags.push(...extraTags);
 
       const rumor: Rumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms: effectiveMs });
-      logSync("send", `sealing rumor ${rumor.id.slice(0, 8)} (kind ${effectiveKind}) — signer: ${user.method}`);
-      const sealStarted = Date.now();
-      const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
-      logSync("send", `sealed ${rumor.id.slice(0, 8)} in ${sinceMs(sealStarted)} — wrapping + broadcasting to ${community.relays.length} relay(s)`);
-      const wrap = wrapSeal(seal, channel.current.group);
-
-      // Optimistic insert (messages/edits render; reactions/deletes fold in).
+      // Discord-style delivery states for the visible kinds: the message
+      // renders IMMEDIATELY as "pending" — before the seal, which for a
+      // NIP-46 login is a remote round-trip that can take seconds or fail
+      // outright. A message the user typed must never silently vanish: sign
+      // or broadcast failure flips it to "failed" (retry/discard affordance)
+      // instead of eating it.
+      const isVisible = effectiveKind === KIND_MESSAGE || effectiveKind === KIND_COMMENT;
       const opened: OpenedChat = {
         rumorId: rumor.id,
         author: user.pubkey,
@@ -684,23 +686,60 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
         tags,
         ms: effectiveMs,
         createdAt: rumor.created_at,
-        wrapId: wrap.id,
-        streamPk: wrap.pubkey,
+        // Placeholders until sealed — the entry is re-upserted (same rumorId)
+        // with the real seal/wrap below, and is NOT persisted before that.
+        wrapId: "",
+        streamPk: channel.current.group.pk,
         sealKind: KIND_SEAL_ENCRYPTED,
-        seal,
+        seal: {
+          id: "",
+          pubkey: user.pubkey,
+          kind: KIND_SEAL_ENCRYPTED,
+          content: "",
+          tags: [],
+          created_at: rumor.created_at,
+          sig: "",
+        },
         channelIdHex: channel.idHex,
         epoch: channel.current.epoch,
       };
-      queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [opened]));
+      if (isVisible) {
+        queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [opened]));
+        setStatus(rumor.id, "pending");
+      }
+
+      logSync("send", `sealing rumor ${rumor.id.slice(0, 8)} (kind ${effectiveKind}) — signer: ${user.method}`);
+      const sealStarted = Date.now();
+      let seal: NostrEvent;
+      try {
+        seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
+      } catch (err) {
+        logSync("send", `sealing ${rumor.id.slice(0, 8)} FAILED in ${sinceMs(sealStarted)}: ${err instanceof Error ? err.message : String(err)}`);
+        if (isVisible) {
+          // The message stays in the timeline as failed — retryable.
+          setStatus(rumor.id, "failed");
+          return { rumorId: rumor.id, wrap: undefined };
+        }
+        throw err; // reactions/edits/deletes: callers own the rollback
+      }
+      logSync("send", `sealed ${rumor.id.slice(0, 8)} in ${sinceMs(sealStarted)} — wrapping + broadcasting to ${community.relays.length} relay(s)`);
+      const wrap = wrapSeal(seal, channel.current.group);
+
+      const sealed: OpenedChat = { ...opened, seal, wrapId: wrap.id, streamPk: wrap.pubkey };
+      queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [sealed]));
       // Persist to the rumor cache so a refresh mid-flight keeps the message
       // (and a self-delete removes its target via the store's NIP-09).
-      writeRumors([opened]);
+      writeRumors([sealed]);
 
-      void broadcast(wrap).catch(() => {
-        if (effectiveKind === KIND_MESSAGE || effectiveKind === KIND_COMMENT) setStatus(rumor.id, "failed");
-      });
+      void broadcast(wrap)
+        .then(() => {
+          if (isVisible) setStatus(rumor.id, undefined); // delivered
+        })
+        .catch(() => {
+          if (isVisible) setStatus(rumor.id, "failed");
+        });
 
-      return { rumorId: rumor.id, wrap };
+      return { rumorId: rumor.id, wrap: wrap as NostrEvent | undefined };
     },
   });
 }
