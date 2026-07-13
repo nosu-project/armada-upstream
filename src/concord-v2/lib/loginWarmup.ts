@@ -48,13 +48,23 @@ interface NostrLike {
   };
 }
 
-/** Cap on communities warmed eagerly (mirrors the V1 gate cap). */
-const MAX_WARMUP_COMMUNITIES = 6;
-/** Cap on channels backfilled eagerly across all communities. */
-const MAX_WARMUP_CHANNELS = 24;
+/**
+ * Safety bound on channels decrypted at login, NOT a working limit. Channel
+ * pulls are batched (one REQ per relay covering many channels), so warming a
+ * whole membership is cheap — this only stops a pathological list from
+ * spending the login on decrypt work. Anything past it heals via the normal
+ * on-open backfill.
+ */
+const MAX_WARMUP_CHANNELS = 200;
+/**
+ * Channel filters per batched REQ. Relays commonly cap filters-per-REQ
+ * around 10-20; chunking keeps each REQ well under that while still
+ * collapsing a whole community's channels into a couple of round-trips.
+ */
+const FILTERS_PER_REQ = 10;
 /** Newest-page size per channel per relay (mirrors the channel backfill page). */
 const WARMUP_PAGE = 50;
-/** Per-channel network budget. */
+/** Per-REQ network budget. */
 const CHANNEL_TIMEOUT_MS = 8_000;
 
 export interface WarmupResult {
@@ -78,7 +88,7 @@ export async function warmupCommunities2(
   opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {},
 ): Promise<WarmupResult> {
   const communities: CommunityV2[] = [];
-  for (const entry of entries.slice(0, MAX_WARMUP_COMMUNITIES)) {
+  for (const entry of entries) {
     const community = rehydrateCommunity(entry);
     if (community && community.relays.length > 0) communities.push(community);
   }
@@ -103,7 +113,8 @@ export async function warmupCommunities2(
     );
 
     // ── Fold + persist snapshots; derive readable channels ──────────────────
-    const jobs: Array<{ community: CommunityV2; channel: ChannelV2 }> = [];
+    const jobs = new Map<CommunityV2, ChannelV2[]>();
+    let totalChannels = 0;
     for (const c of communities) {
       try {
         const stored = await queryByStreams(controlGroups(c).map((g) => g.pk));
@@ -112,71 +123,103 @@ export async function warmupCommunities2(
         emitWireScopes([`c2ctl:${c.idHex}`]);
         for (const channel of channelsView(c, folded)) {
           if (channel.streams.length === 0) continue;
+          if (totalChannels >= MAX_WARMUP_CHANNELS) break;
           registerStreamKeys(channel.streams.map((s) => s.group), c.relays);
-          jobs.push({ community: c, channel });
+          const list = jobs.get(c) ?? [];
+          list.push(channel);
+          jobs.set(c, list);
+          totalChannels++;
         }
       } catch (err) {
         logSync("gate", `warmup fold ${c.idHex.slice(0, 8)} FAILED: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
-    // ── Newest page per channel into the rumor store ────────────────────────
-    const capped = jobs.slice(0, MAX_WARMUP_CHANNELS);
-    result.channels = capped.length;
+    // ── Newest page per channel, BATCHED: one REQ per relay per chunk ───────
+    // One filter per channel (its own `authors` + `limit`, NIP-01 per-filter
+    // semantics), chunked so a big community is a couple of round-trips per
+    // relay instead of one REQ per channel — which is why warming the whole
+    // membership doesn't need a tight cap. Results demux by wrap author
+    // (every channel's stream addresses are distinct).
+    result.channels = totalChannels;
     let done = 0;
-    opts.onProgress?.(0, capped.length);
-    await Promise.all(
-      capped.map(async ({ community, channel }) => {
-        try {
-          const groupsOf = () => channel.streams.map((s) => s.group);
-          const filter: NostrFilter = {
-            kinds: [KIND_WRAP],
-            authors: channel.streams.map((s) => s.group.pk),
-            limit: WARMUP_PAGE,
-          };
-          /**
-           * Pull one relay's newest page, gated on NIP-42. A kind-1059 REQ
-           * racing the stream AUTHs gets CLOSED and reads back as a clean
-           * empty page — which made the warm-up "finish" with zero messages
-           * on auth-gating relays. Hold until the relay has acked our AUTHs;
-           * if the first round still comes back empty (the REQ itself may
-           * have triggered a lazy challenge), wait for the acks and re-ask
-           * once before believing the emptiness.
-           */
-          const pull = async (url: string): Promise<NostrEvent[]> => {
-            for (let attempt = 1; attempt <= 2; attempt++) {
-              await whenAuthSettled(url, groupsOf);
-              try {
-                const events = await nostr.relay(url).query([filter], {
-                  signal: AbortSignal.any([
-                    ...(opts.signal ? [opts.signal] : []),
-                    AbortSignal.timeout(CHANNEL_TIMEOUT_MS),
-                  ]),
-                });
-                if (events.length > 0 || attempt === 2) return events;
-              } catch {
-                if (attempt === 2) return [];
+    opts.onProgress?.(0, totalChannels);
+    const chunkJobs: Array<Promise<void>> = [];
+    for (const [community, channels] of jobs) {
+      for (let i = 0; i < channels.length; i += FILTERS_PER_REQ) {
+        const chunk = channels.slice(i, i + FILTERS_PER_REQ);
+        chunkJobs.push(
+          (async () => {
+            const groupsOf = () => chunk.flatMap((ch) => ch.streams.map((s) => s.group));
+            const filters: NostrFilter[] = chunk.map((ch) => ({
+              kinds: [KIND_WRAP],
+              authors: ch.streams.map((s) => s.group.pk),
+              limit: WARMUP_PAGE,
+            }));
+            /**
+             * Pull one relay's pages for this chunk, gated on NIP-42. A
+             * kind-1059 REQ racing the stream AUTHs gets CLOSED and reads
+             * back as a clean empty page — which made the warm-up "finish"
+             * with zero messages on auth-gating relays. Hold until the relay
+             * has acked our AUTHs; if the first round still comes back empty
+             * (the REQ itself may have triggered a lazy challenge), wait for
+             * the acks and re-ask once before believing the emptiness.
+             */
+            const pull = async (url: string): Promise<NostrEvent[]> => {
+              for (let attempt = 1; attempt <= 2; attempt++) {
+                await whenAuthSettled(url, groupsOf);
+                try {
+                  const events = await nostr.relay(url).query(filters, {
+                    signal: AbortSignal.any([
+                      ...(opts.signal ? [opts.signal] : []),
+                      AbortSignal.timeout(CHANNEL_TIMEOUT_MS),
+                    ]),
+                  });
+                  if (events.length > 0 || attempt === 2) return events;
+                } catch {
+                  if (attempt === 2) return [];
+                }
+                await new Promise((r) => setTimeout(r, 250));
               }
-              await new Promise((r) => setTimeout(r, 250));
+              return [];
+            };
+            try {
+              const wraps = (await Promise.all(community.relays.map(pull))).flat();
+              // Demux by wrap author (each channel decrypts only its own),
+              // deduped across relays by wrap id.
+              const channelByPk = new Map<string, ChannelV2>();
+              for (const ch of chunk) for (const s of ch.streams) channelByPk.set(s.group.pk, ch);
+              const seen = new Set<string>();
+              const byChannel = new Map<ChannelV2, NostrEvent[]>();
+              for (const wrap of wraps) {
+                if (seen.has(wrap.id)) continue;
+                seen.add(wrap.id);
+                const ch = channelByPk.get(wrap.pubkey);
+                if (!ch) continue;
+                const list = byChannel.get(ch) ?? [];
+                list.push(wrap);
+                byChannel.set(ch, list);
+              }
+              for (const [ch, chWraps] of byChannel) {
+                const opened = await openChatBatch(chWraps, ch);
+                if (opened.length > 0) {
+                  // writeRumors rings `c2:<channel>` on the wire bus once committed.
+                  writeRumors(opened);
+                  result.messages += opened.length;
+                }
+              }
+            } catch {
+              // Best-effort per chunk — the rooms backfill on open.
+            } finally {
+              done += chunk.length;
+              opts.onProgress?.(done, totalChannels);
+              task.update({ detail: `${done}/${totalChannels} channels` });
             }
-            return [];
-          };
-          const wraps = (await Promise.all(community.relays.map(pull))).flat();
-          const opened = await openChatBatch(wraps, channel);
-          if (opened.length > 0) {
-            // writeRumors rings `c2:<channel>` on the wire bus once committed.
-            writeRumors(opened);
-            result.messages += opened.length;
-          }
-        } catch {
-          // Best-effort per channel — the room backfills on open.
-        } finally {
-          done++;
-          opts.onProgress?.(done, capped.length);
-          task.update({ detail: `${done}/${capped.length} channels` });
-        }
-      }),
-    );
+          })(),
+        );
+      }
+    }
+    await Promise.all(chunkJobs);
     logSync(
       "gate",
       `v2 warmup: ${result.communities} community(ies), ${result.channels} channel(s), ${result.messages} rumor(s) decrypted`,
