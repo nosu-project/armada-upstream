@@ -54,6 +54,7 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
       canKick: (actor, target) =>
         Boolean(folded && canActOnMember(folded.roster, actor, folded.ownerHex, target, Permissions.KICK)),
       snapshotAuthority,
+      banned: folded?.banned,
     });
   }, [community, query.data, folded]);
 

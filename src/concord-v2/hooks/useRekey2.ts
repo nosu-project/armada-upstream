@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
 import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toJoinMaterial } from "@/concord-v2/lib/communityList";
 import { controlGroupKey, guestbookGroupKey } from "@/concord-v2/lib/derive";
@@ -54,6 +54,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { data: folded } = useControlFold2(community);
+  const { data: dissolved } = useDissolved2(community);
   const { mutateAsync: updateList } = useUpdateCommunityList2();
   const entry = useCommunityEntry2(community?.idHex);
   const queryClient = useQueryClient();
@@ -128,6 +129,9 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
 
   useEffect(() => {
     if (!community || !user || !folded || !query.data || query.data.length === 0) return;
+    // Death wins every race (CORD-02 §9): a Refounding never crosses the
+    // owner's tombstone — no epoch advance past it is honored.
+    if (dissolved) return;
     const key = `${community.idHex}:${nextEpoch}`;
     if (handled.current.has(key)) return;
     const nip44 = user.signer.nip44;
@@ -146,10 +150,13 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
 
       // Authorized rotators only: a removed member still holding the prior
       // root can CONSTRUCT a perfect rotation; authority is the roster, never
-      // key possession (CORD-06).
+      // key possession (CORD-06). A banned rotator is dropped outright —
+      // every event from a banned npub is, authority actions included
+      // (CORD-04 §4).
       const rotations = groupRotations(parsed).filter(
         (set) =>
           set.scopeIdHex === "0".repeat(64) &&
+          !folded.banned.has(set.rotator) &&
           (set.rotator === folded.ownerHex || hasPermission(folded.roster, set.rotator, Permissions.BAN)) &&
           checkContinuity(set, community.rootEpoch, community.root).ok,
       );
@@ -212,7 +219,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [community?.idHex, community?.rootEpoch, user?.pubkey, folded, query.data]);
+  }, [community?.idHex, community?.rootEpoch, user?.pubkey, folded, dissolved, query.data]);
 }
 
 /**
@@ -225,6 +232,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const control = useControlFold2(community);
+  const { data: dissolved } = useDissolved2(community);
   const { mutateAsync: updateList } = useUpdateCommunityList2();
   const entry = useCommunityEntry2(community?.idHex);
   const queryClient = useQueryClient();
@@ -232,6 +240,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
   const refound = useMutation<void, Error, { keep: string[]; exclude: string[] }>({
     mutationFn: async ({ keep, exclude }) => {
       if (!user || !community) throw new Error("Not ready.");
+      if (dissolved) throw new Error("This community was dissolved; no epoch advance past the tombstone is honored.");
       const nip44 = user.signer.nip44;
       if (!nip44) throw new Error("This signer can't rotate keys (NIP-44 unsupported).");
       const folded = control.data;

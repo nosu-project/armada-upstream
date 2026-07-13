@@ -14,7 +14,7 @@
 
 import type { NostrEvent } from "nostr-tools/pure";
 
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
@@ -54,6 +54,9 @@ function openOne(wrap: NostrEvent, channel: ChannelV2): OpenedChat | null {
   let opened: OpenedChat | null = null;
   try {
     const ev = openWrap(wrap, stream.group);
+    // Chat seals MUST be encrypted (CORD-02 §5) — a plaintext seal would make
+    // the message a standalone signed artifact any relay could display.
+    if (ev.sealKind !== KIND_SEAL_ENCRYPTED) throw new Error("chat seal must be encrypted");
     checkChannelBinding(ev, channel.idHex, stream.epoch);
     opened = { ...ev, channelIdHex: channel.idHex, epoch: stream.epoch };
   } catch {

@@ -1,4 +1,4 @@
-import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
+import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
@@ -16,7 +16,8 @@ import {
   sealEdition,
 } from "@/concord-v2/lib/control";
 import { bytesToHex, communityIdOf, controlGroupKey, hex32, random32 } from "@/concord-v2/lib/derive";
-import { rewrapSeal } from "@/concord-v2/lib/stream";
+import { rewrapSeal, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
+import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { adminRole, badgeOf, hasPermission, isAdmin, moderatorRole, Permissions, type Role } from "@/concord-v2/lib/roles";
 
 function signer(sk = generateSecretKey()) {
@@ -291,6 +292,60 @@ describe("control plane fold (CORD-04)", () => {
     const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
     expect(badgeOf(folded.roster, mod.pubkey)).toBeUndefined();
     expect(isAdmin(folded.roster, admin.pubkey)).toBe(true);
+  });
+
+  it("drops a banned npub's authority editions (CORD-04 §4), banlist aside", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+
+    const adm = adminRole(bytesToHex(random32()));
+    const wraps: NostrEvent[] = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+      // The admin renames the community while still trusted.
+      await sealEdition(
+        buildMetadataEdition(communityId, { name: "By Admin", relays: [] }, { actorPubkey: admin.pubkey, version: 1n }),
+        control,
+        admin,
+      ),
+      // The owner bans the admin.
+      await sealEdition(buildBanlistEdition(communityId, [admin.pubkey], { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+    ];
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(folded.banned.has(admin.pubkey)).toBe(true);
+    // The banned admin's metadata edition is dropped on the re-fold.
+    expect(folded.metadata?.name).toBeUndefined();
+    expect(isAdmin(folded.roster, admin.pubkey)).toBe(true); // still roled (owner didn't strip), but silenced
+  });
+
+  it("refuses a control edition carried in an ENCRYPTED seal (CORD-02 §5)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    // Seal a well-formed metadata edition, but with the wrong (encrypted) seal.
+    const rumor = buildMetadataEdition(communityId, { name: "Encrypted", relays: [] }, { actorPubkey: owner.pubkey, version: 1n });
+    const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, control, owner);
+    const wrap = wrapSeal(seal, control);
+
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+    expect(folded.metadata).toBeUndefined(); // an encrypted-seal edition never enters the fold
+  });
+
+  it("refuses metadata whose name exceeds the 64-byte cap on read (CORD-02 §6)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    // Build a valid edition, then tamper the content past the cap and re-hash
+    // (the builder enforces the cap on WRITE; this proves the READ gate too).
+    const good = buildMetadataEdition(communityId, { name: "ok", relays: [] }, { actorPubkey: owner.pubkey, version: 1n });
+    const tampered = { ...good, content: JSON.stringify({ name: "x".repeat(65), relays: [] }) };
+    const rehashed = { ...tampered, id: getEventHash(tampered) };
+    const seal = await sealRumor(rehashed, KIND_SEAL_PLAINTEXT, control, owner);
+    const wrap = wrapSeal(seal, control);
+
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+    expect(folded.metadata).toBeUndefined();
   });
 
   it("refuses a downgrade: a replayed stale banlist never wins", async () => {

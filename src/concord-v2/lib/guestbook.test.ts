@@ -38,6 +38,26 @@ describe("guestbook coalesce (CORD-02 §5)", () => {
     expect(coalesced.get(alice.pubkey)?.ms).toBe(3000);
   });
 
+  it("drops every entry from a banned npub — join and kick alike (CORD-04 §4)", async () => {
+    const banned = signer();
+    const victim = signer();
+    const wraps: NostrEvent[] = [
+      // The banned member's own Join is not honored.
+      await sealGuestbook(buildJoinRumor(banned.pubkey, 1000), gb, banned),
+      // Nor is a Kick they sign, even if the gate would otherwise allow it.
+      await sealGuestbook(buildKickRumor(banned.pubkey, victim.pubkey, 2000), gb, banned),
+      // A live member's Join is unaffected.
+      await sealGuestbook(buildJoinRumor(victim.pubkey, 1500), gb, victim),
+    ];
+    const coalesced = coalesceGuestbook(openGuestbookWraps(wraps, [gb]), {
+      nowMs: 10_000,
+      canKick: allowAllKicks,
+      banned: new Set([banned.pubkey]),
+    });
+    expect(coalesced.has(banned.pubkey)).toBe(false);
+    expect(coalesced.get(victim.pubkey)?.state).toBe("join"); // the banned member's kick never landed
+  });
+
   it("drops entries dated more than one hour ahead of the local clock", async () => {
     const alice = signer();
     const now = 1_000_000_000_000;

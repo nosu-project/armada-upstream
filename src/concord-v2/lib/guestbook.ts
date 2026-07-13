@@ -151,6 +151,9 @@ export function openGuestbookOpened(opened: OpenedEvent[]): OpenedEvent[] {
  *
  *   - entries dated > 1h ahead of the local clock are dropped outright;
  *   - a malformed `ms` was already dropped by the stream layer;
+ *   - every entry from a `banned` author is dropped — a banned npub's events,
+ *     kicks included, are never honored (CORD-04 §4);
+ *   - guestbook seals must be encrypted (CORD-02 §5);
  *   - latest wins by ms; ties break by the LOWER rumor id;
  *   - a Kick is honored only when `canKick(actor, target)` (KICK bit + strict
  *     outrank, resolved against the caller's folded roster);
@@ -164,6 +167,8 @@ export function coalesceGuestbook(
     nowMs: number;
     canKick: (actorHex: string, targetHex: string) => boolean;
     snapshotAuthority?: string;
+    /** Banned npubs (the Banlist fold) — their entries are dropped entirely. */
+    banned?: Set<string>;
   },
 ): Map<string, CoalescedMember> {
   const byMember = new Map<string, CoalescedMember>();
@@ -184,6 +189,8 @@ export function coalesceGuestbook(
 
   for (const ev of opened) {
     if (ev.ms > opts.nowMs + GUESTBOOK_MAX_FUTURE_MS) continue;
+    if (ev.sealKind !== KIND_SEAL_ENCRYPTED) continue;
+    if (opts.banned?.has(ev.author)) continue;
 
     if (ev.kind === KIND_JOIN_LEAVE) {
       const verb = ev.content === "join" ? "join" : ev.content === "leave" ? "leave" : undefined;

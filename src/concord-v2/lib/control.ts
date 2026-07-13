@@ -417,12 +417,35 @@ const foldMemo = new Map<string, FoldedControl>();
  * Replay a set of opened control editions into current state. `ownerHex` is
  * the community's proven owner (verified against the id commitment when the
  * membership entry was accepted).
+ *
+ * Runs in up to two passes: the first fold resolves the Banlist (itself
+ * roster-gated), and if any edition was authored by a banned npub the fold
+ * re-runs with those editions excluded — a banned npub's authority actions are
+ * dropped like every other event of theirs (CORD-04 §4). The first pass's
+ * Banlist stays the final word (the owner is never bannable, so the anti-
+ * roster can't be used to erase itself).
  */
 export function foldControlState(editions: ParsedEdition[], communityId: Uint8Array, ownerHex: string): FoldedControl {
   const cidHex = bytesToHex(communityId);
   const memoKey = `${cidHex}:${ownerHex}:${editions.map((e) => e.opened.wrapId).sort().join(",")}`;
   const hit = foldMemo.get(memoKey);
   if (hit) return hit;
+
+  const first = foldOnce(editions, communityId, ownerHex);
+  let result = first;
+  const banned = new Set([...first.banned].filter((pk) => pk !== ownerHex));
+  if (banned.size > 0 && editions.some((e) => banned.has(e.author))) {
+    result = { ...foldOnce(editions.filter((e) => !banned.has(e.author)), communityId, ownerHex), banned: first.banned };
+  }
+
+  // Single-entry-per-community cache so the memo doesn't grow unbounded.
+  for (const k of foldMemo.keys()) if (k.startsWith(`${cidHex}:`)) foldMemo.delete(k);
+  foldMemo.set(memoKey, result);
+  return result;
+}
+
+function foldOnce(editions: ParsedEdition[], communityId: Uint8Array, ownerHex: string): FoldedControl {
+  const cidHex = bytesToHex(communityId);
 
   // 1. Group by (vsk, entity).
   const byVsk = new Map<string, Map<string, ParsedEdition[]>>();
@@ -474,7 +497,11 @@ export function foldControlState(editions: ParsedEdition[], communityId: Uint8Ar
       if (!isAuthorized(roster, p.author, ownerHex, Permissions.MANAGE_METADATA)) return false;
       try {
         const parsed = JSON.parse(p.content) as CommunityMetadata;
-        return typeof parsed.name === "string";
+        // The protocol caps are read-side rules too (CORD-02 §6): an oversize
+        // name/description is malformed, not merely impolite.
+        if (typeof parsed.name !== "string" || utf8Len(parsed.name) > NAME_MAX_BYTES) return false;
+        if (parsed.description !== undefined && (typeof parsed.description !== "string" || utf8Len(parsed.description) > DESCRIPTION_MAX_BYTES)) return false;
+        return true;
       } catch {
         return false;
       }
@@ -497,7 +524,7 @@ export function foldControlState(editions: ParsedEdition[], communityId: Uint8Ar
       if (!isAuthorized(roster, p.author, ownerHex, Permissions.MANAGE_CHANNELS)) return false;
       try {
         const meta = JSON.parse(p.content) as ChannelMetadata;
-        return typeof meta.name === "string" && meta.name.length > 0;
+        return typeof meta.name === "string" && meta.name.length > 0 && utf8Len(meta.name) <= NAME_MAX_BYTES;
       } catch {
         return false;
       }
@@ -557,9 +584,6 @@ export function foldControlState(editions: ParsedEdition[], communityId: Uint8Ar
   }
 
   const result: FoldedControl = { roster, ownerHex, metadata, channels, banned, liveInviteLinks, registriesByCreator, heads, headEditions };
-  // Single-entry-per-community cache so the memo doesn't grow unbounded.
-  for (const k of foldMemo.keys()) if (k.startsWith(`${cidHex}:`)) foldMemo.delete(k);
-  foldMemo.set(memoKey, result);
   return result;
 }
 
@@ -617,6 +641,7 @@ export function isDissolved(wraps: NostrEvent[], communityId: Uint8Array, ownerH
 /** Whether an already-opened dissolved-address event is a valid owner tombstone. */
 export function isDissolvedOpened(opened: OpenedEvent, ownerHex: string): boolean {
   if (opened.author !== ownerHex) return false;
+  if (opened.sealKind !== KIND_SEAL_PLAINTEXT) return false; // control-family seals are plaintext (CORD-02 §5)
   const vsk = opened.tags.find((t) => t[0] === "vsk")?.[1];
   const eid = opened.tags.find((t) => t[0] === "eid")?.[1];
   return opened.kind === 3308 && vsk === VSK_DISSOLVED && eid === ZERO32_HEX;

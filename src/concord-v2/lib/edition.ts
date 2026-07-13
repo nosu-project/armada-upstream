@@ -18,7 +18,7 @@
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { bytesToHex } from "@/concord-v2/lib/derive";
-import { KIND_CONTROL } from "@/concord-v2/lib/kinds";
+import { KIND_CONTROL, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { buildRumor, type OpenedEvent, type Rumor } from "@/concord-v2/lib/stream";
 import { editionHash, type Edition } from "@/concord-v2/lib/version";
 
@@ -115,6 +115,10 @@ function decodeHash(hex: string | undefined, field: string): Uint8Array {
  */
 export function parseEdition(opened: OpenedEvent): ParsedEdition {
   if (opened.kind !== KIND_CONTROL) throw new EditionError("bad-field", "kind");
+  // Control seals MUST be plaintext (CORD-02 §5) — an encrypted-seal edition
+  // could never survive a compaction re-wrap, so honoring it would mint state
+  // that silently vanishes for every fresh joiner at the next Refounding.
+  if (opened.sealKind !== KIND_SEAL_PLAINTEXT) throw new EditionError("bad-field", "seal-kind");
 
   for (const name of [TAG_SUBKIND, TAG_ENTITY, TAG_EVERSION, TAG_EPREV, TAG_CITATION]) {
     if (opened.tags.filter((t) => t[0] === name).length > 1) {

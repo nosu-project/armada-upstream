@@ -17,7 +17,7 @@
  */
 
 import { bytesToHex, epochKeyCommitment, random32, recipientLocator } from "@/concord-v2/lib/derive";
-import { KIND_REKEY } from "@/concord-v2/lib/kinds";
+import { KIND_REKEY, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import { buildRumor, type OpenedEvent, type Rumor } from "@/concord-v2/lib/stream";
 
 /** Per-recipient blobs per rekey event (CORD-06 §1). */
@@ -143,6 +143,7 @@ export interface ParsedRekey {
 /** Parse an opened rekey stream event into its rotation fields. */
 export function parseRekey(opened: OpenedEvent): ParsedRekey {
   if (opened.kind !== KIND_REKEY) throw new Error("not a rekey rumor");
+  if (opened.sealKind !== KIND_SEAL_ENCRYPTED) throw new Error("rekey seals must be encrypted (CORD-02 §5)");
   const get = (name: string) => opened.tags.find((t) => t[0] === name);
   const scope = get("scope")?.[1];
   const newEpoch = get("newepoch")?.[1];
