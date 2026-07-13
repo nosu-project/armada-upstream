@@ -20,6 +20,7 @@ import { RolesDialog2 } from "@/concord-v2/components/RolesDialog2";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
+import { SyncStatusBar } from "@/components/SyncStatusBar";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
@@ -43,6 +44,7 @@ import { useIsTouch } from "@/hooks/useIsMobile";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
+import { useSyncTasks } from "@/hooks/useSyncActivity";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
@@ -1113,6 +1115,16 @@ export function ConcordV2Page() {
   // Inject `openThread` (page-owned panel state) onto the data transport.
   const transport = useMemo(() => ({ ...baseTransport, openThread }), [baseTransport, openThread]);
 
+  // Background catch-up visibility. `channelSyncing` = a sync task scoped to
+  // the channel on screen (its backfill/gap-bridge round is running). The bar
+  // shows only while it's relevant: hidden once the focused channel is synced
+  // and live on the wire's standing subscription — background work on OTHER
+  // rooms shouldn't nag over an up-to-date conversation.
+  const syncTasks = useSyncTasks();
+  const channelScope = channel ? `c2:${channel.idHex}` : undefined;
+  const channelSyncing = Boolean(channelScope && syncTasks.some((t) => t.scope === channelScope));
+  const showSyncBar = view !== "channel" || !channel || transport.isLoading || channelSyncing;
+
   const onOpenThreadCb = useMemo(
     () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),
     [canWrite, openThread],
@@ -1648,6 +1660,16 @@ export function ConcordV2Page() {
             </div>
           </header>
 
+          {/* Background catch-up status, right under the top bar (Signal-style
+              quiet inline indicator): names what's syncing with a live count.
+              Hidden while the focused channel is synced and live. */}
+          {showSyncBar && (
+            <SyncStatusBar
+              priorityScope={channelScope}
+              className="mx-2 mt-1.5 shrink-0 clip-corner-lg bg-chrome"
+            />
+          )}
+
           {/* Top-of-chat call stage portal target (active when this channel is
               the one in encrypted voice). */}
           <CallStageSlot active={inThisVoice} />
@@ -1679,6 +1701,7 @@ export function ConcordV2Page() {
                     key={channel?.idHex ?? "none"}
                     transport={transport}
                     handleRef={timelineRef}
+                    syncing={channelSyncing}
                     className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
                     emptyState={
                       <p className="px-2 py-8 text-center text-sm text-muted-foreground">

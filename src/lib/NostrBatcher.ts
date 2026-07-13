@@ -22,6 +22,19 @@ const MAX_BATCH_SIZE = 50;
 const PROFILE_EOSE_GRACE_MS = 1000;
 
 /**
+ * Hard deadline on a COALESCED shared query (ms). The shared upstream is
+ * deliberately driven without any caller's signal (one caller aborting must
+ * not cancel the others) — but with NO deadline at all, a request that never
+ * settles (a REQ swallowed by a mid-flight NIP-42 handshake, a half-open
+ * socket) parks in `inflightQueries` forever, and every later identical query
+ * (channel backfills re-ask the exact same filters every round) joins the
+ * corpse instead of opening a fresh request. That wedged the whole sync
+ * pipeline until an app restart. Generous — every real caller times out
+ * sooner (8-15s); this only exists so the coalesce key can't be poisoned.
+ */
+const SHARED_QUERY_DEADLINE_MS = 30_000;
+
+/**
  * Pending request waiting for a batched query result.
  * Each caller gets its own resolve/reject and optional abort signal.
  */
@@ -620,11 +633,17 @@ class SharedSubscription {
   private closed = false;
 
   constructor(
-    source: AsyncIterable<RelayMsg>,
+    /**
+     * Opens the upstream stream. Receives the subscription's own abort signal
+     * so tearing the fan-out down (last subscriber left, pump closed) actually
+     * CLOSEs the socket REQ — an upstream opened without a signal would stay
+     * registered on the relay (and pumping) forever after a silent teardown.
+     */
+    source: (signal: AbortSignal) => AsyncIterable<RelayMsg>,
     private onEmpty: () => void,
     private onMessage: (msg: RelayMsg) => void,
   ) {
-    void this.pump(source);
+    void this.pump(source(this.controller.signal));
   }
 
   private async pump(source: AsyncIterable<RelayMsg>): Promise<void> {
@@ -1071,9 +1090,12 @@ export class NostrBatcher {
       logNostrReq(scopeRelays, filters, via);
       // Drive the shared request WITHOUT any caller signal, so one caller
       // aborting can't cancel it for the others. Per-caller abort is applied
-      // below by racing each caller against its own signal.
+      // below by racing each caller against its own signal. The deadline is
+      // the shared request's ONLY signal: a query that never settles must not
+      // park in `inflightQueries` forever and absorb every future identical
+      // query (see SHARED_QUERY_DEADLINE_MS).
       shared = target
-        .query(filters)
+        .query(filters, { signal: AbortSignal.timeout(SHARED_QUERY_DEADLINE_MS) })
         .then((events) => {
           this.cacheEvents(events);
           this.recordDirectoryProvenance(events, sourceUrl);
@@ -1125,10 +1147,9 @@ export class NostrBatcher {
     let shared = this.sharedSubs.get(key);
     if (!shared || !shared.isOpen()) {
       logNostrReq(scopeRelays, filters, via);
-      const source = target.req(filters) as AsyncIterable<RelayMsg>;
       const sharedSubs = this.sharedSubs;
       const sub: SharedSubscription = new SharedSubscription(
-        source,
+        (signal) => target.req(filters, { signal }) as AsyncIterable<RelayMsg>,
         () => {
           // Last subscriber left — drop the entry so the next caller reopens.
           if (sharedSubs.get(key) === sub) sharedSubs.delete(key);

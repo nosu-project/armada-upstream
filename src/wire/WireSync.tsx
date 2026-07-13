@@ -45,6 +45,18 @@ const FRESH_LOOKBACK_SECONDS = 5 * 60;
 const MAX_CURSOR_AGE_SECONDS = 7 * 24 * 60 * 60;
 /** Overlap subtracted from a resumed cursor (clock skew / borderline events). */
 const CURSOR_OVERLAP_SECONDS = 60;
+/**
+ * Watchdog on a fresh REQ round: a healthy relay answers with SOMETHING
+ * almost immediately (events, or at least EOSE — even an auth-gated relay
+ * settles its NIP-42 handshake well inside this). A round that has yielded
+ * NOTHING by the deadline is presumed swallowed (a REQ held behind a wedged
+ * AUTH exchange, a half-open socket) and is aborted so the loop re-issues it
+ * — without this, the `for await` blocks forever and the wire silently dies
+ * until an app relaunch (the "I log in and nothing is here" wedge).
+ * Once the round has yielded anything, the watchdog stands down: a quiet
+ * standing subscription is normal for hours.
+ */
+const SILENT_REQ_TIMEOUT_MS = 30_000;
 
 function cursorKey(relay: string): string {
   return `armada:wire-cursor:${relay}`;
@@ -310,11 +322,20 @@ export function WireSync() {
             cursor !== undefined ? cursor - CURSOR_OVERLAP_SECONDS : now - FRESH_LOOKBACK_SECONDS,
             cursor !== undefined ? floor : 0,
           );
+          // Abortable round: the silent-REQ watchdog kills a round that never
+          // yields anything (see SILENT_REQ_TIMEOUT_MS); the loop re-REQs.
+          const round = new AbortController();
+          const roundSignal = AbortSignal.any([controller.signal, round.signal]);
+          let sawAnything = false;
+          const watchdog = setTimeout(() => {
+            if (!sawAnything) round.abort();
+          }, SILENT_REQ_TIMEOUT_MS);
           try {
             for await (const msg of nostr.relay(relay).req(
               filters.map((f) => ({ ...f, since })),
-              { signal: controller.signal },
+              { signal: roundSignal },
             )) {
+              sawAnything = true;
               if (msg[0] === "EVENT") {
                 backoff = 1_000;
                 const event = msg[2] as NostrEvent;
@@ -324,6 +345,8 @@ export function WireSync() {
             }
           } catch {
             // Aborted or transport error — handled by the loop condition.
+          } finally {
+            clearTimeout(watchdog);
           }
           if (controller.signal.aborted) break;
           // A session that lived a while earned a prompt retry; a relay

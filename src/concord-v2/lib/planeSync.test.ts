@@ -18,6 +18,7 @@ import {
   sweepControl,
   sweepGuestbook,
   sweepRelayScopes,
+  whenAuthSettled,
 } from "@/concord-v2/lib/planeSync";
 import {
   _resetStreamAuthRegistry,
@@ -187,6 +188,39 @@ describe("sweepRelayScopes — stream-auth gate", () => {
 
     expect(relay.calls.length).toBe(1);
     expect(fresh.map((e) => e.rumorId)).toContain(e1.rumor.id);
+  });
+
+  it("whenAuthSettled: an UNCHALLENGED relay never waits (backfills/warm-up proceed at once)", async () => {
+    _configureAuthWaitForTests({ maxWaitMs: 5_000 });
+    const owner = signer();
+    const community = communityOf(26, owner.pubkey);
+    const groups = controlGroups(community);
+
+    const started = Date.now();
+    await whenAuthSettled(RELAY_A, () => groups);
+    expect(Date.now() - started, "no challenge ⇒ nothing to wait for").toBeLessThan(200);
+  });
+
+  it("whenAuthSettled: a CHALLENGED relay holds until its AUTH acks land", async () => {
+    _configureAuthWaitForTests({ maxWaitMs: 5_000 });
+    const owner = signer();
+    const community = communityOf(30, owner.pubkey);
+    const groups = controlGroups(community);
+
+    noteRelayChallenged(RELAY_A);
+    registerStreamKeys(groups, community.relays);
+    groups.forEach((g, i) => noteStreamAuthSent(RELAY_A, `settle-ev-${i}`, g.pk));
+
+    let settled = false;
+    const wait = whenAuthSettled(RELAY_A, () => groups).then(() => {
+      settled = true;
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    expect(settled, "must hold while AUTHs are unacked").toBe(false);
+
+    groups.forEach((_, i) => noteAuthResult(RELAY_A, `settle-ev-${i}`, true));
+    await wait;
+    expect(settled).toBe(true);
   });
 
   it("proceeds after the wait cap even if keys never register (cursor discipline still heals)", async () => {

@@ -15,6 +15,7 @@ import {
   type OpenedChat,
 } from "@/concord-v2/lib/chat";
 import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
+import { whenAuthSettled } from "@/concord-v2/lib/planeSync";
 import {
   clearChannelExhausted,
   queryChannelRumors,
@@ -28,6 +29,7 @@ import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
+import { beginSyncTask, type SyncTaskHandle } from "@/lib/syncActivity";
 import { logSync, sinceMs } from "@/lib/syncLog";
 import { useWireScopes } from "@/wire/useWireScopes";
 
@@ -373,8 +375,22 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         return upsert(prev, extra ? upsert(rumors, extra) : rumors);
       };
 
-      const backfillAndRefresh = async () => {
+      const backfillAndRefresh = async (task: SyncTaskHandle) => {
         if (signal.aborted) return;
+        // Hold the round until every relay has ACKED our stream AUTHs (if it
+        // challenged) — a kind-1059 REQ racing NIP-42 gets CLOSED and reads
+        // back as an empty page, which on a cold open paints "no messages"
+        // for a channel that has plenty (the post-login empty-rooms bug).
+        // Capped inside whenAuthSettled; the sync task is already showing.
+        await Promise.all(
+          community!.relays.map((url) => whenAuthSettled(url, () => channel!.streams.map((s) => s.group))),
+        );
+        if (signal.aborted) return;
+        // Running count of rumors this round decrypted, for the status bar.
+        let synced = 0;
+        const tick = () => {
+          if (synced > 0) task.update({ detail: `${synced} ${synced === 1 ? "message" : "messages"}` });
+        };
         // Pass 1: pull the newest page (no `until`) so live-adjacent history
         // lands first. Decrypt it and PAINT immediately — the newest page is
         // what the viewer sees on open, so the timeline shows as soon as this
@@ -387,6 +403,8 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         const firstOpened = await openChatBatch(newest.events, channel!, { signal });
         if (signal.aborted) return;
         writeRumors(firstOpened);
+        synced += firstOpened.length;
+        tick();
         queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore(firstOpened));
         // Release the loading skeleton now — the newest history is on screen;
         // older history streams in underneath as the passes below complete.
@@ -426,6 +444,8 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
           { signal },
         );
         writeRumors(opened);
+        synced += opened.length;
+        tick();
 
         // Advance the persisted cursor: `oldest` back, `exhausted` sticky, and
         // `newest` forward ONLY when the newest region is verifiably complete —
@@ -449,6 +469,13 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
           exhausted: c.exhausted,
         });
 
+        // A round that failed outright with nothing decrypted must not hold
+        // the 30s throttle: the relays were likely wedged (a REQ swallowed by
+        // a mid-flight NIP-42 handshake, a poisoned shared query mid-heal) —
+        // let the next poll / bus ring / re-open retry immediately instead of
+        // reading as a permanently empty room.
+        if (synced === 0 && newest.failed && older.failed) lastBackfillRef.current = 0;
+
         queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore(opened));
       };
 
@@ -467,7 +494,14 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
           return Promise.resolve();
         }
         lastBackfillRef.current = Date.now();
-        return backfillAndRefresh().finally(() => {
+        // Report this relay round on the sync-activity signal, named after the
+        // channel with a live decrypted-message count and scoped `c2:<id>` so
+        // the chat view can tell "this room is catching up" from unrelated
+        // background sync — cold opens and post-wake gap-bridging are exactly
+        // the "silent minute" the in-chat status bar exists for.
+        const task = beginSyncTask(`#${channel!.name}`, { scope: `c2:${channel!.idHex}` });
+        return backfillAndRefresh(task).finally(() => {
+          task.end();
           if (!signal.aborted) setFirstLoadDone(true);
         });
       };

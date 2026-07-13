@@ -22,6 +22,7 @@ import { isStreamPubkey, streamAuthsSettled } from "@/concord-v2/lib/streamAuth"
 import { openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { beginSyncTask } from "@/lib/syncActivity";
 import { logSync, sinceMs } from "@/lib/syncLog";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -55,6 +56,25 @@ async function whenAuthReady(url: string, groupsOf: () => GroupKey[]): Promise<v
     const pks = groupsOf().map((g) => g.pk);
     const registered = pks.every((pk) => isStreamPubkey(pk));
     if ((registered && streamAuthsSettled(url, pks)) || Date.now() >= deadline) return;
+    await new Promise((r) => setTimeout(r, Math.max(1, Math.min(50, deadline - Date.now()))));
+  }
+}
+
+/**
+ * Wait until `url` has ACKED the AUTHs for every group — but only if the relay
+ * actually challenged this socket (an unchallenged relay isn't auth-gating, or
+ * its lazy challenge will be triggered by the REQ itself and covered by the
+ * pool's auth-retry). Same cap/test seam as the sweep gate.
+ *
+ * This is the gate for NON-sweep reads (channel backfills, the login warm-up's
+ * newest-page pulls): a kind-1059 REQ racing NIP-42 gets CLOSED by the relay
+ * and reads back as a clean empty page — which is how a fresh login used to
+ * "complete" with zero messages and drop the user into hollow rooms.
+ */
+export async function whenAuthSettled(url: string, groupsOf: () => GroupKey[]): Promise<void> {
+  const deadline = Date.now() + authWait.maxWaitMs;
+  for (;;) {
+    if (streamAuthsSettled(url, groupsOf().map((g) => g.pk)) || Date.now() >= deadline) return;
     await new Promise((r) => setTimeout(r, Math.max(1, Math.min(50, deadline - Date.now()))));
   }
 }
@@ -201,11 +221,18 @@ const batches = new Map<string, RelayBatch>();
 function newBatch(nostr: NostrLike, url: string): RelayBatch {
   const b: RelayBatch = { scopes: [], closed: false, promise: Promise.resolve(new Map()) };
   b.promise = (async () => {
-    await new Promise((r) => setTimeout(r, BATCH_WINDOW_MS));
-    await whenAuthReady(url, () => b.scopes.flatMap((s) => s.groups));
-    b.closed = true;
-    if (batches.get(url) === b) batches.delete(url);
-    return runScopes(nostr, url, b.scopes);
+    // The whole batch lifetime — enrollment window, NIP-42 auth gate, the REQ
+    // itself — counts as sync activity (the auth hold alone can be seconds).
+    const task = beginSyncTask("community updates");
+    try {
+      await new Promise((r) => setTimeout(r, BATCH_WINDOW_MS));
+      await whenAuthReady(url, () => b.scopes.flatMap((s) => s.groups));
+      b.closed = true;
+      if (batches.get(url) === b) batches.delete(url);
+      return await runScopes(nostr, url, b.scopes);
+    } finally {
+      task.end();
+    }
   })();
   batches.set(url, b);
   return b;

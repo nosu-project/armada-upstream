@@ -15,6 +15,7 @@ import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/
 import type { Channel, Community } from "@/concord-v1/lib/types";
 import { listQueryKey, syncCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { liveEntries } from "@/concord-v2/lib/communityList";
+import { warmupCommunities2 } from "@/concord-v2/lib/loginWarmup";
 import {
   KIND_GROUP_CHAT,
   KIND_USER_GROUPS,
@@ -51,13 +52,23 @@ const MAX_CATCHUP_COMMUNITIES = 6;
 
 /**
  * Overall timeout for the whole sync so a dead relay never traps the user.
+ * Sized so the V2 warm-up (plane sweeps + per-channel history) usually fits;
+ * if it doesn't, the gate lifts anyway and the in-chat sync status bar
+ * carries the remaining progress.
  */
-const SYNC_TIMEOUT_MS = 20_000;
+const SYNC_TIMEOUT_MS = 30_000;
 /** Per-step network timeout. */
 const STEP_TIMEOUT_MS = 8_000;
 
 /** A phase of the post-login sync. */
-export type SyncPhase = "settings" | "groups" | "messages" | "concord" | "communities" | "done";
+export type SyncPhase =
+  | "settings"
+  | "groups"
+  | "messages"
+  | "concord"
+  | "communities"
+  | "channels"
+  | "done";
 
 /** One line in the boot-log terminal the SyncGate renders. */
 export interface SyncLogLine {
@@ -82,6 +93,7 @@ const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
   messages: "syncing recent transmissions",
   concord: "decrypting community vault",
   communities: "restoring encrypted communities",
+  channels: "decrypting channel history",
 };
 
 /** Held epoch keys for a channel, newest-first (mirrors useConcordChannel). */
@@ -137,9 +149,12 @@ async function catchUpConcordChannel(
  *   4. Catch up on Concord (encrypted communities): decrypt the membership list,
  *      rehydrate each community, and decrypt its channels' newest messages,
  *      priming the ["concord","channel",…] caches useConcordChannelMessages reads.
- *   5. Fetch + decrypt the Concord V2 Community List (kind 13302) and seed
- *      the ["concord2","list"] cache. Stream-key registration and the
- *      plane sweep follow from this seed.
+ *   5. Fetch + decrypt the Concord V2 Community List (kind 13302), seed the
+ *      ["concord2","list"] cache, then WARM the communities themselves:
+ *      register stream keys, sweep the control/guestbook planes, persist the
+ *      control folds, and decrypt the newest page of every channel into the
+ *      rumor store (see warmupCommunities2) — so the gate never lifts onto a
+ *      wall of empty rooms.
  *
  * Every step is best-effort and bounded by a timeout — the gate must never trap
  * a user behind a slow or unreachable relay. Returns `{ phase, label, done }`.
@@ -204,6 +219,15 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         line.tone = tone;
       }
       if (!cancelled) setState((s) => ({ ...s, log: [...log] }));
+    };
+
+    /** Update a phase line's status chip in place (live x/y progress). */
+    const progress = (id: string, status: string) => {
+      const line = log.find((l) => l.id === id);
+      if (line && !line.tone) {
+        line.status = status;
+        if (!cancelled) setState((s) => ({ ...s, log: [...log] }));
+      }
     };
 
     /** Append a standalone, already-resolved line. */
@@ -368,12 +392,10 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       }
       if (cancelled) return;
 
-      // ── 5. Concord V2: seed the community list, then stop. ───────────────
-      // Stream-key registration and the plane sweep follow from this seed;
-      // sweeping here would spend the NIP-42 challenge before keys register.
+      // ── 5. Concord V2: seed the community list. ──────────────────────────
+      let v2Live: ReturnType<typeof liveEntries> = [];
       if (user.signer.nip44) {
         const vId = begin("communities");
-        let v2Count = 0;
         try {
           const listData = await syncCommunityList2(nostr, user, queryClient, stepSignal());
           logSync(
@@ -382,13 +404,41 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           );
           if (!cancelled && !listData.decryptFailed) {
             queryClient.setQueryData(listQueryKey(pubkey), listData);
+            v2Live = liveEntries(listData.list);
           }
-          v2Count = liveEntries(listData.list).length;
         } catch (err) {
           // Best-effort; never block login on Concord.
           logSync("gate", `v2 list fetch FAILED: ${err instanceof Error ? err.message : String(err)}`);
         }
-        resolve(vId, `${v2Count} ${v2Count === 1 ? "community" : "communities"}`);
+        resolve(vId, `${v2Live.length} ${v2Live.length === 1 ? "community" : "communities"}`);
+      }
+      if (cancelled) return;
+
+      // ── 6. Concord V2 warm-up: planes, folds, newest channel pages. ──────
+      // This is what makes the gate honest — without it the app shows through
+      // with rail icons but hollow, empty rooms. Raced against the overall
+      // budget: if it can't finish in time the gate lifts anyway and the
+      // warm-up keeps running, visible in the in-chat sync status bar.
+      if (v2Live.length > 0) {
+        const hId = begin("channels");
+        const warmup = warmupCommunities2(nostr, v2Live, {
+          signal: overall,
+          onProgress: (done, total) => progress(hId, `${done}/${total}`),
+        });
+        // The abandoned branch of the race must never surface as unhandled.
+        warmup.catch(() => undefined);
+        const warm = await Promise.race([
+          warmup,
+          new Promise<undefined>((settle) => {
+            if (overall.aborted) settle(undefined);
+            else overall.addEventListener("abort", () => settle(undefined), { once: true });
+          }),
+        ]);
+        if (warm) {
+          resolve(hId, `${warm.messages} decrypted`);
+        } else {
+          resolve(hId, "CONTINUING", "warn");
+        }
       }
       if (cancelled) return;
 

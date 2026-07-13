@@ -100,6 +100,12 @@ interface MessageTimelineProps {
    * above it (computed by the parent, e.g. {@link useNewMessagesDivider}).
    */
   newDividerId?: string;
+  /**
+   * True while a background catch-up for THIS conversation is in flight (a
+   * sync-activity task scoped to it). An empty timeline then keeps the
+   * skeleton up instead of declaring "no messages" — the verdict isn't in yet.
+   */
+  syncing?: boolean;
   className?: string;
 }
 
@@ -118,6 +124,7 @@ export function MessageTimeline({
   handleRef,
   paused = false,
   newDividerId,
+  syncing = false,
   className,
 }: MessageTimelineProps) {
   const { messages, isLoading, loadOlder, hasMore, isLoadingOlder } = transport;
@@ -258,7 +265,7 @@ export function MessageTimeline({
   return (
     <div ref={scrollRef} onScroll={handleScroll} className={className}>
       <div ref={contentRef}>
-      {isLoading || transientEmpty ? (
+      {isLoading || transientEmpty || (syncing && messages.length === 0) ? (
         <div className="space-y-3 p-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="flex items-start gap-3">
