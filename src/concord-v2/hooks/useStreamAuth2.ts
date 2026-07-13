@@ -53,19 +53,13 @@ function channelKeys(channels: ChannelV2[]): GroupKey[] {
  *
  * Also registers EVERY community's per-channel stream keys derivable from its
  * persisted control-fold snapshot (a local IndexedDB read, no relay fan-out).
- * This is what lets a channel's kind-1059 backfill pass an auth-gating relay's
- * NIP-42 gate on FIRST open: those relays (ditto-relay's default
- * `AUTH_KINDS=4,1059`) only authenticate a connection's `authors` at the single
- * challenge they issue per socket, and IGNORE a stream AUTH replayed on that
- * spent challenge afterwards. So a channel key registered LATE (only when its
- * community page mounts) never authenticates on the already-challenged socket —
- * both relays then return an empty (auth-filtered) result and the channel reads
- * blank until an app restart re-challenges the fresh socket with every key at
- * once. Registering all channel keys here, up front at the shell, means the
- * initial challenge already covers them. Re-runs on a short poll so folds that
- * land after launch (a community synced for the first time) get their channel
- * keys registered too — a socket opened after that registration will include
- * them in its challenge.
+ * This isn't for NIP-42 (a late key authenticates fine on a live socket —
+ * NostrProvider sends its AUTH on the stored challenge and the relay acks it);
+ * it's for COVERAGE: WireSync's standing kind-1059 subscription filters on
+ * `authors: [...streamPubkeys()]`, so a community's channels only receive live
+ * wraps (messages, notifications) once their keys are in the registry. Re-runs
+ * on a short poll so folds that land after launch (a community synced for the
+ * first time) get their channel keys registered too.
  */
 export function useRegisterAllStreamKeys2(): void {
   const communities = useLiveCommunities2();
@@ -75,7 +69,7 @@ export function useRegisterAllStreamKeys2(): void {
     let cancelled = false;
 
     const register = async () => {
-      // Gather all keys first, then register in one burst — one swap per relay.
+      // Gather all keys first, then register in one burst — one AUTH wave per relay.
       const batches: Array<{ keys: GroupKey[]; relays: string[]; idHex: string }> = [];
       for (const entry of communities) {
         const community = rehydrateCommunity(entry);

@@ -15,13 +15,17 @@ import {
   _configureAuthWaitForTests,
   controlScope,
   guestbookScope,
-  isRelaySweeping,
   sweepControl,
   sweepGuestbook,
   sweepRelayScopes,
-  whenRelaySweepsIdle,
 } from "@/concord-v2/lib/planeSync";
-import { _resetStreamAuthRegistry, registerStreamKeys } from "@/concord-v2/lib/streamAuth";
+import {
+  _resetStreamAuthRegistry,
+  noteAuthResult,
+  noteRelayChallenged,
+  noteStreamAuthSent,
+  registerStreamKeys,
+} from "@/concord-v2/lib/streamAuth";
 import { buildRumor, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -124,12 +128,12 @@ beforeEach(() => {
   _resetStreamAuthRegistry();
   // Most tests exercise the fetch discipline, not the auth gate — let sweeps
   // proceed immediately (maxWaitMs 0 = the cap expires at once).
-  _configureAuthWaitForTests({ settleMs: 0, maxWaitMs: 0 });
+  _configureAuthWaitForTests({ maxWaitMs: 0 });
 });
 
 describe("sweepRelayScopes — stream-auth gate", () => {
-  it("holds every caller's REQ until the stream keys register, then settles before firing", async () => {
-    _configureAuthWaitForTests({ settleMs: 100, maxWaitMs: 5_000 });
+  it("holds every caller's REQ until the stream keys register, then fires", async () => {
+    _configureAuthWaitForTests({ maxWaitMs: 5_000 });
     const owner = signer();
     const community = communityOf(20, owner.pubkey);
     const control = controlGroupKey(community.root, community.id, 0);
@@ -145,7 +149,7 @@ describe("sweepRelayScopes — stream-auth gate", () => {
     await new Promise((r) => setTimeout(r, 250));
     expect(relay.calls.length, "an unauthenticatable REQ must never leave the client").toBe(0);
 
-    // Keys register (and the socket swap they trigger settles)…
+    // Keys register (an unchallenged relay needs no AUTH acks)…
     registerStreamKeys(controlGroups(community), community.relays);
     const fresh = await sweep;
 
@@ -154,8 +158,39 @@ describe("sweepRelayScopes — stream-auth gate", () => {
     expect(fresh.map((e) => e.rumorId)).toContain(e1.rumor.id);
   });
 
+  it("on a CHALLENGED relay, holds the REQ until the relay ACKS the stream AUTHs", async () => {
+    _configureAuthWaitForTests({ maxWaitMs: 5_000 });
+    const owner = signer();
+    const community = communityOf(22, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [e1.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    // The relay issued a NIP-42 challenge on the live socket; AUTH frames for
+    // the community's groups are in flight but not yet acked.
+    noteRelayChallenged(RELAY_A);
+    const groups = controlGroups(community);
+    registerStreamKeys(groups, community.relays);
+    groups.forEach((g, i) => noteStreamAuthSent(RELAY_A, `auth-ev-${i}`, g.pk));
+
+    const sweep = sweepControl(nostr, community);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(relay.calls.length, "a REQ must wait for the relay's AUTH acks").toBe(0);
+
+    // The relay acks each AUTH (["OK", id, true]) — the gate opens.
+    groups.forEach((_, i) => noteAuthResult(RELAY_A, `auth-ev-${i}`, true));
+    const fresh = await sweep;
+
+    expect(relay.calls.length).toBe(1);
+    expect(fresh.map((e) => e.rumorId)).toContain(e1.rumor.id);
+  });
+
   it("proceeds after the wait cap even if keys never register (cursor discipline still heals)", async () => {
-    _configureAuthWaitForTests({ settleMs: 50, maxWaitMs: 300 });
+    _configureAuthWaitForTests({ maxWaitMs: 300 });
     const owner = signer();
     const community = communityOf(24, owner.pubkey);
     const relay = new FakeRelay();
@@ -168,7 +203,7 @@ describe("sweepRelayScopes — stream-auth gate", () => {
   });
 
   it("sweeps arriving while the gate is closed coalesce into ONE REQ when it opens", async () => {
-    _configureAuthWaitForTests({ settleMs: 50, maxWaitMs: 5_000 });
+    _configureAuthWaitForTests({ maxWaitMs: 5_000 });
     const owner = signer();
     const a = communityOf(28, owner.pubkey);
     const b = communityOf(32, owner.pubkey);
@@ -196,8 +231,8 @@ describe("sweepRelayScopes — stream-auth gate", () => {
     expect(relay.calls[0].length, "one filter per scope").toBe(4);
     expect(aFresh.map((e) => e.rumorId)).toContain(aCtl.rumor.id);
   });
-  it("registrations irrelevant to the batch's scopes never re-arm its settle window", { timeout: 15_000 }, async () => {
-    _configureAuthWaitForTests({ settleMs: 300, maxWaitMs: 3_000 });
+  it("registrations irrelevant to the batch's scopes never hold its gate", { timeout: 15_000 }, async () => {
+    _configureAuthWaitForTests({ maxWaitMs: 3_000 });
     const owner = signer();
     const community = communityOf(36, owner.pubkey);
     const control = controlGroupKey(community.root, community.id, 0);
@@ -226,9 +261,9 @@ describe("sweepRelayScopes — stream-auth gate", () => {
 
       expect(relay.calls.length).toBe(1);
       expect(fresh.map((e) => e.rumorId)).toContain(e1.rumor.id);
-      // A global quiet window would never be satisfied and only the 3s cap
-      // would release the sweep; the scoped settle opens it in ~settleMs.
-      expect(took, "settle must track the batch's own keys, not global churn").toBeLessThan(2_000);
+      // The gate tracks the batch's own keys, so foreign churn (other
+      // communities registering) must not delay the sweep toward the cap.
+      expect(took, "the gate must track the batch's own keys, not global churn").toBeLessThan(2_000);
     } finally {
       clearInterval(churn);
     }
@@ -274,35 +309,6 @@ describe("sweepRelayScopes — resilience", () => {
     const healed = await sweepControl(nostr, community);
     expect(relay.calls[2][0].since).toBeUndefined();
     expect(healed.map((e) => e.rumorId)).toContain(e1.rumor.id);
-  });
-
-  it("whenRelaySweepsIdle holds a socket swap until the relay's in-flight sweep completes", async () => {
-    const owner = signer();
-    const community = communityOf(80, owner.pubkey);
-    const relay = new FakeRelay();
-    relay.delayMs = 200;
-    const nostr = poolOf({ [RELAY_A]: relay });
-
-    // Idle relay: resolves immediately.
-    expect(isRelaySweeping(RELAY_A)).toBe(false);
-    await whenRelaySweepsIdle(RELAY_A);
-
-    let sweepDone = false;
-    const sweep = sweepControl(nostr, community).then((r) => {
-      sweepDone = true;
-      return r;
-    });
-    // Wait for the batch window to elapse so the REQ is actually in flight.
-    await new Promise((r) => setTimeout(r, 100));
-    expect(isRelaySweeping(RELAY_A), "the batch REQ is in flight").toBe(true);
-
-    await whenRelaySweepsIdle(RELAY_A);
-    expect(isRelaySweeping(RELAY_A)).toBe(false);
-    // The store commits happen inside the tracked sweep; the caller's own
-    // promise settles a few microtasks later — one tick to observe it.
-    await new Promise((r) => setTimeout(r, 0));
-    expect(sweepDone, "idle must mean the sweep has fully settled").toBe(true);
-    await sweep;
   });
 });
 

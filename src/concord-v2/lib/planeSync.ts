@@ -4,8 +4,9 @@
  * and the global background sweep.
  *
  * - AUTH-GATED: holds every REQ until the scopes' stream keys are
- *   NIP-42-registered and the post-registration socket swap has settled,
- *   with a hard cap so a key that never registers can't stall sync.
+ *   NIP-42-registered and (on a challenged socket) their AUTHs are ACKED by
+ *   the relay, with a hard cap so a key that never registers can't stall
+ *   sync. The ack is the relay's own `OK` — no settle-timer guesswork.
  * - BATCHED: same-relay scopes coalesce into one REQ (one filter per scope,
  *   each with its own cursor and limit — per-filter isolation prevents the
  *   issue-#19 since-skip).
@@ -17,11 +18,10 @@ import { controlGroups } from "@/concord-v2/lib/control";
 import { guestbookGroups } from "@/concord-v2/lib/guestbook";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
-import { isStreamPubkey, onStreamKeysAdded } from "@/concord-v2/lib/streamAuth";
+import { isStreamPubkey, streamAuthsSettled } from "@/concord-v2/lib/streamAuth";
 import { openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
-import { normalizeRelayUrl } from "@/lib/platform";
 import { logSync, sinceMs } from "@/lib/syncLog";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -33,16 +33,9 @@ interface NostrLike {
   };
 }
 
-/**
- * Delay after stream-key registration before a plane REQ may fly, so the
- * NIP-42 socket swap settles first.
- */
-export const STREAM_AUTH_SETTLE_MS = 2_000;
-
-/** Auth gate timings (test seam via {@link _configureAuthWaitForTests}). */
+/** Auth gate timing (test seam via {@link _configureAuthWaitForTests}). */
 const authWait = {
-  settleMs: STREAM_AUTH_SETTLE_MS,
-  /** Hard cap so a key that never registers can't stall sync. */
+  /** Hard cap so a key that never registers/acks can't stall sync. */
   maxWaitMs: 8_000,
 };
 
@@ -51,24 +44,18 @@ export function _configureAuthWaitForTests(cfg: Partial<typeof authWait>): void 
   Object.assign(authWait, cfg);
 }
 
-/** When each stream pubkey was registered (this page-life). Settled from the batch's own keys only. */
-const registeredAt = new Map<string, number>();
-onStreamKeysAdded((added) => {
-  const now = Date.now();
-  for (const pk of added) registeredAt.set(pk, now);
-});
-
-/** Resolve once every group is registered AND settled, or the cap expires. */
-async function whenAuthReady(groupsOf: () => GroupKey[]): Promise<void> {
+/**
+ * Resolve once every group is registered AND its AUTH is acked on `url` (or
+ * the relay never challenged — then there's nothing to wait for), or the cap
+ * expires. Ack state comes from the relay's own `OK` replies (streamAuth).
+ */
+async function whenAuthReady(url: string, groupsOf: () => GroupKey[]): Promise<void> {
   const deadline = Date.now() + authWait.maxWaitMs;
   for (;;) {
-    const now = Date.now();
     const pks = groupsOf().map((g) => g.pk);
     const registered = pks.every((pk) => isStreamPubkey(pk));
-    // Keys registered before this module loaded default to 0 — long settled.
-    const newest = pks.reduce((max, pk) => Math.max(max, registeredAt.get(pk) ?? 0), 0);
-    if ((registered && now >= newest + authWait.settleMs) || now >= deadline) return;
-    await new Promise((r) => setTimeout(r, Math.max(1, Math.min(100, deadline - now))));
+    if ((registered && streamAuthsSettled(url, pks)) || Date.now() >= deadline) return;
+    await new Promise((r) => setTimeout(r, Math.max(1, Math.min(50, deadline - Date.now()))));
   }
 }
 
@@ -186,9 +173,11 @@ async function runScopes(
         `${url} sweep FAILED in ${sinceMs(started)} (${scopes.length} scope(s), attempt ${attempt}): ${err instanceof Error ? err.message : String(err)}`,
       );
       if (attempt >= 2) break;
-      // Pause before the retry: if lost to a socket swap, the fresh challenge
-      // lands within the settle window.
-      await new Promise((r) => setTimeout(r, authWait.settleMs));
+      // Pause, then re-check the auth gate before the retry: a first round
+      // lost to a lazy NIP-42 challenge (REQ → CLOSED auth-required → AUTHs
+      // sent) passes once the relay has acked the stream AUTHs.
+      await new Promise((r) => setTimeout(r, 250));
+      await whenAuthReady(url, () => scopes.flatMap((s) => s.groups));
     }
   }
   return out;
@@ -199,57 +188,6 @@ const inflight = new Map<string, Promise<OpenedEvent[]>>();
 
 /** Extra enrollment time for an OPEN gate, so same-render callers coalesce. */
 const BATCH_WINDOW_MS = 50;
-
-/** Relays with a sweep REQ in the air (normalized url → active batch count). */
-const activeSweeps = new Map<string, number>();
-/** Resolvers parked on a relay going sweep-idle. */
-const idleWaiters = new Map<string, Array<() => void>>();
-
-const relayKey = (url: string) => normalizeRelayUrl(url) ?? url;
-
-/** Whether a sweep REQ is in flight on this relay. */
-export function isRelaySweeping(url: string): boolean {
-  return (activeSweeps.get(relayKey(url)) ?? 0) > 0;
-}
-
-/**
- * Resolve once no sweep is in flight on `url`. NostrProvider awaits this
- * before swapping a relay's socket: the swap only helps future REQs, and
- * tearing the socket under a live sweep strands its data.
- */
-export function whenRelaySweepsIdle(url: string, capMs = 30_000): Promise<void> {
-  const key = relayKey(url);
-  if ((activeSweeps.get(key) ?? 0) === 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(done, capMs);
-    function done() {
-      clearTimeout(timer);
-      resolve();
-    }
-    const waiters = idleWaiters.get(key) ?? [];
-    waiters.push(done);
-    idleWaiters.set(key, waiters);
-  });
-}
-
-/** Track one batch's flight on a relay, waking idle-waiters on last-out. */
-async function trackSweep<T>(url: string, run: () => Promise<T>): Promise<T> {
-  const key = relayKey(url);
-  activeSweeps.set(key, (activeSweeps.get(key) ?? 0) + 1);
-  try {
-    return await run();
-  } finally {
-    const left = (activeSweeps.get(key) ?? 1) - 1;
-    if (left > 0) {
-      activeSweeps.set(key, left);
-    } else {
-      activeSweeps.delete(key);
-      const waiters = idleWaiters.get(key);
-      idleWaiters.delete(key);
-      if (waiters) for (const wake of waiters) wake();
-    }
-  }
-}
 
 /** A per-relay batch collecting scopes until the auth gate opens. */
 interface RelayBatch {
@@ -264,10 +202,10 @@ function newBatch(nostr: NostrLike, url: string): RelayBatch {
   const b: RelayBatch = { scopes: [], closed: false, promise: Promise.resolve(new Map()) };
   b.promise = (async () => {
     await new Promise((r) => setTimeout(r, BATCH_WINDOW_MS));
-    await whenAuthReady(() => b.scopes.flatMap((s) => s.groups));
+    await whenAuthReady(url, () => b.scopes.flatMap((s) => s.groups));
     b.closed = true;
     if (batches.get(url) === b) batches.delete(url);
-    return trackSweep(url, () => runScopes(nostr, url, b.scopes));
+    return runScopes(nostr, url, b.scopes);
   })();
   batches.set(url, b);
   return b;

@@ -13,8 +13,16 @@ import { NostrBatcher } from "@/lib/NostrBatcher";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
 import { logSync } from "@/lib/syncLog";
-import { onStreamKeysAdded, signStreamAuthsChunked, streamPubkeysForRelay } from "@/concord-v2/lib/streamAuth";
-import { whenRelaySweepsIdle } from "@/concord-v2/lib/planeSync";
+import {
+  noteAuthResult,
+  noteRelayChallenged,
+  noteStreamAuthSent,
+  onStreamKeysAdded,
+  resetRelayAuth,
+  signStreamAuths,
+  signStreamAuthsChunked,
+  streamPubkeysForRelay,
+} from "@/concord-v2/lib/streamAuth";
 import { warmRumorStore } from "@/concord-v2/lib/rumorStore";
 import { warmInviteInbox } from "@/concord-v2/lib/inviteInbox";
 
@@ -30,6 +38,14 @@ interface NostrProviderProps {
  * signature across challenges — we just refuse the extra ones during the window.)
  */
 const AUTH_MIN_INTERVAL_MS = 5_000;
+
+/**
+ * Head start the user signer gets on a NIP-42 challenge before NRelay1's
+ * awaited AUTH falls back to a locally-signed stream key. Local/extension
+ * signers answer in well under this; only a genuinely slow NIP-46 bunker
+ * round-trip exceeds it (and its AUTH is then delivered out-of-band).
+ */
+const USER_AUTH_HEADSTART_MS = 1_200;
 
 /**
  * NIP-59 gift-wrap kinds (Concord V2 wraps + ephemeral variant). See
@@ -168,7 +184,9 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   /**
    * Send NIP-42 AUTH frames for the stream pubkeys scoped to this relay.
    * Signing is chunked with event-loop yields; aborts if the socket reopens
-   * mid-flight (the challenge is then a dead nonce).
+   * mid-flight (the challenge is then a dead nonce). Each frame is recorded
+   * so the relay's `["OK", id, true]` ack marks the key authenticated
+   * (streamAuth ack state — plane sweeps gate on it).
    */
   const sendStreamAuths = async (
     entry: { relay: NRelay1; challenge?: string },
@@ -181,6 +199,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       if (entry.challenge !== challenge) return; // stale nonce — a fresh challenge will re-cover
       for (const ev of chunk) {
         try {
+          noteStreamAuthSent(url, ev.id, ev.pubkey);
           entry.relay.socket.send(JSON.stringify(["AUTH", ev]));
         } catch {
           // socket not open yet / closing — the next auth-required round re-sends.
@@ -193,13 +212,24 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
    * Reset a relay's NIP-42 state on socket reopen (#45): a reconnected socket
    * is a fresh unauthenticated session, but NRelay1 carries stale auth
    * bookkeeping across reconnects. Clearing everything on open makes a
-   * reconnect behave like a first connection.
+   * reconnect behave like a first connection. Also watches incoming `OK`
+   * frames to ack the raw stream AUTHs we send outside NRelay1's own flow.
+   *
+   * Additionally re-sends NRelay1's PENDING EVENTS on open: NRelay1 re-issues
+   * its subscriptions when a socket reconnects but never retransmits an EVENT
+   * that is still awaiting its OK. An EVENT written into a half-open socket
+   * (backgrounded Android: readyState OPEN, TCP dead) is silently lost, and
+   * its `event()` promise burns the full publish timeout — for a NIP-46 login
+   * that black-holes the sign request itself, so "send" does nothing for 60s
+   * and then fails. Retransmitting on open makes the reconnect lossless
+   * (duplicate EVENTs are idempotent — relays dedup by id).
    */
   const watchSocketReopen = (relay: NRelay1, url: string) => {
     const internals = relay as unknown as {
       authRetriedSubs?: Set<string>;
       authRetriedEvents?: Set<string>;
       authPromise?: Promise<void>;
+      pendingEvents?: Map<string, NostrEvent>;
       socket: NRelay1["socket"];
     };
     const onOpen = () => {
@@ -209,14 +239,46 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       authCacheRef.current.delete(url);
       authCooldownRef.current.delete(url);
       authInFlightRef.current.delete(url);
+      resetRelayAuth(url); // the old session's AUTH acks died with the socket
       const entry = openRelaysRef.current.get(url);
       if (entry) entry.challenge = undefined; // the old socket's nonce is dead
+      // Retransmit publishes still awaiting an OK (see docstring). NRelay1
+      // removes an event from pendingEvents once its OK arrives, so anything
+      // still here either never reached the relay or its OK was lost — both
+      // healed by a re-send on the fresh socket.
+      const pending = internals.pendingEvents;
+      if (pending?.size) {
+        logSync("auth", `socket reopened for ${url} — retransmitting ${pending.size} pending EVENT(s)`);
+        for (const ev of pending.values()) {
+          try {
+            relay.socket.send(JSON.stringify(["EVENT", ev]));
+          } catch {
+            // Socket flapped again — the next reopen retransmits.
+          }
+        }
+      }
+    };
+    // Ack our raw AUTH frames: the relay replies ["OK", <auth event id>, bool].
+    // Cheap prefix check first so the wrap firehose isn't double-parsed.
+    const onMessage = (...args: unknown[]) => {
+      const data = args
+        .map((a) => (a as { data?: unknown } | undefined)?.data)
+        .find((d): d is string => typeof d === "string");
+      if (!data?.startsWith('["OK"')) return;
+      try {
+        const [, id, ok] = JSON.parse(data) as [string, string, boolean];
+        if (typeof id === "string") noteAuthResult(url, id, ok === true);
+      } catch {
+        // not JSON / not ours
+      }
     };
     const attach = (socket: NRelay1["socket"]) => {
       try {
-        (socket as unknown as {
-          addEventListener(type: string, listener: () => void): void;
-        }).addEventListener("open", onOpen);
+        const s = socket as unknown as {
+          addEventListener(type: string, listener: (...args: unknown[]) => void): void;
+        };
+        s.addEventListener("open", onOpen);
+        s.addEventListener("message", onMessage);
       } catch {
         // No listener support — reconnects fall back to nostrify's behavior.
       }
@@ -242,16 +304,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   };
 
 
-  // The pool MUST be constructed before the signer memo: a bunker (NIP-46)
-  // signer is built with `NUser.fromBunkerLogin(login, pool)`, so the pool has
-  // to exist first. The `open()` callback only reads the refs lazily (when a
-  // relay sends an AUTH challenge), so building it here — before relays/signer
-  // are finalized — is safe. (Previously the pool was created AFTER this memo,
-  // so a bunker login computed its signer with an `undefined` pool, the memo
-  // never recomputed [dep: currentLogin only], and `signerRef` stayed undefined
-  // forever — every NIP-42 AUTH then failed with "no signer", which locked an
-  // auth-required relay like chat.soapbox.pub into an endless REQ→CLOSED retry
-  // and the room received nothing.)
+  // The pool is constructed before the signer memo below. The `open()`
+  // callback only reads the refs lazily (when a relay sends an AUTH
+  // challenge), so building it here — before relays/signer are finalized —
+  // is safe.
   if (!pool.current) {
     pool.current = new NPool({
       open(url: string) {
@@ -260,15 +316,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           // (see verifyEventSkippingWraps); skip them, verify everything else.
           verifyEvent: verifyEventSkippingWraps,
           // NIP-42: respond to relay AUTH challenges by signing a kind 22242
-          // ephemeral event with the current user's signer.
-          //
-          // Two safeguards against a slow/remote NIP-46 bunker: (1) reuse a
-          // cached signature when the same relay re-issues the same challenge (a
-          // REQ retry shouldn't re-sign); (2) serialize all signing through the
-          // per-identity signer queue, so concurrent AUTH challenges from many
-          // relays don't fan out into parallel bunker round-trips (which the
-          // bunker can't service — they all time out, leaving every
-          // auth-required relay stuck on CLOSED and the room empty).
+          // ephemeral event. The user's signer answers when it's fast (local
+          // nsec / extension, or a healthy bunker); a slow NIP-46 bunker is
+          // kept off the critical path by falling back to a locally-signed
+          // stream key (see the head-start race below).
           auth: async (challenge: string) => {
             // Remember the challenge so newly-registered Concord V2 stream keys
             // can be authenticated on this same connection later, and
@@ -277,67 +328,101 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             const entry = openRelaysRef.current.get(url) ?? { relay };
             entry.challenge = challenge;
             openRelaysRef.current.set(url, entry);
+            noteRelayChallenged(url);
+            const streamPks = streamPubkeysForRelay(url);
             logSync(
               "auth",
-              `NIP-42 challenge from ${url} — signing user + ${streamPubkeysForRelay(url).length} stream key(s)`,
+              `NIP-42 challenge from ${url} — signing user + ${streamPks.length} stream key(s)`,
             );
             void sendStreamAuths(entry, url);
 
-            const signer = signerRef.current;
-            if (!signer) {
-              throw new Error("AUTH failed: no signer available (user not logged in)");
-            }
-            // NIP-42 challenges are single-use nonces: a signature is only valid
-            // for the exact challenge it was made for. So we may ONLY reuse a
-            // cached signature when the relay re-issues the IDENTICAL challenge
-            // (a plain REQ retry) — never across a fresh challenge, or the relay
-            // rejects the stale nonce and re-challenges forever (the room never
-            // authenticates).
-            const cached = authCacheRef.current.get(url);
-            if (cached && cached.challenge === challenge) {
-              return cached.event;
-            }
-            // A fresh challenge must be signed. Two guards keep a relay that
-            // re-challenges on every retried REQ from flooding the (slow, remote)
-            // bunker: (a) collapse a concurrent burst onto one in-flight sign;
-            // (b) rate-limit per relay — within the window, DELAY the sign
-            // until the window ends rather than refusing it. Refusing was
-            // fatal mid-session: NRelay1's doAuth swallows the rejection and
-            // each sub/publish gets ONE auth-retry (reset only on socket
-            // reopen), so a challenge dropped inside the window could kill a
-            // gated sub until the next reconnect. The delayed sign uses the
-            // relay's LATEST challenge at fire time — the nonce we were called
-            // with may be superseded by then.
-            const inFlight = authInFlightRef.current.get(url);
-            if (inFlight) return inFlight;
-            const wait = (authCooldownRef.current.get(url) ?? 0) - Date.now();
-            const signing = (wait > 0
-              ? new Promise<void>((resolve) => setTimeout(resolve, wait))
-              : Promise.resolve()
-            ).then(() => {
-              const current = openRelaysRef.current.get(url)?.challenge ?? challenge;
-              const liveSigner = signerRef.current;
-              if (!liveSigner) {
-                throw new Error("AUTH failed: no signer available (user not logged in)");
+            /**
+             * Sign the user's kind-22242 for this relay, guarded against a
+             * slow/remote NIP-46 bunker: reuse a cached signature when the
+             * relay re-issues the IDENTICAL challenge (challenges are
+             * single-use nonces, so never across a fresh one); collapse a
+             * concurrent burst onto one in-flight sign; and rate-limit per
+             * relay — within the window, DELAY the sign until the window ends
+             * rather than refusing it (NRelay1's doAuth swallows a rejection
+             * and each sub/publish gets ONE auth-retry per socket, so a
+             * dropped challenge could kill a gated sub until reconnect). A
+             * delayed sign uses the relay's LATEST challenge at fire time.
+             */
+            const signUserAuth = (): Promise<NostrEvent> => {
+              const signer = signerRef.current;
+              if (!signer) {
+                return Promise.reject(new Error("AUTH failed: no signer available (user not logged in)"));
               }
-              return liveSigner.signEvent({
-                kind: 22242,
-                content: "",
-                tags: [
-                  ["relay", url],
-                  ["challenge", current],
-                ],
-                created_at: Math.floor(Date.now() / 1000),
-              }).then((ev) => {
-                authCacheRef.current.set(url, { challenge: current, event: ev, signedAt: Date.now() });
-                authCooldownRef.current.set(url, Date.now() + AUTH_MIN_INTERVAL_MS);
-                return ev;
+              const cached = authCacheRef.current.get(url);
+              if (cached && cached.challenge === challenge) {
+                return Promise.resolve(cached.event);
+              }
+              const inFlight = authInFlightRef.current.get(url);
+              if (inFlight) return inFlight;
+              const wait = (authCooldownRef.current.get(url) ?? 0) - Date.now();
+              const signing = (wait > 0
+                ? new Promise<void>((resolve) => setTimeout(resolve, wait))
+                : Promise.resolve()
+              ).then(() => {
+                const current = openRelaysRef.current.get(url)?.challenge ?? challenge;
+                const liveSigner = signerRef.current;
+                if (!liveSigner) {
+                  throw new Error("AUTH failed: no signer available (user not logged in)");
+                }
+                return liveSigner.signEvent({
+                  kind: 22242,
+                  content: "",
+                  tags: [
+                    ["relay", url],
+                    ["challenge", current],
+                  ],
+                  created_at: Math.floor(Date.now() / 1000),
+                }).then((ev) => {
+                  authCacheRef.current.set(url, { challenge: current, event: ev, signedAt: Date.now() });
+                  authCooldownRef.current.set(url, Date.now() + AUTH_MIN_INTERVAL_MS);
+                  return ev;
+                });
+              }).finally(() => {
+                authInFlightRef.current.delete(url);
               });
-            }).finally(() => {
-              authInFlightRef.current.delete(url);
-            });
-            authInFlightRef.current.set(url, signing);
-            return signing;
+              authInFlightRef.current.set(url, signing);
+              return signing;
+            };
+
+            const userSign = signUserAuth();
+            userSign.catch(() => undefined); // the stream path below may abandon it
+            if (streamPks.length === 0) {
+              // No stream keys scoped here (e.g. a NIP-29 relay): the USER
+              // identity is what's being authenticated — nothing else can
+              // satisfy the gate, so the bunker round-trip is unavoidable.
+              return userSign;
+            }
+
+            // Keep the bunker OFF the reconnect critical path: NRelay1 holds
+            // every auth-retried sub/publish behind this promise, and for a
+            // NIP-46 login the sign is a relay round-trip that may itself be
+            // traveling over the socket that just reconnected. Give the user
+            // sign a short head start; if it hasn't answered, resolve NRelay1
+            // with a locally-signed STREAM-key 22242 (~4ms) so gated REQs
+            // unblock now, and deliver the user's AUTH out-of-band whenever
+            // the bunker responds (ditto-relay accepts AUTH frames for the
+            // socket's whole lifetime and its authed set only grows).
+            const fast = await Promise.race([
+              userSign.then((ev) => ev, () => undefined),
+              new Promise<undefined>((r) => setTimeout(() => r(undefined), USER_AUTH_HEADSTART_MS)),
+            ]);
+            if (fast) return fast;
+            void userSign.then((ev) => {
+              const live = openRelaysRef.current.get(url);
+              try {
+                live?.relay.socket.send(JSON.stringify(["AUTH", ev]));
+              } catch {
+                // Socket flapped — the next challenge re-signs.
+              }
+            }).catch(() => undefined);
+            logSync("auth", `user sign is slow for ${url} — answering the challenge with a stream key, user AUTH to follow`);
+            const [streamEv] = signStreamAuths(challenge, url, [streamPks[0]]);
+            return streamEv;
           },
         });
         const existing = openRelaysRef.current.get(url);
@@ -370,7 +455,9 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     });
   }
 
-  // Now that the pool exists, derive the signer (a bunker signer needs it).
+  // Derive the NIP-42 AUTH signer for the current login. The pool is
+  // constructed above this memo: a bunker (NIP-46) signer is built with
+  // `NUser.fromBunkerLogin(login, pool)`, so the pool has to exist first.
   const currentLogin = logins[0];
   const currentSigner = useMemo(() => {
     if (!currentLogin) return undefined;
@@ -401,97 +488,30 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
 
   useEffect(() => {
     return () => {
+      // Closing the pool poisons every captured relay handle (websocket-ts
+      // silently drops all sends on a closedByUser socket) — nothing outside
+      // this provider may hold a pool reference past unmount.
       pool.current?.close();
     };
   }, []);
 
   // When Concord V2 registers new stream keys, authenticate them on
-  // already-open sockets. A spent challenge can't be replayed, so for a
-  // socket that already consumed its challenge we swap the socket: close
-  // the websocket-ts wrapper and wake the relay for a fresh connection with
-  // a fresh challenge covering all registered keys.
+  // already-open sockets right away. ditto-relay's challenge stays valid for
+  // the socket's lifetime and its authenticated-pubkey set only grows, so a
+  // late key just signs the stored challenge and sends another AUTH frame —
+  // the relay acks it and subsequent REQs for that author pass. (Verified
+  // against the real relay implementation; no socket swap needed.)
   useEffect(() => {
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let pendingPks = new Set<string>();
-    /** Per-relay: when we last swapped its socket for a re-auth. */
-    const lastSwapAt = new Map<string, number>();
-    /** Per-relay: a trailing swap scheduled for when the cooldown expires. */
-    const pendingSwaps = new Map<string, ReturnType<typeof setTimeout>>();
-    /**
-     * Minimum spacing between swaps of the same relay. Registration arrives
-     * in waves — coalescing within the cooldown avoids rapid reconnects.
-     */
-    const SWAP_COOLDOWN_MS = 15_000;
-    /** Per-relay: a swap parked on {@link whenRelaySweepsIdle}. */
-    const deferredSwaps = new Set<string>();
-    let unmounted = false;
-
-    const swapSocket = (url: string) => {
-      const entry = openRelaysRef.current.get(url);
-      if (!entry?.challenge) return;
-      lastSwapAt.set(url, Date.now());
-      // Close the wrapper (not the browser socket) for an instant reconnect —
-      // a graceful close handshake can stall 10+ seconds with no close event.
-      logSync("auth", `new stream keys scoped to ${url} — swapping its challenged socket for a fresh challenge`);
-      try {
-        entry.relay.socket.close();
-        (entry.relay as unknown as { wake?: () => void }).wake?.();
-      } catch {
-        // No socket / already closing — the next REQ's wake() (or the next
-        // gated REQ's challenge) picks up the new keys.
-      }
-    };
-
-    /**
-     * Swap only once the relay has no sweep in flight.
-     */
-    const swapWhenIdle = (url: string) => {
-      if (deferredSwaps.has(url)) return; // a parked swap already covers this wave
-      deferredSwaps.add(url);
-      void whenRelaySweepsIdle(url).then(() => {
-        deferredSwaps.delete(url);
-        if (!unmounted) swapSocket(url);
-      });
-    };
-
-    const reconnectChallengedSockets = () => {
-      reconnectTimer = undefined;
-      const added = pendingPks;
-      pendingPks = new Set();
+    return onStreamKeysAdded((added) => {
       for (const [url, entry] of openRelaysRef.current) {
         if (!entry.challenge) continue;
-        // Only swap sockets the new keys are scoped to.
         const scoped = new Set(streamPubkeysForRelay(url));
-        if (![...added].some((pk) => scoped.has(pk))) continue;
-        // Already authenticated on a spent challenge — swap for a fresh one.
-        if (pendingSwaps.has(url)) continue; // a trailing swap already covers this wave
-        const sinceLast = Date.now() - (lastSwapAt.get(url) ?? 0);
-        if (sinceLast < SWAP_COOLDOWN_MS) {
-          const t = setTimeout(() => {
-            pendingSwaps.delete(url);
-            swapWhenIdle(url);
-          }, SWAP_COOLDOWN_MS - sinceLast);
-          pendingSwaps.set(url, t);
-          continue;
-        }
-        swapWhenIdle(url);
-      }
-    };
-    const unsubscribe = onStreamKeysAdded((added) => {
-      // Opening a community fires several `registerStreamKeys` calls in quick
-      // succession (core keys, per-channel keys, notif-subs). Debounce so the
-      // burst collapses into ONE reconnect per socket instead of a thrash.
-      for (const pk of added) pendingPks.add(pk);
-      if (reconnectTimer === undefined) {
-        reconnectTimer = setTimeout(reconnectChallengedSockets, 250);
+        const pks = added.filter((pk) => scoped.has(pk));
+        if (pks.length === 0) continue;
+        logSync("auth", `authenticating ${pks.length} late stream key(s) on ${url}`);
+        void sendStreamAuths(entry, url, pks);
       }
     });
-    return () => {
-      unmounted = true;
-      unsubscribe();
-      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
-      for (const t of pendingSwaps.values()) clearTimeout(t);
-    };
     // Reads only refs; stable for the provider's lifetime.
   }, []);
 

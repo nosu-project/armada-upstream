@@ -18,7 +18,7 @@ import { syncControlPlane } from "./controlPlaneSync";
 
 beforeEach(() => {
   // The auth gate is planeSync's concern (planeSync.test.ts); let REQs fly.
-  _configureAuthWaitForTests({ settleMs: 0, maxWaitMs: 0 });
+  _configureAuthWaitForTests({ maxWaitMs: 0 });
 });
 
 const RELAY_A = "wss://relay-a.test";

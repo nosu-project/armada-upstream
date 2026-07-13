@@ -43,7 +43,7 @@ import { _configureAuthWaitForTests } from "@/concord-v2/lib/planeSync";
 // These tests exercise the cursor discipline, not planeSync's NIP-42 auth
 // gate (planeSync.test.ts owns that) — let the sweeps' REQs fly immediately.
 beforeAll(() => {
-  _configureAuthWaitForTests({ settleMs: 0, maxWaitMs: 0 });
+  _configureAuthWaitForTests({ maxWaitMs: 0 });
 });
 
 // ── Module mocks ─────────────────────────────────────────────────────────────

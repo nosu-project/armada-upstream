@@ -15,6 +15,17 @@
  * per registered key on the same challenge, so the connection ends up
  * authenticated as the user AND every stream it will query.
  *
+ * ditto-relay keeps a per-connection SET of authenticated pubkeys and its
+ * challenge stays valid for the socket's whole lifetime, so a key registered
+ * AFTER the challenge can still authenticate on the live socket — the client
+ * just signs and sends another AUTH frame (verified empirically against the
+ * real ditto-relay over a live socket). The relay acks every AUTH with
+ * `["OK", id, true]`; this module also tracks those acks per relay, giving
+ * sweeps a deterministic "these authors are authenticated on this socket"
+ * signal instead of a timing heuristic. (The relay processes frames in
+ * parallel, so an un-acked AUTH→REQ pipeline can race — hence ack-gating,
+ * not send-and-hope.)
+ *
  * Keys register with the RELAYS their community lives on, and a challenge
  * signs only the keys scoped to that relay (a key registered without relays is
  * unscoped and signs everywhere — the safe fallback). This matters: a Schnorr
@@ -194,7 +205,78 @@ export async function* signStreamAuthsChunked(
   }
 }
 
-/** Test seam: forget every registered stream key. */
+/** Test seam: forget every registered stream key and all per-relay ack state. */
 export function _resetStreamAuthRegistry(): void {
   registry.clear();
+  relayAuth.clear();
+}
+
+// ── Per-relay AUTH ack state ─────────────────────────────────────────────────
+//
+// ditto-relay acks every accepted kind-22242 with `["OK", <id>, true]` and adds
+// the pubkey to the connection's authenticated set. NostrProvider feeds those
+// acks in here; plane sweeps gate on them (`streamAuthsSettled`) so a REQ only
+// flies once the relay has CONFIRMED its authors — deterministic, no settle
+// timers. State is per live socket: a reopened socket is a fresh
+// unauthenticated session, so NostrProvider resets it on reconnect.
+
+interface RelayAuthState {
+  /** Whether this relay has issued a NIP-42 challenge on the live socket. */
+  challenged: boolean;
+  /** Stream pubkeys the relay has acked (OK true) on the live socket. */
+  acked: Set<string>;
+  /** Sent-but-unacked AUTH event ids → the stream pubkey they authenticate. */
+  pending: Map<string, string>;
+}
+
+/** normalized relay url → live-socket auth state. */
+const relayAuth = new Map<string, RelayAuthState>();
+
+function relayAuthState(url: string): RelayAuthState {
+  const key = normalizeRelayUrl(url) ?? url;
+  let state = relayAuth.get(key);
+  if (!state) {
+    state = { challenged: false, acked: new Set(), pending: new Map() };
+    relayAuth.set(key, state);
+  }
+  return state;
+}
+
+/** Record that `url` issued a NIP-42 challenge on its live socket. */
+export function noteRelayChallenged(url: string): void {
+  relayAuthState(url).challenged = true;
+}
+
+/** Reset a relay's auth state (socket reopened — the old session's acks are dead). */
+export function resetRelayAuth(url: string): void {
+  relayAuth.delete(normalizeRelayUrl(url) ?? url);
+}
+
+/** Record a stream AUTH frame sent to `url`, so its OK ack can be matched. */
+export function noteStreamAuthSent(url: string, eventId: string, pubkey: string): void {
+  relayAuthState(url).pending.set(eventId, pubkey);
+}
+
+/** Feed an `["OK", id, ok]` from `url`; ignores ids that aren't pending stream AUTHs. */
+export function noteAuthResult(url: string, eventId: string, ok: boolean): void {
+  const state = relayAuth.get(normalizeRelayUrl(url) ?? url);
+  const pk = state?.pending.get(eventId);
+  if (!state || pk === undefined) return;
+  state.pending.delete(eventId);
+  if (ok) state.acked.add(pk);
+}
+
+/**
+ * Whether a REQ authored by `pubkeys` would pass `url`'s NIP-42 gate right
+ * now: either the relay never challenged this socket (not auth-gating, or the
+ * lazy challenge hasn't fired — the REQ itself will trigger it and NRelay1's
+ * auth-retry covers that round), or every pubkey's AUTH has been acked.
+ */
+export function streamAuthsSettled(url: string, pubkeys: Iterable<string>): boolean {
+  const state = relayAuth.get(normalizeRelayUrl(url) ?? url);
+  if (!state?.challenged) return true;
+  for (const pk of pubkeys) {
+    if (!state.acked.has(pk)) return false;
+  }
+  return true;
 }

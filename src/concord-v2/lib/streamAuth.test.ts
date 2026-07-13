@@ -6,10 +6,15 @@ import { controlGroupKey, random32 } from "@/concord-v2/lib/derive";
 import {
   _resetStreamAuthRegistry,
   isStreamPubkey,
+  noteAuthResult,
+  noteRelayChallenged,
+  noteStreamAuthSent,
   onStreamKeysAdded,
   registerStreamKeys,
+  resetRelayAuth,
   signStreamAuths,
   signStreamAuthsChunked,
+  streamAuthsSettled,
   streamPubkeys,
   streamPubkeysForRelay,
 } from "@/concord-v2/lib/streamAuth";
@@ -153,5 +158,67 @@ describe("streamAuth registry", () => {
     expect(new Set(events.map((e) => e.pubkey))).toEqual(new Set(keys.map((k) => k.pk)));
     for (const ev of events.slice(0, 2)) expect(verifyEvent(ev)).toBe(true);
     expect(interleaved).toBe(true);
+  });
+});
+
+describe("streamAuth per-relay ack state", () => {
+  afterEach(() => _resetStreamAuthRegistry());
+
+  it("an unchallenged relay is always settled (nothing to wait for)", () => {
+    const a = makeKey();
+    registerStreamKeys([a], [RELAY]);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
+  });
+
+  it("a challenged relay settles per-pubkey as the relay acks each AUTH", () => {
+    const a = makeKey();
+    const b = makeKey();
+    registerStreamKeys([a, b], [RELAY]);
+    noteRelayChallenged(RELAY);
+    expect(streamAuthsSettled(RELAY, [a.pk, b.pk])).toBe(false);
+
+    noteStreamAuthSent(RELAY, "ev-a", a.pk);
+    noteStreamAuthSent(RELAY, "ev-b", b.pk);
+    noteAuthResult(RELAY, "ev-a", true);
+    expect(streamAuthsSettled(RELAY, [a.pk]), "acked key is settled").toBe(true);
+    expect(streamAuthsSettled(RELAY, [a.pk, b.pk]), "unacked key still holds").toBe(false);
+
+    noteAuthResult(RELAY, "ev-b", true);
+    expect(streamAuthsSettled(RELAY, [a.pk, b.pk])).toBe(true);
+  });
+
+  it("a rejected AUTH (OK false) does not settle, and unknown OK ids are ignored", () => {
+    const a = makeKey();
+    registerStreamKeys([a], [RELAY]);
+    noteRelayChallenged(RELAY);
+    noteStreamAuthSent(RELAY, "ev-a", a.pk);
+    noteAuthResult(RELAY, "unrelated-publish-ok", true); // e.g. an EVENT's OK
+    noteAuthResult(RELAY, "ev-a", false);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(false);
+  });
+
+  it("resetRelayAuth clears the live-socket session (reconnect = fresh unauthenticated socket)", () => {
+    const a = makeKey();
+    registerStreamKeys([a], [RELAY]);
+    noteRelayChallenged(RELAY);
+    noteStreamAuthSent(RELAY, "ev-a", a.pk);
+    noteAuthResult(RELAY, "ev-a", true);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
+
+    resetRelayAuth(RELAY);
+    // Unchallenged again — settled until the new socket's challenge arrives…
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
+    // …after which the old acks must NOT count.
+    noteRelayChallenged(RELAY);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(false);
+  });
+
+  it("ack state normalizes relay URLs", () => {
+    const a = makeKey();
+    registerStreamKeys([a], [RELAY]);
+    noteRelayChallenged("wss://relay.example.com/");
+    noteStreamAuthSent("relay.example.com", "ev-a", a.pk);
+    noteAuthResult(`${RELAY}/`, "ev-a", true);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
   });
 });
