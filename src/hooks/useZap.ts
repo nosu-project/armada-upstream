@@ -55,7 +55,7 @@ export function useZap(opts: {
   const { target, recipient, sendZap } = opts;
   const { user } = useCurrentUser();
   const { config } = useAppContext();
-  const { activeConnection, payWithNWC, webln } = useWallet();
+  const { activeConnection, payWithNWC, lookupPreimage, webln } = useWallet();
 
   const [status, setStatus] = useState<ZapStatus>("idle");
   const [invoice, setInvoice] = useState<string | null>(null);
@@ -70,6 +70,13 @@ export function useZap(opts: {
       if (!user) throw new Error("Sign in to zap.");
       if (!Number.isFinite(amountSats) || amountSats < 1) throw new Error("Enter an amount in sats.");
       const isPrivate = Boolean(sendZap);
+      // CORD.md's proof is the preimage, and only a connected wallet (NWC /
+      // WebLN) can hand it back — the manual QR path can't, so a private zap
+      // paid that way would settle but never seal an announcement (invisible
+      // to everyone). Refuse upfront instead of silently losing the tally.
+      if (isPrivate && !activeConnection && !webln) {
+        throw new Error("Private zaps need a connected wallet (Settings → Wallet).");
+      }
 
       setStatus("resolving");
       try {
@@ -131,13 +138,17 @@ export function useZap(opts: {
           } catch (e) {
             throw new Error(e instanceof Error ? e.message : "Browser wallet payment failed.");
           }
-        } else {
-          // Manual fallback: surface the invoice for an external wallet. For
-          // public zaps the provider's receipt confirms it; for private zaps
-          // we can't get the preimage back, so no sealed tally is posted.
+        } else if (!isPrivate) {
+          // Manual fallback: surface the invoice for an external wallet. The
+          // provider's receipt (not us) confirms it once paid.
           setInvoice(bolt11);
           setStatus("manual");
           return "manual";
+        } else {
+          // Unreachable in practice (guarded above), but never let a private
+          // zap fall into the manual path: an external wallet can't return
+          // the preimage, so no sealed tally could ever be posted.
+          throw new Error("Private zaps need a connected wallet (Settings → Wallet).");
         }
 
         if (isPrivate) {
@@ -145,9 +156,25 @@ export function useZap(opts: {
           // announcement to post. payWithNWC/WebLN only reach here with a
           // falsy preimage when the payment ITSELF settled (a genuine failure
           // throws), so the sats reached the recipient; this wallet just can't
-          // surface the proof a private tally needs. Report it as sent-but-
-          // unrecorded, not failed.
+          // surface the proof a private tally needs YET.
           if (!preimage) {
+            // The near-universal NWC failure is a lost/slow ack: the wallet
+            // paid but its response (or our short recovery window) missed the
+            // preimage. Keep asking in the background and seal the zap late
+            // when it turns up — the ⚡ pill simply appears once it lands.
+            // Only a wallet that never surfaces it stays unproven.
+            const payment = { amountMsats, bolt11, comment: trimmedComment };
+            const post = sendZap!;
+            void lookupPreimage(bolt11).then(async (recovered) => {
+              if (!recovered) return;
+              try {
+                await post(target, { ...payment, preimage: recovered });
+                notify("success");
+              } catch {
+                // Sealing failed (channel gone, signer locked) — the payment
+                // still settled; nothing further to do.
+              }
+            });
             notify("warning");
             setStatus("success");
             return "unproven";
@@ -164,7 +191,7 @@ export function useZap(opts: {
         throw e;
       }
     },
-    [user, sendZap, activeConnection, webln, payWithNWC, recipient, target, config.appRelays],
+    [user, sendZap, activeConnection, webln, payWithNWC, lookupPreimage, recipient, target, config.appRelays],
   );
 
   return { zap, status, invoice, reset };

@@ -28,6 +28,16 @@ export interface WalletContextType {
    * genuine payment failure rejects.
    */
   payWithNWC(invoice: string): Promise<{ preimage: string | null }>;
+  /**
+   * Long-window preimage recovery for an ALREADY-PAID invoice: polls the
+   * active wallet's `lookup_invoice` until the payment reports settled (or the
+   * budget runs out). Exists for the "lost NWC ack" case — `payWithNWC`
+   * resolved with `preimage: null` while the sats actually settled — so a
+   * private CORD.md zap can still seal its proof once the wallet catches up.
+   * Resolves null when the wallet never surfaces it (no `lookup_invoice`
+   * support/permission, or a genuinely failed payment).
+   */
+  lookupPreimage(invoice: string, opts?: { budgetMs?: number }): Promise<string | null>;
   /** Browser WebLN provider, if an extension injected one (null on the APK). */
   webln: WebLNProvider | null;
 }

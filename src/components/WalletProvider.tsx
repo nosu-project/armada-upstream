@@ -66,7 +66,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
  * be built without the preimage — a lost ack would otherwise mean paid sats
  * with no zap to show for them.
  */
-async function recoverPreimage(client: LN, invoice: string): Promise<string | null> {
+async function recoverPreimage(
+  client: LN,
+  invoice: string,
+  schedule: { attempts: number; firstDelayMs: number; delayMs: number } = { attempts: 5, firstDelayMs: 500, delayMs: 1500 },
+): Promise<string | null> {
   // NIP-47 lets lookup_invoice match on payment_hash OR the bolt11 string, and
   // wallets vary in which they honor — try both. The hash decodes locally.
   const { paymentHash } = bolt11Info(invoice);
@@ -75,9 +79,9 @@ async function recoverPreimage(client: LN, invoice: string): Promise<string | nu
   requests.push({ invoice });
 
   let unsupported = false;
-  for (let attempt = 0; attempt < 5 && !unsupported; attempt++) {
+  for (let attempt = 0; attempt < schedule.attempts && !unsupported; attempt++) {
     // A just-settled payment can report `pending` briefly; poll a few rounds.
-    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 500 : 1500));
+    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? schedule.firstDelayMs : schedule.delayMs));
     for (const request of requests) {
       try {
         const tx = await client.nwcClient.lookupInvoice(request);
@@ -223,11 +227,46 @@ const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =
     [connections, active],
   );
 
+  /**
+   * Long-window preimage recovery for an already-paid invoice (see
+   * WalletContext). Opens its own NWC client so it can outlive the payment
+   * call — `payWithNWC` closes its client when it returns, and the whole point
+   * here is to keep asking AFTER an "unproven" payment resolved. Polls
+   * `lookup_invoice` every 5s until the budget (default 2 min) runs out.
+   */
+  const lookupPreimage = useCallback(
+    async (invoice: string, opts?: { budgetMs?: number }): Promise<string | null> => {
+      const connection = connections.find((c) => c.connectionString === active);
+      if (!connection) return null;
+      const budgetMs = opts?.budgetMs ?? 120_000;
+      const delayMs = 5_000;
+      let client: LN | undefined;
+      try {
+        const sdk = await loadSdk();
+        client = new sdk.LN(connection.connectionString);
+        return await recoverPreimage(client, invoice, {
+          attempts: Math.max(1, Math.floor(budgetMs / delayMs)),
+          firstDelayMs: delayMs,
+          delayMs,
+        });
+      } catch {
+        return null;
+      } finally {
+        try {
+          client?.close();
+        } catch {
+          // best-effort socket cleanup
+        }
+      }
+    },
+    [connections, active],
+  );
+
   const value = useMemo<WalletContextType>(() => {
     const activeConnection = connections.find((c) => c.connectionString === active) ?? null;
     const webln = (globalThis as { webln?: WebLNProvider }).webln ?? null;
-    return { connections, activeConnection, addConnection, removeConnection, setActive, payWithNWC, webln };
-  }, [connections, active, addConnection, removeConnection, setActive, payWithNWC]);
+    return { connections, activeConnection, addConnection, removeConnection, setActive, payWithNWC, lookupPreimage, webln };
+  }, [connections, active, addConnection, removeConnection, setActive, payWithNWC, lookupPreimage]);
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
 };

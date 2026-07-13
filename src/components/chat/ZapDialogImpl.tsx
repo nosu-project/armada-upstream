@@ -73,12 +73,17 @@ function methodTitle(method: DialogMethod | undefined): string {
 export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone }: ZapDialogImplProps) {
   const { config } = useAppContext();
   const { toast } = useToast();
-  const { webln } = useWallet();
+  const { activeConnection, webln } = useWallet();
   const author = useAuthor(target.pubkey);
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(target.pubkey, metadata);
 
   const isPrivate = Boolean(sendZap);
+  // A private zap's tally is proven by the payment preimage, which only a
+  // connected wallet (NWC / WebLN) can return — the manual QR path can't, so
+  // without a wallet the pane blocks instead of offering a payment that could
+  // never be counted (matching the original feat/zaps design).
+  const walletRequired = isPrivate && !activeConnection && !webln;
   const hasLightning = canZap(metadata);
 
   // NIP-A3 payment targets. Only fetch once the dialog is open (the parent
@@ -173,7 +178,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
         toast({
           title: `Sent ${formatSats(amount)} sats ⚡`,
           description:
-            "The payment went through, but this wallet can't provide the proof needed to show a private zap tally here. Use a wallet like Alby Hub, Coinos, or lnbits to have private zaps counted.",
+            "The payment went through, but the wallet hasn't provided the proof a private zap tally needs. We'll keep checking for a couple of minutes and count the zap if it turns up — wallets like Alby Hub, Coinos, or lnbits provide it reliably.",
         });
         setSuccess({ kind: "lightning", amountSats: amount });
       }
@@ -295,6 +300,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
             setError={setError}
             busy={busy}
             status={status}
+            walletRequired={walletRequired}
             onZap={handleLightningZap}
           />
         ) : currentMethod?.def.kind === "generic" && currentMethod.target ? (
@@ -327,6 +333,8 @@ interface LightningZapPaneProps {
   setError: (s: string) => void;
   busy: boolean;
   status: string;
+  /** Private zap with no connected wallet: block the CTA (no provable payment). */
+  walletRequired: boolean;
   onZap: () => void;
 }
 
@@ -341,6 +349,7 @@ function LightningZapPane({
   setError,
   busy,
   status,
+  walletRequired,
   onZap,
 }: LightningZapPaneProps) {
   return (
@@ -399,10 +408,16 @@ function LightningZapPane({
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
+      {walletRequired && (
+        <p className="text-xs text-amber-500">
+          Private zaps need a payment proof, so connect a wallet first (Settings → Wallet).
+        </p>
+      )}
+
       <Button
         type="button"
         onClick={onZap}
-        disabled={busy || amount <= 0}
+        disabled={busy || amount <= 0 || walletRequired}
         className="w-full"
       >
         {busy ? (
