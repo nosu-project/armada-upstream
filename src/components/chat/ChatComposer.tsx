@@ -820,8 +820,22 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // result here.
         resetComposeState();
         onSent?.();
-        void Promise.resolve(sendOverride(finalText, tags)).catch(() => {
-          // Delivery/sign failures are surfaced inline by the override.
+        void Promise.resolve(sendOverride(finalText, tags)).catch((err) => {
+          // Post-sign delivery failures are surfaced inline by the override
+          // (per-message failed/retry state). But a failure BEFORE the
+          // optimistic insert — the signer itself (a NIP-46 bunker that can't
+          // be reached) — leaves no trace in the timeline, so it must surface
+          // here or the send silently does nothing.
+          const signerDown =
+            err instanceof AggregateError ||
+            (err instanceof Error && /timed? ?out|abort/i.test(err.message));
+          toast({
+            title: "Message not sent",
+            description: signerDown
+              ? "Couldn't reach your signer. Check your remote signer connection and try again."
+              : relayRejectionMessage(err),
+            variant: "destructive",
+          });
         });
       } else if (onOptimisticInsert) {
         // Optimistic group send: clear the composer immediately and render the

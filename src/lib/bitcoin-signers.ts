@@ -2,6 +2,8 @@ import type { NostrSigner } from '@nostrify/types';
 import { NSecSigner, NBrowserSigner, NConnectSigner } from '@nostrify/nostrify';
 import type { NConnectSignerOpts } from '@nostrify/nostrify';
 
+import { logSync } from '@/lib/syncLog';
+
 // ---------------------------------------------------------------------------
 // BtcSigner interface
 // ---------------------------------------------------------------------------
@@ -127,9 +129,54 @@ function looksLikeCapabilityError(msg: string): boolean {
  * that flips the UI into the unsupported state; everything else propagates
  * unchanged so the caller can surface the real error.
  */
+/**
+ * Per-attempt budget for one NIP-46 RPC round-trip. A healthy bunker answers
+ * in well under a second; a response swallowed by a transport hiccup would
+ * otherwise hang the RPC FOREVER (NConnectSigner's response promise never
+ * settles when its REQ iterator ends without a matching event), so each
+ * attempt is fenced and retried once with a fresh REQ + republished request.
+ */
+const NIP46_ATTEMPT_TIMEOUT_MS = 15_000;
+const NIP46_ATTEMPTS = 2;
+
 export class NConnectSignerBtc extends NConnectSigner implements BtcSigner {
   constructor(opts: NConnectSignerOpts) {
     super(opts);
+    // Wrap every NIP-46 RPC (`cmd` is TypeScript-private, JS-public) with a
+    // trace + a per-attempt timeout + one retry. The remote-signer round-trip
+    // is the least observable link in the app: a request published into a dead
+    // socket, or a response arriving after its subscription died, is silent.
+    // The fence turns "hangs forever" into "retries in 15s, fails in 30s", and
+    // the trace (debugSync sync log) shows which attempt/link failed.
+    const self = this as unknown as { cmd(method: string, params: string[]): Promise<string> };
+    const orig = self.cmd.bind(this);
+    self.cmd = async (method: string, params: string[]): Promise<string> => {
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= NIP46_ATTEMPTS; attempt++) {
+        const t0 = Date.now();
+        logSync("nip46", `→ ${method}${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
+        try {
+          const result = await Promise.race([
+            orig(method, params),
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error(`NIP-46 ${method} attempt timed out after ${NIP46_ATTEMPT_TIMEOUT_MS}ms`)),
+                NIP46_ATTEMPT_TIMEOUT_MS,
+              ),
+            ),
+          ]);
+          logSync("nip46", `← ${method} ok in ${Date.now() - t0}ms${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
+          return result;
+        } catch (err) {
+          lastErr = err;
+          logSync(
+            "nip46",
+            `✗ ${method} attempt ${attempt}/${NIP46_ATTEMPTS} failed in ${Date.now() - t0}ms: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+      throw lastErr;
+    };
   }
 
   async signPsbt(psbtHex: string): Promise<string> {

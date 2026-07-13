@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef } from "react";
-import { NostrEvent, NostrFilter, NPool, NRelay1 } from "@nostrify/nostrify";
-import { verifyEvent } from "nostr-tools";
+import { NConnectSigner, NostrEvent, NostrFilter, NPool, NRelay1, NSecSigner } from "@nostrify/nostrify";
+import type { NConnectSignerOpts } from "@nostrify/nostrify";
+import { nip19, verifyEvent } from "nostr-tools";
 import { NostrContext } from "@nostrify/react";
 import { NUser, useNostrLogin } from "@nostrify/react/login";
 import type { NostrSigner } from "@nostrify/types";
@@ -10,6 +11,7 @@ import { NIndexedDB } from "@nostrify/indexeddb";
 import { EventStoreContext } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { NostrBatcher } from "@/lib/NostrBatcher";
+import { getNip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
 import { logSync } from "@/lib/syncLog";
@@ -455,9 +457,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     });
   }
 
-  // Derive the NIP-42 AUTH signer for the current login. The pool is
-  // constructed above this memo: a bunker (NIP-46) signer is built with
-  // `NUser.fromBunkerLogin(login, pool)`, so the pool has to exist first.
+  // Derive the NIP-42 AUTH signer for the current login.
   const currentLogin = logins[0];
   const currentSigner = useMemo(() => {
     if (!currentLogin) return undefined;
@@ -465,8 +465,21 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       switch (currentLogin.type) {
         case "nsec":
           return NUser.fromNsecLogin(currentLogin).signer;
-        case "bunker":
-          return NUser.fromBunkerLogin(currentLogin, pool.current!).signer;
+        case "bunker": {
+          // Same DEDICATED plain-WebSocket NIP-46 transport as the user-facing
+          // signer (useCurrentUser) — never the relay pool, whose socket
+          // machinery wedged remote signs on Android (see nip46Transport.ts).
+          const clientSk = nip19.decode(currentLogin.data.clientNsec) as { type: "nsec"; data: Uint8Array };
+          return new NConnectSigner({
+            relay: getNip46Transport(
+              currentLogin.data.bunkerPubkey,
+              currentLogin.data.relays ?? [],
+            ) as unknown as NConnectSignerOpts["relay"],
+            pubkey: currentLogin.data.bunkerPubkey,
+            signer: new NSecSigner(clientSk.data),
+            timeout: 60_000,
+          });
+        }
         case "extension":
           return NUser.fromExtensionLogin(currentLogin).signer;
         default:
@@ -475,7 +488,6 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     } catch {
       return undefined;
     }
-    // pool.current is a stable ref (created once above), so it isn't a dep.
   }, [currentLogin]);
 
   signerRef.current = currentSigner;
@@ -514,6 +526,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     });
     // Reads only refs; stable for the provider's lifetime.
   }, []);
+
+  // (NIP-46 liveness is handled inside the dedicated transport — see
+  // nip46Transport.ts. The pool no longer carries any bunker traffic, so
+  // there is nothing to recycle here on resume.)
 
   return (
     <NostrContext.Provider value={{ nostr: (batcher.current ?? pool.current) as unknown as NPool }}>

@@ -28,6 +28,7 @@ import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
+import { logSync, sinceMs } from "@/lib/syncLog";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -608,9 +609,16 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       // Budget scaled to the signer: an auth-gating relay can demand a NIP-42
       // sign (a bunker round-trip for NIP-46 logins) inside this await (#51).
       const timeout = publishTimeoutMs(user?.method);
+      const started = Date.now();
       const results = await Promise.allSettled(
         community!.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(timeout) })),
       );
+      results.forEach((r, i) => {
+        logSync(
+          "send",
+          `wrap ${wrap.id.slice(0, 8)} → ${community!.relays[i]}: ${r.status === "fulfilled" ? "accepted" : `FAILED (${r.reason instanceof Error ? r.reason.message : r.reason})`} in ${sinceMs(started)}`,
+        );
+      });
       if (!results.some((r) => r.status === "fulfilled")) throw new Error("No relay accepted the message.");
     },
     [nostr, community, user?.method],
@@ -661,7 +669,10 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       if (extraTags) tags.push(...extraTags);
 
       const rumor: Rumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms: effectiveMs });
+      logSync("send", `sealing rumor ${rumor.id.slice(0, 8)} (kind ${effectiveKind}) — signer: ${user.method}`);
+      const sealStarted = Date.now();
       const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
+      logSync("send", `sealed ${rumor.id.slice(0, 8)} in ${sinceMs(sealStarted)} — wrapping + broadcasting to ${community.relays.length} relay(s)`);
       const wrap = wrapSeal(seal, channel.current.group);
 
       // Optimistic insert (messages/edits render; reactions/deletes fold in).
