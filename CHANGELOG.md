@@ -4,6 +4,39 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.27.2] - 2026-07-13
+
+A permissions and enforcement release for Concord communities. Banned
+members can no longer keep editing community metadata, channels, or grants
+after being removed; only members with the proper rank can revoke or demote
+others (previously any member could strip anyone's role); a dissolved
+community can't be refounded out from under its owner; and the per-plane
+read rules and metadata size limits are now applied on read, not just on
+write.
+
+### Fixed
+- Banned members' events are now dropped everywhere in a community, not
+  just in chat — previously a banned member could still edit community
+  metadata, channels, grants, or the guestbook, and could even rekey the
+  community out from under everyone
+- A community's owner dissolution now wins every race: the app no longer
+  adopts a rekey epoch past the owner's dissolution, and a dissolved
+  community can't be rotated
+- Only members who actually outrank a role can revoke or demote it —
+  previously any member could strip anyone's rank because the authority
+  check passed vacuously for empty (revoke) grant editions, and a
+  lower-ranked role manager could demote a grant above its station
+- A moderation action that the signer lacks the authority for is now
+  pre-checked before publishing, so a kick/ban-only holder no longer
+  publishes a doomed grant edition
+- Control-plane editions are now required to be plaintext on read and
+  chat/guestbook/rekey editions encrypted on read, matching the per-plane
+  seal rules; an encrypted control edition used to fold and then silently
+  vanish at the next compaction
+- Community and channel name (64-byte) and description (10000-byte) limits
+  are now enforced when folding metadata and channel editions, not just
+  when writing
+
 ## [0.27.1] - 2026-07-13
 
 A reliability and messaging release. Sending a message in an encrypted
