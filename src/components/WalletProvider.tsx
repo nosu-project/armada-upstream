@@ -53,14 +53,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
+/** What `lookup_invoice` could establish about a payment. */
+type Recovery =
+  /** The invoice settled; `preimage` is null when the wallet won't surface it. */
+  | { state: "settled"; preimage: string | null }
+  /** The wallet says the payment failed. */
+  | { state: "failed" }
+  /** Couldn't tell within the budget (lookup unsupported, pending, or erroring). */
+  | { state: "unknown" };
+
 /**
- * Recover a payment's preimage when `pay()` rejected without one — the
- * near-universal NWC failure where the wallet paid but its response event was
- * slow or lost (`Nip47ReplyTimeoutError`; the user's sats are gone, the ack
- * isn't). We don't classify the error: we ask the wallet whether the invoice
- * settled. A genuinely failed payment reports `failed`/never settles, so we
- * return null and the caller rethrows the original error. Polls a few times
- * because a just-timed-out payment may still be `pending`.
+ * Ask the wallet what actually happened to a payment whose `pay()` reply was
+ * missing, error-shaped, or preimage-less. Wallet error replies are unreliable
+ * narrators — some report "timeout" for a payment that settles a beat later —
+ * so callers should trust THIS (the ledger), not the error's shape. Polls a
+ * few rounds because a just-settled payment may briefly report `pending`, and
+ * a settled one may briefly omit its preimage.
  *
  * This matters most for CORD.md private zaps, whose sealed announcement can't
  * be built without the preimage — a lost ack would otherwise mean paid sats
@@ -70,7 +78,7 @@ async function recoverPreimage(
   client: LN,
   invoice: string,
   schedule: { attempts: number; firstDelayMs: number; delayMs: number } = { attempts: 5, firstDelayMs: 500, delayMs: 1500 },
-): Promise<string | null> {
+): Promise<Recovery> {
   // NIP-47 lets lookup_invoice match on payment_hash OR the bolt11 string, and
   // wallets vary in which they honor — try both. The hash decodes locally.
   const { paymentHash } = bolt11Info(invoice);
@@ -78,6 +86,7 @@ async function recoverPreimage(
   if (paymentHash) requests.push({ payment_hash: paymentHash });
   requests.push({ invoice });
 
+  let settled = false;
   let unsupported = false;
   for (let attempt = 0; attempt < schedule.attempts && !unsupported; attempt++) {
     // A just-settled payment can report `pending` briefly; poll a few rounds.
@@ -85,8 +94,11 @@ async function recoverPreimage(
     for (const request of requests) {
       try {
         const tx = await client.nwcClient.lookupInvoice(request);
-        if (tx?.state === "settled" && tx.preimage) return tx.preimage;
-        if (tx?.state === "failed") return null;
+        if (tx?.state === "settled") {
+          if (tx.preimage) return { state: "settled", preimage: tx.preimage };
+          settled = true; // keep polling — the preimage may surface next round
+        }
+        if (tx?.state === "failed") return { state: "failed" };
       } catch (e) {
         const message = e instanceof Error ? e.message.toLowerCase() : "";
         if (message.includes("not supported") || message.includes("unsupported") || message.includes("not_implemented")) {
@@ -97,7 +109,7 @@ async function recoverPreimage(
       }
     }
   }
-  return null;
+  return settled ? { state: "settled", preimage: null } : { state: "unknown" };
 }
 
 const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -197,20 +209,28 @@ const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =
               const result = await client.pay(invoice);
               if (result?.preimage) return { preimage: result.preimage };
               // Paid, but the reply carried no preimage — recover it by lookup.
-              return { preimage: await recoverPreimage(client, invoice) };
+              const recovery = await recoverPreimage(client, invoice);
+              return { preimage: recovery.state === "settled" ? recovery.preimage : null };
             } catch (payErr) {
-              // A NIP-47 timeout means the wallet's response (and the preimage
-              // with it) was lost, but the payment very likely settled — like
-              // Ditto, we DON'T fail the zap over a lost ack. Try to recover
-              // the preimage (CORD.md needs it), but return null rather than
-              // throw when we can't: the NIP-29 caller doesn't need it (the
-              // provider's public receipt confirms the zap), and the private
-              // caller decides for itself whether a null proof is fatal.
-              // Any other error is a genuine payment failure — surface it.
-              if (!(payErr instanceof sdk.Nip47TimeoutError)) {
+              // A rejected pay() does NOT mean the payment failed. Beyond the
+              // SDK's own reply timeout (Nip47TimeoutError — response event
+              // lost, sats very likely moved), wallets also REPLY with
+              // error-shaped acks ("timeout", races with settlement) for
+              // payments that settle anyway. Don't classify the error — ask
+              // the wallet what actually happened via lookup_invoice:
+              //  - settled: it paid; hand back the preimage (or null if the
+              //    wallet won't surface it — the private caller keeps looking,
+              //    the NIP-29 caller never needed it).
+              //  - failed:  genuine failure, surface the original error.
+              //  - unknown: only a lost ack (Nip47TimeoutError) earns the
+              //    benefit of the doubt, matching Ditto; a definite error
+              //    reply with no trace of settlement is a failure.
+              const recovery = await recoverPreimage(client, invoice);
+              if (recovery.state === "settled") return { preimage: recovery.preimage };
+              if (recovery.state === "failed" || !(payErr instanceof sdk.Nip47TimeoutError)) {
                 throw payErr instanceof Error ? payErr : new Error("Payment failed.");
               }
-              return { preimage: await recoverPreimage(client, invoice) };
+              return { preimage: null };
             }
           })(),
           PAY_TIMEOUT_MS,
@@ -244,11 +264,12 @@ const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =
       try {
         const sdk = await loadSdk();
         client = new sdk.LN(connection.connectionString);
-        return await recoverPreimage(client, invoice, {
+        const recovery = await recoverPreimage(client, invoice, {
           attempts: Math.max(1, Math.floor(budgetMs / delayMs)),
           firstDelayMs: delayMs,
           delayMs,
         });
+        return recovery.state === "settled" ? recovery.preimage : null;
       } catch {
         return null;
       } finally {
