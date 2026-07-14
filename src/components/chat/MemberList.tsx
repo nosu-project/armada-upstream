@@ -1,4 +1,4 @@
-import { AtSign, Ban, Copy, Crown, IdCard, MoreVertical, Shield, ShieldOff, Smile, UserMinus, X } from "lucide-react";
+import { AtSign, Ban, Copy, Crown, IdCard, MoreVertical, Music, Shield, ShieldOff, Smile, UserMinus, X } from "lucide-react";
 
 import { useState } from "react";
 
@@ -26,7 +26,7 @@ import {
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
-import { useUserStatus } from "@/hooks/useUserStatus";
+import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { requestMention } from "@/hooks/useMentionBus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -92,6 +92,9 @@ function MemberRow({
   const metadata = author.data?.metadata;
   const { displayName, color } = useScopedIdentity(pubkey, metadata);
   const status = useUserStatus(pubkey).data?.status;
+  const rawMusicStatus = useUserStatus(pubkey, "music").data?.status;
+  // Hide a music status whose NIP-40 expiration has passed (track ended).
+  const musicStatus = isStatusExpired(rawMusicStatus) ? undefined : rawMusicStatus;
   const [statusOpen, setStatusOpen] = useState(false);
 
   const roleSet = new Set((roles ?? []).map((r) => r.toLowerCase()));
@@ -250,6 +253,17 @@ function MemberRow({
               title={status.content}
             >
               <EmojifiedText tags={status.event.tags}>{status.content}</EmojifiedText>
+            </span>
+          )}
+          {musicStatus?.content && (
+            <span
+              className="flex items-center gap-1 text-xs text-muted-foreground truncate"
+              title={musicStatus.content}
+            >
+              <Music className="size-3 shrink-0" />
+              <span className="truncate">
+                <EmojifiedText tags={musicStatus.event.tags}>{musicStatus.content}</EmojifiedText>
+              </span>
             </span>
           )}
         </button>

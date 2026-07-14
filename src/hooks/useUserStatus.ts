@@ -27,6 +27,20 @@ export interface UserStatus {
 export type UserStatusResult = { status?: UserStatus };
 
 /**
+ * Whether a status's NIP-40 `expiration` has passed as of `now`. Music statuses
+ * typically expire when the track ends, so callers should hide an expired one
+ * even if it's still sitting in the query cache (the fetch-time check in
+ * {@link parseUserStatusEvent} only runs when the event is (re)fetched).
+ */
+export function isStatusExpired(status: UserStatus | undefined, now = Date.now()): boolean {
+  return (
+    status?.expiration !== undefined &&
+    Number.isFinite(status.expiration) &&
+    status.expiration * 1000 <= now
+  );
+}
+
+/**
  * Parse a kind-30315 event into a {@link UserStatus}. A status whose content is
  * empty, or whose `expiration` has already passed, is treated as "no status"
  * (NIP-38: an empty status clears it).

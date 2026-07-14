@@ -1,4 +1,4 @@
-import { AtSign, Check, Copy, MessageSquare } from "lucide-react";
+import { AtSign, Check, Copy, MessageSquare, Music } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -11,7 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { requestMention } from "@/hooks/useMentionBus";
-import { useUserStatus } from "@/hooks/useUserStatus";
+import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
@@ -33,6 +33,10 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
   const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
   const status = useUserStatus(pubkey).data?.status;
+  const rawMusicStatus = useUserStatus(pubkey, "music").data?.status;
+  // Music statuses expire when the track ends; hide one whose NIP-40 expiration
+  // has passed even if it's still cached (no refetch happens within a session).
+  const musicStatus = isStatusExpired(rawMusicStatus) ? undefined : rawMusicStatus;
   const displayName = getDisplayName(metadata, pubkey);
   const avatarShape = getAvatarShape(metadata);
   const npub = tryNpubEncode(pubkey);
@@ -109,6 +113,35 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
           ) : (
             <div className="mt-1 text-sm text-muted-foreground truncate" title={status.content}>
               <EmojifiedText tags={status.event.tags}>{status.content}</EmojifiedText>
+            </div>
+          )
+        )}
+
+        {/* NIP-38 music status ("now playing"). Linked to the track when the
+            event carries an `r` tag (e.g. a Spotify / YouTube Music search). */}
+        {musicStatus?.content && (
+          musicStatus.link ? (
+            <a
+              href={musicStatus.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground truncate hover:text-foreground transition-colors"
+              title={musicStatus.content}
+            >
+              <Music className="size-3.5 shrink-0" />
+              <span className="truncate">
+                <EmojifiedText tags={musicStatus.event.tags}>{musicStatus.content}</EmojifiedText>
+              </span>
+            </a>
+          ) : (
+            <div
+              className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground truncate"
+              title={musicStatus.content}
+            >
+              <Music className="size-3.5 shrink-0" />
+              <span className="truncate">
+                <EmojifiedText tags={musicStatus.event.tags}>{musicStatus.content}</EmojifiedText>
+              </span>
             </div>
           )
         )}
