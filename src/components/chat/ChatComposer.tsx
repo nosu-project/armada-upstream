@@ -10,12 +10,14 @@ import {
   Reply,
   Smile,
   Square,
+  SquareSlash,
   Sticker,
   X,
 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { BotCommandComposer } from "@/components/chat/BotCommandComposer";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { firstImageRef } from "@/components/chat/messageHelpers";
@@ -33,6 +35,7 @@ import { useApps } from "@/hooks/useApps";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useBotManifests } from "@/hooks/useBotManifests";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useGroup } from "@/hooks/useGroup";
 import { useInsertText } from "@/hooks/useInsertText";
@@ -51,6 +54,7 @@ import { encryptFileForUpload } from "@/lib/encryptedMedia";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
+import { botTag, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
@@ -63,6 +67,19 @@ const LazyEmojiPicker = lazy(() => import("@/components/chat/EmojiPicker").then(
 
 /** NIP-88 poll kind. */
 const KIND_POLL = 1068;
+
+/** How many recently used bot commands the `/` menu keeps, per account. */
+const BOT_RECENTS_CAP = 8;
+
+/** Recently used bot commands, most recent first, as `<botHex>:<name>` keys. */
+function readBotRecents(key: string): string[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(key) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 // Plain NIP-29 group chat has no relay-side content cap worth worrying about
 // (khatru's default MaxMessageSize is ~500KB per websocket frame). The real
@@ -327,6 +344,43 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const draftKey = `chat-draft:${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
   const [content, setContent] = useState(() => readDraft(draftKey).content);
+
+  // ── Bot commands ─────────────────────────────────────────────────────────
+  // The bots in this conversation publish their command catalogs as replaceable
+  // kind-10304 manifests.
+  //
+  // Plain DMs have no roster (`memberPubkeys` is undefined), so they offer no bot
+  // commands — which is what we want: their transport leaves tags in the clear,
+  // and a `bot` tag there would tell every relay who is commanding whom.
+  /** The command whose arguments are being collected, if any. */
+  const [botCommand, setBotCommand] = useState<BotCommandEntry | null>(null);
+  /** The bot the user picked from, so a name two bots share still routes correctly. */
+  const armedBotRef = useRef<string | undefined>(undefined);
+  const {
+    entries: botEntries,
+    bots: botPubkeys,
+    profiles: botProfiles,
+    isLoading: botsLoading,
+  } = useBotManifests(memberPubkeys);
+
+  const botRecentsKey = `armada-bot-recents:${user?.pubkey ?? ""}`;
+  const [botRecents, setBotRecents] = useState<string[]>([]);
+  useEffect(() => {
+    setBotRecents(readBotRecents(botRecentsKey));
+  }, [botRecentsKey]);
+  const rememberBotCommand = useCallback((bot: string, name: string) => {
+    const key = `${bot}:${name}`;
+    setBotRecents((prev) => {
+      const next = [key, ...prev.filter((k) => k !== key)].slice(0, BOT_RECENTS_CAP);
+      try {
+        localStorage.setItem(botRecentsKey, JSON.stringify(next));
+      } catch {
+        // Storage may be unavailable (private mode); recents are a nicety.
+      }
+      return next;
+    });
+  }, [botRecentsKey]);
+
   const [pickerOpen, setPickerOpen] = useState(false);
   // Keeps the picker mounted through its slide animation (mount + visible flags).
   const { mounted: pickerMounted, visible: pickerVisible } = useMountedTransition(pickerOpen);
@@ -390,6 +444,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setUploadedFileGroups(new Map(draft.attachments));
     setRemovedEmbeds(new Set());
     setMode("post");
+    // A half-built command belongs to the channel it was started in. The
+    // composer is not remounted on a channel switch, so without this the fields
+    // stay on screen over the new channel's draft, and submitting would fire the
+    // invocation — routing tag and all — into a conversation it was never meant
+    // for.
+    setBotCommand(null);
+    armedBotRef.current = undefined;
   }, [draftKey]);
 
   // Auto-resize the textarea as content grows/shrinks. Also recompute on
@@ -794,8 +855,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return tags;
   }, [groupId, user, replyTo, replyMarker, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
 
-  /** Publish a finalized message body via the active send path. */
-  const publishMessage = useCallback(async (finalText: string) => {
+  /**
+   * Publish a finalized message body via the active send path.
+   *
+   * `extraTags` are appended to the content-derived ones. They carry routing that
+   * the text itself cannot express — today, the `bot` tag naming which bot should
+   * act on a command. They ride the same path as every other tag, which for
+   * Concord means the inner, encrypted rumor.
+   */
+  const publishMessage = useCallback(async (finalText: string, extraTags?: string[][]) => {
     if (!finalText || !user || finalText.length > MAX_CHARS) return;
     // Only the legacy (non-optimistic) publish path serializes on `isSending`.
     // The optimistic and override paths clear the composer and publish in the
@@ -809,6 +877,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // `decryption-key`/`decryption-nonce` from its imeta — publishing the
     // ciphertext URL with no way to decrypt it (a broken image for everyone).
     const tags = buildMessageTags(finalText);
+    if (extraTags?.length) tags.push(...extraTags);
 
     try {
       if (sendOverride) {
@@ -948,6 +1017,55 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     void executeSlash(command, parsed?.command === command ? parsed.arg : "");
   }, [executeSlash]);
 
+  /** Send a bot invocation, addressed to the bot that declared the command. */
+  const sendInvocation = useCallback(async (bot: string, name: string, text: string) => {
+    rememberBotCommand(bot, name);
+    armedBotRef.current = undefined;
+    await publishMessage(text, [botTag(bot)]);
+  }, [publishMessage, rememberBotCommand]);
+
+  /** Pick a bot's command from the `/` menu. */
+  const runBotFromMenu = useCallback((entry: BotCommandEntry) => {
+    armedBotRef.current = entry.bot;
+    // Nothing to fill in, so picking it IS the send.
+    if (entry.command.args.length === 0) {
+      setContent("");
+      void sendInvocation(entry.bot, entry.command.name, `/${entry.command.name}`);
+      return;
+    }
+    setContent("");
+    setBotCommand(entry);
+  }, [sendInvocation]);
+
+  /**
+   * Open the command menu from the "+" menu. Seeding the draft with "/" is all
+   * it takes: the menu already watches for exactly that, so this is the same
+   * path as typing the slash, not a second way in that could drift from it.
+   */
+  const openCommandMenu = useCallback(() => {
+    setPlusOpen(false);
+    setContent("/");
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      el?.focus();
+      el?.setSelectionRange(1, 1);
+    });
+  }, []);
+
+  const cancelBotCommand = useCallback(() => {
+    setBotCommand(null);
+    armedBotRef.current = undefined;
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
+
+  const submitBotCommand = useCallback((text: string) => {
+    const entry = botCommand;
+    if (!entry) return;
+    setBotCommand(null);
+    void sendInvocation(entry.bot, entry.command.name, text);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [botCommand, sendInvocation]);
+
   const handleSend = useCallback(async () => {
     const text = content.trim();
 
@@ -962,6 +1080,36 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         await executeSlash(parsed.command, parsed.arg);
         return;
       }
+
+      // A bot's command, typed by hand rather than picked. This app's own
+      // commands are matched first, so a local `/me` always beats a bot's.
+      const invocation = parseInvocation(text, botEntries, armedBotRef.current);
+      if (invocation) {
+        // A known command with bad arguments is worth blocking: sending it would
+        // only produce an invocation the bot rejects, and the draft would be
+        // gone. The error is the same canonical text a conforming bot replies
+        // with, so the user reads one message, not two dialects of it.
+        const error = validateInvocation(invocation.command, invocation.args);
+        if (error) {
+          toast({
+            title: `/${invocation.command.name}`,
+            description: `${error}\n${usageLine(invocation.command)}`,
+            variant: "destructive",
+          });
+          return;
+        }
+        // Two bots answer to this name and the user named neither. Send it
+        // untagged — a broadcast any of them may answer — rather than pick one
+        // for them, which would order the other to stay silent.
+        if (invocation.ambiguous) {
+          armedBotRef.current = undefined;
+          await publishMessage(text);
+          return;
+        }
+        await sendInvocation(invocation.bot, invocation.command.name, text);
+        return;
+      }
+
       // Unknown /command: fall through and send it literally.
     }
 
@@ -972,7 +1120,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       .filter((url) => !text.includes(url));
     const finalText = [text, ...extraUrls].filter(Boolean).join("\n");
     await publishMessage(finalText);
-  }, [content, attachments, executeSlash, publishMessage]);
+  }, [content, attachments, executeSlash, publishMessage, botEntries, sendInvocation, toast]);
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;
@@ -1268,7 +1416,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               }}
             />
 
-            {/* ── Input pill: + | textarea | emoji | mic/send ──── */}
+            {/* Collecting a bot command's arguments takes over the message box:
+                the fields ARE the message, and quoting is no longer the user's
+                problem. */}
+            {botCommand ? (
+              <BotCommandComposer
+                entry={botCommand}
+                memberPubkeys={memberPubkeys ?? []}
+                profiles={botProfiles}
+                onSubmit={submitBotCommand}
+                onCancel={cancelBotCommand}
+              />
+            ) : (
+            /* ── Input pill: + | textarea | emoji | mic/send ──── */
             <div className="flex items-end gap-0.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
               {/* Plus menu: attach + poll (Discord-style) */}
               <Popover open={plusOpen} onOpenChange={setPlusOpen}>
@@ -1302,6 +1462,25 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       <Paperclip className="size-4" />
                       <span className="font-medium">Attach file</span>
                     </button>
+                    {/* Only when a bot here actually offers something to run.
+                        Disabled mid-draft: the command menu keys off a draft that
+                        is nothing but "/", so seeding it would eat the message. */}
+                    {botEntries.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={openCommandMenu}
+                        disabled={hasContent}
+                        className={cn(
+                          "flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm transition-colors",
+                          hasContent
+                            ? "text-muted-foreground/40 cursor-not-allowed"
+                            : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
+                        )}
+                      >
+                        <SquareSlash className="size-4" />
+                        <span className="font-medium">Commands</span>
+                      </button>
+                    )}
                     {appScope && (
                       <button
                         type="button"
@@ -1370,6 +1549,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   capabilities={slashCapabilities}
                   onInsertCommand={insertAtCursor}
                   onRunCommand={runSlashFromMenu}
+                  botEntries={botEntries}
+                  botCount={botPubkeys.length}
+                  botsLoading={botsLoading}
+                  botRecents={botRecents}
+                  onRunBotCommand={runBotFromMenu}
                 />
                 <EmojiShortcodeAutocomplete
                   textareaRef={textareaRef}
@@ -1430,6 +1614,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 </button>
               )}
             </div>
+            )}
 
             {/* Char counter — only when approaching the limit */}
             {charCount > MAX_CHARS * 0.8 && (
