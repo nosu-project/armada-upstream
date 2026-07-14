@@ -488,7 +488,11 @@ function VoiceRoomShell({
       token={token}
       room={room}
       connect
-      audio
+      // Join muted by default: don't auto-publish the mic track on connect.
+      // Users opt in via the mic button (setMicrophoneEnabled), which also
+      // covers the permission prompt explicitly instead of surprising anyone
+      // with live audio the instant they land in a call.
+      audio={false}
       video={false}
       options={options}
       onDisconnected={onDisconnected}
