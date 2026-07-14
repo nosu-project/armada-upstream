@@ -89,8 +89,15 @@ export function buildRumor(opts: {
   if (opts.ms === null || opts.ms === undefined) {
     createdAt = opts.createdAtSecs ?? Math.floor(Date.now() / 1000);
   } else {
+    // A negative or non-integer send time would mint a malformed `ms` tag
+    // (e.g. "-123"), which every reader drops as out-of-range (CORD-02 §5).
+    // A glitched clock is a local fault, not a reason to publish garbage: fail
+    // closed rather than emit an un-decodable event.
+    if (!Number.isFinite(opts.ms) || opts.ms < 0) {
+      throw new StreamError("bad-ms", `send time must be a non-negative epoch-ms, got ${opts.ms}`);
+    }
     createdAt = Math.floor(opts.ms / 1000);
-    tags.push([TAG_MS, (opts.ms % 1000).toString()]);
+    tags.push([TAG_MS, (Math.floor(opts.ms) % 1000).toString()]);
   }
   const unsigned: UnsignedEvent = {
     kind: opts.kind,
@@ -187,9 +194,18 @@ export interface OpenedEvent {
 export function resolveMs(createdAtSecs: number, tags: string[][]): number {
   const tag = tags.find((t) => t[0] === TAG_MS);
   if (!tag) return createdAtSecs * 1000;
-  const n = Number(tag[1]);
-  if (!Number.isInteger(n) || n < 0 || n > 999) {
-    throw new StreamError("bad-ms", `malformed ms tag: ${tag[1]}`);
+  // Strict decimal only: `Number()` would accept "", "0x1f", "1e2", " 5 ",
+  // "+5" — and two clients disagreeing on accept/reject would diverge on the
+  // ordering basis every comparison rides (CORD-02 §4/§5). The value is the
+  // 0..999 sub-second remainder as a plain decimal with no leading zeros
+  // beyond a bare "0".
+  const raw = tag[1];
+  if (raw === undefined || !/^(0|[1-9][0-9]{0,2})$/.test(raw)) {
+    throw new StreamError("bad-ms", `malformed ms tag: ${raw}`);
+  }
+  const n = Number(raw);
+  if (n > 999) {
+    throw new StreamError("bad-ms", `malformed ms tag: ${raw}`);
   }
   return createdAtSecs * 1000 + n;
 }

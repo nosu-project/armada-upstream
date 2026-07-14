@@ -46,9 +46,13 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
   const coalesced = useMemo(() => {
     if (!community || !query.data) return new Map<string, CoalescedMember>();
     const opened = openGuestbookOpened(query.data);
-    // A snapshot is honored only from the npub whose Refounding minted the
-    // epoch — recorded on adoption as a list-entry extension; genesis has none.
-    const snapshotAuthority = community.rootEpoch === 0n ? community.owner : refounderOf(community);
+    // A snapshot is honored only from the npub whose Refounding minted THIS
+    // epoch (CORD-02 §5). At genesis (epoch 0) there is no snapshot, so no
+    // authority is needed. For a post-genesis epoch the authority is the
+    // recorded refounder; if it's unknown we accept NO snapshot rather than
+    // falling back to the owner — an owner who didn't mint this epoch must not
+    // be able to seed arbitrary members into it.
+    const snapshotAuthority = community.rootEpoch === 0n ? undefined : community.refounder;
     return coalesceGuestbook(opened, {
       nowMs: Date.now(),
       canKick: (actor, target) =>
@@ -59,12 +63,6 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
   }, [community, query.data, folded]);
 
   return { ...query, coalesced };
-}
-
-/** The recorded refounder of the community's current epoch (Armada extension). */
-function refounderOf(community: CommunityV2): string | undefined {
-  // Recorded on rekey adoption; falls back to the owner (who can always refound).
-  return community.refounder ?? community.owner;
 }
 
 /**

@@ -87,16 +87,24 @@ describe("control plane fold (CORD-04)", () => {
     const stranger = signer();
 
     const role = adminRole(bytesToHex(random32()));
+    const grantWrap = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [role.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    // The admin must CITE the grant it acts under (CORD-04 §5 `vac`).
+    const [grantParsed] = openControlWraps([grantWrap], [control]);
     const wraps: NostrEvent[] = [
       await sealEdition(buildRoleEdition(role, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      grantWrap,
+      // The admin (MANAGE_METADATA holder) renames the community — honored,
+      // because it cites its owner-rooted grant.
       await sealEdition(
-        buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [role.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
-        control,
-        owner,
-      ),
-      // The admin (MANAGE_METADATA holder) renames the community — honored.
-      await sealEdition(
-        buildMetadataEdition(communityId, { name: "Renamed", relays: [] }, { actorPubkey: admin.pubkey, version: 1n }),
+        buildMetadataEdition(communityId, { name: "Renamed", relays: [] }, {
+          actorPubkey: admin.pubkey,
+          version: 1n,
+          authority: { entityId: grantParsed.entityId, version: 1n, editionHash: grantParsed.selfHash },
+        }),
         control,
         admin,
       ),
@@ -112,6 +120,67 @@ describe("control plane fold (CORD-04)", () => {
     expect(isAdmin(folded.roster, admin.pubkey)).toBe(true);
     expect(hasPermission(folded.roster, stranger.pubkey, Permissions.MANAGE_ROLES)).toBe(false);
     expect(folded.metadata?.name).toBe("Renamed");
+  });
+
+  it("drops a non-owner action with a MISSING or FORGED authority citation (CORD-04 §5 vac)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const role = adminRole(bytesToHex(random32()));
+    const grantWrap = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [role.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const [grantParsed] = openControlWraps([grantWrap], [control]);
+    const roleWrap = await sealEdition(buildRoleEdition(role, { actorPubkey: owner.pubkey, version: 1n }), control, owner);
+
+    // (a) No citation at all → parked.
+    const noCite = await sealEdition(
+      buildMetadataEdition(communityId, { name: "NoCite", relays: [] }, { actorPubkey: admin.pubkey, version: 1n }),
+      control,
+      admin,
+    );
+    expect(
+      foldControlState(openControlWraps([roleWrap, grantWrap, noCite], [control]), communityId, owner.pubkey).metadata?.name,
+    ).not.toBe("NoCite");
+
+    // (b) Forged hash for the (real) grant → parked.
+    const forgedHash = await sealEdition(
+      buildMetadataEdition(communityId, { name: "ForgedHash", relays: [] }, {
+        actorPubkey: admin.pubkey,
+        version: 1n,
+        authority: { entityId: grantParsed.entityId, version: 1n, editionHash: random32() },
+      }),
+      control,
+      admin,
+    );
+    expect(
+      foldControlState(openControlWraps([roleWrap, grantWrap, forgedHash], [control]), communityId, owner.pubkey).metadata?.name,
+    ).not.toBe("ForgedHash");
+
+    // (c) Cites a grant version that never resolves (v5, only v1 present) → parked.
+    const unresolved = await sealEdition(
+      buildMetadataEdition(communityId, { name: "Unresolved", relays: [] }, {
+        actorPubkey: admin.pubkey,
+        version: 1n,
+        authority: { entityId: grantParsed.entityId, version: 5n, editionHash: grantParsed.selfHash },
+      }),
+      control,
+      admin,
+    );
+    expect(
+      foldControlState(openControlWraps([roleWrap, grantWrap, unresolved], [control]), communityId, owner.pubkey).metadata?.name,
+    ).not.toBe("Unresolved");
+
+    // (d) The owner needs no citation — supreme.
+    const ownerEdit = await sealEdition(
+      buildMetadataEdition(communityId, { name: "OwnerNoCite", relays: [] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    expect(
+      foldControlState(openControlWraps([ownerEdit], [control]), communityId, owner.pubkey).metadata?.name,
+    ).toBe("OwnerNoCite");
   });
 
   it("an admin can mint + grant the stock Moderator (position 2), but not a peer Admin", async () => {
@@ -706,6 +775,50 @@ describe("control plane fold (CORD-04)", () => {
     const joinerView = openControlWraps([rewrapped], [control1]);
     const folded = foldControlState(joinerView, communityId, owner.pubkey);
     expect(folded.metadata?.name).toBe("Two"); // accepted despite prev citing an absent edition
+  });
+
+  it("a TRACKING client fails closed on a withheld-middle chain — no downgrade to a dangling head (CORD-04 §1)", async () => {
+    // The steady-state counterpart to the fresh-joiner case above: a client
+    // that already holds v1 must NOT be pushed onto a higher DANGLING edition a
+    // hostile relay serves after withholding the middle of the chain. It holds
+    // at its last-known-good head and refetches instead.
+    const { owner, communityId, control } = await makeCommunity();
+
+    // First fold: the client legitimately advances to v1 "Real".
+    const v1 = buildMetadataEdition(communityId, { name: "Real", relays: [] }, { actorPubkey: owner.pubkey, version: 1n });
+    const v1Wrap = await sealEdition(v1, control, owner);
+    const firstFold = foldControlState(openControlWraps([v1Wrap], [control]), communityId, owner.pubkey);
+    const eid = bytesToHex(communityId); // metadata eid = community_id
+    expect(firstFold.metadata?.name).toBe("Real");
+
+    // Attacker serves ONLY a v3 whose prev cites a v2 the client never saw.
+    const v3 = buildMetadataEdition(communityId, { name: "Hijacked", relays: [] }, {
+      actorPubkey: owner.pubkey,
+      version: 3n,
+      prevHash: random32(), // dangling
+    });
+    const v3Wrap = await sealEdition(v3, control, owner);
+
+    // Fed the prior fold's heads as the high-water floor, the tracking client
+    // rejects the dangling v3 and keeps v1 "Real".
+    const trackingFold = foldControlState(
+      openControlWraps([v1Wrap, v3Wrap], [control]),
+      communityId,
+      owner.pubkey,
+      firstFold.heads,
+    );
+    expect(trackingFold.metadata?.name).toBe("Real");
+    expect(trackingFold.heads.get(eid)?.version).toBe(1n);
+
+    // Even if the relay drops v1 entirely and serves only the dangling v3, the
+    // floor still holds the entity at v1 (nothing at/above the floor links).
+    const onlyDangling = foldControlState(
+      openControlWraps([v3Wrap], [control]),
+      communityId,
+      owner.pubkey,
+      firstFold.heads,
+    );
+    expect(onlyDangling.metadata?.name).not.toBe("Hijacked");
   });
 });
 

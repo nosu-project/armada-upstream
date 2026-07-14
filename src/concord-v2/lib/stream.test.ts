@@ -133,6 +133,32 @@ describe("stream envelope (CORD-01)", () => {
     expect(() => resolveMs(100, [["ms", "-1"]])).toThrow();
   });
 
+  it("parses the ms remainder as STRICT decimal only (ordering-basis convergence, CORD-02 §4/§5)", () => {
+    // `Number()` is lenient — these must all be rejected as malformed, or two
+    // clients would disagree on the ordering basis every comparison rides.
+    expect(() => resolveMs(1000, [["ms", ""]])).toThrow(); // Number("") === 0
+    expect(() => resolveMs(1000, [["ms", "0x1f"]])).toThrow();
+    expect(() => resolveMs(1000, [["ms", "1e2"]])).toThrow();
+    expect(() => resolveMs(1000, [["ms", " 5 "]])).toThrow();
+    expect(() => resolveMs(1000, [["ms", "+5"]])).toThrow();
+    expect(() => resolveMs(1000, [["ms", "05"]])).toThrow(); // no leading zeros (CORD-01)
+    expect(() => resolveMs(1000, [["ms", "1000"]])).toThrow(); // out of 0..999
+    // Well-formed remainders still parse.
+    expect(resolveMs(1000, [["ms", "0"]])).toBe(1_000_000);
+    expect(resolveMs(1000, [["ms", "417"]])).toBe(1_000_417);
+  });
+
+  it("buildRumor refuses a negative/non-finite send time rather than emitting a bad ms tag", () => {
+    const alice = testSigner();
+    // A glitched clock would otherwise mint `["ms","-234"]`, an un-decodable
+    // event every reader drops (CORD-02 §5).
+    expect(() => buildRumor({ kind: KIND_MESSAGE, content: "x", pubkey: alice.pubkey, ms: -1234 })).toThrow(/ms/);
+    expect(() => buildRumor({ kind: KIND_MESSAGE, content: "x", pubkey: alice.pubkey, ms: NaN })).toThrow(/ms/);
+    // A normal time still yields a valid 0..999 remainder.
+    const ok = buildRumor({ kind: KIND_MESSAGE, content: "x", pubkey: alice.pubkey, ms: 1_719_800_000_417 });
+    expect(ok.tags.find((t) => t[0] === "ms")?.[1]).toBe("417");
+  });
+
   it("detects a cross-channel splice via the binding tags", async () => {
     const alice = testSigner();
     const stream = channelGroupKey(secret, channelId, 0);

@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { useDeferredFold } from "@/concord-v2/hooks/useDeferredFold2";
 import {
@@ -10,6 +10,7 @@ import {
   isDissolvedOpened,
   openControlEditions,
   sealEdition,
+  type EntityHead,
   type FoldedControl,
 } from "@/concord-v2/lib/control";
 import { channelsView } from "@/concord-v2/lib/community";
@@ -150,12 +151,27 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
   const control = useControlEvents2(community, active);
   const events = control.data;
 
+  // Per-entity high-water floor (CORD-04 §1): the highest version we've ever
+  // accepted for each entity, monotonic and never lowered. Feeding it back into
+  // the fold makes a tracking client fail closed on a withheld-middle chain —
+  // a hostile relay serving only a higher DANGLING edition can't downgrade an
+  // entity we already advanced past. Keyed per community; reset on switch.
+  const floorRef = useRef<{ idHex: string; heads: Map<string, EntityHead> }>({ idHex: "", heads: new Map() });
+  if (community && floorRef.current.idHex !== community.idHex) {
+    floorRef.current = { idHex: community.idHex, heads: new Map() };
+  }
+
   const data = useDeferredFold<FoldedControl>(
     community ? controlFoldKey(community.idHex) : null,
     () => {
       if (!community || !events) return undefined;
       const editions = openControlEditions(events);
-      const folded = foldControlState(editions, community.id, community.owner);
+      const folded = foldControlState(editions, community.id, community.owner, floorRef.current.heads);
+      // Raise the high-water floor from this fold's accepted heads (upward only).
+      for (const [eid, head] of folded.heads) {
+        const prior = floorRef.current.heads.get(eid);
+        if (!prior || head.version > prior.version) floorRef.current.heads.set(eid, head);
+      }
       logSync(
         "fold",
         `${community.idHex.slice(0, 8)}: ${events.length} opened → ${editions.length} edition(s); name=${folded.metadata?.name ?? "∅"} icon=${folded.metadata?.icon ? "yes" : "no"} channels=${folded.channels.size} banned=${folded.banned.size} heads=${folded.heads.size}`,

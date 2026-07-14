@@ -124,6 +124,24 @@ describe("guestbook coalesce (CORD-02 §5)", () => {
     expect(coalesced.size).toBe(0);
   });
 
+  it("no snapshot authority (unknown refounder) means NO snapshot is honored — never a blanket owner fallback", async () => {
+    // The hook (useGuestbook2) must pass the epoch's true minting refounder, or
+    // `undefined` when unknown — NEVER the owner as a fallback for a
+    // post-genesis epoch. With no authority, even an owner-signed snapshot
+    // can't seed a ghost member (CORD-02 §5).
+    const owner = signer();
+    const ghost = signer();
+    const rumors = buildSnapshotRumors(owner.pubkey, [ghost.pubkey], bytesToHex(random32()), 5000);
+    const wraps: NostrEvent[] = [];
+    for (const r of rumors) wraps.push(await sealGuestbook(r, gb, owner));
+    const coalesced = coalesceGuestbook(openGuestbookWraps(wraps, [gb]), {
+      nowMs: 10_000,
+      canKick: denyAllKicks,
+      snapshotAuthority: undefined,
+    });
+    expect(coalesced.has(ghost.pubkey)).toBe(false);
+  });
+
   it("chunks snapshots at 400 members with one shared id", () => {
     const refounder = signer();
     const members = Array.from({ length: 950 }, () => bytesToHex(random32()));
