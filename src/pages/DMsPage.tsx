@@ -1,4 +1,4 @@
-import { BellOff, ChevronLeft, Headphones, Loader2, MessageSquare, PenSquare, Phone, Plus, Search, UserCheck, X } from "lucide-react";
+import { BellOff, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, PenSquare, Phone, Plus, Search, UserCheck, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -171,6 +171,10 @@ function ConversationRow({
  * length/position stay correct in the timeline) and shows a muted shimmer until
  * it scrolls into view, at which point `observePlaceholder` triggers its
  * decrypt. Decrypted messages render through the shared `ChatMessage` instead.
+ *
+ * When the user has DECLINED bulk decryption, the shimmer is replaced by an
+ * explicit "Decrypt" button (and the scroll observer is not registered, so
+ * scrolling never pokes the signer) — the message decrypts only on tap.
  */
 function DmPlaceholderRow({
   id,
@@ -178,24 +182,40 @@ function DmPlaceholderRow({
   createdAt,
   continuation,
   observePlaceholder,
+  declined,
+  onDecrypt,
 }: {
   id: string;
   pubkey: string;
   createdAt: number;
   continuation?: boolean;
   observePlaceholder: (el: HTMLElement, id: string) => () => void;
+  declined?: boolean;
+  onDecrypt?: (id: string) => void;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (declined) return; // manual-only: don't auto-decrypt on scroll
     const el = rowRef.current;
     if (!el) return;
     return observePlaceholder(el, id);
-  }, [id, observePlaceholder]);
+  }, [id, observePlaceholder, declined]);
 
   return (
     <div ref={rowRef} data-event-id={id}>
       <MessageRow pubkey={pubkey} createdAt={createdAt} continuation={continuation}>
-        <Skeleton className="h-3 w-40 max-w-full" />
+        {declined ? (
+          <button
+            type="button"
+            onClick={() => onDecrypt?.(id)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Lock className="size-3" />
+            Encrypted message. Tap to decrypt.
+          </button>
+        ) : (
+          <Skeleton className="h-3 w-40 max-w-full" />
+        )}
       </MessageRow>
     </div>
   );
@@ -206,7 +226,8 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const name = getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
-  const { transport, encryptedIds, decryptVisible, send } = useDmTransport(peer);
+  const { transport, encryptedIds, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+    useDmTransport(peer);
   const { messages } = transport;
   const { markRead } = useReadState();
   const { toast } = useToast();
@@ -515,6 +536,21 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       {/* Top-of-chat call stage portal target (active when this DM is in call). */}
       <CallStageSlot active={inThisCall} />
 
+      {/* Manual-decrypt banner: shown when the user declined the one-time
+          decrypt prompt and this thread still has locked messages. "Decrypt
+          all" opens them AND grants consent so future threads decrypt on load. */}
+      {decryptDeclined && hasEncrypted && (
+        <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/30 px-4 py-2">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
+            <Lock className="size-3.5 shrink-0" />
+            <span className="truncate">Messages are locked. Decrypt with your signer to read them.</span>
+          </div>
+          <Button size="sm" variant="secondary" className="shrink-0" onClick={decryptAll}>
+            Decrypt all
+          </Button>
+        </div>
+      )}
+
       {normalizedSearch ? (
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4">
           {searchResults.length === 0 ? (
@@ -564,6 +600,8 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 createdAt={msg.created_at}
                 continuation={continuation}
                 observePlaceholder={observePlaceholder}
+                declined={decryptDeclined}
+                onDecrypt={decryptOne}
               />
             ) : (
               <ChatMessage
@@ -1040,7 +1078,8 @@ export function DMsPage() {
   const { peer: rawPeer } = useParams<{ peer: string }>();
   const { user } = useCurrentUser();
   const dmSupported = useDMSupport();
-  const { conversations, previews, isLoading, loadMore, hasMore, isLoadingMore } = useDMConversations();
+  const { conversations, previews, isLoading, loadMore, hasMore, isLoadingMore } =
+    useDMConversations({ decryptPreviews: true });
   const { data: followData } = useFollowList();
   const [composing, setComposing] = useState(false);
   // The conversation list is always narrowed to people the user follows (kind

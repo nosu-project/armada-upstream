@@ -106,6 +106,22 @@ export class AppSigner implements NostrSigner {
   nip04?: CryptoMethods;
   nip44?: CryptoMethods;
 
+  // --- cache introspection --------------------------------------------------
+
+  /**
+   * Whether this ciphertext's plaintext is already cached (persistent IDB or an
+   * in-flight decrypt), i.e. resolving it would NOT touch the upstream signer.
+   *
+   * The consent gate uses this to gate ONLY the decrypts that would actually
+   * poke a bunker/extension: a fully-cached set needs no prompt at all. Returns
+   * false on any error / when IDB is unavailable (treat as "would hit signer").
+   */
+  async isDecryptCached(method: DecryptMethod, counterparty: string, ciphertext: string): Promise<boolean> {
+    const id = await this.#deriveId(method, counterparty, ciphertext);
+    if (this.#inflight.has(id)) return true;
+    return (await this.#get(id)) !== undefined;
+  }
+
   // --- decrypt cache --------------------------------------------------------
 
   #wrapCrypto(method: DecryptMethod, crypto: CryptoMethods): CryptoMethods {
@@ -213,4 +229,16 @@ export class AppSigner implements NostrSigner {
       // ignore
     }
   }
+}
+
+/**
+ * Whether a signer is an AppSigner exposing `isDecryptCached` — the cache-peek
+ * the consent gate uses to skip prompting when a decrypt would be served from
+ * cache anyway. A non-AppSigner (e.g. the raw AUTH signer) reports as not
+ * cacheable, which the gate treats conservatively as "would hit the signer".
+ */
+export function canPeekDecryptCache(
+  signer: unknown,
+): signer is Pick<AppSigner, "isDecryptCached"> {
+  return typeof (signer as { isDecryptCached?: unknown } | null)?.isDecryptCached === "function";
 }

@@ -12,6 +12,9 @@ import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { decryptCached, getRenderedPlaintext, hasRenderedPlaintext, setRenderedPlaintext, type DecryptFn } from "@/hooks/dmRenderCache";
+import { useDecryptConsent } from "@/hooks/useDecryptConsent";
+import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
+import { setDecryptConsent } from "@/lib/decryptConsent";
 import { useWireScopes } from "@/wire/useWireScopes";
 import {
   dmConversationsSnapshotScope,
@@ -246,6 +249,8 @@ export async function decryptThreadRows(
   decrypt: DecryptFn,
   eager: number,
   onRow: (row: DecryptedDM) => void,
+  preflight?: (targets: { id: string; counterparty: string; ciphertext: string }[]) => Promise<boolean>,
+  onAllFailed?: () => void,
 ): Promise<void> {
   // Newest-first so the eager window is the newest messages (the visible
   // bottom). Decrypts within the window are fired CONCURRENTLY — they are not
@@ -255,18 +260,44 @@ export async function decryptThreadRows(
   const ordered = [...events].sort((a, b) => b.created_at - a.created_at);
   const window = ordered.slice(0, eager);
 
+  // Consent gate: the not-yet-shown rows are the only ones that could poke the
+  // signer. Ask the preflight whether we may decrypt them; if it declines, the
+  // rows stay encrypted placeholders (the UI offers manual "Decrypt"/"Decrypt
+  // all"). Already-shown rows are skipped either way — no signer contact.
+  if (preflight) {
+    const pending = window
+      .filter((event) => getRenderedPlaintext(event.id) === undefined)
+      .map((event) => ({
+        id: event.id,
+        counterparty: event.pubkey === self ? peer : event.pubkey,
+        ciphertext: event.content,
+      }));
+    if (pending.length > 0 && !(await preflight(pending))) return;
+  }
+
+  let attempted = 0;
+  let failed = 0;
   await Promise.all(
     window.map(async (event) => {
       if (getRenderedPlaintext(event.id) !== undefined) return; // already shown
       const counterparty = event.pubkey === self ? peer : event.pubkey;
+      attempted++;
       try {
         const content = await decryptCached(counterparty, event, decrypt);
         onRow({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
       } catch {
         // Keep as a placeholder; retried lazily when it scrolls into view.
+        failed++;
       }
     }),
   );
+
+  // A signer that rejects EVERY decrypt (e.g. an extension set to "never ask
+  // again → reject") would otherwise leave the thread lingering on skeletons
+  // and re-poke on every scroll. Treat a wholesale failure as the signer
+  // declining, so the UI flips to the manual "Decrypt" / "Decrypt all"
+  // affordances and stops auto-retrying. A partial failure is just transient.
+  if (attempted > 0 && failed === attempted) onAllFailed?.();
 }
 
 /**
@@ -370,7 +401,14 @@ async function queryRelaysDmPage(
  * counterparty with the latest message and its timestamp. Built client-side
  * from kind-4 events on the DM relay (no caching service, unlike Primal).
  */
-export function useDMConversations() {
+export function useDMConversations(options?: { decryptPreviews?: boolean }) {
+  // Previews decrypt each conversation's latest message, which is a signer
+  // round-trip (and the first thing that could open the decrypt-consent
+  // prompt). The DMs list is the ONLY consumer that needs them, so previews are
+  // opt-in: the always-mounted unread-dot consumer (useHasUnreadDMs) leaves
+  // them off, so nothing pokes the signer — or the prompt — until the user
+  // actually opens DMs.
+  const decryptPreviews = options?.decryptPreviews ?? false;
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
@@ -378,6 +416,7 @@ export function useDMConversations() {
   const eventStore = useEventStore();
   const { mutedPubkeys, ready: muteReady } = useMutedPubkeys();
   const { data: followData } = useFollowList();
+  const { consent } = useDecryptConsent();
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
 
@@ -573,12 +612,24 @@ export function useDMConversations() {
     .join(",");
 
   const previews = useQuery<Record<string, string>>({
-    queryKey: ["dm", "previews", self, previewKey],
-    enabled: !!self && !!user?.signer.nip04 && conversations.length > 0,
+    queryKey: ["dm", "previews", self, previewKey, consent],
+    enabled: decryptPreviews && !!self && !!user?.signer.nip04 && conversations.length > 0,
     staleTime: 60_000,
     queryFn: async () => {
       const nip04 = user!.signer.nip04!;
       const out: Record<string, string> = {};
+
+      // Consent gate: one decrypt per conversation would fan out across the
+      // whole list on entry. Only the previews that aren't already cached could
+      // poke the signer, so gate on those; a decline leaves previews blank
+      // (the list renders an "Encrypted message" placeholder) until the user
+      // opts in.
+      const targets = conversations.map(({ peer, latest }) => ({
+        counterparty: peer,
+        ciphertext: latest.content,
+      }));
+      if (!(await mayBulkDecrypt(user!.signer, "nip04", targets, signerNeedsApproval(user!.method)))) return out;
+
       // Decrypt every conversation's latest message concurrently — the previews
       // don't depend on each other and the signer handles overlapping calls.
       await Promise.all(
@@ -640,6 +691,7 @@ export function useDirectMessages(peer: string | undefined) {
   const { config } = useAppContext();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
+  const { consent, declined } = useDecryptConsent();
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
 
@@ -658,8 +710,8 @@ export function useDirectMessages(peer: string | undefined) {
 
   const self = user?.pubkey;
   const queryKey = useMemo(
-    () => ["dm", "thread", self, peer, relayKey] as const,
-    [self, peer, relayKey],
+    () => ["dm", "thread", self, peer, relayKey, consent] as const,
+    [self, peer, relayKey, consent],
   );
   // Last-known-good localStorage snapshot of this thread's newest decrypted
   // rows (plaintext at rest — same trust level as the signer's persistent
@@ -704,6 +756,8 @@ export function useDirectMessages(peer: string | undefined) {
           (cp, ct) => nip04.decrypt(cp, ct),
           EAGER_DECRYPT_COUNT,
           (row) => patchRow(queryClient, queryKey, row),
+          (targets) => mayBulkDecrypt(user!.signer, "nip04", targets, signerNeedsApproval(user!.method)),
+          () => { if (signerNeedsApproval(user!.method)) setDecryptConsent("declined"); },
         );
       }
 
@@ -741,6 +795,8 @@ export function useDirectMessages(peer: string | undefined) {
             (cp, ct) => nip04.decrypt(cp, ct),
             EAGER_DECRYPT_COUNT,
             (row) => patchRow(queryClient, queryKey, row),
+            (targets) => mayBulkDecrypt(user!.signer, "nip04", targets, signerNeedsApproval(user!.method)),
+            () => { if (signerNeedsApproval(user!.method)) setDecryptConsent("declined"); },
           );
         } catch {
           // Best-effort background refresh; the local-first result already rendered.
@@ -1043,6 +1099,10 @@ export function useDirectMessages(peer: string | undefined) {
         );
         return;
       }
+      // Consent declined: never auto-decrypt on scroll — that would turn
+      // scrolling into the very storm the gate exists to prevent. The row stays
+      // a placeholder with its own "Decrypt" button (`decryptOne`).
+      if (declined) return;
       const nip04 = user.signer.nip04;
       void (async () => {
         const store = await eventStore;
@@ -1059,8 +1119,77 @@ export function useDirectMessages(peer: string | undefined) {
         }
       })();
     },
+    [self, peer, user?.signer.nip04, eventStore, queryClient, queryKey, declined],
+  );
+
+  /**
+   * Explicitly decrypt ONE message on the user's request (the per-message
+   * "Decrypt" button shown when consent was declined). This is a direct user
+   * action, so it bypasses the consent gate and touches the signer for exactly
+   * that message — no bulk fan-out.
+   */
+  const decryptOne = useCallback(
+    (id: string) => {
+      if (!self || !peer || !user?.signer.nip04) return;
+      const nip04 = user.signer.nip04;
+      void (async () => {
+        const store = await eventStore;
+        const [event] = await store.query([{ ids: [id] }]);
+        if (!event) return;
+        const counterparty = event.pubkey === self ? peer : event.pubkey;
+        try {
+          const content = await decryptCached(counterparty, event, (cp, ct) => nip04.decrypt(cp, ct));
+          queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
+            old.map((m) => (m.id === id ? { ...m, content, encrypted: false } : m)),
+          );
+        } catch {
+          // Leave it as a placeholder; the button stays available to retry.
+        }
+      })();
+    },
     [self, peer, user?.signer.nip04, eventStore, queryClient, queryKey],
   );
+
+  /**
+   * Explicitly decrypt EVERY still-encrypted message in the thread (the
+   * "Decrypt all" banner shown when consent was declined). A direct user action:
+   * it bypasses the gate and — since the user has asked for it here — flips the
+   * global consent to allowed so future threads decrypt without re-asking.
+   */
+  const decryptAll = useCallback(() => {
+    if (!self || !peer || !user?.signer.nip04) return;
+    const nip04 = user.signer.nip04;
+    setDecryptConsent("allowed");
+    void (async () => {
+      const store = await eventStore;
+      const rows = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
+      const encryptedIds = rows.filter((m) => m.encrypted).map((m) => m.id);
+      if (encryptedIds.length === 0) return;
+      const events = await store.query([{ ids: encryptedIds }]);
+      let ok = 0;
+      await Promise.all(
+        events.map(async (event) => {
+          const counterparty = event.pubkey === self ? peer : event.pubkey;
+          try {
+            const content = await decryptCached(counterparty, event, (cp, ct) => nip04.decrypt(cp, ct));
+            patchRow(queryClient, queryKey, {
+              id: event.id,
+              pubkey: event.pubkey,
+              created_at: event.created_at,
+              content,
+            });
+            ok++;
+          } catch {
+            // Skip; the row stays a placeholder with its own button.
+          }
+        }),
+      );
+      // The signer refused everything (e.g. "never ask again → reject"): undo
+      // the optimistic "allowed" so the banner and per-message buttons return
+      // instead of the thread silently sitting on skeletons.
+      if (events.length > 0 && ok === 0 && signerNeedsApproval(user!.method)) setDecryptConsent("declined");
+    })();
+  }, [self, peer, user?.signer.nip04, eventStore, queryClient, queryKey]);
 
   return {
     messages: query.data ?? [],
@@ -1081,5 +1210,13 @@ export function useDirectMessages(peer: string | undefined) {
     hasMore,
     isLoadingOlder,
     decryptVisible,
+    /** Explicitly decrypt one message (the per-message "Decrypt" button). */
+    decryptOne,
+    /** Explicitly decrypt every encrypted row + grant consent ("Decrypt all"). */
+    decryptAll,
+    /** Whether the user declined bulk decryption (drives the manual controls). */
+    decryptDeclined: declined,
+    /** Whether any rendered row is still an encrypted placeholder. */
+    hasEncrypted: (query.data ?? []).some((m) => m.encrypted),
   };
 }

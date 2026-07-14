@@ -29,11 +29,31 @@ export function useDmTransport(peer: string): {
   encryptedIds: Set<string>;
   /** Decrypt a placeholder message by id (on scroll into view). */
   decryptVisible: (id: string) => void;
+  /** Explicitly decrypt one message (per-message "Decrypt" button). */
+  decryptOne: (id: string) => void;
+  /** Explicitly decrypt every encrypted row + grant consent ("Decrypt all"). */
+  decryptAll: () => void;
+  /** Whether the user declined bulk decryption (drives the manual controls). */
+  decryptDeclined: boolean;
+  /** Whether any row is still an encrypted placeholder. */
+  hasEncrypted: boolean;
   /** Sign + optimistically send a DM; resolves once rendered (relay in bg). */
   send: (text: string) => Promise<void>;
 } {
-  const { messages, isLoading, send, retry, loadOlder, hasMore, isLoadingOlder, decryptVisible } =
-    useDirectMessages(peer);
+  const {
+    messages,
+    isLoading,
+    send,
+    retry,
+    loadOlder,
+    hasMore,
+    isLoadingOlder,
+    decryptVisible,
+    decryptOne,
+    decryptAll,
+    decryptDeclined,
+    hasEncrypted,
+  } = useDirectMessages(peer);
 
   // Adapt DecryptedDM → ChatMsg, preserving object identity for unchanged
   // messages so React.memo on the rows holds (a fresh array lands on every
@@ -108,5 +128,5 @@ export function useDmTransport(peer: string): {
     [chatMessages, isLoading, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryById],
   );
 
-  return { transport, encryptedIds, decryptVisible, send: sendText };
+  return { transport, encryptedIds, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send: sendText };
 }

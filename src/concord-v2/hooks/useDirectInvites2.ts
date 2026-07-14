@@ -17,6 +17,9 @@ import {
   writeStoredInvites,
 } from "@/concord-v2/lib/inviteInbox";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
+import { getDecryptConsent } from "@/lib/decryptConsent";
+import { signerNeedsApproval } from "@/lib/bulkDecryptGate";
+import { useDecryptConsent } from "@/hooks/useDecryptConsent";
 import type { InviteBundle } from "@/concord-v2/lib/invite";
 import { KIND_DIRECT_INVITE, KIND_WRAP } from "@/concord-v2/lib/kinds";
 
@@ -47,6 +50,7 @@ export function useDirectInvites2() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { data: list, isFetched: listFetched } = useCommunityList2();
+  const { consent } = useDecryptConsent();
 
   const known = new Set(list ? liveEntries(list.list).map((e) => e.community_id) : []);
   const tombstoned = new Set((list?.list.tombstones ?? []).map((t) => t.community_id));
@@ -63,6 +67,7 @@ export function useDirectInvites2() {
       "concord2",
       "direct-invites",
       user?.pubkey,
+      consent,
       [...known].sort().join(","),
       [...tombstoned].sort().join(","),
     ],
@@ -93,17 +98,29 @@ export function useDirectInvites2() {
 
       if (wraps.length > 0) {
         const stored = new Set((await queryStoredInvites({ signal })).map((i) => i.wrapId));
+
+        // Consent gate: opening each fresh wrap is two nip-44 signer decrypts —
+        // a bunker/extension storm on a cold inbox. This is a BACKGROUND poller,
+        // so it never opens the one-time prompt itself (the interactive DM/room
+        // path does); it just holds off decrypting NEW wraps until consent is
+        // granted. A local nsec has no approval to gate, so it always decrypts.
+        // Already-stored invites are still read back below with no decrypt, so a
+        // declined user's existing invites stay visible. Advancing the cursor is
+        // likewise deferred so a later "allow" re-scans them.
+        const mayDecrypt = !signerNeedsApproval(user!.method) || getDecryptConsent() === "allowed";
         const fresh: { wrap: NostrEvent; unwrapped: NonNullable<Awaited<ReturnType<typeof unwrapDirectInvite>>> }[] = [];
         let newestWrap = 0;
-        for (const wrap of wraps) {
-          if (wrap.created_at > newestWrap) newestWrap = wrap.created_at;
-          if (stored.has(wrap.id)) continue;
-          const unwrapped = await unwrapDirectInvite(wrap, user!.signer);
-          if (!unwrapped) continue;
-          fresh.push({ wrap, unwrapped });
+        if (mayDecrypt) {
+          for (const wrap of wraps) {
+            if (wrap.created_at > newestWrap) newestWrap = wrap.created_at;
+            if (stored.has(wrap.id)) continue;
+            const unwrapped = await unwrapDirectInvite(wrap, user!.signer);
+            if (!unwrapped) continue;
+            fresh.push({ wrap, unwrapped });
+          }
+          writeStoredInvites(fresh);
+          if (newestWrap > 0) await advanceInviteInboxCursor(pubkey, newestWrap);
         }
-        writeStoredInvites(fresh);
-        if (newestWrap > 0) await advanceInviteInboxCursor(pubkey, newestWrap);
       }
 
       // Read the parked set back from the store (no re-decrypt), then apply

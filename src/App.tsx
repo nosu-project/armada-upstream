@@ -8,6 +8,7 @@ import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-
 
 import { AppProvider } from "@/components/AppProvider";
 import { ControlPlaneSync } from "@/components/ControlPlaneSync";
+import { DecryptConsentDialog } from "@/components/DecryptConsentDialog";
 import { DeepLinkWarmup } from "@/components/DeepLinkWarmup";
 import { DesktopBadge } from "@/components/DesktopBadge";
 import { MeshProvider } from "@/components/MeshProvider";
@@ -69,6 +70,7 @@ export function App() {
                   <ControlPlaneSync />
                   <ScreenSharePicker />
                   <Toaster />
+                  <DecryptConsentDialog />
                   <MeshProvider>
                     <AppRouter />
                   </MeshProvider>
