@@ -2,12 +2,14 @@ import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { fetchRelayInfoDoc, useRelayInfo } from "@/hooks/useRelayInfo";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import {
   buildRelayGroups,
   KIND_GROUP_METADATA,
+  KIND_PUT_USER,
   relayGroupCacheFilters,
 } from "@/lib/nip29";
 import { eventIdsForRelay } from "@/lib/relayProvenance";
@@ -37,6 +39,17 @@ const NIP11_RACE_MS = 2_000;
  * ids remembered in the user's kind 10009 list are queried explicitly by
  * `d` tag and merged in.
  *
+ * That kind-10009 recovery isn't enough for users arriving from Flotilla:
+ * Flotilla's "join" only publishes a kind-9021 to the relay and NEVER writes a
+ * `group` tag into kind-10009 (that tag is only its per-room "favorite"
+ * toggle). So a Flotilla member of a closed/private channel has nothing in
+ * their 10009 list to recover it by, and the relay hides it from the open
+ * listing — the channel silently disappears on migration. To match what
+ * Flotilla showed, we ALSO enumerate the user's memberships directly from the
+ * relay via kind-9000 (put-user) events tagging them (`#p`), then fetch the
+ * kind-39000 metadata for those group ids by `#d` and merge it in. This is
+ * membership-scoped, so it never surfaces channels the user has no access to.
+ *
  * The channel list is one of the most STABLE things in the app: it's
  * relay-signed metadata that changes only when an admin creates/edits/deletes
  * a channel. So this query is deliberately quiet — no polling, a long
@@ -51,16 +64,18 @@ export function useRelayGroups(relayUrl: string | undefined) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
+  const { user } = useCurrentUser();
   const { data: relayInfo, isLoading: infoLoading, isError: infoError } = useRelayInfo(relayUrl);
   const { data: userList } = useUserGroupList();
 
+  const selfPubkey = user?.pubkey;
   const relaySelf = relayInfo?.self || relayInfo?.pubkey;
   const rememberedIds = (userList?.groups ?? [])
     .filter((ref) => ref.relay === relayUrl)
     .map((ref) => ref.id)
     .sort();
 
-  const queryKey = ["nip29", "groups", relayUrl];
+  const queryKey = ["nip29", "groups", relayUrl, selfPubkey ?? null];
 
   // Read THIS relay's cached kind-39000 metadata from the local event store,
   // scoped by relay PROVENANCE (which relay actually served each event), not
@@ -139,13 +154,46 @@ export function useRelayGroups(relayUrl: string | undefined) {
         signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
       });
 
+      // Recover channels the user is a MEMBER of but the relay hides from the
+      // open listing above (closed/private groups) and that aren't in their
+      // kind-10009 list. This is the Flotilla-migration case: Flotilla joins
+      // publish only a kind-9021 and never touch kind-10009, so a member of a
+      // closed channel has nothing to recover it by. Enumerate memberships from
+      // the relay's kind-9000 (put-user) roster events tagging this user, then
+      // fetch the kind-39000 metadata for those group ids by `#d`. Membership-
+      // scoped, so it can never surface a channel the user has no access to.
+      const known = new Set(events.map((e) => e.tags.find(([n]) => n === "d")?.[1]));
+      const memberEvents = selfPubkey
+        ? await nostr
+            .relay(relayUrl!)
+            .query([{ kinds: [KIND_PUT_USER], "#p": [selfPubkey], limit: 500 }], {
+              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+            })
+            .catch(() => [])
+        : [];
+      const memberGroupIds = [
+        ...new Set(
+          memberEvents
+            .flatMap((e) => e.tags.filter(([n]) => n === "h").map(([, id]) => id))
+            .filter((id): id is string => Boolean(id) && !known.has(id)),
+        ),
+      ];
+      const memberMeta = memberGroupIds.length
+        ? await nostr
+            .relay(relayUrl!)
+            .query([{ kinds: [KIND_GROUP_METADATA], "#d": memberGroupIds, ...authors }], {
+              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+            })
+            .catch(() => [])
+        : [];
+
       // Merge with the relay's PROVENANCE-scoped cached metadata so a sparse or
       // empty relay read never DROPS channels we already knew about — without
       // re-introducing the cross-relay bleed for same-key relays. The fresh
       // network events (correctly isolated to this relay) also get their
       // provenance recorded by NostrBatcher, so subsequent reads stay scoped.
       const cached = await readScopedCache(selfKey);
-      return buildRelayGroups([...cached, ...events], relayUrl!);
+      return buildRelayGroups([...cached, ...events, ...memberMeta], relayUrl!);
     },
     enabled: Boolean(relayUrl),
     // Relay-signed, rarely-changing data. Keep it fresh for the whole session
