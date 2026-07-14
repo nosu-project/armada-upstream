@@ -170,12 +170,21 @@ export function removeFromList(list: CommunityList, communityId: string, removed
  * Replace a membership's `current` snapshot in place (an authoritative local
  * refresh — e.g. a caught-up Refounding or rename). Bypasses the epoch-keyed
  * `freshest` so a same-epoch update can't silently lose the canonical-bytes
- * tiebreak. Pure.
+ * tiebreak.
+ *
+ * Also bumps `added_at` to now: adopting a fresh epoch key is PROOF of current
+ * membership, so it must win liveness over any earlier removal tombstone —
+ * exactly as a re-join does. Without this, a member excluded in one Refounding
+ * (tombstoned) and RE-INCLUDED in a later one keeps their original `added_at`,
+ * which stays below `removed_at`, so `isLive` judges the still-valid membership
+ * dead and the community silently vanishes from the rail forever. Pure.
  */
-export function refreshCurrent(list: CommunityList, current: JoinMaterial): CommunityList {
+export function refreshCurrent(list: CommunityList, current: JoinMaterial, addedAt = Date.now()): CommunityList {
   const idx = list.entries.findIndex((e) => e.community_id === current.community_id);
   if (idx === -1) return list;
-  const entries = list.entries.map((e, i) => (i === idx ? { ...e, current } : e));
+  const entries = list.entries.map((e, i) =>
+    i === idx ? { ...e, current, added_at: Math.max(e.added_at, addedAt) } : e,
+  );
   return { ...list, entries };
 }
 
