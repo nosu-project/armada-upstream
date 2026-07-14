@@ -123,6 +123,14 @@ const nameplateClass =
 const VERIFY_GRACE_MS = 15_000;
 
 /**
+ * How long after joining a call the first video track to appear still counts
+ * as "video was already rolling when I joined" and auto-expands the stage.
+ * Subscriptions to pre-existing tracks land asynchronously after connecting
+ * (longer on the E2EE path), so this can't just check the first render.
+ */
+const JOIN_VIDEO_EXPAND_WINDOW_MS = 10_000;
+
+/**
  * The name to render for a participant, folding in Concord's verification race
  * (CORD-07 §4): a participant's LiveKit connection and their signed presence
  * claim travel over independent channels (the SFU vs the Nostr relays), so a
@@ -506,6 +514,22 @@ export function CallStage({
     prevScreenShareKeys.current = screenShareKeys;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenShareKeys.join("|")]);
+
+  // Auto-expand on join when video is already in use: if camera/screenshare
+  // tracks exist when we join (their subscriptions land moments after
+  // connecting), open the stage so the video is visible immediately — instead
+  // of a collapsed bar whose small toggle is easy to miss. One-shot: a camera
+  // turning on later must NOT reopen a stage the user closed (a *new*
+  // screenshare still does, above), so the first video sighting consumes the
+  // trigger whether or not it fell inside the join window.
+  const mountedAt = useRef(Date.now());
+  const sawVideo = useRef(false);
+  const hasVideoTracks = videoTracks.length > 0;
+  useEffect(() => {
+    if (!hasVideoTracks || sawVideo.current) return;
+    sawVideo.current = true;
+    if (Date.now() - mountedAt.current <= JOIN_VIDEO_EXPAND_WINDOW_MS) setStageOpen(true);
+  }, [hasVideoTracks, setStageOpen]);
 
   // The ordered, keyed set of focusable tiles. A render fn per tile keeps the
   // spotlight + thumbnail strip in sync without duplicating tile markup.

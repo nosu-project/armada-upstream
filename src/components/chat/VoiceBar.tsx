@@ -9,8 +9,6 @@ import { ConnectionState, LocalAudioTrack, Track } from "livekit-client";
 import type { Participant } from "livekit-client";
 import {
   Check,
-  ChevronDown,
-  ChevronUp,
   Headphones,
   Loader2,
   Mic,
@@ -285,8 +283,8 @@ interface InCallViewProps {
  * In-call controls + connection/participant summary. Must be rendered inside a
  * LiveKitRoom context (uses room hooks). Intentionally shows NO participant
  * roster: who's in the call already lives in the sidebar's nested voice list
- * (and the expandable call stage, toggled from the header count) — a roster
- * here would duplicate it right above.
+ * (and the expandable call stage, toggled from the header's Show/Hide button) —
+ * a roster here would duplicate it right above.
  */
 export function InCallView({ label, onLabelClick, stacked, compact }: InCallViewProps) {
   const { stageOpen, toggleStage } = useCall();
@@ -342,10 +340,11 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
         onClick={toggleStage}
         aria-label={stageOpen ? "Hide call stage" : "Show call stage"}
         aria-pressed={stageOpen}
-        className="shrink-0 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+        className="shrink-0 flex items-center gap-1.5 rounded-md bg-foreground/10 px-2 py-1 text-[11px] font-medium text-foreground hover:bg-foreground/20"
       >
+        <Video className="size-3.5" />
         <span className="tabular-nums">{participants.length}</span>
-        {stageOpen ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
+        <span>{stageOpen ? "Hide" : "Show"}</span>
       </button>
     </div>
   );
@@ -432,7 +431,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   // mobile so the controls are never crammed onto the activity row.
   if (compact) {
     // Mobile: a single compact row. The roster/tiles live in the expandable
-    // call stage (toggled from the header count), so the bar stays small.
+    // call stage (toggled from the header's Show/Hide button), so the bar stays small.
     // The control cluster is a single `shrink-0` group and the header is the
     // only flexible child, so the header truncates instead of the controls
     // overflowing — otherwise a long channel label pushes the rightmost
