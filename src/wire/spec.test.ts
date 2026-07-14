@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildWireSpec } from "./spec";
 
 import type { ConcordSub } from "@/concord-v1/lib/concordNotifications";
+import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 
 const PUBKEY = "f".repeat(64);
@@ -127,6 +128,50 @@ describe("buildWireSpec", () => {
     ]);
     expect(spec.v2ByPk.get("pkA2")).toBe(chanA);
     expect(spec.v2ByPk.get("pkB1")).toBe(chanB);
+  });
+
+  it("subscribes to Concord V2 control authors and maps control pk → community", () => {
+    const spec = buildWireSpec({
+      pubkey: PUBKEY,
+      groups: [],
+      dmRelays: [],
+      dmFollows: [],
+      concord1: [],
+      concord2: [],
+      concord2Control: [
+        {
+          relays: ["wss://c.relay"],
+          idHex: "a".repeat(64),
+          groups: [{ pk: "ctlA1" } as unknown as GroupKey, { pk: "ctlA2" } as unknown as GroupKey],
+        },
+      ],
+    });
+
+    expect(spec.subs).toHaveLength(1);
+    expect(spec.subs[0].filters).toEqual([{ kinds: [1059], authors: ["ctlA1", "ctlA2"] }]);
+    expect(spec.v2CtlByPk.get("ctlA1")?.idHex).toBe("a".repeat(64));
+    expect(spec.v2CtlByPk.get("ctlA2")?.idHex).toBe("a".repeat(64));
+  });
+
+  it("keeps chat-wrap and control-wrap filters separate on the same relay", () => {
+    const chanA = v2Channel(1, ["pkA1"]);
+    const spec = buildWireSpec({
+      pubkey: PUBKEY,
+      groups: [],
+      dmRelays: [],
+      dmFollows: [],
+      concord1: [],
+      concord2: [{ relays: ["wss://c.relay"], channel: chanA }],
+      concord2Control: [
+        { relays: ["wss://c.relay"], idHex: "a".repeat(64), groups: [{ pk: "ctlA1" } as unknown as GroupKey] },
+      ],
+    });
+
+    expect(spec.subs).toHaveLength(1);
+    expect(spec.subs[0].filters).toEqual([
+      { kinds: [1059], authors: ["pkA1"] },
+      { kinds: [1059], authors: ["ctlA1"] },
+    ]);
   });
 
   it("keeps the sig stable across input reordering (no needless resubscribes)", () => {

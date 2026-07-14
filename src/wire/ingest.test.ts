@@ -10,9 +10,9 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
-import { KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
-import { peekPendingWraps, queryChannelRumors } from "@/concord-v2/lib/rumorStore";
+import { bytesToHex, channelGroupKey, controlGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
+import { KIND_CONTROL, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
+import { peekPendingWraps, queryByStreams, queryChannelRumors } from "@/concord-v2/lib/rumorStore";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 
@@ -73,6 +73,7 @@ function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
   const full: WireSpec = {
     subs: [],
     v2ByPk: new Map(),
+    v2CtlByPk: new Map(),
     v1ByZ: new Map(),
     sig: "",
     ...spec,
@@ -147,6 +148,31 @@ describe("ingestWireEvents", () => {
     expect(scopes.has(`c2:${idHex}`)).toBe(true);
     const rumors = await queryChannelRumors(idHex, { limit: 10 });
     expect(rumors.some((r) => r.content === "sealed hello")).toBe(true);
+  });
+
+  it("decrypts V2 control wraps into the opened-event store and rings the c2ctl fold-wake", async () => {
+    const communityId = new Uint8Array(32).fill(200);
+    const idHex = bytesToHex(communityId);
+    const control = controlGroupKey(root, communityId, 0);
+    const owner = signer();
+    const rumor = buildRumor({
+      kind: KIND_CONTROL,
+      content: "edition",
+      tags: [],
+      pubkey: owner.pubkey,
+      ms: Date.now(),
+    });
+    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, owner), control) as NostrEvent;
+    const { store, sinks } = makeSinks({
+      v2CtlByPk: new Map([[wrap.pubkey, { idHex, groups: [control] }]]),
+    });
+
+    const scopes = await collectScopes(() => ingestWireEvents(sinks, [wrap]));
+
+    expect(store.events).toHaveLength(0); // wraps never land in armada-events
+    expect(scopes.has(`c2ctl:${idHex}`)).toBe(true);
+    const opened = await queryByStreams([control.pk]);
+    expect(opened.some((o) => o.content === "edition")).toBe(true);
   });
 
   it("parks V2 wraps for streams we hold no key for and rings the park doorbell", async () => {

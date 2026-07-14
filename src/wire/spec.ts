@@ -4,6 +4,7 @@ import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE } fr
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 
 import type { ConcordSub } from "@/concord-v1/lib/concordNotifications";
+import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { NostrFilter } from "@nostrify/nostrify";
 
@@ -32,6 +33,15 @@ export interface WireInputs {
   concord1: ConcordSub[];
   /** Concord V2 channels (each carries its stream GroupKeys for decrypt). */
   concord2: Array<{ relays: string[]; channel: ChannelV2 }>;
+  /**
+   * Concord V2 CONTROL planes (each carries its control-stream GroupKeys). A
+   * standing subscription to these authors lands new control editions —
+   * channel creations, roster/metadata changes — LIVE for every community, not
+   * only the one you have open, so a member added to a new channel sees it in
+   * the sidebar without waiting for the slow background sweep (or for someone
+   * to post the first message).
+   */
+  concord2Control?: Array<{ relays: string[]; idHex: string; groups: GroupKey[] }>;
 }
 
 /** One relay's standing subscription. */
@@ -46,6 +56,8 @@ export interface WireSpec {
   subs: WireSub[];
   /** V2 stream address (wrap author) → owning channel, for decrypt + scope. */
   v2ByPk: Map<string, ChannelV2>;
+  /** V2 CONTROL stream address (wrap author) → its community, for decrypt + fold wake. */
+  v2CtlByPk: Map<string, { idHex: string; groups: GroupKey[] }>;
   /** V1 `#z` pseudonym → channel id hex, for scope naming. */
   v1ByZ: Map<string, string>;
   /** Deterministic signature of `subs` for cheap diffing/resubscribe. */
@@ -134,9 +146,30 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     add(relay, { kinds: [KIND_WRAP], authors: [...pks].sort() });
   }
 
+  // ── Concord V2 CONTROL: merged control-author filter per community relay ──
+  // Kept SEPARATE from the chat-wrap map above: control wraps decode with the
+  // control-stream keys (not any channel's) and wake the fold rather than a
+  // chat timeline (see ingest.ts). Filters coalesce with the chat-wrap filter
+  // on the same relay via the shared KIND_WRAP `add` merge — one round trip.
+  const v2CtlByPk = new Map<string, { idHex: string; groups: GroupKey[] }>();
+  const ctlPksByRelay = new Map<string, Set<string>>();
+  for (const { relays, idHex, groups } of inputs.concord2Control ?? []) {
+    for (const g of groups) v2CtlByPk.set(g.pk, { idHex, groups });
+    for (const url of relays) {
+      const relay = normalizeRelayUrl(url);
+      if (!relay) continue;
+      let set = ctlPksByRelay.get(relay);
+      if (!set) ctlPksByRelay.set(relay, (set = new Set()));
+      for (const g of groups) set.add(g.pk);
+    }
+  }
+  for (const [relay, pks] of ctlPksByRelay) {
+    add(relay, { kinds: [KIND_WRAP], authors: [...pks].sort() });
+  }
+
   const subs: WireSub[] = [...byRelay.entries()]
     .map(([relay, filters]) => ({ relay, filters }))
     .sort((a, b) => (a.relay < b.relay ? -1 : 1));
 
-  return { subs, v2ByPk, v1ByZ, sig: JSON.stringify(subs) };
+  return { subs, v2ByPk, v2CtlByPk, v1ByZ, sig: JSON.stringify(subs) };
 }

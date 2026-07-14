@@ -10,6 +10,7 @@ import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView } from "@/concord-v2/lib/community";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
+import { controlGroups } from "@/concord-v2/lib/control";
 import { ackPendingWraps, peekPendingWraps, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 import { effectiveDmRelays } from "@/contexts/AppContext";
@@ -153,6 +154,40 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
 }
 
 /**
+ * The Concord V2 CONTROL-plane subscription targets for EVERY live community:
+ * per community, its control-stream GroupKeys (across held epochs) and relays.
+ * Unlike the channel list, this needs NO fold — control keys derive straight
+ * from the rehydrated bundle's held roots — so it's a cheap, stable memo that
+ * updates only when membership/epochs change.
+ *
+ * A standing subscription to these authors is what makes a newly-published
+ * channel edition land LIVE for a non-open community, so a member added to a
+ * new channel sees it appear in the sidebar without waiting for the slow
+ * background control-plane sweep (or for the first message to be posted).
+ * Every control stream key is registered for NIP-42 so the wire's kind-1059
+ * control REQs pass auth-gating relays.
+ */
+function useWireConcord2Control(): Array<{ relays: string[]; idHex: string; groups: GroupKey[] }> {
+  const { data } = useCommunityList2();
+  const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+
+  return useMemo(() => {
+    const out: Array<{ relays: string[]; idHex: string; groups: GroupKey[] }> = [];
+    for (const entry of entries) {
+      const community = rehydrateCommunity(entry);
+      if (!community || community.relays.length === 0) continue;
+      const groups = controlGroups(community);
+      if (groups.length === 0) continue;
+      out.push({ relays: community.relays, idHex: community.idHex, groups });
+      // Scoped per community: a relay's NIP-42 challenge only signs the control
+      // stream keys it actually hosts (see streamAuth.ts).
+      registerStreamKeys(groups, community.relays);
+    }
+    return out;
+  }, [entries]);
+}
+
+/**
  * Every NIP-29 group the user can see, as `{ id, relay }` — discovered PER
  * SERVER, not from the kind-10009 `groups` list.
  *
@@ -268,6 +303,7 @@ export function WireSync() {
   const { data: followData } = useFollowList();
   const { data: concordData } = useConcordList();
   const concord2 = useWireConcord2Channels();
+  const concord2Control = useWireConcord2Control();
   const nip29Groups = useWireNip29Groups();
 
   // NIP-29 groups to subscribe to: the per-server directory discovery (the
@@ -294,8 +330,9 @@ export function WireSync() {
         dmFollows: followData?.pubkeys ?? [],
         concord1: buildConcordSubs(concordData?.list),
         concord2,
+        concord2Control,
       }),
-    [user?.pubkey, groups, config, followData?.pubkeys, concordData, concord2],
+    [user?.pubkey, groups, config, followData?.pubkeys, concordData, concord2, concord2Control],
   );
 
   // The ingest path reads the spec lazily so long-lived subscriptions always

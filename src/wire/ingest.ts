@@ -1,5 +1,7 @@
 import { openChatBatch } from "@/concord-v2/lib/chat";
-import { parkPendingWraps, writeRumors } from "@/concord-v2/lib/rumorStore";
+import type { GroupKey } from "@/concord-v2/lib/derive";
+import { openPlaneWraps } from "@/concord-v2/lib/planeSync";
+import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { emitWireScopes } from "@/wire/bus";
 
 import type { WireSpec } from "@/wire/spec";
@@ -58,8 +60,10 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
   const scopes = new Set<string>();
 
   // Split wraps from plaintext; group decryptable wraps per channel so the
-  // (chunked, memoized) decode runs one batch per channel.
+  // (chunked, memoized) decode runs one batch per channel. Control-plane wraps
+  // (a separate author set) are collected per community for a fold wake.
   const wrapsByChannel = new Map<ChannelV2, NostrEvent[]>();
+  const ctlWraps: NostrEvent[] = [];
   const toPark: NostrEvent[] = [];
   const plain: NostrEvent[] = [];
   for (const ev of events) {
@@ -70,6 +74,8 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
         const list = wrapsByChannel.get(channel);
         if (list) list.push(ev);
         else wrapsByChannel.set(channel, [ev]);
+      } else if (spec?.v2CtlByPk.has(ev.pubkey)) {
+        ctlWraps.push(ev);
       } else {
         toPark.push(ev);
       }
@@ -84,6 +90,29 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
     if (opened.length === 0) continue;
     writeRumors(opened);
     scopes.add(`c2:${channel.idHex}`);
+  }
+
+  // V2 CONTROL: decrypt with the community's control-stream keys → opened-event
+  // store, then ring `c2ctl:<idHex>`. useControlEvents2 listens on that scope
+  // (even for a non-open community, whose rail button can't be invalidation-
+  // reached) to re-seed from the store and re-fold — so a freshly-published
+  // channel edition surfaces in the sidebar promptly, without waiting for the
+  // slow control-plane sweep or a first message on the channel.
+  if (ctlWraps.length > 0 && spec) {
+    const byCommunity = new Map<string, { groups: GroupKey[]; wraps: NostrEvent[] }>();
+    for (const ev of ctlWraps) {
+      const entry = spec.v2CtlByPk.get(ev.pubkey);
+      if (!entry) continue;
+      const bucket = byCommunity.get(entry.idHex);
+      if (bucket) bucket.wraps.push(ev);
+      else byCommunity.set(entry.idHex, { groups: entry.groups, wraps: [ev] });
+    }
+    for (const [idHex, { groups, wraps }] of byCommunity) {
+      const opened = openPlaneWraps(wraps, groups);
+      if (opened.length === 0) continue;
+      await writeOpened(opened);
+      scopes.add(`c2ctl:${idHex}`);
+    }
   }
   // Wraps for streams we hold no key for (control plane, invites, or a
   // just-joined channel whose spec hasn't refreshed): park for the plane
