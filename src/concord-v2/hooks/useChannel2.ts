@@ -315,8 +315,18 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   // rumor store, and announces `c2:<idHex>` on the bus. We just re-read.
   // (Relay backfill inside the queryFn is independently throttled below so a
   // bus invalidation is a cheap local read, not a network round.)
+  //
+  // `c2park:<streamPk>` covers the wire's blind spot: a wrap for one of OUR
+  // stream addresses that the wire couldn't decrypt (its spec hadn't refreshed
+  // past a rekey yet) is parked, not stored — re-reading drains the park via
+  // the queryFn's peekPendingWraps pass, so the message paints now instead of
+  // after the next poll.
   useWireScopes((scopes) => {
-    if (channelIdHex && scopes.has(`c2:${channelIdHex}`)) {
+    if (!channelIdHex) return;
+    const mine =
+      scopes.has(`c2:${channelIdHex}`) ||
+      (channel?.streams.some((s) => scopes.has(`c2park:${s.group.pk}`)) ?? false);
+    if (mine) {
       void queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });
     }
   });

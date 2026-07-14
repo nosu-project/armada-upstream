@@ -14,6 +14,7 @@ import { NostrBatcher } from "@/lib/NostrBatcher";
 import { getNip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
+import { emitRelayReopened } from "@/lib/relayReopen";
 import { logSync } from "@/lib/syncLog";
 import {
   noteAuthResult,
@@ -259,6 +260,11 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           }
         }
       }
+      // Tell long-lived consumers (the wire's standing ingestion) that this is
+      // a fresh socket session: their re-issued subscriptions may have raced
+      // the NIP-42 handshake, so they should re-REQ rather than trust the old
+      // round (see relayReopen.ts).
+      emitRelayReopened(url);
     };
     // Ack our raw AUTH frames: the relay replies ["OK", <auth event id>, bool].
     // Cheap prefix check first so the wrap firehose isn't double-parsed.

@@ -24,6 +24,8 @@ import { readFolded } from "@/lib/foldedCache";
 import { buildRelayGroups, KIND_GROUP_METADATA } from "@/lib/nip29";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { PINNED_RAIL_RELAYS, normalizeRelayUrl } from "@/lib/platform";
+import { onRelayReopened } from "@/lib/relayReopen";
+import { logSync } from "@/lib/syncLog";
 import { emitWireScopes } from "@/wire/bus";
 import { ingestWireEvents } from "@/wire/ingest";
 import { buildWireSpec, type WireSpec } from "@/wire/spec";
@@ -53,10 +55,22 @@ const CURSOR_OVERLAP_SECONDS = 60;
  * AUTH exchange, a half-open socket) and is aborted so the loop re-issues it
  * — without this, the `for await` blocks forever and the wire silently dies
  * until an app relaunch (the "I log in and nothing is here" wedge).
- * Once the round has yielded anything, the watchdog stands down: a quiet
- * standing subscription is normal for hours.
  */
 const SILENT_REQ_TIMEOUT_MS = 30_000;
+/**
+ * Rotation ceiling on a QUIET established round: once a round has yielded
+ * something, a long silence is usually just a quiet channel — but it is
+ * indistinguishable from a subscription that silently died (a relay that
+ * dropped its sub state without CLOSED, a re-issued REQ swallowed by the
+ * NIP-42 race on a reconnected socket — see relayReopen.ts for the eager
+ * path). So a round silent this long is torn down and re-REQ'd from the
+ * cursor. Rotation is lossless (the cursor + overlap replays the boundary)
+ * and cheap (one REQ frame; an empty replay on a truly quiet relay), and it
+ * bounds "live went deaf" to this window instead of "until app relaunch".
+ */
+const QUIET_ROTATE_MS = 90_000;
+/** How often a round's silence is re-checked against the deadlines above. */
+const WATCHDOG_TICK_MS = 5_000;
 
 function cursorKey(relay: string): string {
   return `armada:wire-cursor:${relay}`;
@@ -74,8 +88,14 @@ function readCursor(relay: string): number | undefined {
 
 function writeCursor(relay: string, createdAt: number): void {
   try {
+    // Clamp against the local clock: an event stamped in the future (a
+    // member's skewed clock, a hostile timestamp) must not drag the cursor
+    // past `now` — every later REQ would open with `since > now` and the wire
+    // would go deaf on this relay (persistently — the cursor is durable)
+    // while everyone else's correctly-stamped messages stop matching.
+    const next = Math.min(createdAt, Math.floor(Date.now() / 1000));
     const prev = readCursor(relay) ?? 0;
-    if (createdAt > prev) localStorage.setItem(cursorKey(relay), String(createdAt));
+    if (next > prev) localStorage.setItem(cursorKey(relay), String(next));
   } catch {
     // localStorage unavailable — resume from the fresh lookback next launch.
   }
@@ -290,15 +310,11 @@ export function WireSync() {
     if (!user || spec.subs.length === 0) return;
     const controller = new AbortController();
 
-    // Signal-aware sleep so effect cleanup doesn't leave a retry pending.
-    const sleep = (ms: number) =>
-      new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, ms);
-        controller.signal.addEventListener("abort", () => {
-          clearTimeout(t);
-          resolve();
-        }, { once: true });
-      });
+    // Per-relay "restart your round now" hooks: aborts the in-flight round and
+    // skips any backoff sleep, so the loop re-REQs immediately. Driven by the
+    // socket-reopen signal below.
+    const bumps = new Map<string, () => void>();
+    const offReopen = onRelayReopened((url) => bumps.get(url)?.());
 
     for (const { relay, filters } of spec.subs) {
       void (async () => {
@@ -311,6 +327,24 @@ export function WireSync() {
         // until restart. Each fresh REQ gets a new sub id and with it a fresh
         // auth-retry from the pool, so the wire heals as soon as AUTH lands.
         let backoff = 1_000;
+        // Signal-aware, bump-aware sleep: effect cleanup or a socket reopen
+        // resolves it early so the retry never lags behind a live socket.
+        let wakeSleep: (() => void) | undefined;
+        const sleep = (ms: number) =>
+          new Promise<void>((resolve) => {
+            const finish = () => {
+              clearTimeout(t);
+              controller.signal.removeEventListener("abort", finish);
+              wakeSleep = undefined;
+              resolve();
+            };
+            const t = setTimeout(finish, ms);
+            wakeSleep = finish;
+            controller.signal.addEventListener("abort", finish);
+          });
+        // Routine rotations are silent in the log; only the first round and
+        // anomalies (swallowed REQ, reopen restart, early CLOSED) speak.
+        let firstRound = true;
         while (!controller.signal.aborted) {
           const started = Date.now();
           // Recompute the resume point each round: the cursor advanced with
@@ -322,33 +356,69 @@ export function WireSync() {
             cursor !== undefined ? cursor - CURSOR_OVERLAP_SECONDS : now - FRESH_LOOKBACK_SECONDS,
             cursor !== undefined ? floor : 0,
           );
-          // Abortable round: the silent-REQ watchdog kills a round that never
-          // yields anything (see SILENT_REQ_TIMEOUT_MS); the loop re-REQs.
+          // Abortable round, watched for liveness on a recurring tick:
+          //   - a round that never yields ANYTHING (no EVENT, no EOSE) inside
+          //     SILENT_REQ_TIMEOUT_MS was swallowed — abort and re-REQ;
+          //   - an established round silent past QUIET_ROTATE_MS is rotated —
+          //     a quiet channel and a silently-dead subscription look
+          //     identical from here, and re-REQing from the cursor is
+          //     lossless, so never trust one subscription for long;
+          //   - a socket reopen bumps the round immediately (see relayReopen).
           const round = new AbortController();
           const roundSignal = AbortSignal.any([controller.signal, round.signal]);
+          bumps.set(relay, () => {
+            logSync("wire", `${relay}: socket reopened — restarting round`);
+            round.abort();
+            wakeSleep?.();
+          });
           let sawAnything = false;
-          const watchdog = setTimeout(() => {
-            if (!sawAnything) round.abort();
-          }, SILENT_REQ_TIMEOUT_MS);
+          let lastMsgAt = started;
+          let ingested = 0;
+          let rotated = false;
+          const watchdog = setInterval(() => {
+            const silentFor = Date.now() - lastMsgAt;
+            if (!sawAnything && silentFor >= SILENT_REQ_TIMEOUT_MS) {
+              logSync("wire", `${relay}: round yielded nothing in ${Math.round(silentFor / 1000)}s — presumed swallowed, re-REQ`);
+              round.abort();
+            } else if (sawAnything && silentFor >= QUIET_ROTATE_MS) {
+              rotated = true;
+              round.abort();
+            }
+          }, WATCHDOG_TICK_MS);
+          if (firstRound) {
+            logSync("wire", `${relay}: round open (since=${since}, ${filters.length} filter(s))`);
+            firstRound = false;
+          }
           try {
             for await (const msg of nostr.relay(relay).req(
               filters.map((f) => ({ ...f, since })),
               { signal: roundSignal },
             )) {
               sawAnything = true;
+              lastMsgAt = Date.now();
               if (msg[0] === "EVENT") {
                 backoff = 1_000;
                 const event = msg[2] as NostrEvent;
                 await ingestWireEvents(sinksRef.current, [event]);
+                ingested += 1;
                 writeCursor(relay, event.created_at);
               }
             }
           } catch {
             // Aborted or transport error — handled by the loop condition.
           } finally {
-            clearTimeout(watchdog);
+            clearInterval(watchdog);
+            // Release the composite roundSignal's grip on the effect
+            // controller (a naturally-CLOSED round never aborted its own).
+            round.abort();
           }
           if (controller.signal.aborted) break;
+          if (!rotated) {
+            logSync(
+              "wire",
+              `${relay}: round ended after ${Math.round((Date.now() - started) / 1000)}s (${ingested} event(s) ingested)`,
+            );
+          }
           // A session that lived a while earned a prompt retry; a relay
           // slamming the door (CLOSED right away) backs off up to 60s.
           if (Date.now() - started > 60_000) backoff = 1_000;
@@ -357,7 +427,10 @@ export function WireSync() {
         }
       })();
     }
-    return () => controller.abort();
+    return () => {
+      offReopen();
+      controller.abort();
+    };
     // Resubscribe only when the actual subscription set changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, user?.pubkey, spec.sig]);

@@ -268,6 +268,123 @@ describe("NostrBatcher — relay()/group() req multiplexing", () => {
   });
 });
 
+describe("NostrBatcher — live tail with a signal-respecting upstream", () => {
+  /**
+   * A relay handle whose `req` behaves like the REAL NRelay1: it RESPECTS the
+   * abort signal (ends when aborted), yields an EOSE up front, and then stays
+   * open for live events. The coalesce mock above ignores the signal, so it
+   * cannot catch teardown/re-REQ regressions — this one can. Mirrors how
+   * WireSync drives its standing rounds (abortable round + re-REQ).
+   */
+  function makeRealisticPool() {
+    const reqCalls: { url: string; filters: NostrFilter[] }[] = [];
+    const feeders = new Map<string, (msg: [string, ...unknown[]]) => void>();
+
+    const makeHandle = (url: string) => ({
+      query: vi.fn(async () => [] as NostrEvent[]),
+      req: vi.fn((filters: NostrFilter[], opts?: { signal?: AbortSignal }) => {
+        reqCalls.push({ url, filters });
+        const queue: [string, ...unknown[]][] = [];
+        let wake: (() => void) | undefined;
+        let done = false;
+        const signal = opts?.signal;
+        const onAbort = () => {
+          done = true;
+          wake?.();
+        };
+        if (signal) {
+          if (signal.aborted) done = true;
+          else signal.addEventListener("abort", onAbort, { once: true });
+        }
+        feeders.set(url, (msg) => {
+          queue.push(msg);
+          wake?.();
+        });
+        return (async function* () {
+          try {
+            yield ["EOSE", "sub"] as [string, ...unknown[]];
+            for (;;) {
+              while (queue.length > 0) yield queue.shift()!;
+              if (done) return;
+              await new Promise<void>((r) => (wake = r));
+              wake = undefined;
+            }
+          } finally {
+            signal?.removeEventListener("abort", onAbort);
+          }
+        })();
+      }),
+    });
+
+    const pool = {
+      relay: vi.fn((url: string) => makeHandle(url)),
+    } as unknown as NPool;
+
+    return { pool, reqCalls, feeders };
+  }
+
+  it("delivers a live event after EOSE on a standing subscription", async () => {
+    const { pool, feeders } = makeRealisticPool();
+    const batcher = new NostrBatcher(pool);
+    const filter = [{ kinds: [1059], authors: ["stream"], since: 100 }];
+
+    const got: string[] = [];
+    const ac = new AbortController();
+    const p = (async () => {
+      for await (const msg of batcher.relay("wss://r1").req(filter, { signal: ac.signal })) {
+        const m = msg as [string, string, NostrEvent];
+        if (m[0] === "EVENT") got.push(m[2].id);
+      }
+    })();
+
+    await new Promise((r) => setTimeout(r, 0));
+    // A live message arrives on the standing (post-EOSE) subscription.
+    feeders.get("wss://r1")!(["EVENT", "sub", wrapEvent("live-1")]);
+    await new Promise((r) => setTimeout(r, 0));
+
+    ac.abort();
+    await p;
+
+    expect(got).toEqual(["live-1"]);
+  });
+
+  it("a re-REQ after an aborted round still delivers live events (round teardown)", async () => {
+    const { pool, feeders, reqCalls } = makeRealisticPool();
+    const batcher = new NostrBatcher(pool);
+    const filter = [{ kinds: [1059], authors: ["stream"], since: 100 }];
+
+    const got: string[] = [];
+    const drainWith = (signal: AbortSignal) =>
+      (async () => {
+        for await (const msg of batcher.relay("wss://r1").req(filter, { signal })) {
+          const m = msg as [string, string, NostrEvent];
+          if (m[0] === "EVENT") got.push(m[2].id);
+        }
+      })();
+
+    // Round 1: opened, then aborted (WireSync's watchdog/rotation pattern).
+    const round1 = new AbortController();
+    const p1 = drainWith(round1.signal);
+    await new Promise((r) => setTimeout(r, 0));
+    round1.abort();
+    await p1;
+
+    // Round 2: the loop re-REQs with the SAME filter (cursor didn't advance).
+    const round2 = new AbortController();
+    const p2 = drainWith(round2.signal);
+    await new Promise((r) => setTimeout(r, 0));
+
+    feeders.get("wss://r1")!(["EVENT", "sub", wrapEvent("live-2")]);
+    await new Promise((r) => setTimeout(r, 0));
+
+    round2.abort();
+    await p2;
+
+    expect(reqCalls).toHaveLength(2); // round 1 closed, round 2 reopened
+    expect(got).toEqual(["live-2"]);
+  });
+});
+
 describe("NostrBatcher — gift wraps are never cached", () => {
   /** A store stub recording every event handed to `.event()`. */
   function makeStore() {

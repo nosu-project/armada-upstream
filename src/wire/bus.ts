@@ -13,6 +13,9 @@
  *   - `dm`                   — a kind-4 DM arrived
  *   - `c1:<channelIdHex>`    — a Concord V1 channel's sealed history changed
  *   - `c2:<channelIdHex>`    — a Concord V2 channel's rumor store changed
+ *   - `c2park:<streamPk>`    — a V2 wrap for this stream address was PARKED
+ *     (the wire held no key for it); a hook holding that stream's key should
+ *     drain the pending store
  *   - `c2ctl:<communityIdHex>` — a Concord V2 community's decrypted control
  *     plane changed (the background sweep stored new editions)
  *

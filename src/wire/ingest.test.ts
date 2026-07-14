@@ -149,7 +149,7 @@ describe("ingestWireEvents", () => {
     expect(rumors.some((r) => r.content === "sealed hello")).toBe(true);
   });
 
-  it("parks V2 wraps for streams we hold no key for (loss-proof native parity)", async () => {
+  it("parks V2 wraps for streams we hold no key for and rings the park doorbell", async () => {
     const { channel } = makeChannel();
     const alice = signer();
     const wrap = await wrapChat(channel, alice, "not ours yet");
@@ -158,7 +158,9 @@ describe("ingestWireEvents", () => {
     const scopes = await collectScopes(() => ingestWireEvents(sinks, [wrap]));
 
     expect(store.events).toHaveLength(0);
-    expect(scopes.size).toBe(0);
+    // The park announces the wrap's STREAM ADDRESS, so a hook that holds the
+    // key the wire's spec hasn't caught up to (post-rekey) can drain it.
+    expect(scopes).toEqual(new Set([`c2park:${wrap.pubkey}`]));
     const parked = await peekPendingWraps([wrap.pubkey]);
     expect(parked.some((w) => w.id === wrap.id)).toBe(true);
   });

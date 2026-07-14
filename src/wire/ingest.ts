@@ -88,7 +88,14 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
   // Wraps for streams we hold no key for (control plane, invites, or a
   // just-joined channel whose spec hasn't refreshed): park for the plane
   // hooks that do hold the keys. Peek+ack semantics keep this loss-proof.
-  if (toPark.length > 0) parkPendingWraps(toPark);
+  // Ring a doorbell naming the wrap's stream address: a hook that DOES hold
+  // that stream's key (e.g. the active channel right after a rekey, before
+  // the wire spec has refreshed its stream set) can drain the park instead
+  // of sitting in dead air until the next poll.
+  if (toPark.length > 0) {
+    parkPendingWraps(toPark);
+    for (const ev of toPark) scopes.add(`c2park:${ev.pubkey}`);
+  }
 
   // Plaintext planes → the shared event store (NIP-09 applied by the store).
   if (plain.length > 0) {
