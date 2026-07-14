@@ -1795,6 +1795,8 @@ export function ConcordV2Page() {
                         groupId={channel.idHex}
                         messages={[]}
                         mentionPubkeys={memberPubkeys}
+                        botCommands
+                        conversationRelays={community?.relays}
                         placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                         sendOverride={handleSend}
                         replyTo={replyTo}
@@ -1840,6 +1842,8 @@ export function ConcordV2Page() {
                     groupId={channel.idHex}
                     canWrite={canWrite}
                     mentionPubkeys={memberPubkeys}
+                    botCommands
+                    conversationRelays={community?.relays}
                     autoFocus={threadAutoFocus}
                     onClose={() => setThreadRoot(undefined)}
                   />

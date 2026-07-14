@@ -279,6 +279,27 @@ interface ChatComposerProps {
    * interoperable with Vector. Without this, attachments upload as plaintext.
    */
   encryptAttachments?: boolean;
+  /**
+   * Whether this conversation may offer bot commands.
+   *
+   * Off by default, and deliberately a decision the surface makes rather than
+   * something inferred: an invocation carries a `["bot", <pubkey>]` routing tag,
+   * and it is only safe where the transport hides its tags (Concord seals them
+   * inside the encrypted rumor) or where nothing is hidden anyway (a public
+   * NIP-29 group). It must stay OFF for NIP-04 direct messages, whose tags are
+   * plaintext on the wire: a routing tag there would publish "this pubkey is
+   * commanding that bot" to every relay carrying the conversation.
+   */
+  botCommands?: boolean;
+  /**
+   * Relays this conversation's own traffic uses, searched for bot manifests
+   * alongside the app relays and the public indexers — a bot may publish its
+   * manifest only to the community it serves, where no indexer would see it.
+   *
+   * NIP-29 groups need not pass this: their host relay IS `relayUrl`. Concord
+   * rides `relayUrl="dm"` and so must supply its community's relays here.
+   */
+  conversationRelays?: string[];
 }
 
 /**
@@ -291,7 +312,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, conversationRelays }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -347,21 +368,25 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   // ── Bot commands ─────────────────────────────────────────────────────────
   // The bots in this conversation publish their command catalogs as replaceable
-  // kind-10304 manifests.
-  //
-  // Plain DMs have no roster (`memberPubkeys` is undefined), so they offer no bot
-  // commands — which is what we want: their transport leaves tags in the clear,
-  // and a `bot` tag there would tell every relay who is commanding whom.
+  // kind-10304 manifests. Gated on the `botCommands` opt-in, never inferred from
+  // the roster: a surface that gains a member list must not thereby gain the
+  // right to put a routing tag on a transport that cannot hide it.
   /** The command whose arguments are being collected, if any. */
   const [botCommand, setBotCommand] = useState<BotCommandEntry | null>(null);
   /** The bot the user picked from, so a name two bots share still routes correctly. */
   const armedBotRef = useRef<string | undefined>(undefined);
+  // A NIP-29 group's own relay is the one it is hosted on; Concord has no such
+  // single URL (it rides the "dm" sentinel) and hands its community's relays in.
+  const botRelays = useMemo(
+    () => conversationRelays ?? (isDM ? undefined : [relayUrl]),
+    [conversationRelays, isDM, relayUrl],
+  );
   const {
     entries: botEntries,
     bots: botPubkeys,
     profiles: botProfiles,
     isLoading: botsLoading,
-  } = useBotManifests(memberPubkeys);
+  } = useBotManifests(botCommands ? memberPubkeys : undefined, botRelays);
 
   const botRecentsKey = `armada-bot-recents:${user?.pubkey ?? ""}`;
   const [botRecents, setBotRecents] = useState<string[]>([]);

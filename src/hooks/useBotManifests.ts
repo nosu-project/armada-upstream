@@ -8,18 +8,22 @@ import { BOT_MANIFEST_KIND, parseBotManifest, type BotCommandEntry } from "@/lib
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
- * Widely-indexed relays queried for manifests alongside the app's own.
+ * Widely-indexed relays queried for manifests alongside the conversation's own
+ * and the app's.
  *
- * A conversation's relay is not a reliable place to find a bot's manifest: some
- * drop events from non-members, and in practice they also lag (a bot that
- * republishes its interface may land on the indexers minutes before its
- * community relay catches up, or never). Reading the union and taking the newest
- * per author makes a manifest resolvable regardless of which relay is behind.
+ * Neither end of that union is sufficient alone. A conversation's relay may drop
+ * events from non-members, and in practice it also lags: a bot that republishes
+ * its interface can land on the indexers while its community relay still serves
+ * the retired one. But a bot may equally publish its manifest ONLY to the
+ * community it serves, and no indexer would ever see it. Reading the union and
+ * taking the newest per author resolves the manifest whichever way it was
+ * published, and whichever relay is behind.
  */
 export const BOT_DISCOVERY_RELAYS = [
   "wss://relay.damus.io",
   "wss://nos.lol",
   "wss://purplepag.es",
+  "wss://relay.nostr.band",
 ];
 
 /** Relays cap how many authors one filter may name; stay well inside that. */
@@ -100,8 +104,16 @@ function newestPerAuthor(events: NostrEvent[], asked: Set<string>, kind: number)
  * anything, in order to decide whether to offer Commands at all. Warming here
  * also means the `/` menu is already populated by the time it is opened. A
  * conversation with no roster (a plain DM) fetches nothing.
+ *
+ * `conversationRelays` are the relays this conversation's own traffic uses (a
+ * community's relays, a NIP-29 host). They are searched alongside the app's and
+ * the public indexers, because a bot may have published its manifest to only one
+ * of the three.
  */
-export function useBotManifests(memberPubkeys: string[] | undefined): BotManifestsResult {
+export function useBotManifests(
+  memberPubkeys: string[] | undefined,
+  conversationRelays?: string[],
+): BotManifestsResult {
   const { nostr } = useNostr();
   const { config } = useAppContext();
 
@@ -154,13 +166,20 @@ export function useBotManifests(memberPubkeys: string[] | undefined): BotManifes
   const bots = botsQuery.data?.bots ?? EMPTY;
   const botsKey = bots.join(",");
 
+  // Sorted so the key is stable however the caller ordered them, and so a
+  // caller passing a fresh array each render does not churn the query.
   const relays = useMemo(
-    () => [...new Set([...config.appRelays, ...BOT_DISCOVERY_RELAYS])],
-    [config.appRelays],
+    () =>
+      [...new Set([...(conversationRelays ?? []), ...config.appRelays, ...BOT_DISCOVERY_RELAYS])].sort(),
+    [conversationRelays, config.appRelays],
   );
+  const relayKey = relays.join(",");
 
   const manifestsQuery = useQuery({
-    queryKey: ["bot-manifests", botsKey],
+    // The relay set is part of the identity of this result: querying a different
+    // set can legitimately yield a different (newer) manifest, so a relay change
+    // must invalidate rather than serve a cached answer from the old set.
+    queryKey: ["bot-manifests", botsKey, relayKey],
     queryFn: async ({ signal }) => {
       const asked = new Set(bots);
       const events = await queryChunked(

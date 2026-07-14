@@ -620,6 +620,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             onOptimisticSent={markSent}
             onOptimisticFailed={markFailed}
             canModerate={canModerate}
+            botCommands
             onSlashAction={handleSlashAction}
           />
         ) : membershipPending ? (
@@ -693,6 +694,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
               relayUrl={relayUrl}
               groupId={groupId}
               canWrite={Boolean(user && canWrite)}
+              botCommands
               autoFocus={threadAutoFocus}
               onClose={() => setThreadRoot(undefined)}
             />
