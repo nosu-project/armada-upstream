@@ -858,7 +858,11 @@ export function ConcordV2Page() {
   const canKickAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.KICK));
   const canBanAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.BAN));
   const canModerateMessages = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_MESSAGES));
-  const canWrite = Boolean(user && channel);
+  // A dissolved community is terminal: the owner has torn it down, so no key
+  // rotation or new messages will ever land. Keep it fully readable (members
+  // asked to still see the history), but freeze every write path.
+  const { data: dissolved } = useDissolved2(community);
+  const canWrite = Boolean(user && channel && !dissolved);
 
   const { transport: baseTransport, reactionsFor, allMessages } = useTransport2(community, channel, canWrite, canModerateMessages);
   const { mutateAsync: send } = useSendMessage2(community, channel);
@@ -897,7 +901,6 @@ export function ConcordV2Page() {
   }, [user, channelIdForRead, allMessages, markChannelRead]);
 
   const { leave, isLeaving, dissolve, createChannel, isAddingChannel } = useCommunityManagement2(community);
-  const { data: dissolved } = useDissolved2(community);
   const { coalesced } = useGuestbook2(community);
 
   // Voice (CORD-07): the active channel's live presence + rendezvous broker
@@ -1154,11 +1157,13 @@ export function ConcordV2Page() {
   const publishTyping = useTypingPublisher2(community, channel);
   const typingPubkeys = useTyping2(community, channel);
 
-  // A dissolved community is terminal — read-only would be ideal; for now
-  // navigate home (the list entry stays until the user leaves).
-  useEffect(() => {
-    if (dissolved) navigateTo("/");
-  }, [dissolved, navigateTo]);
+  // A dissolved community stays viewable (read-only) rather than redirecting
+  // home — members asked to keep seeing the history. `canWrite` (above) is
+  // already false when `dissolved`, freezing every write path; the timeline
+  // renders a banner + explicit "Remove" button (below) so the member can
+  // reap their own list entry when they're ready. The owner's dissolution
+  // can't reach into each member's self-encrypted list, so removal MUST be a
+  // local, per-member action.
 
   if (!communityId) return <Navigate to="/" replace />;
 
@@ -1287,19 +1292,19 @@ export function ConcordV2Page() {
                     onClick: () => setInfoOpen(true),
                   },
                   {
-                    show: !!user,
+                    show: !!user && !dissolved,
                     icon: <UserPlus className="size-4" />,
                     label: "Invite people",
                     onClick: () => setInviteOpen(true),
                   },
                   {
-                    show: canManageChannels,
+                    show: canManageChannels && !dissolved,
                     icon: <Plus className="size-4" />,
                     label: "Create channel",
                     onClick: () => setCreatingChannel(true),
                   },
                   {
-                    show: canManageRoles,
+                    show: canManageRoles && !dissolved,
                     icon: <Shield className="size-4" />,
                     label: "Manage roles",
                     onClick: () => setRolesOpen(true),
@@ -1339,9 +1344,9 @@ export function ConcordV2Page() {
                       }}
                     >
                       <LogOut className="size-4" />
-                      Leave community
+                      {dissolved ? "Remove community" : "Leave community"}
                     </button>
-                    {iAmOwner && (
+                    {iAmOwner && !dissolved && (
                       <button
                         type="button"
                         className="flex w-full items-center gap-3 px-3 py-2 text-sm text-left text-destructive transition-colors clip-corner-lg hover:bg-destructive/10"
@@ -1586,7 +1591,7 @@ export function ConcordV2Page() {
               </div>
             </button>
             <div className="ml-auto flex items-center gap-0.5">
-              {user && view === "channel" && channel && (
+              {user && view === "channel" && channel && !dissolved && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -1603,7 +1608,7 @@ export function ConcordV2Page() {
                   <TooltipContent>{inThisVoice ? "In voice" : "Join voice"}</TooltipContent>
                 </Tooltip>
               )}
-              {user && (
+              {user && !dissolved && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon" className="size-8 touch:size-10" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
@@ -1745,20 +1750,41 @@ export function ConcordV2Page() {
                   />
 
                   {typingPubkeys.length > 0 && <TypingIndicator pubkeys={typingPubkeys} />}
-                  {channel && (
-                    <ChatComposer
-                      relayUrl="dm"
-                      groupId={channel.idHex}
-                      messages={[]}
-                      mentionPubkeys={memberPubkeys}
-                      placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
-                      sendOverride={handleSend}
-                      replyTo={replyTo}
-                      replyMarker="nipc7"
-                      onCancelReply={() => setReplyTo(undefined)}
-                      onTyping={publishTyping}
-                      encryptAttachments
-                    />
+                  {dissolved ? (
+                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-destructive/10 border border-destructive/30 flex items-center gap-3">
+                      <Trash2 className="size-5 shrink-0 text-destructive" />
+                      <div className="min-w-0 flex-1 text-sm">
+                        <p className="font-medium text-destructive">This community was deleted by its owner.</p>
+                        <p className="text-muted-foreground">
+                          It's now read-only. You can still browse the history, or remove it from your list.
+                        </p>
+                      </div>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="shrink-0 clip-corner-lg"
+                        disabled={isLeaving}
+                        onClick={handleLeave}
+                      >
+                        {isLeaving ? <Loader2 className="size-4 animate-spin" /> : "Remove"}
+                      </Button>
+                    </div>
+                  ) : (
+                    channel && (
+                      <ChatComposer
+                        relayUrl="dm"
+                        groupId={channel.idHex}
+                        messages={[]}
+                        mentionPubkeys={memberPubkeys}
+                        placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
+                        sendOverride={handleSend}
+                        replyTo={replyTo}
+                        replyMarker="nipc7"
+                        onCancelReply={() => setReplyTo(undefined)}
+                        onTyping={publishTyping}
+                        encryptAttachments
+                      />
+                    )
                   )}
                 </>
               )}
