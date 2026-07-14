@@ -6,9 +6,9 @@ import { useNavigate } from "react-router-dom";
 import { buildConcordSubs } from "@/concord-v1/lib/concordNotifications";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
-import { useToast } from "@/hooks/useToast";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseAuthorEvent, type AuthorResult } from "@/hooks/useAuthor";
 import {
@@ -19,6 +19,7 @@ import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
+import { tryNpubEncode } from "@/lib/safeNip19";
 import { registerNotifySink } from "@/wire/notify";
 
 /**
@@ -27,16 +28,15 @@ import { registerNotifySink } from "@/wire/notify";
  * The client-side notifier that runs while Armada is OPEN (web / desktop; the
  * native APK uses its background service instead). It surfaces the SAME
  * unread/mention signal the badges already compute — sourced from the wire's
- * ingest, which hands it every live event once — as:
+ * ingest, which hands it every live event once — as a real OS
+ * `new Notification(...)`.
  *
- *   - an in-app TOAST when the tab is focused, and
- *   - a real OS `new Notification(...)` when the tab is BACKGROUNDED.
- *
- * These are complementary to Web Push (closed-tab delivery via the relay
- * gateway): the OS-notification half needs only the Notifications API +
- * permission, so it works in browsers where Web Push is unavailable (Brave with
- * Google push disabled), which otherwise get nothing while the app is open in
- * the background.
+ * This is complementary to Web Push (closed-tab delivery via the relay
+ * gateway): it needs only the Notifications API + permission, so it works in
+ * browsers where Web Push is unavailable (Brave with Google push disabled),
+ * which otherwise get nothing while the app is open in the background. It fires
+ * whether the tab is focused or backgrounded, except for the conversation
+ * currently on screen (see the active-room gate).
  *
  * Gating (all must pass to notify):
  *   - the master foreground intent is on;
@@ -60,8 +60,8 @@ function levelAdmits(level: NotifLevel, mention: boolean): boolean {
 export function useForegroundNotifications(): void {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
-  const { toast } = useToast();
   const queryClient = useQueryClient();
+  const eventStore = useEventStore();
   useNostr(); // keep within the Nostr provider tree
 
   const { readState } = useReadState();
@@ -108,8 +108,8 @@ export function useForegroundNotifications(): void {
     relayByGroup,
     v1ByChannel,
     navigate,
-    toast,
     queryClient,
+    eventStore,
   });
   ctx.current = {
     readState,
@@ -119,8 +119,8 @@ export function useForegroundNotifications(): void {
     relayByGroup,
     v1ByChannel,
     navigate,
-    toast,
     queryClient,
+    eventStore,
   };
 
   // Session floor: never notify for anything older than the moment the notifier
@@ -134,19 +134,41 @@ export function useForegroundNotifications(): void {
     if (!user) return;
     if (isNativeRuntime()) return; // native has its own background service
 
-    const displayNameFor = (pubkey: string): string => {
+    // Resolve a display name for an author. Tries, in order: the react-query
+    // author cache (populated when a profile has been viewed this session), the
+    // shared event store's kind-0 (the wire keeps profiles flowing in), and
+    // finally a shortened npub — never a bland "Someone", which was the bug.
+    const displayNameFor = async (pubkey: string): Promise<string> => {
       if (!pubkey) return "Someone";
-      const cached = ctx.current.queryClient.getQueryData<AuthorResult>(["author", pubkey]);
+      const qc = ctx.current.queryClient;
+      const cached = qc.getQueryData<AuthorResult>(["author", pubkey]);
       if (cached?.metadata) return getDisplayName(cached.metadata, pubkey);
       if (cached?.event) return getDisplayName(parseAuthorEvent(cached.event).metadata, pubkey);
-      return "Someone";
+
+      // Fall back to the local event store (no network) — the profile is very
+      // often already here even when no component has subscribed to it.
+      try {
+        const store = await ctx.current.eventStore;
+        const [ev] = await store.query([{ kinds: [0], authors: [pubkey], limit: 1 }]);
+        if (ev) {
+          const parsed = parseAuthorEvent(ev);
+          // Seed the author cache so the next lookup is synchronous.
+          qc.setQueryData<AuthorResult>(["author", pubkey], parsed);
+          if (parsed.metadata) return getDisplayName(parsed.metadata, pubkey);
+        }
+      } catch {
+        // Store unavailable — fall through to the npub.
+      }
+
+      const npub = tryNpubEncode(pubkey);
+      return npub ? `${npub.slice(0, 12)}…` : "Someone";
     };
 
     const unregister = registerNotifySink((candidates) => {
       const intentOn = foregroundNotifyIntent();
       if (!intentOn) return;
+      if (!notificationsApiAvailable() || Notification.permission !== "granted") return;
 
-      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
       const c = ctx.current;
 
       for (const cand of candidates) {
@@ -158,7 +180,6 @@ export function useForegroundNotifications(): void {
         let readKey = cand.readKey;
         let path = cand.path;
         let level: NotifLevel;
-        let title = "";
 
         if (cand.plane === "nip29") {
           const relay = cand.groupId ? c.relayByGroup.get(cand.groupId) : undefined;
@@ -167,10 +188,8 @@ export function useForegroundNotifications(): void {
           readKey = channelReadKey(relay, cand.groupId);
           path = `/s/${relayToRouteParam(relay)}/${encodeURIComponent(cand.groupId)}`;
           level = c.channelLevel(relay, cand.groupId);
-          title = cand.mention ? `${displayNameFor(cand.author)} mentioned you` : displayNameFor(cand.author);
         } else if (cand.plane === "dm") {
           level = cand.peer ? c.dmLevel(cand.peer) : "all";
-          title = `${displayNameFor(cand.author)} sent you a message`;
         } else if (cand.plane === "c2") {
           if (!path) continue; // couldn't resolve the community route
           // Recover the community id from the route (`/c/<communityId>/<channel>`)
@@ -181,9 +200,6 @@ export function useForegroundNotifications(): void {
             communityId && cand.channelIdHex
               ? c.concordChannelLevel("c2", communityId, cand.channelIdHex)
               : "all";
-          title = cand.mention
-            ? `${displayNameFor(cand.author)} mentioned you`
-            : displayNameFor(cand.author);
         } else {
           // c1: sealed at ingest — generic, no mention detection possible.
           const info = cand.v1ChannelIdHex ? c.v1ByChannel.get(cand.v1ChannelIdHex) : undefined;
@@ -191,7 +207,6 @@ export function useForegroundNotifications(): void {
           roomKey = cand.roomKey; // `z:<pseudonym>`
           path = `/c1/${encodeURIComponent(info.communityId)}/${encodeURIComponent(cand.v1ChannelIdHex!)}`;
           level = c.concordChannelLevel("c1", info.communityId, cand.v1ChannelIdHex!);
-          title = `New message in ${info.channelName || info.communityName}`;
         }
 
         // Notification-level gate (Discord-style all/mentions/nothing). For V1,
@@ -211,15 +226,31 @@ export function useForegroundNotifications(): void {
         if (cand.createdAt <= mark) continue;
         lastNotified.current.set(roomKey, cand.createdAt);
 
-        const body = cand.body ?? (cand.plane === "dm" ? "New direct message" : undefined);
+        // Resolve the title (async — needs the author's profile) then fire the
+        // OS notification. Errors are swallowed so one bad event never breaks
+        // the sink for the rest of the batch.
+        void (async () => {
+          let title: string;
+          let body = cand.body;
+          if (cand.plane === "c1") {
+            const info = cand.v1ChannelIdHex ? c.v1ByChannel.get(cand.v1ChannelIdHex) : undefined;
+            title = `New message in ${info?.channelName || info?.communityName || "a channel"}`;
+          } else {
+            const name = await displayNameFor(cand.author);
+            if (cand.plane === "dm") {
+              title = `${name} sent you a message`;
+              body = body ?? "New direct message";
+            } else {
+              title = cand.mention ? `${name} mentioned you` : name;
+            }
+          }
 
-        if (hidden && notificationsApiAvailable() && Notification.permission === "granted") {
-          // Backgrounded tab → OS notification. Tag by room so repeated messages
-          // in the same conversation collapse into one entry.
           try {
             const n = new Notification(title, {
               body,
               icon: "/favicon.png",
+              // Tag by room so repeated messages in the same conversation
+              // collapse into one entry.
               tag: roomKey || "armada",
             });
             n.onclick = () => {
@@ -228,16 +259,10 @@ export function useForegroundNotifications(): void {
               n.close();
             };
           } catch {
-            // Some browsers throw when constructing Notification directly
-            // (they require the SW). Fall back to a toast silently.
-            c.toast({ title, description: body });
+            // Some browsers require the service worker to show notifications;
+            // there's nothing more to do here (Web Push covers those).
           }
-        } else if (!hidden) {
-          // Focused tab → in-app toast.
-          c.toast({ title, description: body });
-        }
-        // Hidden but no permission / API: nothing to do here (Web Push, if
-        // available and subscribed, covers the closed/background case).
+        })();
       }
     });
 

@@ -7,19 +7,19 @@ import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/hooks/usePushNotifications
  *
  * This is the client-side notifier that runs while Armada is OPEN — separate
  * from Web Push (which delivers with the tab closed via the relay gateway) and
- * the native Android service. It powers two surfaces (see
- * useForegroundNotifications):
- *   - an in-app toast when the tab is focused, and
- *   - a real OS `new Notification(...)` when the tab is backgrounded.
+ * the native Android service. It fires a real OS `new Notification(...)` for
+ * incoming messages/mentions/DMs whether the tab is focused or backgrounded
+ * (except for the conversation currently on screen). See
+ * useForegroundNotifications.
  *
  * Crucially it needs NO push gateway and NO Push API — only the Notifications
  * API + permission — so it works in browsers where Web Push is unavailable
  * (e.g. Brave with Google push services disabled), which otherwise get no
- * notifications at all. The toast layer needs no permission whatsoever.
+ * notifications at all while the app is open in the background.
  *
  * The user's intent (the master on/off wish) is stored locally, defaulting ON
- * (opt-out), mirroring the push intent. The OS notification half only fires
- * once the browser grants Notification permission; toasts fire regardless.
+ * (opt-out), mirroring the push intent. Nothing fires until the browser grants
+ * Notification permission.
  */
 
 /** localStorage key for the foreground-notification intent (master on/off). */
@@ -27,7 +27,7 @@ const INTENT_KEY = "armada:foreground-notif-intent";
 /** Shared per-type preferences key (also used by Web Push / native). */
 const PREFS_KEY = "armada:push-prefs";
 
-/** Whether the Notifications API exists at all (toasts don't need it). */
+/** Whether the Notifications API is available (required to notify). */
 export function notificationsApiAvailable(): boolean {
   return typeof window !== "undefined" && "Notification" in window;
 }
@@ -91,8 +91,7 @@ export interface UseForegroundNotificationSettingsReturn {
 /**
  * Settings-surface control for the foreground notifier. Turning it on requests
  * Notification permission (a user gesture — call from a click handler) so the
- * OS-notification half can fire when backgrounded. The toast half works with or
- * without permission.
+ * notifier can fire OS notifications.
  */
 export function useForegroundNotificationSettings(): UseForegroundNotificationSettingsReturn {
   const apiAvailable = notificationsApiAvailable();
@@ -120,8 +119,8 @@ export function useForegroundNotificationSettings(): UseForegroundNotificationSe
           const perm = await Notification.requestPermission();
           setPermission(perm);
         } catch {
-          // Permission request unavailable (e.g. insecure context) — toasts
-          // still work; leave permission as-is.
+          // Permission request unavailable (e.g. insecure context) — leave
+          // permission as-is; the notifier simply won't fire.
         }
       }
     },

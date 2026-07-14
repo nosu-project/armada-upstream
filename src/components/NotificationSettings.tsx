@@ -119,9 +119,8 @@ function WebPushSettings() {
     usePushNotifications();
 
   // Browsers where Web Push is unavailable (Brave with Google push services
-  // off, or no configured push gateway) still get FOREGROUND notifications:
-  // toasts while focused and OS notifications while the tab is backgrounded,
-  // as long as Armada is open. Surface those controls instead of a dead end.
+  // off, or no configured push gateway) still get FOREGROUND OS notifications
+  // while Armada is open. Surface those controls instead of a dead end.
   if (!supported) {
     return <ForegroundOnlySettings />;
   }
@@ -143,9 +142,9 @@ function WebPushSettings() {
 
 /**
  * Foreground-only notifications for browsers without Web Push (e.g. Brave).
- * The OS-notification half needs Notification permission; the toast half always
- * works. Delivery only happens while Armada is open — for closed-app delivery
- * the user needs a browser that supports Web Push, or the Android app.
+ * Fires OS notifications while Armada is open (needs Notification permission);
+ * for closed-app delivery the user needs a browser that supports Web Push, or
+ * the Android app.
  */
 function ForegroundOnlySettings() {
   const { apiAvailable, permission, intent, setEnabled, prefs, setPrefs } =
@@ -153,19 +152,23 @@ function ForegroundOnlySettings() {
 
   const blocked = apiAvailable && permission === "denied";
 
+  if (!apiAvailable) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        This browser doesn&rsquo;t support notifications. Use Chrome, Firefox, or the Android app.
+      </p>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <NotificationToggles
         title="Notifications while Armada is open"
-        description={
-          apiAvailable
-            ? "This browser doesn't support background push, so notifications only arrive while Armada is open. You'll get an alert when the window isn't focused, and in-app toasts when it is."
-            : "In-app toasts for new messages. This browser doesn't support system notifications."
-        }
+        description="This browser doesn't support background push, so notifications only arrive while Armada is open. You'll get a system notification for new messages when you're not looking at the conversation."
         enabled={intent}
         busy={false}
         blocked={blocked}
-        blockedMessage="System notifications are blocked in your browser settings; in-app toasts still work."
+        blockedMessage="Notifications are blocked in your browser settings."
         prefs={prefs}
         onToggle={(v) => setEnabled(v).catch(() => {})}
         onSetPrefs={setPrefs}
