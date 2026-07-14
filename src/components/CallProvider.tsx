@@ -133,8 +133,21 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const target = stageSlots.length > 0 ? stageSlots[stageSlots.length - 1] : null;
-    if (target) target.appendChild(stageHost);
-    else stageHost.remove();
+    if (target) {
+      target.appendChild(stageHost);
+      // Browsers pause media elements while they're removed from the document
+      // (which happens above whenever the user navigates away from the call's
+      // channel). Re-inserting the host does NOT resume them, and LiveKit only
+      // calls play() on a fresh attach or a tab visibility change — neither
+      // happens here since CallStage stays mounted. Without this kick, remote
+      // video stays frozen on its last frame after switching channels and back
+      // (audio is unaffected: its elements live outside the reparented host).
+      for (const video of stageHost.querySelectorAll("video")) {
+        if (video.paused) video.play().catch(() => {});
+      }
+    } else {
+      stageHost.remove();
+    }
   }, [stageSlots, stageHost]);
   useEffect(() => () => stageHost.remove(), [stageHost]);
 
