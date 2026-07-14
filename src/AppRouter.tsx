@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
+import { useForegroundNotifications } from "@/hooks/useForegroundNotifications";
 import {
   coldLaunchPending,
   consumeColdLaunchDeepLink,
@@ -207,11 +208,22 @@ function NotificationNavigation() {
   return null;
 }
 
+/**
+ * Runs the foreground (in-page) notifier: toasts while focused, OS
+ * notifications while backgrounded, for incoming messages/mentions/DMs. Must be
+ * inside the router (it navigates on notification click). Inert on native.
+ */
+function ForegroundNotifications() {
+  useForegroundNotifications();
+  return null;
+}
+
 export function AppRouter() {
   useWarmRouteChunks();
   return (
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <NotificationNavigation />
+        <ForegroundNotifications />
         <VersionCheck />
         {/* Lazy route chunks paint the branded splash while they load, never a
             blank frame. */}

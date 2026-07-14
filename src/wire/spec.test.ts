@@ -117,8 +117,8 @@ describe("buildWireSpec", () => {
       dmFollows: [],
       concord1: [],
       concord2: [
-        { relays: ["wss://c.relay"], channel: chanA },
-        { relays: ["wss://c.relay"], channel: chanB },
+        { relays: ["wss://c.relay"], channel: chanA, communityIdHex: "commA" },
+        { relays: ["wss://c.relay"], channel: chanB, communityIdHex: "commB" },
       ],
     });
 
@@ -161,7 +161,7 @@ describe("buildWireSpec", () => {
       dmRelays: [],
       dmFollows: [],
       concord1: [],
-      concord2: [{ relays: ["wss://c.relay"], channel: chanA }],
+      concord2: [{ relays: ["wss://c.relay"], channel: chanA, communityIdHex: "commA" }],
       concord2Control: [
         { relays: ["wss://c.relay"], idHex: "a".repeat(64), groups: [{ pk: "ctlA1" } as unknown as GroupKey] },
       ],

@@ -109,7 +109,7 @@ function writeCursor(relay: string, createdAt: number): void {
  * wire's kind-1059 REQs pass auth-gating relays. Mirrors useConcord2Subs, but
  * keeps the full ChannelV2 (the wire decrypts; the native service can't).
  */
-function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2 }> {
+function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string }> {
   const { data } = useCommunityList2();
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
   const listSig = useMemo(
@@ -121,7 +121,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
     [entries],
   );
 
-  const query = useQuery<Array<{ relays: string[]; channel: ChannelV2 }>>({
+  const query = useQuery<Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string }>>({
     queryKey: ["wire", "concord2-channels", listSig],
     enabled: entries.length > 0,
     staleTime: 30_000,
@@ -131,7 +131,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
     refetchInterval: 2 * 60_000,
     refetchIntervalInBackground: false,
     queryFn: async () => {
-      const out: Array<{ relays: string[]; channel: ChannelV2 }> = [];
+      const out: Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string }> = [];
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
         if (!community || community.relays.length === 0) continue;
@@ -139,7 +139,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
         const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
         for (const channel of channelsView(community, folded)) {
           if (channel.streams.length === 0) continue;
-          out.push({ relays: community.relays, channel });
+          out.push({ relays: community.relays, channel, communityIdHex: community.idHex });
           keys.push(...channel.streams.map((s) => s.group));
         }
         // Scoped per community, so a relay's NIP-42 challenge only signs the
@@ -339,8 +339,16 @@ export function WireSync() {
   // decrypt/scope with the latest keys without resubscribing.
   const specRef = useRef(spec);
   specRef.current = spec;
-  const sinksRef = useRef({ eventStore, getSpec: () => specRef.current });
-  sinksRef.current = { eventStore, getSpec: () => specRef.current };
+  const sinksRef = useRef({
+    eventStore,
+    getSpec: () => specRef.current,
+    getSelfPubkey: () => user?.pubkey,
+  });
+  sinksRef.current = {
+    eventStore,
+    getSpec: () => specRef.current,
+    getSelfPubkey: () => user?.pubkey,
+  };
 
   // ── Web sockets: one REQ per relay, resumed from the persisted cursor ─────
   useEffect(() => {

@@ -1,15 +1,33 @@
 import { openChatBatch } from "@/concord-v2/lib/chat";
+import { KIND_MESSAGE } from "@/concord-v2/lib/kinds";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import { openPlaneWraps } from "@/concord-v2/lib/planeSync";
 import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
+import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { emitWireScopes } from "@/wire/bus";
+import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
 
+import type { OpenedChat } from "@/concord-v2/lib/chat";
 import type { WireSpec } from "@/wire/spec";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Gift-wrap kinds (Concord V2 / NIP-59) — never persisted sealed. */
 const WRAP_KINDS = new Set([1059, 21059]);
+/** Legacy NIP-04 direct message kind (Armada's DM plane). */
+const KIND_DM = 4;
+/** NIP-88 poll kind — a channel-activity message in NIP-29 timelines. */
+const KIND_POLL = 1068;
+
+/** Preview text length cap for a foreground notification body. */
+const PREVIEW_MAX = 140;
+
+function preview(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return undefined;
+  return t.length > PREVIEW_MAX ? `${t.slice(0, PREVIEW_MAX - 1)}\u2026` : t;
+}
 
 /** The minimal store surface the wire writes to (armada-events). */
 export interface WireEventStore {
@@ -21,6 +39,8 @@ export interface WireSinks {
   eventStore: Promise<WireEventStore>;
   /** The current spec (decrypt map + scope naming). */
   getSpec: () => WireSpec | undefined;
+  /** The logged-in user's pubkey (for mention detection / self-suppression). */
+  getSelfPubkey?: () => string | undefined;
 }
 
 /** First value of a tag, if any. */
@@ -57,7 +77,9 @@ function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined
 export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): Promise<void> {
   if (events.length === 0) return;
   const spec = sinks.getSpec();
+  const self = sinks.getSelfPubkey?.();
   const scopes = new Set<string>();
+  const candidates: NotifyCandidate[] = [];
 
   // Split wraps from plaintext; group decryptable wraps per channel so the
   // (chunked, memoized) decode runs one batch per channel. Control-plane wraps
@@ -90,6 +112,8 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
     if (opened.length === 0) continue;
     writeRumors(opened);
     scopes.add(`c2:${channel.idHex}`);
+    const communityIdHex = spec?.v2CommunityByChannel.get(channel.idHex);
+    for (const c of v2Candidates(opened, channel, communityIdHex, self)) candidates.push(c);
   }
 
   // V2 CONTROL: decrypt with the community's control-stream keys → opened-event
@@ -137,8 +161,113 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
       }
       const scope = scopeOf(ev, spec);
       if (scope) scopes.add(scope);
+      const cand = plaintextCandidate(ev, spec, self);
+      if (cand) candidates.push(cand);
     }
   }
 
   if (scopes.size > 0) emitWireScopes(scopes);
+  feedNotifyCandidates(candidates);
+}
+
+/** Build notify candidates for a batch of decrypted V2 chat rumors. */
+function v2Candidates(
+  opened: OpenedChat[],
+  channel: ChannelV2,
+  communityIdHex: string | undefined,
+  self: string | undefined,
+): NotifyCandidate[] {
+  const out: NotifyCandidate[] = [];
+  const path = communityIdHex
+    ? `/c/${encodeURIComponent(communityIdHex)}/${encodeURIComponent(channel.idHex)}`
+    : "";
+  for (const r of opened) {
+    if (r.kind !== KIND_MESSAGE) continue; // reactions/edits/deletes don't notify
+    if (self && r.author === self) continue; // never notify on our own message
+    out.push({
+      plane: "c2",
+      author: r.author,
+      createdAt: r.createdAt,
+      mention: Boolean(self) && r.tags.some(([n, v]) => n === "p" && v === self),
+      kind: r.kind,
+      body: preview(r.content),
+      roomKey: `c2:${channel.idHex}`,
+      readKey: channel.idHex, // Concord2 read map is keyed by channel id hex
+      path,
+      channelIdHex: channel.idHex,
+    });
+  }
+  return out;
+}
+
+/**
+ * Build a notify candidate for a plaintext event (NIP-29 chat, DM, or a sealed
+ * V1 outer). Returns undefined for events that shouldn't notify (self-authored,
+ * non-activity kinds, deletions).
+ */
+function plaintextCandidate(
+  ev: NostrEvent,
+  spec: WireSpec | undefined,
+  self: string | undefined,
+): NotifyCandidate | undefined {
+  if (self && ev.pubkey === self) return undefined; // never notify on our own message
+
+  // NIP-29 group chat / poll.
+  const h = tagValue(ev, "h");
+  if (h) {
+    if (ev.kind !== KIND_GROUP_CHAT && ev.kind !== KIND_POLL) return undefined;
+    // The relay URL isn't on the event; the notifier hook maps groupId → relay
+    // (+ route + name) from the user's group list. Leave relayUrl unset here.
+    return {
+      plane: "nip29",
+      author: ev.pubkey,
+      createdAt: ev.created_at,
+      mention: Boolean(self) && ev.tags.some(([n, v]) => n === "p" && v === self),
+      kind: ev.kind,
+      body: preview(ev.content),
+      roomKey: "", // filled by the hook once the relay URL is known
+      readKey: "", // filled by the hook (needs the relay URL)
+      path: "",
+      groupId: h,
+    };
+  }
+
+  // DM (kind 4): content is ciphertext here, so no body preview. A received DM
+  // is authored by the peer; a sent DM (self) was filtered above.
+  if (ev.kind === KIND_DM) {
+    const peer = ev.pubkey;
+    return {
+      plane: "dm",
+      author: peer,
+      createdAt: ev.created_at,
+      mention: true, // a DM is inherently directed at the user
+      kind: KIND_DM,
+      roomKey: `dm:${peer}`,
+      readKey: `dm:${peer}`,
+      path: `/dms/${peer}`,
+      peer,
+    };
+  }
+
+  // Concord V1 sealed outer (kind-3300 with a `#z` pseudonym): content stays
+  // sealed at ingest, so we can't recover author/body/mention here. Emit a
+  // channel-level candidate; the notifier hook resolves the community route +
+  // names from the V1 list and treats it as an "all messages" signal only.
+  const z = tagValue(ev, "z");
+  if (z) {
+    const channelId = spec?.v1ByZ.get(z) ?? z;
+    return {
+      plane: "c1",
+      author: "",
+      createdAt: ev.created_at,
+      mention: false,
+      kind: ev.kind,
+      roomKey: `z:${z}`,
+      readKey: "", // filled by the hook (V1 read state)
+      path: "",
+      v1ChannelIdHex: channelId,
+    };
+  }
+
+  return undefined;
 }

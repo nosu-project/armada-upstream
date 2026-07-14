@@ -32,7 +32,7 @@ export interface WireInputs {
   /** Concord V1 channel subscriptions (relays + `#z` pseudonyms + bindings). */
   concord1: ConcordSub[];
   /** Concord V2 channels (each carries its stream GroupKeys for decrypt). */
-  concord2: Array<{ relays: string[]; channel: ChannelV2 }>;
+  concord2: Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string }>;
   /**
    * Concord V2 CONTROL planes (each carries its control-stream GroupKeys). A
    * standing subscription to these authors lands new control editions —
@@ -56,6 +56,8 @@ export interface WireSpec {
   subs: WireSub[];
   /** V2 stream address (wrap author) → owning channel, for decrypt + scope. */
   v2ByPk: Map<string, ChannelV2>;
+  /** V2 channel id hex → its owning community id hex (for notification routing). */
+  v2CommunityByChannel: Map<string, string>;
   /** V2 CONTROL stream address (wrap author) → its community, for decrypt + fold wake. */
   v2CtlByPk: Map<string, { idHex: string; groups: GroupKey[] }>;
   /** V1 `#z` pseudonym → channel id hex, for scope naming. */
@@ -131,9 +133,11 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
 
   // ── Concord V2: merged wrap-author filter per community relay ────────────
   const v2ByPk = new Map<string, ChannelV2>();
+  const v2CommunityByChannel = new Map<string, string>();
   const pksByRelay = new Map<string, Set<string>>();
-  for (const { relays, channel } of inputs.concord2) {
+  for (const { relays, channel, communityIdHex } of inputs.concord2) {
     for (const s of channel.streams) v2ByPk.set(s.group.pk, channel);
+    v2CommunityByChannel.set(channel.idHex, communityIdHex);
     for (const url of relays) {
       const relay = normalizeRelayUrl(url);
       if (!relay) continue;
@@ -171,5 +175,5 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     .map(([relay, filters]) => ({ relay, filters }))
     .sort((a, b) => (a.relay < b.relay ? -1 : 1));
 
-  return { subs, v2ByPk, v2CtlByPk, v1ByZ, sig: JSON.stringify(subs) };
+  return { subs, v2ByPk, v2CommunityByChannel, v2CtlByPk, v1ByZ, sig: JSON.stringify(subs) };
 }

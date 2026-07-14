@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { setActiveRooms as setWebActiveRooms } from "@/lib/activeRooms";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 
 /**
@@ -23,8 +24,11 @@ import { ArmadaNotification } from "@/lib/nativeNotifications";
  * the service immediately resumes notifications — no persistence, no TTL.
  *
  * Re-publishes on `visibilitychange` so backgrounding the app (document
- * hidden) clears the active set and foregrounding restores it. Native-only;
- * no-op on web/PWA.
+ * hidden) clears the active set and foregrounding restores it. Native-only for
+ * the background SERVICE; on web/desktop it also mirrors the keys into the
+ * in-process active-room registry ({@link setWebActiveRooms}) so the page's
+ * foreground notifier (`useForegroundNotifications`) suppresses notifications
+ * for the conversation on screen the same way.
  *
  * @param roomKeys stable conversation identifiers the WebView is currently
  *                 showing. When empty/undefined, the active set is cleared.
@@ -44,6 +48,7 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
   // had no active keys and let notifications through.
   useEffect(() => {
     return () => {
+      setWebActiveRooms([]);
       if (isNativeRuntime()) {
         ArmadaNotification.setActiveRooms({ roomKeys: [] }).catch(() => undefined);
       }
@@ -51,14 +56,17 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
   }, []);
 
   useEffect(() => {
-    if (!isNativeRuntime()) return;
-
     const publish = () => {
       const hidden = document.visibilityState === "hidden";
       const next = hidden ? [] : sig.split("\u0001").filter((k) => k.length > 0);
-      ArmadaNotification.setActiveRooms({ roomKeys: next }).catch((err) => {
-        console.warn("[active-room] setActiveRooms failed:", err);
-      });
+      // In-process (web/desktop foreground notifier) — cheap, always.
+      setWebActiveRooms(next);
+      // Native background service — only where it exists.
+      if (isNativeRuntime()) {
+        ArmadaNotification.setActiveRooms({ roomKeys: next }).catch((err) => {
+          console.warn("[active-room] setActiveRooms failed:", err);
+        });
+      }
     };
 
     publish();

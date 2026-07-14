@@ -18,6 +18,7 @@ import type { ChannelV2 } from "@/concord-v2/lib/types";
 
 import { onWireScopes, resetWireBus } from "./bus";
 import { ingestWireEvents, type WireEventStore } from "./ingest";
+import { registerNotifySink, type NotifyCandidate } from "./notify";
 import type { WireSpec } from "./spec";
 
 afterEach(() => resetWireBus());
@@ -73,6 +74,7 @@ function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
   const full: WireSpec = {
     subs: [],
     v2ByPk: new Map(),
+    v2CommunityByChannel: new Map(),
     v2CtlByPk: new Map(),
     v1ByZ: new Map(),
     sig: "",
@@ -199,5 +201,98 @@ describe("ingestWireEvents", () => {
       good,
     ]);
     expect(store.events.map((e) => e.id)).toEqual([good.id]);
+  });
+});
+
+describe("ingestWireEvents — foreground notify candidates", () => {
+  const SELF = "5".repeat(64);
+  const PEER = "6".repeat(64);
+
+  function withSink(spec: Partial<WireSpec>, self: string | undefined = SELF) {
+    const captured: NotifyCandidate[] = [];
+    const off = registerNotifySink((c) => captured.push(...c));
+    const { sinks } = makeSinks(spec);
+    const withSelf = { ...sinks, getSelfPubkey: () => self };
+    return { captured, off, sinks: withSelf };
+  }
+
+  it("emits a NIP-29 candidate with mention flag from a p-tag", async () => {
+    const { captured, off, sinks } = withSink({});
+    const ev = plainEvent(9, [["h", "g1"], ["p", SELF]]);
+    ev.pubkey = PEER;
+    try {
+      await ingestWireEvents(sinks, [ev]);
+    } finally {
+      off();
+    }
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ plane: "nip29", groupId: "g1", mention: true, body: "x" });
+  });
+
+  it("never emits a candidate for the user's own message", async () => {
+    const { captured, off, sinks } = withSink({});
+    const ev = plainEvent(9, [["h", "g1"]]);
+    ev.pubkey = SELF;
+    try {
+      await ingestWireEvents(sinks, [ev]);
+    } finally {
+      off();
+    }
+    expect(captured).toHaveLength(0);
+  });
+
+  it("emits a DM candidate (mention=true) with no body preview (ciphertext)", async () => {
+    const { captured, off, sinks } = withSink({});
+    const ev = plainEvent(4, [["p", SELF]]);
+    ev.pubkey = PEER;
+    try {
+      await ingestWireEvents(sinks, [ev]);
+    } finally {
+      off();
+    }
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ plane: "dm", peer: PEER, mention: true });
+    expect(captured[0].body).toBeUndefined();
+  });
+
+  it("emits a c1 candidate keyed by the resolved channel id, no body/mention", async () => {
+    const { captured, off, sinks } = withSink({ v1ByZ: new Map([["z1", "chan1"]]) });
+    const ev = plainEvent(3300, [["z", "z1"]]);
+    ev.pubkey = PEER;
+    try {
+      await ingestWireEvents(sinks, [ev]);
+    } finally {
+      off();
+    }
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({
+      plane: "c1",
+      v1ChannelIdHex: "chan1",
+      roomKey: "z:z1",
+      mention: false,
+    });
+    expect(captured[0].body).toBeUndefined();
+  });
+
+  it("emits a c2 candidate with the resolved community route", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const wrap = await wrapChat(channel, alice, "sealed hi");
+    const { captured, off, sinks } = withSink({
+      v2ByPk: new Map([[wrap.pubkey, channel]]),
+      v2CommunityByChannel: new Map([[idHex, "comm-hex"]]),
+    });
+    try {
+      await ingestWireEvents(sinks, [wrap]);
+    } finally {
+      off();
+    }
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({
+      plane: "c2",
+      channelIdHex: idHex,
+      body: "sealed hi",
+      path: `/c/comm-hex/${idHex}`,
+    });
   });
 });

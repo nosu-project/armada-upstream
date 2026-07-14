@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useForegroundNotificationSettings } from "@/hooks/useForegroundNotificationSettings";
 import { useNativeNotifications } from "@/hooks/useNativeNotifications";
 import { usePushNotifications, type PushPrefs } from "@/hooks/usePushNotifications";
 import {
@@ -117,17 +118,18 @@ function WebPushSettings() {
   const { supported, permission, enabled, busy, prefs, enable, disable, setPrefs } =
     usePushNotifications();
 
+  // Browsers where Web Push is unavailable (Brave with Google push services
+  // off, or no configured push gateway) still get FOREGROUND notifications:
+  // toasts while focused and OS notifications while the tab is backgrounded,
+  // as long as Armada is open. Surface those controls instead of a dead end.
   if (!supported) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Web Push isn't available in this browser. On iOS, add Armada to your Home Screen first.
-      </p>
-    );
+    return <ForegroundOnlySettings />;
   }
 
   return (
     <NotificationToggles
       title="Enable push notifications"
+      description="Get notified even when Armada is closed. While Armada is open, messages also notify in the foreground."
       enabled={enabled}
       busy={busy}
       blocked={permission === "denied"}
@@ -136,6 +138,43 @@ function WebPushSettings() {
       onToggle={(v) => (v ? enable() : disable())}
       onSetPrefs={(p) => setPrefs(p).catch(() => {})}
     />
+  );
+}
+
+/**
+ * Foreground-only notifications for browsers without Web Push (e.g. Brave).
+ * The OS-notification half needs Notification permission; the toast half always
+ * works. Delivery only happens while Armada is open — for closed-app delivery
+ * the user needs a browser that supports Web Push, or the Android app.
+ */
+function ForegroundOnlySettings() {
+  const { apiAvailable, permission, intent, setEnabled, prefs, setPrefs } =
+    useForegroundNotificationSettings();
+
+  const blocked = apiAvailable && permission === "denied";
+
+  return (
+    <div className="space-y-4">
+      <NotificationToggles
+        title="Notifications while Armada is open"
+        description={
+          apiAvailable
+            ? "This browser doesn't support background push, so notifications only arrive while Armada is open. You'll get an alert when the window isn't focused, and in-app toasts when it is."
+            : "In-app toasts for new messages. This browser doesn't support system notifications."
+        }
+        enabled={intent}
+        busy={false}
+        blocked={blocked}
+        blockedMessage="System notifications are blocked in your browser settings; in-app toasts still work."
+        prefs={prefs}
+        onToggle={(v) => setEnabled(v).catch(() => {})}
+        onSetPrefs={setPrefs}
+      />
+      <p className="text-xs text-muted-foreground">
+        For notifications when Armada is closed, use a browser that supports Web Push (Chrome,
+        Firefox, or Brave with Google push services enabled), or the Android app.
+      </p>
+    </div>
   );
 }
 
