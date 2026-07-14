@@ -8,6 +8,7 @@ import {
   useNostrLogin,
 } from "@nostrify/react/login";
 
+import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
 import { useAppContext } from "@/hooks/useAppContext";
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
@@ -43,6 +44,15 @@ export function useLoginActions() {
     // Login with a NIP-07 browser extension
     async extension(): Promise<void> {
       const login = await NLogin.fromExtension();
+      addAndActivate(login);
+    },
+    // Login with a native Android signer app (Amber, etc.) via NIP-55.
+    // The plugin round-trips to the signer app to fetch the user's pubkey; we
+    // persist it in the login so subsequent sessions don't re-prompt.
+    async androidSigner(packageName: string): Promise<void> {
+      const signer = new AndroidNativeSigner(packageName);
+      const pubkey = await signer.getPublicKey();
+      const login = new NLogin("x-android-signer", pubkey, { packageName });
       addAndActivate(login);
     },
     // Login via nostrconnect:// (client-initiated NIP-46)

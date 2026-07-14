@@ -21,6 +21,7 @@ import {
   type NostrConnectParams,
   type NostrConnectStatus,
 } from '@/hooks/useLoginActions';
+import { AndroidSignerOptions } from '@/components/auth/AndroidSignerOptions';
 import { getNsecCredential } from '@/lib/credentialManager';
 import { APP_NAME } from '@/lib/platform';
 import { shareOrigin } from '@/lib/shareOrigin';
@@ -416,6 +417,10 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
             </div>
           ) : (
             <>
+              {/* Native Android signer apps (Amber, etc.) — only renders on
+                  Capacitor Android with a signer installed. */}
+              <AndroidSignerOptions onLogin={() => { onLogin(); onClose(); }} />
+
               {/* Extension Login Button - shown if extension is available */}
               {hasExtension && (
                 <div className="space-y-3">
