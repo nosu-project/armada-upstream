@@ -1,6 +1,6 @@
 import { AlertCircle, Braces, Copy, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
@@ -37,6 +37,8 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
 import { dittoEventUrl } from "@/lib/dittoUrl";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { requestCommand } from "@/hooks/useCommandBus";
+import { commandLine } from "@/lib/botCommands";
 import { isMeAction, meActionText } from "@/lib/slashCommands";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
@@ -57,6 +59,13 @@ function ReplyMentionName({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
   return <span className="text-primary">@{name}</span>;
+}
+
+/** The bot an invocation was addressed to, by display name. */
+function InvokedBotName({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  const name = useScopedDisplayName(pubkey, author.data?.metadata);
+  return <span className="font-semibold not-italic text-primary">{name}</span>;
 }
 
 /**
@@ -401,6 +410,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const author = useAuthor(identityOverride ? undefined : event.pubkey);
   const scopedName = useScopedDisplayName(identityOverride ? undefined : event.pubkey, author.data?.metadata);
   const displayName = identityOverride?.name ?? scopedName;
+  // A command reads as an action ("JSKitty ran /greet with Concordia"), not as a
+  // wall of raw arguments. The content still carries them for the bot.
+  const invocation = useMemo(
+    () => commandLine(event.content, event.tags),
+    [event.content, event.tags],
+  );
   // An inline reply renders a "replying to …" line above the body. The page
   // resolves it per-protocol (NIP-29 NIP-10 `e`, Concord NIP-C7 `q`) and passes
   // it as `replyContext`; its presence is the authoritative "this is a reply".
@@ -625,6 +640,31 @@ const ChatMessageInner = memo(function ChatMessageInner({
             />
           )}
         </>
+      ) : invocation ? (
+        // The same third-person action line `/me` uses. The arguments are left
+        // out on purpose: they were addressed to the bot, not to the room, and
+        // the bot's reply is what actually says how it went.
+        <div className="text-[15px] italic text-muted-foreground">
+          <span className="font-semibold not-italic text-primary">{displayName}</span>{" "}
+          ran{" "}
+          <button
+            type="button"
+            // Re-arms the command in the composer, already filtered — the fast
+            // path for "do that again", without retyping the arguments blind.
+            onClick={(e) => {
+              e.stopPropagation();
+              requestCommand(invocation.name);
+            }}
+            className="font-mono not-italic text-primary hover:underline cursor-pointer"
+          >
+            /{invocation.name}
+          </button>
+          {invocation.bot && (
+            <>
+              {" "}with <InvokedBotName pubkey={invocation.bot} />
+            </>
+          )}
+        </div>
       ) : isMeAction(event) ? (
         <div className="text-[15px] italic text-muted-foreground">
           <span className="font-semibold not-italic text-primary">{displayName}</span>{" "}

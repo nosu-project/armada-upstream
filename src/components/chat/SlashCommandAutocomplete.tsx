@@ -55,6 +55,14 @@ interface Section {
   rows: Row[];
 }
 
+/**
+ * Argument names shown on a row before the rest collapse into a `+N`. A command
+ * can declare eight; spelling them all out pushes the row past the menu's width,
+ * and the row is a chooser, not a signature. The full list is one keystroke away
+ * in the argument fields.
+ */
+const MAX_VISIBLE_ARGS = 2;
+
 const rowKey = (row: Row): string =>
   row.type === "local" ? `local:${row.command.name}` : `bot:${row.entry.bot}:${row.entry.command.name}`;
 
@@ -289,7 +297,11 @@ export function SlashCommandAutocomplete({
       className="fixed z-[300] w-[320px] max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
       style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
-      <div ref={listRef} className="max-h-[260px] overflow-y-auto py-1">
+      {/* No padding on the TOP edge: a scroll container's padding insets the
+          rectangle a sticky child is constrained to, so `top-0` would park each
+          header just below the border and leave a slit for the rows to scroll
+          through. The headers carry their own `pt-2` for spacing at rest. */}
+      <div ref={listRef} className="max-h-[260px] overflow-y-auto overflow-x-hidden pb-1">
         {sections.map((section) => (
           <div key={section.key}>
             {(section.bot || section.label) && (
@@ -334,7 +346,7 @@ export function SlashCommandAutocomplete({
                   <span className="font-mono text-sm font-semibold shrink-0">
                     {!isBot && row.command.usage ? row.command.usage : `/${command.name}`}
                   </span>
-                  {args.map((a) => (
+                  {args.slice(0, MAX_VISIBLE_ARGS).map((a) => (
                     <span
                       key={a.name}
                       className={cn("font-mono text-xs shrink-0", a.required ? "text-foreground/70" : "text-muted-foreground/60")}
@@ -342,7 +354,23 @@ export function SlashCommandAutocomplete({
                       {a.name}
                     </span>
                   ))}
-                  <span className="text-xs text-muted-foreground truncate">{command.description}</span>
+                  {args.length > MAX_VISIBLE_ARGS && (
+                    // A command with a long signature would otherwise push the row
+                    // wider than the menu. The count is enough to say "there is
+                    // more here"; picking it opens a field per argument anyway.
+                    <span
+                      className="shrink-0 font-mono text-xs text-muted-foreground/60"
+                      title={args.slice(MAX_VISIBLE_ARGS).map((a) => a.name).join(" ")}
+                    >
+                      +{args.length - MAX_VISIBLE_ARGS}
+                    </span>
+                  )}
+                  {/* Absorbs the rest of the row and truncates, so no row can ever
+                      widen the menu (min-w-0 lets a flex item shrink below its
+                      content, which `truncate` needs to bite). */}
+                  <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                    {command.description}
+                  </span>
                 </button>
               );
             })}

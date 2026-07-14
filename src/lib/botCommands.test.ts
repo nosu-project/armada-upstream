@@ -5,6 +5,7 @@ import {
   argReason,
   botTag,
   buildInvocationText,
+  commandLine,
   normalizeUser,
   parseBotManifest,
   parseInvocation,
@@ -482,6 +483,38 @@ describe("interoperability with the reference implementation", () => {
     expect(usageLine(commandNamed("roll"))).toBe("/roll [sides:int]");
     expect(usageLine(commandNamed("calc"))).toBe("/calc <a:number> <op:choice> <b:number>");
     expect(usageLine(commandNamed("greet"))).toBe("/greet <who:npub> <style:choice> [times:int]");
+  });
+});
+
+describe("commandLine (how an invocation renders in the timeline)", () => {
+  const tagged = [botTag(BOT_A)];
+
+  it("reads an addressed invocation as an action, without its arguments", () => {
+    const line = commandLine(`/greet nostr:${NPUB} pirate 1`, tagged);
+    expect(line).toEqual({ name: "greet", bot: BOT_A });
+  });
+
+  it("reads a bare command as an action even when it names no bot", () => {
+    expect(commandLine("/ping", [])).toEqual({ name: "ping", bot: undefined });
+  });
+
+  it("NEVER hides text a person actually wrote", () => {
+    // The whole safety of this rule: an untagged `/word` with prose after it is
+    // a sentence, not a command, and collapsing it would swallow what was said.
+    expect(commandLine("/shrug I give up on this", [])).toBeUndefined();
+    expect(commandLine("/me waves at everyone", [])).toBeUndefined();
+    expect(commandLine("check /roll out", [])).toBeUndefined();
+    expect(commandLine("no slash at all", [])).toBeUndefined();
+  });
+
+  it("still collapses arguments once a bot is named, since they were meant for it", () => {
+    expect(commandLine("/roll 20", tagged)).toEqual({ name: "roll", bot: BOT_A });
+  });
+
+  it("folds the command word, so a valid invocation cannot render as prose", () => {
+    // The parser accepts `/PING`, so the renderer must recognise it too.
+    expect(commandLine("/PING", [])).toEqual({ name: "ping", bot: undefined });
+    expect(commandLine("/Roll 20", tagged)).toEqual({ name: "roll", bot: BOT_A });
   });
 });
 

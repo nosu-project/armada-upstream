@@ -36,6 +36,7 @@ import { useChatScope } from "@/hooks/useChatScope";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useBotManifests } from "@/hooks/useBotManifests";
+import { useCommandRequests } from "@/hooks/useCommandBus";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useGroup } from "@/hooks/useGroup";
 import { useInsertText } from "@/hooks/useInsertText";
@@ -1063,19 +1064,28 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [sendInvocation]);
 
   /**
-   * Open the command menu from the "+" menu. Seeding the draft with "/" is all
-   * it takes: the menu already watches for exactly that, so this is the same
-   * path as typing the slash, not a second way in that could drift from it.
+   * Seed the draft with a command and focus it. The picker watches for exactly
+   * that shape, so it opens itself — one code path in, rather than two that
+   * could drift apart. `name` empty means "just the slash".
    */
-  const openCommandMenu = useCallback(() => {
+  const startCommand = useCallback((name: string) => {
     setPlusOpen(false);
-    setContent("/");
+    setBotCommand(null);
+    armedBotRef.current = undefined;
+    const draft = `/${name}`;
+    setContent(draft);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       el?.focus();
-      el?.setSelectionRange(1, 1);
+      el?.setSelectionRange(draft.length, draft.length);
     });
   }, []);
+
+  /** The "+" menu's Commands entry: open the picker with nothing typed yet. */
+  const openCommandMenu = useCallback(() => startCommand(""), [startCommand]);
+
+  // Clicking a command in the timeline re-arms it here, already filtered.
+  useCommandRequests(startCommand);
 
   const cancelBotCommand = useCallback(() => {
     setBotCommand(null);

@@ -70,10 +70,24 @@ describe("SlashCommandAutocomplete — bot commands", () => {
   });
 
   it("shows a command's arguments so their shape is visible before picking", () => {
+    // `/greet <who> <style> [times]` — the third collapses, so the row can never
+    // outgrow the menu.
     render(<Harness content="/" botEntries={entriesFor(BOT_A, ["greet"])} />);
     expect(screen.getByText("who")).toBeInTheDocument();
     expect(screen.getByText("style")).toBeInTheDocument();
-    expect(screen.getByText("times")).toBeInTheDocument();
+    expect(screen.queryByText("times")).not.toBeInTheDocument();
+    expect(screen.getByText("+1")).toBeInTheDocument();
+  });
+
+  it("collapses a long signature rather than widening the row", () => {
+    // `/typetest` declares all six argument types. Spelling them out would push
+    // the row past the menu's width and produce a horizontal scrollbar.
+    render(<Harness content="/" botEntries={entriesFor(BOT_A, ["typetest"])} />);
+    expect(screen.getByText("text")).toBeInTheDocument();
+    expect(screen.getByText("count")).toBeInTheDocument();
+    expect(screen.getByText("+4")).toBeInTheDocument();
+    // The names are not lost, just folded away.
+    expect(screen.getByTitle("ratio loud who color")).toBeInTheDocument();
   });
 
   it("filters bot commands as the command word is typed", () => {
