@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 
 import { channelReadKey } from "@/contexts/ReadStateContext";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useNotifLevels } from "@/hooks/useNotifLevels";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 /**
@@ -75,14 +76,18 @@ export interface UseMutesReturn {
 /**
  * Per-community / per-channel notification mutes.
  *
- * Muting silences notifications (web push, native background service) and
- * suppresses the unread badge for the muted scope without leaving it — unread
- * mentions still badge, Discord-style. Stored in AppConfig
- * (`mutedCommunities` / `mutedChannels`) and synced across devices via the
- * encrypted settings event.
+ * "Muted" is now the `nothing` end of the Discord-style notification levels
+ * (see {@link useNotifLevels}): a muted scope silences all delivery paths
+ * (foreground, web push, native service) and suppresses its unread badge
+ * without leaving — unread mentions still badge, Discord-style. This hook is a
+ * thin compatibility facade over `useNotifLevels` so the many existing mute
+ * call sites keep working: `is*Muted` reports whether the effective level is
+ * `nothing`, and the toggles flip a scope between `nothing` and clearing its
+ * override (inherit). Stored in AppConfig and synced across devices.
  */
 export function useMutes(): UseMutesReturn {
-  const { config, updateConfig } = useAppContext();
+  const { config } = useAppContext();
+  const { getLevel, setLevel } = useNotifLevels();
 
   const mutedCommunities = useMemo(
     () => new Set(config.mutedCommunities.map(communityMuteKey)),
@@ -93,62 +98,51 @@ export function useMutes(): UseMutesReturn {
     [config.mutedChannels],
   );
 
+  // "Muted" means an EXPLICIT `nothing` at the scope or an inherited one from
+  // the parent community — deliberately NOT the global-prefs fallback, so
+  // turning off a global toggle never silences every badge. This preserves the
+  // exact pre-levels badge semantics (channel-mute OR server/community-mute).
   const isCommunityMuted = useCallback(
-    (railKey: string) => mutedCommunities.has(communityMuteKey(railKey)),
-    [mutedCommunities],
+    (railKey: string) => getLevel(communityMuteKey(railKey)) === "nothing",
+    [getLevel],
   );
 
   const isChannelMuted = useCallback(
     (relayUrl: string, groupId: string) =>
-      mutedChannels.has(channelMuteKey(relayUrl, groupId)) ||
-      mutedCommunities.has(communityMuteKey(relayUrl)),
-    [mutedChannels, mutedCommunities],
+      getLevel(channelMuteKey(relayUrl, groupId)) === "nothing" ||
+      getLevel(communityMuteKey(relayUrl)) === "nothing",
+    [getLevel],
   );
 
   const isConcordChannelMuted = useCallback(
     (protocol: "c1" | "c2", communityId: string, channelIdHex: string) =>
-      mutedChannels.has(concordChannelMuteKey(protocol, communityId, channelIdHex)) ||
-      mutedCommunities.has(`${protocol}:${communityId}`),
-    [mutedChannels, mutedCommunities],
+      getLevel(concordChannelMuteKey(protocol, communityId, channelIdHex)) === "nothing" ||
+      getLevel(`${protocol}:${communityId}`) === "nothing",
+    [getLevel],
   );
 
   const toggleCommunityMute = useCallback(
     (railKey: string) => {
       const key = communityMuteKey(railKey);
-      updateConfig((current) => {
-        const set = new Set(current.mutedCommunities.map(communityMuteKey));
-        if (set.has(key)) set.delete(key);
-        else set.add(key);
-        return { ...current, mutedCommunities: [...set].sort() };
-      });
+      setLevel(key, getLevel(key) === "nothing" ? undefined : "nothing");
     },
-    [updateConfig],
+    [setLevel, getLevel],
   );
 
   const toggleChannelMute = useCallback(
     (relayUrl: string, groupId: string) => {
       const key = channelMuteKey(relayUrl, groupId);
-      updateConfig((current) => {
-        const set = new Set(current.mutedChannels);
-        if (set.has(key)) set.delete(key);
-        else set.add(key);
-        return { ...current, mutedChannels: [...set].sort() };
-      });
+      setLevel(key, getLevel(key) === "nothing" ? undefined : "nothing");
     },
-    [updateConfig],
+    [setLevel, getLevel],
   );
 
   const toggleConcordChannelMute = useCallback(
     (protocol: "c1" | "c2", communityId: string, channelIdHex: string) => {
       const key = concordChannelMuteKey(protocol, communityId, channelIdHex);
-      updateConfig((current) => {
-        const set = new Set(current.mutedChannels);
-        if (set.has(key)) set.delete(key);
-        else set.add(key);
-        return { ...current, mutedChannels: [...set].sort() };
-      });
+      setLevel(key, getLevel(key) === "nothing" ? undefined : "nothing");
     },
-    [updateConfig],
+    [setLevel, getLevel],
   );
 
   return {

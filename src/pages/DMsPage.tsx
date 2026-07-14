@@ -1,4 +1,4 @@
-import { BellOff, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, PenSquare, Phone, Plus, Search, UserCheck, X } from "lucide-react";
+import { ChevronLeft, Headphones, Loader2, Lock, MessageSquare, PenSquare, Phone, Plus, Search, UserCheck, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -44,6 +44,8 @@ import { useDmTransport } from "@/hooks/useDmTransport";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
+import { useNotifLevels, dmScopeKey } from "@/hooks/useNotifLevels";
+import { NotifLevelDropdown } from "@/components/NotifLevelMenu";
 import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
@@ -230,6 +232,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
     useDmTransport(peer);
   const { messages } = transport;
   const { markRead } = useReadState();
+  const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { toast } = useToast();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
@@ -484,6 +487,11 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             <TooltipContent>View on Ditto</TooltipContent>
           </Tooltip>
         )}
+        <NotifLevelDropdown
+          level={dmLevel(peer)}
+          onChange={(lvl) => setNotifLevel(dmScopeKey(peer), lvl)}
+          ariaLabel={`Notification settings for ${name}`}
+        />
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -493,10 +501,10 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
               className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-destructive"
               onClick={() => setMuteConfirmOpen(true)}
             >
-              <BellOff className="size-4" />
+              <UserX className="size-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Mute conversation</TooltipContent>
+          <TooltipContent>Mute person (hide messages)</TooltipContent>
         </Tooltip>
       </header>
 

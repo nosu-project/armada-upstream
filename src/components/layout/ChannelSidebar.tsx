@@ -1,4 +1,4 @@
-import { Bell, BellOff, CheckCheck, ChevronDown, Hash, Headphones, Link as LinkIcon, Loader2, Lock, Plus, RefreshCw, Volume2 } from "lucide-react";
+import { BellOff, CheckCheck, ChevronDown, Hash, Headphones, Link as LinkIcon, Loader2, Lock, Plus, RefreshCw, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
@@ -16,13 +16,14 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useLivekitParticipants, useRelayLivekitSupport } from "@/hooks/useLivekit";
-import { useMutes } from "@/hooks/useMutes";
+import { useNotifLevels, channelScopeKey } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
@@ -44,8 +45,8 @@ function ChannelLink({
 }) {
   const { activeCall, speakingPubkeys, mutedPubkeys, voiceRoomPubkeys } = useCall();
   const { markRead } = useReadState();
-  const { isChannelMuted, toggleChannelMute } = useMutes();
-  const muted = isChannelMuted(group.relay, group.id);
+  const { channelLevel, setLevel } = useNotifLevels();
+  const muted = channelLevel(group.relay, group.id) === "nothing";
   // Voice capability: prefer the per-group `livekit` metadata tag, but fall
   // back to the relay-level capability (`/.well-known/nip29/livekit` 204).
   // Armada's relay29 metadata doesn't emit the `livekit` group tag, so
@@ -142,17 +143,11 @@ function ChannelLink({
         >
           <CheckCheck className="mr-2 size-4" /> Mark as read
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => toggleChannelMute(group.relay, group.id)}>
-          {muted ? (
-            <>
-              <Bell className="mr-2 size-4" /> Unmute channel
-            </>
-          ) : (
-            <>
-              <BellOff className="mr-2 size-4" /> Mute channel
-            </>
-          )}
-        </ContextMenuItem>
+        <NotifLevelMenu
+          label="Notifications"
+          level={channelLevel(group.relay, group.id)}
+          onChange={(lvl) => setLevel(channelScopeKey(group.relay, group.id), lvl)}
+        />
         <ContextMenuItem
           onSelect={() => {
             const url = `${shareOrigin()}/s/${relayToRouteParam(group.relay)}/${encodeURIComponent(group.id)}`;

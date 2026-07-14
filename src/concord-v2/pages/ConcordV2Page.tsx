@@ -27,7 +27,6 @@ import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
@@ -46,6 +45,8 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useSyncTasks } from "@/hooks/useSyncActivity";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
+import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
+import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
@@ -299,7 +300,8 @@ function ChannelRow2({
   const fold = useVoicePresence2(community, channel);
   const { data: broker } = useVoiceBroker2(channel, fold);
   const { voiceRoomPubkeys } = useCall();
-  const { isConcordChannelMuted, toggleConcordChannelMute } = useMutes();
+  const { isConcordChannelMuted } = useMutes();
+  const { concordChannelLevel, setLevel: setNotifLevel } = useNotifLevels();
   const muted = community
     ? isConcordChannelMuted("c2", community.idHex, channel.idHex)
     : false;
@@ -395,22 +397,15 @@ function ChannelRow2({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
-        <ContextMenuItem
-          disabled={!community}
-          onSelect={() => {
-            if (community) toggleConcordChannelMute("c2", community.idHex, channel.idHex);
-          }}
-        >
-          {muted ? (
-            <>
-              <Bell className="mr-2 size-4" /> Unmute channel
-            </>
-          ) : (
-            <>
-              <BellOff className="mr-2 size-4" /> Mute channel
-            </>
-          )}
-        </ContextMenuItem>
+        {community && (
+          <NotifLevelMenu
+            label="Channel notifications"
+            level={concordChannelLevel("c2", community.idHex, channel.idHex)}
+            onChange={(lvl) =>
+              setNotifLevel(concordChannelScopeKey("c2", community.idHex, channel.idHex), lvl)
+            }
+          />
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

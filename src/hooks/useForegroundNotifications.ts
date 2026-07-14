@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { buildConcordSubs } from "@/concord-v1/lib/concordNotifications";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useMutes } from "@/hooks/useMutes";
+import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useToast } from "@/hooks/useToast";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
@@ -15,12 +15,11 @@ import {
   foregroundNotifyIntent,
   notificationsApiAvailable,
 } from "@/hooks/useForegroundNotificationSettings";
-import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/hooks/usePushNotifications";
 import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
-import { registerNotifySink, type NotifyCandidate } from "@/wire/notify";
+import { registerNotifySink } from "@/wire/notify";
 
 /**
  * useForegroundNotifications
@@ -41,30 +40,21 @@ import { registerNotifySink, type NotifyCandidate } from "@/wire/notify";
  *
  * Gating (all must pass to notify):
  *   - the master foreground intent is on;
- *   - the per-type preference for this kind is on (reuses `PushPrefs`);
- *   - the conversation isn't muted (`useMutes`, Discord-style: mentions pierce);
+ *   - the conversation's resolved notification level (Discord-style
+ *     all/mentions/nothing, `useNotifLevels`, cascading channel → community →
+ *     global per-type prefs) admits this message: `all` always, `mentions`
+ *     only when it @-mentions you (DMs count), `nothing` never;
  *   - the conversation isn't the one currently on screen (`isRoomActive`);
  *   - the user hasn't already read past it (`useReadState`, NIP-29/DM);
  *   - it's newer than this session's start AND newer than the last thing we
  *     notified for that room (so a backfill / re-ingest never re-alerts).
  */
 
-/** Read the current per-type prefs (shared with Web Push / native). */
-function loadPrefs(): PushPrefs {
-  try {
-    const raw = localStorage.getItem("armada:push-prefs");
-    if (raw) return { ...DEFAULT_PUSH_PREFS, ...JSON.parse(raw) };
-  } catch {
-    // ignore
-  }
-  return { ...DEFAULT_PUSH_PREFS };
-}
-
-/** Which per-type pref governs a candidate. */
-function prefKeyFor(c: NotifyCandidate): keyof PushPrefs {
-  if (c.plane === "dm") return "directMessages";
-  // Mentions are their own toggle; everything else is "all channel messages".
-  return c.mention ? "mentions" : "allGroupMessages";
+/** Whether a candidate is admitted by a resolved notification level. */
+function levelAdmits(level: NotifLevel, mention: boolean): boolean {
+  if (level === "nothing") return false;
+  if (level === "mentions") return mention;
+  return true; // "all"
 }
 
 export function useForegroundNotifications(): void {
@@ -75,7 +65,7 @@ export function useForegroundNotifications(): void {
   useNostr(); // keep within the Nostr provider tree
 
   const { readState } = useReadState();
-  const { isChannelMuted, isConcordChannelMuted } = useMutes();
+  const { channelLevel, concordChannelLevel, dmLevel } = useNotifLevels();
   const { data: groupList } = useUserGroupList();
   const { data: concordList } = useConcordList();
 
@@ -112,8 +102,9 @@ export function useForegroundNotifications(): void {
   // every render — a re-register would drop the wire's reference to the sink.
   const ctx = useRef({
     readState,
-    isChannelMuted,
-    isConcordChannelMuted,
+    channelLevel,
+    concordChannelLevel,
+    dmLevel,
     relayByGroup,
     v1ByChannel,
     navigate,
@@ -122,8 +113,9 @@ export function useForegroundNotifications(): void {
   });
   ctx.current = {
     readState,
-    isChannelMuted,
-    isConcordChannelMuted,
+    channelLevel,
+    concordChannelLevel,
+    dmLevel,
     relayByGroup,
     v1ByChannel,
     navigate,
@@ -151,7 +143,6 @@ export function useForegroundNotifications(): void {
     };
 
     const unregister = registerNotifySink((candidates) => {
-      const prefs = loadPrefs();
       const intentOn = foregroundNotifyIntent();
       if (!intentOn) return;
 
@@ -162,11 +153,11 @@ export function useForegroundNotifications(): void {
         if (cand.createdAt <= sessionFloor.current) continue;
 
         // Resolve the fields ingest left for the hook (relay-dependent routing,
-        // V1 community routing), and the mute gate, per plane.
+        // V1 community routing) and the conversation's notification level.
         let roomKey = cand.roomKey;
         let readKey = cand.readKey;
         let path = cand.path;
-        let muted = false;
+        let level: NotifLevel;
         let title = "";
 
         if (cand.plane === "nip29") {
@@ -175,34 +166,38 @@ export function useForegroundNotifications(): void {
           roomKey = `h:${relay}|${cand.groupId}`;
           readKey = channelReadKey(relay, cand.groupId);
           path = `/s/${relayToRouteParam(relay)}/${encodeURIComponent(cand.groupId)}`;
-          muted = c.isChannelMuted(relay, cand.groupId);
+          level = c.channelLevel(relay, cand.groupId);
           title = cand.mention ? `${displayNameFor(cand.author)} mentioned you` : displayNameFor(cand.author);
         } else if (cand.plane === "dm") {
+          level = cand.peer ? c.dmLevel(cand.peer) : "all";
           title = `${displayNameFor(cand.author)} sent you a message`;
         } else if (cand.plane === "c2") {
           if (!path) continue; // couldn't resolve the community route
-          if (cand.channelIdHex) {
-            // c2 read map is keyed by channel id hex; there's no useReadState
-            // entry, so unread gating for c2 relies on active-room + floor.
-            muted = false; // per-channel c2 mute needs community id; skip fine-grained here
-          }
+          // Recover the community id from the route (`/c/<communityId>/<channel>`)
+          // to resolve the per-channel level.
+          const parts = path.split("/");
+          const communityId = parts[2] ? decodeURIComponent(parts[2]) : "";
+          level =
+            communityId && cand.channelIdHex
+              ? c.concordChannelLevel("c2", communityId, cand.channelIdHex)
+              : "all";
           title = cand.mention
             ? `${displayNameFor(cand.author)} mentioned you`
             : displayNameFor(cand.author);
         } else {
-          // c1: sealed at ingest — generic, "all messages" only, no mention.
+          // c1: sealed at ingest — generic, no mention detection possible.
           const info = cand.v1ChannelIdHex ? c.v1ByChannel.get(cand.v1ChannelIdHex) : undefined;
           if (!info) continue;
           roomKey = cand.roomKey; // `z:<pseudonym>`
           path = `/c1/${encodeURIComponent(info.communityId)}/${encodeURIComponent(cand.v1ChannelIdHex!)}`;
-          muted = c.isConcordChannelMuted("c1", info.communityId, cand.v1ChannelIdHex!);
+          level = c.concordChannelLevel("c1", info.communityId, cand.v1ChannelIdHex!);
           title = `New message in ${info.channelName || info.communityName}`;
         }
 
-        // Preference gate (mentions always pierce a channel mute, Discord-style).
-        const prefKey = prefKeyFor(cand);
-        if (!prefs[prefKey]) continue;
-        if (muted && !cand.mention) continue;
+        // Notification-level gate (Discord-style all/mentions/nothing). For V1,
+        // `mention` is always false (sealed), so a `mentions`-level V1 channel
+        // never foreground-notifies — matching that we can't see its mentions.
+        if (!levelAdmits(level, cand.mention)) continue;
 
         // Read-state gate (NIP-29 / DM have a useReadState entry). If the user
         // already read past this message, don't notify.

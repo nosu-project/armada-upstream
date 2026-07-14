@@ -135,6 +135,28 @@ export interface AppConfig {
    */
   mutedChannels: string[];
   /**
+   * Discord-style per-conversation notification level, keyed by the SAME stable
+   * scope keys as the mute sets:
+   *   - community: a normalized relay URL (NIP-29) or `c1:`/`c2:${communityId}`
+   *   - NIP-29 channel: `${relayUrl}::${groupId}`
+   *   - Concord channel: `c1:`/`c2:${communityId}::${channelIdHex}`
+   *   - DM: `dm:${pubkey}`
+   *
+   * Levels:
+   *   - `all`      — notify on every message
+   *   - `mentions` — notify only on @-mentions (and DMs, which are inherently
+   *                  directed at you)
+   *   - `nothing`  — silence completely, mentions included (this is what the
+   *                  legacy mute sets migrate to)
+   *
+   * A conversation with NO entry inherits: a channel falls back to its
+   * community's level, and a community with no level falls back to the
+   * account-global per-type prefs. Supersedes `mutedCommunities`/`mutedChannels`
+   * (still written for backward compatibility with older clients / the relay
+   * push gateway's `muted_groups`). Synced across devices.
+   */
+  notifLevels: Record<string, "all" | "mentions" | "nothing">;
+  /**
    * Bluetooth-mesh incognito mode. When on (the default), this device announces
    * a derived `anon<peerid>` nickname over the mesh rather than the user's
    * Armada display name — matching bitchat's anonymous-by-default behavior.
@@ -191,6 +213,7 @@ export const SYNCED_CONFIG_KEYS = [
   "lastChannelByServer",
   "mutedCommunities",
   "mutedChannels",
+  "notifLevels",
   "defaultZapAmount",
   "zapsEnabled",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
@@ -213,6 +236,7 @@ export const defaultConfig: AppConfig = {
   lastChannelByServer: {},
   mutedCommunities: [],
   mutedChannels: [],
+  notifLevels: {},
   meshIncognito: true,
   meshEnabled: false,
   defaultZapAmount: 100,

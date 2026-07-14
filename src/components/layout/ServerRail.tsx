@@ -1,4 +1,4 @@
-import { Bell, BellOff, Bluetooth, FolderOpen, Headphones, MessageSquare, Plus, Settings } from "lucide-react";
+import { Bluetooth, FolderOpen, Headphones, MessageSquare, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
@@ -38,6 +38,8 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useMutes } from "@/hooks/useMutes";
+import { useNotifLevels, communityScopeKey } from "@/hooks/useNotifLevels";
+import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useRelayUnread } from "@/hooks/useRelayUnread";
@@ -463,8 +465,7 @@ function ServerButton({
   const { data: groups } = useRelayGroups(user ? url : undefined);
   const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
   const { anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
-  const { isCommunityMuted, toggleCommunityMute } = useMutes();
-  const muted = isCommunityMuted(url);
+  const { communityLevel, setLevel: setNotifLevel } = useNotifLevels();
   const host = relayHost(url);
   const name = info?.name || host;
   const initial = name.trim().charAt(0).toUpperCase() || "?";
@@ -593,17 +594,11 @@ function ServerButton({
         </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
-        <ContextMenuItem onSelect={() => toggleCommunityMute(url)}>
-          {muted ? (
-            <>
-              <Bell className="mr-2 size-4" /> Unmute server
-            </>
-          ) : (
-            <>
-              <BellOff className="mr-2 size-4" /> Mute server
-            </>
-          )}
-        </ContextMenuItem>
+        <NotifLevelMenu
+          label="Server notifications"
+          level={communityLevel(url)}
+          onChange={(lvl) => setNotifLevel(communityScopeKey(url), lvl)}
+        />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -632,8 +627,7 @@ function ConcordButton({
   const triggerRef = useRef<HTMLAnchorElement | null>(null);
   useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
-  const { isCommunityMuted, toggleCommunityMute } = useMutes();
-  const muted = isCommunityMuted(concord1Key(communityId));
+  const { communityLevel, setLevel: setNotifLevel } = useNotifLevels();
 
   const initials = name.trim().slice(0, 2).toUpperCase() || "··";
   // Resolve the community's authoritative GroupRoot icon: rehydrate from the
@@ -742,17 +736,12 @@ function ConcordButton({
         </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
-        <ContextMenuItem onSelect={() => toggleCommunityMute(concord1Key(communityId))}>
-          {muted ? (
-            <>
-              <Bell className="mr-2 size-4" /> Unmute community
-            </>
-          ) : (
-            <>
-              <BellOff className="mr-2 size-4" /> Mute community
-            </>
-          )}
-        </ContextMenuItem>
+        <NotifLevelMenu
+          label="Community notifications"
+          level={communityLevel(concord1Key(communityId))}
+          onChange={(lvl) => setNotifLevel(concord1Key(communityId), lvl)}
+          allowMentions={false}
+        />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -798,8 +787,9 @@ function Concord2Button({
   // community) don't light the unread dot; unread mentions still badge.
   const channels = useChannels2(community, false);
   const { byChannel } = useConcord2Unread(channels);
-  const { isCommunityMuted, isConcordChannelMuted, toggleCommunityMute } = useMutes();
-  const muted = isCommunityMuted(concord2Key(communityId));
+  const { isConcordChannelMuted } = useMutes();
+  const { communityLevel, setLevel: setNotifLevel } = useNotifLevels();
+
   const anyUnread = Object.keys(byChannel).some(
     (id) => !isConcordChannelMuted("c2", communityId, id),
   );
@@ -888,17 +878,11 @@ function Concord2Button({
         </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
-        <ContextMenuItem onSelect={() => toggleCommunityMute(concord2Key(communityId))}>
-          {muted ? (
-            <>
-              <Bell className="mr-2 size-4" /> Unmute community
-            </>
-          ) : (
-            <>
-              <BellOff className="mr-2 size-4" /> Mute community
-            </>
-          )}
-        </ContextMenuItem>
+        <NotifLevelMenu
+          label="Community notifications"
+          level={communityLevel(concord2Key(communityId))}
+          onChange={(lvl) => setNotifLevel(concord2Key(communityId), lvl)}
+        />
       </ContextMenuContent>
     </ContextMenu>
   );

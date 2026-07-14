@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useMutes } from "@/hooks/useMutes";
+import { useNotifLevels } from "@/hooks/useNotifLevels";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl, PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
 
@@ -152,7 +152,6 @@ export function usePushNotifications(): UsePushNotificationsReturn {
   // though publishing here goes over plain fetch (NIP-98), not the pool.
   useNostr();
   const { data: groupList } = useUserGroupList();
-  const { mutedChannels, isCommunityMuted } = useMutes();
 
   const supported =
     typeof window !== "undefined" &&
@@ -170,32 +169,25 @@ export function usePushNotifications(): UsePushNotificationsReturn {
 
   const swRef = useRef<ServiceWorkerRegistration | null>(null);
 
-  // Group ids on the platform relay (the push gateway) the user has muted —
-  // individually, or via a whole-server mute. Sent with the registration so
-  // the relay's fan-out skips them (it pushes to group *members*; only it can
-  // enforce a mute with the app closed).
-  const mutedGroups = useMemo(() => {
+  // Per-group notification levels on the platform relay (the push gateway),
+  // sent with the registration so the relay's fan-out can enforce them with the
+  // app closed (it pushes to group *members* — only it can, with no client
+  // running). `nothing` groups are skipped entirely; `mentions` groups get only
+  // messages that p-tag the recipient.
+  const { channelLevel } = useNotifLevels();
+  const { mutedGroups, mentionOnlyGroups } = useMemo(() => {
     const platform = PLATFORM_RELAYS[0] ? normalizeRelayUrl(PLATFORM_RELAYS[0]) : undefined;
-    if (!platform) return [];
-    const out = new Set<string>();
-    // Explicit channel mutes on the platform relay, parsed from their
-    // `${relayUrl}::${groupId}` keys (Concord `c1:`/`c2:` keys never
-    // normalize to a relay URL, so they fall out here).
-    for (const key of mutedChannels) {
-      const idx = key.lastIndexOf("::");
-      if (idx < 0) continue;
-      if (normalizeRelayUrl(key.slice(0, idx)) !== platform) continue;
-      const groupId = key.slice(idx + 2);
-      if (groupId) out.add(groupId);
+    if (!platform) return { mutedGroups: [] as string[], mentionOnlyGroups: [] as string[] };
+    const muted = new Set<string>();
+    const mentionOnly = new Set<string>();
+    for (const g of groupList?.groups ?? []) {
+      if (normalizeRelayUrl(g.relay) !== platform) continue;
+      const level = channelLevel(g.relay, g.id);
+      if (level === "nothing") muted.add(g.id);
+      else if (level === "mentions") mentionOnly.add(g.id);
     }
-    // A muted server mutes every joined group on it.
-    if (isCommunityMuted(platform)) {
-      for (const g of groupList?.groups ?? []) {
-        if (normalizeRelayUrl(g.relay) === platform) out.add(g.id);
-      }
-    }
-    return [...out].sort();
-  }, [mutedChannels, isCommunityMuted, groupList]);
+    return { mutedGroups: [...muted].sort(), mentionOnlyGroups: [...mentionOnly].sort() };
+  }, [channelLevel, groupList]);
 
   // Restore enabled state on mount: if permission is granted and a browser push
   // subscription already exists, we're enabled.
@@ -221,7 +213,7 @@ export function usePushNotifications(): UsePushNotificationsReturn {
     };
   }, [supported]);
 
-  /** PUT the subscription + prefs + mutes to the relay (NIP-98 authed). */
+  /** PUT the subscription + prefs + per-group levels to the relay (NIP-98 authed). */
   const register = useCallback(
     async (subscription: PushSubscription, p: PushPrefs) => {
       if (!user) throw new Error("Not logged in");
@@ -241,12 +233,16 @@ export function usePushNotifications(): UsePushNotificationsReturn {
             direct_messages: p.directMessages,
             all_group_messages: p.allGroupMessages,
             muted_groups: mutedGroups,
+            // Groups the user set to "mentions only": the gateway should push a
+            // message in these only when it p-tags the recipient. Older
+            // gateways that ignore this field simply push all (graceful).
+            mention_only_groups: mentionOnlyGroups,
           },
         }),
       });
       if (!res.ok) throw new Error(`Push registration failed: HTTP ${res.status}`);
     },
-    [user, mutedGroups],
+    [user, mutedGroups, mentionOnlyGroups],
   );
 
   const enable = useCallback(async () => {
@@ -299,26 +295,26 @@ export function usePushNotifications(): UsePushNotificationsReturn {
     enable();
   }, [supported, user, enabled, busy, enable]);
 
-  // Re-sync the server record whenever the muted-group set changes while push
-  // is active, so a mute/unmute reaches the gateway immediately (it enforces
-  // mutes at fan-out — the only place that can, with the app closed). Guarded
-  // so the same set is never re-PUT.
-  const mutedKey = mutedGroups.join(",");
-  const lastSyncedMutes = useRef<string | null>(null);
+  // Re-sync the server record whenever the per-group level sets change while
+  // push is active, so a level change reaches the gateway immediately (it
+  // enforces levels at fan-out — the only place that can, with the app closed).
+  // Guarded so the same sets are never re-PUT.
+  const levelKey = `${mutedGroups.join(",")}|${mentionOnlyGroups.join(",")}`;
+  const lastSyncedLevels = useRef<string | null>(null);
   useEffect(() => {
     if (!supported || !enabled || !user) return;
-    if (lastSyncedMutes.current === mutedKey) return;
-    lastSyncedMutes.current = mutedKey;
+    if (lastSyncedLevels.current === levelKey) return;
+    lastSyncedLevels.current = levelKey;
     (async () => {
       const reg = swRef.current ?? (await navigator.serviceWorker.ready);
       const sub = await reg.pushManager.getSubscription();
       if (sub) await register(sub, prefs);
     })().catch((err) => {
       // Retry on the next change (or re-mount).
-      lastSyncedMutes.current = null;
-      console.warn("[push] failed to sync mutes:", err);
+      lastSyncedLevels.current = null;
+      console.warn("[push] failed to sync notification levels:", err);
     });
-  }, [supported, enabled, user, mutedKey, prefs, register]);
+  }, [supported, enabled, user, levelKey, prefs, register]);
 
   const disable = useCallback(async () => {
     setBusy(true);

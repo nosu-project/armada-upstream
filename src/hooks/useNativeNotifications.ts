@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useFollowList } from "@/hooks/useFollowList";
-import { useMutes } from "@/hooks/useMutes";
+import { useNotifLevels } from "@/hooks/useNotifLevels";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import {
@@ -95,7 +95,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const { data: groupList } = useUserGroupList();
   const { data: concordData } = useConcordList();
   const { data: followData } = useFollowList();
-  const { isChannelMuted, isConcordChannelMuted } = useMutes();
+  const { channelLevel, concordChannelLevel } = useNotifLevels();
 
   // Start dormant; the auto-enable effect below flips this on at launch (after
   // requesting the OS permission if it hasn't been granted yet).
@@ -123,20 +123,33 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     return [...set].sort();
   }, [groupList]);
 
-  // Joined group ids (the `h` tag values) for the kind-9 filter. Muted
-  // channels (and every channel of a muted server) are omitted entirely, so
-  // the service never subscribes to them — no notifications, mentions
-  // included.
+  // Joined group ids (the `h` tag values) for the kind-9 filter. Groups at the
+  // `nothing` level are omitted entirely (the service never subscribes — no
+  // notifications, mentions included). Groups at `mentions` are still watched
+  // but flagged in `mentionOnlyGroupIds` so the service suppresses their
+  // non-mention messages.
   const groupIds = useMemo(
     () =>
       [
         ...new Set(
           (groupList?.groups ?? [])
-            .filter((g) => !isChannelMuted(g.relay, g.id))
+            .filter((g) => channelLevel(g.relay, g.id) !== "nothing")
             .map((g) => g.id),
         ),
       ].sort(),
-    [groupList, isChannelMuted],
+    [groupList, channelLevel],
+  );
+
+  const mentionOnlyGroupIds = useMemo(
+    () =>
+      [
+        ...new Set(
+          (groupList?.groups ?? [])
+            .filter((g) => channelLevel(g.relay, g.id) === "mentions")
+            .map((g) => g.id),
+        ),
+      ].sort(),
+    [groupList, channelLevel],
   );
 
   // DM relays: where kind-4 DMs are read from (config.appRelays, or the user's
@@ -172,29 +185,38 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     [prefs],
   );
 
-  // Concord (E2E) channel subscriptions: relays + #z pseudonyms + display names.
-  // Computed here (we hold the channel keys); the native service can't decrypt
-  // so it only fires generic "New message in <community>/#<channel>". Muted
-  // channels/communities are dropped so the service never watches them.
+  // Concord (E2E) V1 channel subscriptions: relays + #z pseudonyms + display
+  // names. Computed here (we hold the channel keys); the native service can't
+  // decrypt so it only fires generic "New message in <community>/#<channel>".
+  // V1 is all-or-nothing: mentions can't be detected in a sealed outer, so a
+  // channel/community is either watched (`all`) or dropped (`nothing` — or a
+  // `mentions` level, which for V1 means the same as nothing since we can never
+  // see the mention).
   const concordSubs = useMemo<ConcordSub[]>(
     () =>
       buildConcordSubs(concordData?.list).filter((sub) => {
         const channelId = sub.keys[0]?.channelId;
-        return !channelId || !isConcordChannelMuted("c1", sub.communityId, channelId);
+        if (!channelId) return true;
+        return concordChannelLevel("c1", sub.communityId, channelId) === "all";
       }),
-    [concordData, isConcordChannelMuted],
+    [concordData, concordChannelLevel],
   );
 
   // Concord V2 channel subscriptions: kind-1059 stream addresses + the
-  // conversation keys that open their wraps (see useConcord2Subs). Muted
-  // channels/communities are dropped the same way.
+  // conversation keys that open their wraps (see useConcord2Subs). Channels at
+  // `nothing` are dropped; `mentions` are watched but flagged `mentionOnly` so
+  // the service (which CAN decrypt V2) suppresses non-mention messages.
   const allConcord2Subs = useConcord2Subs();
   const concord2Subs = useMemo(
     () =>
-      allConcord2Subs.filter(
-        (sub) => !isConcordChannelMuted("c2", sub.communityId, sub.channelId),
-      ),
-    [allConcord2Subs, isConcordChannelMuted],
+      allConcord2Subs
+        .map((sub) => ({
+          sub,
+          level: concordChannelLevel("c2", sub.communityId, sub.channelId),
+        }))
+        .filter(({ level }) => level !== "nothing")
+        .map(({ sub, level }) => ({ ...sub, mentionOnly: level === "mentions" })),
+    [allConcord2Subs, concordChannelLevel],
   );
 
   // Push the current config to the native service whenever the relevant inputs
@@ -228,6 +250,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         userPubkey: user!.pubkey,
         relayUrls,
         groupIds,
+        mentionOnlyGroupIds,
         prefs: prefsRecord,
         concordSubs,
         concord2Subs,
@@ -244,7 +267,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows]);
+  }, [supported, enabled, user, relayUrls, groupIds, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off, start the background service. Android lets us request the OS

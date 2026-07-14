@@ -114,6 +114,13 @@ export interface ArmadaNotificationPlugin {
     relayUrls?: string[];
     /** Joined group ids (the `h` tag values) for the kind-9 filter. */
     groupIds?: string[];
+    /**
+     * Subset of `groupIds` whose notification level is "mentions only" — the
+     * service still subscribes (so mentions land) but should suppress non-
+     * mention messages for these groups. Older native binaries that don't know
+     * this field simply notify on all messages for them (graceful downgrade).
+     */
+    mentionOnlyGroupIds?: string[];
     /** Relays to read DMs (kind 4) from — the app/DM relays, not group relays. */
     dmRelays?: string[];
     /**
@@ -137,6 +144,8 @@ export interface ArmadaNotificationPlugin {
       communityId: string;
       communityName: string;
       channelName: string;
+      /** "mentions only" — suppress non-mention messages (older binaries notify all). */
+      mentionOnly?: boolean;
     }>;
     /**
      * Concord V2 (CORD-02) channel subscriptions. The service subscribes
@@ -153,6 +162,8 @@ export interface ArmadaNotificationPlugin {
       channelId: string;
       channelName: string;
       streams: Array<{ pk: string; convKey: string; epoch: string }>;
+      /** "mentions only" — suppress non-mention messages (older binaries notify all). */
+      mentionOnly?: boolean;
     }>;
   }): Promise<void>;
 }
