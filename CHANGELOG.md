@@ -4,6 +4,38 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.27.3] - 2026-07-14
+
+A notifications release. Armada now raises real notifications for incoming
+messages, mentions, and DMs while it's running, and you can set a Discord-style
+notification level per conversation — all messages, mentions only, or nothing.
+This release also steadies live message delivery over long sessions, adds a
+single consent prompt before decrypting a backlog of DMs on bunker/extension
+signers, shows now-playing music status on profiles, and fixes a handful of
+Concord community edge cases.
+
+### Added
+- Notifications for incoming messages, mentions, and DMs while the app is open
+- Per-conversation notification levels — choose all messages, mentions only, or
+  nothing for each channel and DM
+- Now-playing music status shown on profiles and member lists
+
+### Changed
+- Opening DMs with a bunker or extension signer now asks once before decrypting
+  a large backlog, instead of firing a decrypt request per message
+
+### Fixed
+- Live messages now keep streaming into the open channel over long sessions
+  instead of silently stalling until a relaunch
+- Newly-added Concord channels now appear right away instead of waiting for a
+  first message
+- Member-only channels are recovered for users migrating from Flotilla
+- A Concord community is brought back when a rekey re-includes a previously
+  excluded member
+- A dissolved Concord community is now read-only and can be removed manually
+- Joining a call with video auto-expands the call stage, with a clearer stage
+  toggle; paused stage videos resume when moved back into a page slot
+
 ## [0.27.2] - 2026-07-13
 
 A permissions and enforcement release for Concord communities. Banned
