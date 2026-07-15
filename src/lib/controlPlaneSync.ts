@@ -16,8 +16,8 @@ import { controlPseudonym } from "@/concord-v1/lib/control";
 import type { Community } from "@/concord-v1/lib/types";
 import { KIND_COMMUNITY_CONTROL } from "@/concord-v1/lib/kinds";
 import { controlScope, guestbookScope, sweepRelayScopes, type PlaneScope } from "@/concord-v2/lib/planeSync";
+import { readStreamCursor, updateStreamCursor } from "@/concord-v2/lib/rumorStore";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
-import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { logSync, sinceMs } from "@/lib/syncLog";
 import { emitWireScopes } from "@/wire/bus";
 
@@ -31,21 +31,17 @@ interface NostrLike {
   };
 }
 
-/** V1 sweep cursor, per-relay (issue #19 isolation). */
-const v1CursorKey = (relayUrl: string) => `control-plane-sync:v1|${relayUrl}`;
+// V1 sweep cursor, per-relay (issue #19 isolation). Reuses the shared
+// StreamCursor helpers (concord2-cursor:*) so there is ONE persisted-cursor
+// implementation across the sync layer; only `newest` is used here.
+const v1CursorScope = (relayUrl: string) => `v1control|${relayUrl}`;
 
-interface ControlPlaneCursor {
-  /** `created_at` of the newest control edition this relay delivered. */
-  newest: number;
-}
-
-function readV1Cursor(relayUrl: string): Promise<ControlPlaneCursor | undefined> {
-  return readFolded<ControlPlaneCursor>(v1CursorKey(relayUrl));
+function readV1Cursor(relayUrl: string): Promise<{ newest: number } | undefined> {
+  return readStreamCursor(v1CursorScope(relayUrl));
 }
 
 async function advanceV1Cursor(relayUrl: string, newest: number): Promise<void> {
-  const prev = await readV1Cursor(relayUrl);
-  await writeFolded(v1CursorKey(relayUrl), { newest: Math.max(prev?.newest ?? 0, newest) });
+  await updateStreamCursor(v1CursorScope(relayUrl), { newest });
 }
 
 export interface ControlPlaneSyncResult {
