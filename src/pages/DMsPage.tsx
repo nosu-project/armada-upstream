@@ -369,12 +369,25 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [muteConfirmOpen, setMuteConfirmOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Reset the inline search whenever we switch conversations.
   useEffect(() => {
     setSearchOpen(false);
     setSearchQuery("");
   }, [peer]);
+
+  // Focus the search field when it expands. `preventScroll` is essential: the
+  // input starts off-screen (translate-x-full) and slides in, so a default
+  // focus() would make the browser scroll the page to reveal it — a visible jolt.
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
+  }, [searchOpen]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+  }, []);
 
   // Messages shown after applying the inline search filter (case-insensitive
   // substring match on the decrypted text). Encrypted placeholders have no
@@ -547,7 +560,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   return (
     <ComposerBoundsProvider value={composerBoundsRef}>
     <div className="flex flex-col flex-1 min-h-0">
-      <header className="h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+      <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         {/* Mobile back → returns to the rail + conversation list (the shared
             DM-list view), the same panes that are persistently rendered. */}
         <Button
@@ -600,15 +613,18 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             <Button
               variant="ghost"
               size="icon"
-              aria-label={searchOpen ? "Close search" : "Search messages"}
+              aria-label="Search messages"
               aria-pressed={searchOpen}
-              className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
-              onClick={() => setSearchOpen((open) => !open)}
+              className={cn(
+                "size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground",
+                searchOpen && "text-foreground",
+              )}
+              onClick={() => setSearchOpen(true)}
             >
-              {searchOpen ? <X className="size-4" /> : <Search className="size-4" />}
+              <Search className="size-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>{searchOpen ? "Close search" : "Search messages"}</TooltipContent>
+          <TooltipContent>Search messages</TooltipContent>
         </Tooltip>
         {dittoProfileHref && (
           <Tooltip>
@@ -647,40 +663,45 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           </TooltipTrigger>
           <TooltipContent>Mute person (hide messages)</TooltipContent>
         </Tooltip>
-      </header>
 
-      {/* Inline message search — filters the loaded thread client-side. */}
-      {searchOpen && (
-        <div className="mx-2 mt-2 px-1 shrink-0">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              autoFocus
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  setSearchOpen(false);
-                  setSearchQuery("");
-                }
-              }}
-              placeholder="Search messages…"
-              aria-label="Search messages"
-              className="pl-8 pr-8"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                onClick={() => setSearchQuery("")}
-              >
-                <X className="size-4" />
-              </button>
-            )}
-          </div>
+        {/* Inline search bar: smoothly expands across the header (covering the
+            title and actions) when open. On mobile it leaves the back button
+            visible; on desktop it covers the full bar. An X dismisses it.
+            Slides via GPU-composited transform (not `left`) so it animates on
+            the compositor and never forces a per-frame reflow / jitter. */}
+        <div
+          className={cn(
+            "absolute inset-y-0 right-0 left-10 sidebar:left-0 z-10 flex items-center gap-1.5 px-2 sidebar:px-3",
+            "bg-chrome clip-corner-lg overflow-hidden",
+            "transition-transform duration-300 ease-in-out",
+            searchOpen
+              ? "translate-x-0 pointer-events-auto"
+              : "translate-x-full pointer-events-none",
+          )}
+        >
+          <Search className="size-4 text-muted-foreground shrink-0" />
+          <Input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") closeSearch();
+            }}
+            placeholder="Search messages…"
+            aria-label="Search messages"
+            className="h-8 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Close search"
+            className="size-8 shrink-0 text-muted-foreground"
+            onClick={closeSearch}
+          >
+            <X className="size-4" />
+          </Button>
         </div>
-      )}
+      </header>
 
       {/* Top-of-chat call stage portal target (active when this DM is in call). */}
       <CallStageSlot active={inThisCall} />
@@ -1105,6 +1126,19 @@ function ConversationList({
   const { registerCallBarSlot, activeCall } = useCall();
   const { config } = useAppContext();
   const [search, setSearch] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus the search field when it expands. `preventScroll` avoids the browser
+  // scrolling to reveal the input as it slides in from off-screen.
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
+  }, [searchOpen]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearch("");
+  }, []);
 
   // The shared DM voice relay (same derivation as the open conversation): a
   // LiveKit-capable relay from the platform list, then the user's DM relays.
@@ -1160,54 +1194,80 @@ function ConversationList({
         className,
       )}
     >
-      <header className="relative pl-4 pr-3 pb-[1.625rem] pt-[calc(1.5rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] flex flex-col justify-center shrink-0">
-        {/* Reserve a constant primary-line height (min-h-6) so this header sits
-            at the exact same vertical position — and the divider below lines up
-            — with a community's channel sidebar, whose title row reserves the
-            same floor for an optional avatar/icon (see ChannelSidebarView). */}
-        <div className="flex items-center min-h-6">
-          <h1 className="min-w-0 font-semibold truncate leading-tight tracking-wide text-sm">Direct Messages</h1>
-        </div>
-      </header>
-
-      {/* Divider between the header and the conversation list. */}
-      <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
-
-      {/* "Messages" section label + new-message action, formatted exactly like
-          the "Channels" sub-header on a community sidebar (ChannelSidebarView):
-          the uppercase label with the "+" that creates a new chat. */}
-      <div className="px-1 pt-[11px] shrink-0">
-        <div className="flex items-center justify-between pl-4 pr-2 py-1">
+      {/* "Messages" section label + search / new-message actions, formatted
+          like the "Channels" sub-header on a community sidebar
+          (ChannelSidebarView): the uppercase label with actions on the right.
+          Search expands inline over this row behind the search icon. */}
+      <div className="relative px-1 pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] shrink-0">
+        <div className="flex items-center justify-between pl-4 pr-2 py-1 min-h-6">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Messages
           </span>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-5"
-                aria-label="New message"
-                onClick={onCompose}
-              >
-                <Plus className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>New message</TooltipContent>
-          </Tooltip>
+          <div className="flex items-center gap-0.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-5 text-muted-foreground hover:text-foreground"
+                  aria-label="Search conversations"
+                  aria-pressed={searchOpen}
+                  onClick={() => setSearchOpen(true)}
+                >
+                  <Search className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Search conversations</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-5"
+                  aria-label="New message"
+                  onClick={onCompose}
+                >
+                  <Plus className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>New message</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
-      </div>
 
-      {/* Search conversations by contact name or last message. */}
-      <div className="px-3 pb-2 pt-1 shrink-0">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+        {/* Expanding conversation search — slides across the "Messages" row. */}
+        <div
+          className={cn(
+            "absolute inset-y-0 inset-x-1 z-10 flex items-center gap-1.5 pl-3 pr-1",
+            "bg-chrome overflow-hidden",
+            "transition-transform duration-300 ease-in-out",
+            searchOpen
+              ? "translate-x-0 pointer-events-auto"
+              : "translate-x-full pointer-events-none",
+          )}
+        >
+          <Search className="size-3.5 text-muted-foreground shrink-0" />
           <Input
+            ref={searchInputRef}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") closeSearch();
+            }}
             placeholder="Search conversations…"
-            className="h-8 pl-8 text-sm"
+            aria-label="Search conversations"
+            className="h-7 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
           />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Close search"
+            className="size-6 shrink-0 text-muted-foreground"
+            onClick={closeSearch}
+          >
+            <X className="size-4" />
+          </Button>
         </div>
       </div>
 
