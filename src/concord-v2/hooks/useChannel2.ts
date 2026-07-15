@@ -14,7 +14,7 @@ import {
   type FoldedTimeline,
   type OpenedChat,
 } from "@/concord-v2/lib/chat";
-import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { whenAuthSettled } from "@/concord-v2/lib/planeSync";
 import {
   clearChannelExhausted,
@@ -677,6 +677,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       replyTo,
       target,
       targetKind,
+      targetPubkey,
       extraTags,
       ms,
     }: {
@@ -693,6 +694,12 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       target?: string;
       /** Kind of the `e`-target for deletes (NIP-09 `k` tag); defaults to message. */
       targetKind?: number;
+      /**
+       * Author of the `e`-target, for a NIP-25 `p` tag on reactions. Lives on
+       * the NIP-44-encrypted rumor (never the wrap), so it leaks nothing to the
+       * relay while making the reacted-to author recoverable to channel members.
+       */
+      targetPubkey?: string;
       /** Extra rumor tags appended verbatim (NIP-30 emoji, NIP-92 imeta, …). */
       extraTags?: string[][];
       /**
@@ -711,6 +718,9 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       const tags: string[][] = [...channelBindingTags(channel.idHex, channel.current.epoch)];
       if (replyTo) tags.push(...buildV2CommentTags(replyTo));
       if (target) tags.push(["e", target]);
+      // NIP-25: a reaction SHOULD carry a `p` for the reacted-to author. Safe
+      // in V2 — the tag lives on the NIP-44-encrypted rumor, never the wrap.
+      if (kind === KIND_REACTION && targetPubkey) tags.push(["p", targetPubkey]);
       if (kind === KIND_DELETE && target) tags.push(["k", String(targetKind ?? KIND_MESSAGE)]);
       if (extraTags) tags.push(...extraTags);
 

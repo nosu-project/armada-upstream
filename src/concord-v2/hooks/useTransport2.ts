@@ -162,6 +162,15 @@ export function useTransport2(
 
   const channelIdHex = channel?.idHex ?? null;
 
+  // Author lookup by rumor id, so a reaction can carry a NIP-25 `p` tag for the
+  // reacted-to author (mirroring the NIP-29 path). Invisible to the relay: the
+  // tag lives on the NIP-44-encrypted rumor, never promoted to the wrap.
+  const authorById = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const m of messages) out.set(m.id, m.pubkey);
+    return out;
+  }, [messages]);
+
   const reactionsFor = useMemo(() => {
     const reactCache = new Map<string, (input: ReactInput) => void>();
     const reactFor = (id: string) => {
@@ -190,6 +199,7 @@ export function useTransport2(
               content: input.content,
               kind: KIND_REACTION,
               target: id,
+              targetPubkey: authorById.get(id),
               extraTags: customEmojiReactionTags(input.content, input.emojiUrl),
             }).catch(() => {});
           }
@@ -207,7 +217,7 @@ export function useTransport2(
       objCache.set(id, { tallies, value });
       return value;
     };
-  }, [talliesById, send, queryClient, channelIdHex]);
+  }, [talliesById, send, queryClient, channelIdHex, authorById]);
 
   // CORD.md zap tallies from the fold (only VERIFIED zaps ever reach it).
   const zapTalliesById = useMemo(() => {

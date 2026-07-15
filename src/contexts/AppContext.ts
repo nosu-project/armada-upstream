@@ -182,6 +182,15 @@ export interface AppConfig {
    * hidden. Synced across devices so a deployment-wide preference propagates.
    */
   zapsEnabled: boolean;
+  /**
+   * Whether the user dismissed the first-run "create/join a community" screen
+   * with "Skip for now". Without a community there is nothing to redirect a
+   * fresh account onto, so the getting-started screen would otherwise be forced
+   * on every relaunch — this flag records that they chose to skip so we land
+   * them on DMs instead. Synced across devices (skipping on one device should
+   * not re-nag on another); cleared/irrelevant once they actually join.
+   */
+  onboardingSkipped: boolean;
 }
 
 export interface AppContextType {
@@ -216,6 +225,7 @@ export const SYNCED_CONFIG_KEYS = [
   "notifLevels",
   "defaultZapAmount",
   "zapsEnabled",
+  "onboardingSkipped",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
 export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
@@ -241,6 +251,7 @@ export const defaultConfig: AppConfig = {
   meshEnabled: false,
   defaultZapAmount: 100,
   zapsEnabled: true,
+  onboardingSkipped: false,
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
