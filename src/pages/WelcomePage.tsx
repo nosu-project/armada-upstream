@@ -88,7 +88,7 @@ function WizardShell({ step, maxWidth = "max-w-sm", children }: {
 }
 
 export function WelcomePage() {
-  const { config, updateConfig } = useAppContext();
+  const { config } = useAppContext();
   const { user } = useCurrentUser();
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
@@ -108,11 +108,11 @@ export function WelcomePage() {
     setStep("download");
   };
 
-  // "Skip for now": leave onboarding for DMs. Persist the choice so a fresh
-  // account with no community isn't forced back onto the getting-started
-  // screen on every relaunch (see the redirect guards below and HomeRedirect).
+  // "Skip for now": leave the create/join step for DMs. Nothing to persist —
+  // the create/join takeover only ever shows mid-signup (the wizard drives it
+  // in-session), never on a later relaunch (see the guard below and
+  // HomeRedirect), so there's no relaunch nag to suppress.
   const skipOnboarding = () => {
-    updateConfig((c) => ({ ...c, onboardingSkipped: true }));
     navigate("/dms");
   };
 
@@ -181,11 +181,14 @@ export function WelcomePage() {
   if (user && firstRoute) {
     return <Navigate to={firstRoute} replace />;
   }
-  // Already skipped and still community-less: don't force the create/join
-  // takeover again on relaunch. Only redirect when not mid-wizard, so a user
-  // who deliberately steps into the "add" step here (or reaches it via signup)
-  // still sees it.
-  if (user && config.onboardingSkipped && step === null) {
+  // Signed in, no community, and NOT mid-signup: don't show the create/join
+  // takeover. This page is only the onboarding surface during the active
+  // account-creation wizard (`step` walks generate → download → profile →
+  // add). A signed-in, community-less user who lands here any other way — a
+  // relaunch, a manual /welcome, a redirect — is not creating an account, so
+  // send them to DMs rather than re-forcing getting-started. Onboarding only
+  // happens on account creation.
+  if (user && step === null) {
     return <Navigate to="/dms" replace />;
   }
 
@@ -327,26 +330,6 @@ export function WelcomePage() {
           Skip for now
         </Button>
       </WizardShell>
-    );
-  }
-
-  // ── Signed-in, no server, not in the wizard: in-layout create/join ──────
-  if (user) {
-    return (
-      <main className="flex-1 min-w-0 overflow-y-auto">
-        <div className="mx-auto flex min-h-full w-full max-w-md flex-col justify-center gap-8 px-6 py-12 safe-area-top safe-area-bottom">
-          <AddBody onDone={() => undefined} />
-
-          <Button
-            variant="ghost"
-            className="mx-auto text-muted-foreground"
-            onClick={skipOnboarding}
-          >
-            Skip for now
-          </Button>
-        </div>
-        <ArmadaCrestKeyframes />
-      </main>
     );
   }
 

@@ -151,16 +151,18 @@ function HomeRedirect() {
   }
 
   if (!firstRoute) {
-    // Signed in but no community yet (fresh account). The mesh is the home
-    // where it exists (Android); otherwise show the getting-started screen so
-    // the user can accept an invite or add a server — NOT a bare app shell.
-    // Unless they already dismissed it with "Skip for now": re-forcing the
-    // create/join screen on every relaunch is the bug we're avoiding, so land
-    // a skipped, community-less user on DMs instead.
+    // Signed in but no community yet. The mesh is the home where it exists
+    // (Android); otherwise land on DMs — a real, usable screen. We deliberately
+    // do NOT force /welcome here: the create/join onboarding takeover is only
+    // for account creation (the signup wizard drives it in-session). Re-forcing
+    // it on every page load / relaunch for an already-signed-in, community-less
+    // user was the bug — refresh or reopen the app and you'd be dumped back on
+    // the getting-started screen. They can always reach create/join from the +
+    // in the app.
     if (mesh.available) {
       return <Navigate to="/mesh" replace />;
     }
-    return <Navigate to={config.onboardingSkipped ? "/dms" : "/welcome"} replace />;
+    return <Navigate to="/dms" replace />;
   }
   return <Navigate to={firstRoute} replace />;
 }
