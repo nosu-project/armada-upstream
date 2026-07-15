@@ -4,6 +4,7 @@ import { nip19 } from "nostr-tools";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { CustomEmojiImg, EmojifiedText } from "@/components/chat/CustomEmoji";
+import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -98,12 +99,19 @@ export function EmbeddedNaddr({ addr, className }: { addr: AddrCoords; className
  * off-ramp footer.
  */
 export function EmbeddedEventCard({ event, className }: { event: NostrEvent; className?: string }) {
+  // NIP-30 emoji packs get a dedicated preview + "Add" card rather than the
+  // generic event body (whose content is empty — the emojis live in tags).
+  if (event.kind === 30030) {
+    return <EmojiPackCard event={event} className={className} />;
+  }
+  return <GenericEventCard event={event} className={className} />;
+}
+
+function GenericEventCard({ event, className }: { event: NostrEvent; className?: string }) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);
-  const label = kindLabel(event.kind);
-
-  // Addressable events often have a title tag worth surfacing.
+  const label = kindLabel(event.kind);  // Addressable events often have a title tag worth surfacing.
   const title = event.tags.find(([name]) => name === "title")?.[1];
 
   // Reactions render their emoji rather than raw content.
