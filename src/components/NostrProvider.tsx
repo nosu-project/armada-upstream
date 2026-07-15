@@ -20,6 +20,7 @@ import {
   noteAuthResult,
   noteRelayChallenged,
   noteStreamAuthSent,
+  onStreamAuthStale,
   onStreamKeysAdded,
   resetRelayAuth,
   signStreamAuths,
@@ -202,8 +203,14 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       if (entry.challenge !== challenge) return; // stale nonce — a fresh challenge will re-cover
       for (const ev of chunk) {
         try {
-          noteStreamAuthSent(url, ev.id, ev.pubkey);
           entry.relay.socket.send(JSON.stringify(["AUTH", ev]));
+          // Record as pending ONLY after the frame actually left the socket.
+          // A half-open socket (readyState OPEN, TCP dead) throws or silently
+          // drops here; marking it pending first would pin the key unacked
+          // forever (its OK never comes), wedging streamAuthsSettled until a
+          // socket reopen — which a half-open socket never fires. The next
+          // auth-required round re-sends.
+          noteStreamAuthSent(url, ev.id, ev.pubkey);
         } catch {
           // socket not open yet / closing — the next auth-required round re-sends.
         }
@@ -529,6 +536,23 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         logSync("auth", `authenticating ${pks.length} late stream key(s) on ${url}`);
         void sendStreamAuths(entry, url, pks);
       }
+    });
+    // Reads only refs; stable for the provider's lifetime.
+  }, []);
+
+  // Self-heal a wedged NIP-42 auth: streamAuthsSettled fires this when a relay
+  // was challenged but some stream key stayed unacked past the stale window (a
+  // dropped AUTH frame, a lost OK, an ack that raced the listener attach). The
+  // old code could only recover via a socket reopen — which a half-open socket
+  // never fires — so sync stayed dead until an app restart. Re-sign and re-send
+  // the relay's stream AUTHs on the LIVE socket; the relay's challenge is valid
+  // for the socket's lifetime, so a fresh AUTH frame still authenticates.
+  useEffect(() => {
+    return onStreamAuthStale((url) => {
+      const entry = openRelaysRef.current.get(url);
+      if (!entry?.challenge) return;
+      logSync("auth", `stream auth went stale for ${url} — re-sending AUTH frames`);
+      void sendStreamAuths(entry, url);
     });
     // Reads only refs; stable for the provider's lifetime.
   }, []);

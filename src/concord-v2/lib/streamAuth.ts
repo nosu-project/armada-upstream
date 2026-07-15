@@ -223,6 +223,8 @@ export function _resetStreamAuthRegistry(): void {
 interface RelayAuthState {
   /** Whether this relay has issued a NIP-42 challenge on the live socket. */
   challenged: boolean;
+  /** When the current challenge was recorded (ms) — for the stale self-heal. */
+  challengedAt: number;
   /** Stream pubkeys the relay has acked (OK true) on the live socket. */
   acked: Set<string>;
   /** Sent-but-unacked AUTH event ids → the stream pubkey they authenticate. */
@@ -232,11 +234,37 @@ interface RelayAuthState {
 /** normalized relay url → live-socket auth state. */
 const relayAuth = new Map<string, RelayAuthState>();
 
+/**
+ * How long a challenged-but-not-fully-acked relay stays "unsettled" before the
+ * self-heal kicks in. Longer than plane sweeps' auth-wait cap (8s) so a merely
+ * slow ack still wins the race; past it we assume an AUTH frame or its OK was
+ * lost (dropped send, half-open socket, ack that raced the listener attach) and
+ * stop blocking sweeps forever — instead firing a re-auth so the relay can
+ * recover WITHOUT an app restart (the old failure mode: only a socket reopen
+ * cleared the stuck state, and a half-open socket never reopens).
+ */
+const AUTH_STALE_MS = 12_000;
+
+/** Listeners asked to re-send AUTH frames for a relay whose auth went stale. */
+type ReauthListener = (url: string) => void;
+const reauthListeners = new Set<ReauthListener>();
+
+/**
+ * Subscribe to auth-stale events: fired for a relay that has been challenged
+ * but hasn't fully acked its stream AUTHs within {@link AUTH_STALE_MS}. The
+ * listener (NostrProvider) re-signs and re-sends the stream AUTH frames on the
+ * live socket. Returns an unsubscribe.
+ */
+export function onStreamAuthStale(listener: ReauthListener): () => void {
+  reauthListeners.add(listener);
+  return () => reauthListeners.delete(listener);
+}
+
 function relayAuthState(url: string): RelayAuthState {
   const key = normalizeRelayUrl(url) ?? url;
   let state = relayAuth.get(key);
   if (!state) {
-    state = { challenged: false, acked: new Set(), pending: new Map() };
+    state = { challenged: false, challengedAt: 0, acked: new Set(), pending: new Map() };
     relayAuth.set(key, state);
   }
   return state;
@@ -244,7 +272,9 @@ function relayAuthState(url: string): RelayAuthState {
 
 /** Record that `url` issued a NIP-42 challenge on its live socket. */
 export function noteRelayChallenged(url: string): void {
-  relayAuthState(url).challenged = true;
+  const state = relayAuthState(url);
+  state.challenged = true;
+  state.challengedAt = Date.now();
 }
 
 /** Reset a relay's auth state (socket reopened — the old session's acks are dead). */
@@ -271,12 +301,34 @@ export function noteAuthResult(url: string, eventId: string, ok: boolean): void 
  * now: either the relay never challenged this socket (not auth-gating, or the
  * lazy challenge hasn't fired — the REQ itself will trigger it and NRelay1's
  * auth-retry covers that round), or every pubkey's AUTH has been acked.
+ *
+ * SELF-HEAL: if the relay was challenged but some pubkey is still unacked past
+ * {@link AUTH_STALE_MS}, an AUTH frame or its OK was almost certainly lost. We
+ * stop reporting unsettled (so sweeps/backfills stop burning the auth-wait cap
+ * on every call — the old wedge that made sync "die" until an app restart) and
+ * fire a re-auth so the relay can actually recover on the LIVE socket. The
+ * challenge window is re-armed so a single stale detection triggers one re-auth
+ * wave, not a storm.
  */
 export function streamAuthsSettled(url: string, pubkeys: Iterable<string>): boolean {
   const state = relayAuth.get(normalizeRelayUrl(url) ?? url);
   if (!state?.challenged) return true;
+  let allAcked = true;
   for (const pk of pubkeys) {
-    if (!state.acked.has(pk)) return false;
+    if (!state.acked.has(pk)) {
+      allAcked = false;
+      break;
+    }
   }
+  if (allAcked) return true;
+  // Not fully acked. If we're still inside the fresh-challenge window, keep
+  // waiting (a slow-but-live ack should win). Past the window, self-heal.
+  if (Date.now() - state.challengedAt < AUTH_STALE_MS) return false;
+  // Re-arm the window so the re-auth we trigger gets its own fresh grace period
+  // (and a subsequent settled check waits for the new AUTHs rather than firing
+  // another re-auth immediately).
+  state.challengedAt = Date.now();
+  const key = normalizeRelayUrl(url) ?? url;
+  for (const l of reauthListeners) l(key);
   return true;
 }

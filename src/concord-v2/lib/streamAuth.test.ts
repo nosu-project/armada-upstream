@@ -1,6 +1,6 @@
 import { verifyEvent } from "nostr-tools/pure";
 import type { NostrEvent } from "nostr-tools/pure";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { controlGroupKey, random32 } from "@/concord-v2/lib/derive";
 import {
@@ -9,6 +9,7 @@ import {
   noteAuthResult,
   noteRelayChallenged,
   noteStreamAuthSent,
+  onStreamAuthStale,
   onStreamKeysAdded,
   registerStreamKeys,
   resetRelayAuth,
@@ -220,5 +221,86 @@ describe("streamAuth per-relay ack state", () => {
     noteStreamAuthSent("relay.example.com", "ev-a", a.pk);
     noteAuthResult(`${RELAY}/`, "ev-a", true);
     expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
+  });
+});
+
+describe("streamAuth self-heal (never wedge until a restart)", () => {
+  afterEach(() => {
+    _resetStreamAuthRegistry();
+    vi.useRealTimers();
+  });
+
+  it("a challenged-but-unacked relay self-heals past the stale window: reports settled AND fires a re-auth", () => {
+    vi.useFakeTimers();
+    const a = makeKey();
+    registerStreamKeys([a], [RELAY]);
+    noteRelayChallenged(RELAY);
+
+    const reauthed: string[] = [];
+    const off = onStreamAuthStale((url) => reauthed.push(url));
+
+    // Inside the fresh-challenge window: still unsettled (a slow live ack wins).
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(false);
+    expect(reauthed).toEqual([]);
+
+    // Past the stale window: an AUTH frame or its OK was lost. Stop blocking
+    // sweeps forever (the old restart-only wedge) and trigger a re-auth.
+    vi.advanceTimersByTime(13_000);
+    expect(streamAuthsSettled(RELAY, [a.pk]), "stale relay must stop reporting unsettled").toBe(true);
+    expect(reauthed, "a re-auth must be fired for the stale relay").toEqual([RELAY]);
+
+    off();
+  });
+
+  it("a re-auth that lands (OK acks arrive) settles cleanly without further re-auth storms", () => {
+    vi.useFakeTimers();
+    const a = makeKey();
+    registerStreamKeys([a], [RELAY]);
+    noteRelayChallenged(RELAY);
+
+    let reauthCount = 0;
+    const off = onStreamAuthStale(() => reauthCount++);
+
+    vi.advanceTimersByTime(13_000);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true); // heals, fires re-auth #1
+    expect(reauthCount).toBe(1);
+
+    // The re-auth's AUTH lands and the relay acks it.
+    noteStreamAuthSent(RELAY, "ev-a2", a.pk);
+    noteAuthResult(RELAY, "ev-a2", true);
+
+    // Now genuinely settled — no more re-auths regardless of how much time passes.
+    vi.advanceTimersByTime(60_000);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
+    expect(reauthCount, "an acked relay must not keep firing re-auths").toBe(1);
+
+    off();
+  });
+
+  it("re-arms the window so a stale relay fires ONE re-auth per window, not a storm", () => {
+    vi.useFakeTimers();
+    const a = makeKey();
+    registerStreamKeys([a], [RELAY]);
+    noteRelayChallenged(RELAY);
+
+    let reauthCount = 0;
+    const off = onStreamAuthStale(() => reauthCount++);
+
+    vi.advanceTimersByTime(13_000);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true); // heals, fires re-auth #1
+    expect(reauthCount).toBe(1);
+
+    // Immediately re-checking (the sweep polls every ~50ms) must NOT re-fire —
+    // the window was re-armed, so the gate goes back to WAITING for the
+    // re-auth's ack (returns false) rather than firing another re-auth.
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(false);
+    expect(reauthCount).toBe(1);
+
+    // Only after the NEW window elapses without an ack does it heal + fire again.
+    vi.advanceTimersByTime(13_000);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
+    expect(reauthCount).toBe(2);
+
+    off();
   });
 });
