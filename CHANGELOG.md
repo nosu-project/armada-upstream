@@ -4,6 +4,37 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.28.1] - 2026-07-15
+
+A messaging and reliability release. Private DMs now arrive the instant they're
+sent, with notifications firing right away instead of waiting on a slow refresh.
+Invite links and emoji packs shared in chat now render as rich, tappable cards
+you can join or add with one tap. Voice calls keep running when you switch away
+from the app on Android, and several cases where a Concord community could
+briefly vanish from your sidebar — or where the app needed a restart to recover
+— are fixed.
+
+### Added
+- Invite links posted in chat render as a join card showing the community name,
+  icon, and channel count, with a one-tap Join/Open button
+- Emoji packs shared in chat render as a preview grid with an Add button that
+  adds the pack to your emoji list
+
+### Changed
+- Tearing down a Concord community now uses clearer "dissolve" wording
+
+### Fixed
+- Private direct messages now arrive live the moment they're sent, and their
+  notifications fire right away instead of waiting for a periodic refresh
+- Voice calls stay connected when you switch away from the app on Android
+- A Concord community no longer briefly vanishes from your sidebar after joining
+  via an older invite, or after a kick/ban
+- The app now recovers on its own from a stuck connection that previously needed
+  a restart
+- Onboarding is no longer forced when relaunching the app — only when creating a
+  new account
+- Fixed an intermittent crash when refreshing the app right after an update
+
 ## [0.28.0] - 2026-07-15
 
 A private direct messages release. Armada now sends and receives fully
