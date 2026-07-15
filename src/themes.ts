@@ -225,6 +225,21 @@ export function buildThemeCssFromCore(colors: CoreThemeColors): string {
   return buildThemeCss(coreToTokens(colors));
 }
 
+/**
+ * Build a React inline-style object of the theme CSS variables from 3 core
+ * colors, for scoping a theme to a single element (e.g. a profile card) rather
+ * than the whole `:root`. Tailwind tokens inside the element then resolve to
+ * these colors instead of the global theme.
+ */
+export function buildThemeVarStyle(colors: CoreThemeColors): Record<string, string> {
+  const tokens = coreToTokens(colors);
+  const style: Record<string, string> = {};
+  for (const key of Object.keys(tokens) as Array<keyof ThemeTokens>) {
+    style[toThemeVar(key)] = tokens[key];
+  }
+  return style;
+}
+
 // ─── Resolution ───────────────────────────────────────────────────────
 
 /** Resolve a theme mode to a concrete light/dark/custom value. */

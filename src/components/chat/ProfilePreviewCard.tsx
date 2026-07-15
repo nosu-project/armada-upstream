@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { requestMention } from "@/hooks/useMentionBus";
+import { useProfileTheme } from "@/hooks/useProfileTheme";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -19,6 +20,7 @@ import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
+import { buildThemeVarStyle } from "@/themes";
 
 interface ProfilePreviewCardProps {
   pubkey: string;
@@ -214,7 +216,8 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
 /**
  * Wraps a trigger element (typically an avatar) with a click-triggered popover
  * showing a compact profile preview: banner, avatar, display name, npub, and
- * bio.
+ * bio. The card is tinted with the profile owner's Ditto theme when they have
+ * one, so hovering a user shows their chosen colors.
  */
 export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps) {
   const [open, setOpen] = useState(false);
@@ -222,15 +225,30 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent
-        side="bottom"
-        align="start"
-        sideOffset={8}
-        className="w-72 p-0 rounded-2xl overflow-hidden border border-border shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {open && <ProfilePreviewBody pubkey={pubkey} onAction={() => setOpen(false)} />}
-      </PopoverContent>
+      {open && <ThemedPreviewContent pubkey={pubkey} onClose={() => setOpen(false)} />}
     </Popover>
+  );
+}
+
+/**
+ * The popover content, mounted only while open so the profile + theme queries
+ * don't fire until the card is shown. Applies the profile owner's Ditto theme
+ * (if any) as scoped CSS variables on the card element.
+ */
+function ThemedPreviewContent({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
+  const dittoTheme = useProfileTheme(pubkey).data;
+  const themeStyle = dittoTheme ? buildThemeVarStyle(dittoTheme.colors) : undefined;
+
+  return (
+    <PopoverContent
+      side="bottom"
+      align="start"
+      sideOffset={8}
+      style={themeStyle}
+      className="w-72 p-0 rounded-2xl overflow-hidden border border-border shadow-xl"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <ProfilePreviewBody pubkey={pubkey} onAction={onClose} />
+    </PopoverContent>
   );
 }
