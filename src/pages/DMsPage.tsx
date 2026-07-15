@@ -1198,7 +1198,7 @@ function ConversationList({
           like the "Channels" sub-header on a community sidebar
           (ChannelSidebarView): the uppercase label with actions on the right.
           Search expands inline over this row behind the search icon. */}
-      <div className="relative px-1 pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] shrink-0">
+      <div className="relative overflow-hidden px-1 pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] shrink-0">
         <div className="flex items-center justify-between pl-4 pr-2 py-1 min-h-6">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Messages
