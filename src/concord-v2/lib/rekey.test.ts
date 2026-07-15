@@ -24,6 +24,8 @@ import {
   myLocator,
   parseRekey,
   rekeyScopeId,
+  rotationExcludesMe,
+  rotationPublishedAtMs,
   type RekeyBlob,
 } from "@/concord-v2/lib/rekey";
 import { openWrap, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
@@ -150,3 +152,84 @@ describe("rekey events (CORD-06 §1–2)", () => {
     expect(lowerKeyWins(b, a)).toBe(a);
   });
 });
+
+describe("exclusion vs. history (join-onto-a-past-Refounding, liveness-only bug)", () => {
+  function chunkedRotationAtMs(ms: number) {
+    // A one-chunk root rotation whose only chunk was published at `ms`.
+    const rotator = signer();
+    const prevCommit = bytesToHex(epochKeyCommitment(0n, random32()));
+    const rumors = buildRekeyRumors(
+      rotator.pubkey,
+      { scope: { kind: "root" }, newEpoch: 1n, prevEpoch: 0n, prevCommit },
+      [{ locator: bytesToHex(random32()), wrapped: "AA" }],
+      ms,
+    );
+    const parsed = parseRekey({
+      rumorId: rumors[0].id,
+      author: rotator.pubkey,
+      kind: rumors[0].kind,
+      content: rumors[0].content,
+      tags: rumors[0].tags,
+      ms,
+      createdAt: rumors[0].created_at,
+      wrapId: rumors[0].id,
+      streamPk: "",
+      sealKind: 20013,
+      seal: {} as never,
+    });
+    return groupRotations([parsed])[0];
+  }
+
+  it("reports a rotation's publish time as its newest chunk ms", () => {
+    // Two chunks of one rotation, published at different times → the newest.
+    const rotator = signer();
+    const prevCommit = bytesToHex(epochKeyCommitment(0n, random32()));
+    const blobs: RekeyBlob[] = Array.from({ length: 130 }, () => ({
+      locator: bytesToHex(random32()),
+      wrapped: "AA",
+    }));
+    const rumors = buildRekeyRumors(
+      rotator.pubkey,
+      { scope: { kind: "root" }, newEpoch: 1n, prevEpoch: 0n, prevCommit },
+      blobs,
+      5000,
+    );
+    const parsed = rumors.map((r, i) =>
+      parseRekey({
+        rumorId: r.id,
+        author: rotator.pubkey,
+        kind: r.kind,
+        content: r.content,
+        tags: r.tags,
+        // Second chunk lands a beat later.
+        ms: 5000 + i * 1000,
+        createdAt: r.created_at,
+        wrapId: r.id,
+        streamPk: "",
+        sealKind: 20013,
+        seal: {} as never,
+      }),
+    );
+    const [set] = groupRotations(parsed);
+    expect(rotationPublishedAtMs(set)).toBe(6000);
+  });
+
+  it("a rotation entirely before my join is history, NOT an exclusion", () => {
+    // The reported bug: a public invite hands me epoch N; the community already
+    // ran an N→N+1 Refounding LONG before I joined. The rotation is complete and
+    // has no blob for me, but it predates my join — so it must not tombstone me.
+    const rotatedAt = 1_000_000; // the Refounding happened here
+    const joinedAt = 9_000_000; // I joined much later, via the stale link
+    const set = chunkedRotationAtMs(rotatedAt);
+    expect(rotationPublishedAtMs(set)).toBe(rotatedAt);
+    expect(rotationExcludesMe(rotationPublishedAtMs(set), joinedAt)).toBe(false);
+  });
+
+  it("a rotation at/after my join CAN exclude me", () => {
+    const joinedAt = 1_000_000;
+    // Exactly at join (boundary) and strictly after both count as an exclusion.
+    expect(rotationExcludesMe(rotationPublishedAtMs(chunkedRotationAtMs(joinedAt)), joinedAt)).toBe(true);
+    expect(rotationExcludesMe(rotationPublishedAtMs(chunkedRotationAtMs(joinedAt + 1)), joinedAt)).toBe(true);
+  });
+});
+

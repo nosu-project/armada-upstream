@@ -254,6 +254,38 @@ export function findBlob(set: RekeyRotationSet, locatorHex: string): RekeyBlob |
 }
 
 /**
+ * When did this rotation publish? The newest of its chunks' rumor ms.
+ * Used to tell a removal apart from community history: a rotation that
+ * entirely predates a member's join happened before they existed in the
+ * community, so its lack of a blob for them is not an exclusion.
+ */
+export function rotationPublishedAtMs(set: RekeyRotationSet): number {
+  let newest = 0;
+  for (const chunk of set.chunks.values()) if (chunk.ms > newest) newest = chunk.ms;
+  return newest;
+}
+
+/**
+ * Does a complete rotation carrying no blob for me actually EXCLUDE me, or is
+ * it community history that predates my membership? A member who joins via a
+ * stale public invite (bundle epoch N) lands ON a historical `N→N+1`
+ * Refounding they were never part of. It is continuity-valid and complete, yet
+ * has no blob at their locator — but it was published before they joined, so it
+ * must not be read as a removal (else the community's rail icon vanishes
+ * seconds after every join, while chat stays fully usable — a liveness-only
+ * bug). Only a rotation published at/after the join can exclude me (CORD-06).
+ *
+ * `joinedAtMs` is the member's own Community-List `added_at`; `rotatedAtMs` is
+ * {@link rotationPublishedAtMs}. Clock skew only ever fails toward KEEPING the
+ * icon (a slightly-early real exclusion), which is safe: key rotation, not the
+ * rail, enforces post-removal secrecy.
+ */
+export function rotationExcludesMe(rotatedAtMs: number, joinedAtMs: number): boolean {
+  return rotatedAtMs >= joinedAtMs;
+}
+
+
+/**
  * Race convergence (CORD-06 §3): among authorized candidates at the same
  * continuity point, the lexicographically lowest NEW KEY wins. Callers holding
  * multiple adopted candidates keep both keys but converge the chain on the

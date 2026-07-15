@@ -28,6 +28,8 @@ import {
   myLocator,
   parseRekey,
   rekeyScopeId,
+  rotationExcludesMe,
+  rotationPublishedAtMs,
   type ParsedRekey,
   type RekeyBlob,
 } from "@/concord-v2/lib/rekey";
@@ -46,9 +48,12 @@ const ZERO_SCOPE = new Uint8Array(32);
  *   - a complete, authorized, continuity-checked rotation carrying MY blob →
  *     adopt the new root (retaining the prior for history) and record the
  *     refounder as the new epoch's snapshot authority;
- *   - a complete rotation with NO blob for me across ALL chunks → I've been
- *     removed; the membership entry is tombstoned. A missing chunk is never a
- *     removal — the watcher just keeps refetching.
+ *   - a complete rotation with NO blob for me across ALL chunks, published
+ *     at/after I joined → I've been removed; the membership entry is
+ *     tombstoned. A missing chunk is never a removal — the watcher just keeps
+ *     refetching. Neither is a complete rotation that predates my join: it is
+ *     community history I was never part of (a stale public invite drops me
+ *     ONTO a past Refounding), so its lack of a blob for me means nothing.
  */
 export function useRekeyWatch2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
@@ -129,6 +134,10 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
 
   useEffect(() => {
     if (!community || !user || !folded || !query.data || query.data.length === 0) return;
+    // Without my own list entry we don't know when I joined, and the removal
+    // decision compares each rotation's publish time against that join time —
+    // so wait for it rather than risk a stale-epoch false removal.
+    if (!entry) return;
     // Death wins every race (CORD-02 §9): a Refounding never crosses the
     // owner's tombstone — no epoch advance past it is honored.
     if (dissolved) return;
@@ -162,15 +171,31 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
       );
       if (rotations.length === 0) return;
 
+      // My join time (wall-clock ms). A rotation that entirely predates it
+      // happened before I was a member, so its lack of a blob for me is NOT an
+      // exclusion — see the removal guard below.
+      const joinedAt = entry?.added_at ?? 0;
+
       // Try to adopt: my blob, decrypted under the rotator↔me pairwise key.
       let adopted: { key: Uint8Array; rotator: string } | undefined;
-      let sawComplete = false;
+      // A complete rotation counts toward removal only if it could have carried
+      // a blob for me — i.e. it was published at/after I joined.
+      let sawExcludingRotation = false;
       for (const set of rotations) {
         if (!set.complete) continue;
-        sawComplete = true;
+        // A member who joined via a stale public invite (bundle epoch N) lands
+        // ON a historical `N→N+1` Refounding they were never part of; it carries
+        // no blob at their locator, but it predates their join, so it must not be
+        // read as a removal (else the rail icon vanishes seconds after every
+        // join/rejoin while the community stays fully interactable — exposing it
+        // as a liveness-only bug). Only a rotation at/after the join can exclude.
+        const couldCarryMyBlob = rotationExcludesMe(rotationPublishedAtMs(set), joinedAt);
         const locator = myLocator(set.rotator, user.pubkey, set.scopeIdHex, set.newEpoch);
         const blob = findBlob(set, locator);
-        if (!blob) continue;
+        if (!blob) {
+          if (couldCarryMyBlob) sawExcludingRotation = true;
+          continue;
+        }
         try {
           const plainB64 = await nip44.decrypt(set.rotator, blob.wrapped);
           const newKey = decodeWrappedKey(base64ToBytes(plainB64), ZERO_SCOPE, set.newEpoch);
@@ -180,6 +205,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
           }
         } catch {
           // undecryptable blob at my locator — treat as absent
+          if (couldCarryMyBlob) sawExcludingRotation = true;
         }
       }
       if (cancelled) return;
@@ -206,8 +232,10 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
       }
 
       // Every chunk of at least one complete rotation held, none carries my
-      // locator → removed. Tombstone the membership (the UI reflects it).
-      if (sawComplete) {
+      // locator, AND that rotation was published at/after I joined → I've been
+      // excluded. Tombstone the membership (the UI reflects it). A rotation that
+      // entirely predates my join is community history, not a removal.
+      if (sawExcludingRotation) {
         handled.current.add(key);
         await updateList({ type: "remove", communityId: community.idHex }).catch(() =>
           handled.current.delete(key),
@@ -219,7 +247,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [community?.idHex, community?.rootEpoch, user?.pubkey, folded, dissolved, query.data]);
+  }, [community?.idHex, community?.rootEpoch, user?.pubkey, folded, dissolved, query.data, entry?.added_at]);
 }
 
 /**
