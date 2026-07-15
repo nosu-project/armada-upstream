@@ -1,4 +1,4 @@
-import { ChevronLeft, Headphones, Loader2, Lock, MessageSquare, PenSquare, Phone, Plus, Search, UserCheck, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Plus, Search, UserCheck, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -21,6 +21,18 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,8 +60,7 @@ import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
-import { useNotifLevels, dmScopeKey } from "@/hooks/useNotifLevels";
-import { NotifLevelDropdown } from "@/components/NotifLevelMenu";
+import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLevels";
 import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
@@ -304,11 +315,10 @@ function DmBestEffortBadge({ name }: { name: string }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-0.5 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground/80 hover:text-foreground shrink-0 select-none"
+          className="inline-flex items-center justify-center rounded-full p-0.5 text-muted-foreground/80 hover:text-foreground shrink-0 select-none"
           aria-label="Private, best-effort delivery. Tap for details."
         >
-          <Lock className="size-2.5" aria-hidden />
-          Private
+          <Lock className="size-3" aria-hidden />
         </button>
       </PopoverTrigger>
       <PopoverContent side="bottom" className="w-64 p-3 text-xs font-normal text-muted-foreground">
@@ -689,43 +699,66 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           </TooltipTrigger>
           <TooltipContent>Search messages</TooltipContent>
         </Tooltip>
-        {dittoProfileHref && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`View ${name} on Ditto`}
-                className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
-                asChild
-              >
-                <a href={dittoProfileHref} target="_blank" rel="noopener noreferrer">
-                  <DittoIcon className="size-4" />
-                </a>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>View on Ditto</TooltipContent>
-          </Tooltip>
-        )}
-        <NotifLevelDropdown
-          level={dmLevel(peer)}
-          onChange={(lvl) => setNotifLevel(dmScopeKey(peer), lvl)}
-          ariaLabel={`Notification settings for ${name}`}
-        />
-        <Tooltip>
-          <TooltipTrigger asChild>
+
+        {/* Secondary actions overflow into a … menu to keep the bar uncluttered:
+            notification level, View on Ditto, and Mute. Call + Search stay
+            inline as the primary conversation actions. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               size="icon"
-              aria-label={`Mute ${name}`}
-              className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-destructive"
+              aria-label="More options"
+              className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
+            >
+              <MoreVertical className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52 p-1.5">
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="px-3 py-2">
+                {(() => {
+                  const lvl = dmLevel(peer);
+                  const Icon = lvl === "nothing" ? BellOff : lvl === "mentions" ? AtSign : Bell;
+                  return <Icon className="mr-2 size-4" />;
+                })()}
+                Notifications
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-48">
+                <DropdownMenuRadioGroup
+                  value={dmLevel(peer)}
+                  onValueChange={(v) => setNotifLevel(dmScopeKey(peer), v as NotifLevel)}
+                >
+                  <DropdownMenuRadioItem value="all">
+                    <Bell className="mr-2 size-4" /> All messages
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="mentions">
+                    <AtSign className="mr-2 size-4" /> Only @mentions
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="nothing">
+                    <BellOff className="mr-2 size-4" /> Nothing
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            {dittoProfileHref && (
+              <DropdownMenuItem className="px-3 py-2" asChild>
+                <a href={dittoProfileHref} target="_blank" rel="noopener noreferrer">
+                  <DittoIcon className="size-4" />
+                  View on Ditto
+                </a>
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="px-3 py-2 text-destructive focus:text-destructive"
               onClick={() => setMuteConfirmOpen(true)}
             >
               <UserX className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Mute person (hide messages)</TooltipContent>
-        </Tooltip>
+              Mute person
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Inline search bar: smoothly expands across the header (covering the
             title and actions) when open. On mobile it leaves the back button
