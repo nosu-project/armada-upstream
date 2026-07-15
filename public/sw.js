@@ -35,8 +35,13 @@ const PRECACHE = ["/", "/index.html", "/theme.js", "/favicon.svg", "/favicon.png
 // ---------------------------------------------------------------------------
 
 self.addEventListener("install", (event) => {
-  // Take control immediately so push and caching work on first install.
-  self.skipWaiting();
+  // Install the new shell into a fresh, version-scoped cache. Deliberately do
+  // NOT skipWaiting(): a new SW hijacking an already-loaded tab (which has
+  // parsed the OLD index.html and is dynamically importing OLD chunk hashes)
+  // is exactly what produces a mismatched old-HTML + new-chunk boot. The new SW
+  // waits until every tab on the old build has gone, then takes over on the
+  // next navigation — so each page load stays on one consistent build. Web
+  // Push still works: an activated (waiting) SW handles push events regardless.
   event.waitUntil(
     // cache: "reload" bypasses the HTTP cache so a freshly-updated SW can never
     // precache a stale shell served from heuristic HTTP caching.
@@ -45,14 +50,15 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  // Remove caches from old SW versions.
+  // This SW only activates once no client is controlled by the previous one, so
+  // its assets are no longer needed and can be dropped. Do NOT claim() existing
+  // clients — they finish their session on the build they loaded with.
   event.waitUntil(
     caches
       .keys()
       .then((keys) =>
         Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))),
-      )
-      .then(() => self.clients.claim()),
+      ),
   );
 });
 
@@ -86,12 +92,40 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets: cache-first (hashed filenames never change).
+  // Hashed build assets (/assets/*): cache-first (content-hashed → immutable).
+  //
+  // The SPA fallback in nginx returns 404 (not index.html) for a chunk hash
+  // that no longer exists after a deploy, so a stale tab's dynamic import()
+  // fails cleanly and the client's chunk-load-error recovery reloads to a
+  // consistent build. Guard against ever caching or returning an HTML document
+  // under an asset URL — doing so is what makes a mismatched-chunk boot look
+  // like "useContext(...) is null": the browser would try to run HTML as a JS
+  // module.
+  if (url.pathname.startsWith("/assets/")) {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request).then((res) => {
+          const type = res.headers.get("Content-Type") || "";
+          const isHtml = type.includes("text/html");
+          // Only cache a genuine, non-HTML asset response.
+          if (res.ok && !isHtml) {
+            const clone = res.clone();
+            caches.open(CACHE).then((cache) => cache.put(request, clone));
+          }
+          return res;
+        });
+      }),
+    );
+    return;
+  }
+
+  // Other same-origin static files (icons, manifest, theme.js — stable paths):
+  // cache-first, populate on first fetch.
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;
       return fetch(request).then((res) => {
-        // Only cache successful, opaque-safe responses for same-origin assets.
         if (res.ok) {
           const clone = res.clone();
           caches.open(CACHE).then((cache) => cache.put(request, clone));

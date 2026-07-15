@@ -18,27 +18,32 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl, PINNED_RAIL_RELAYS } from "@/lib/platform";
 import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
+import { lazyWithReload } from "@/lib/chunkReload";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
 // so the boot bundle carries only the shell + the landing route's code. This is
 // a large cut on a mid-range Android WebView, where parsing the previously
 // monolithic bundle was a visible slice of every cold start.
-const AboutPage = lazy(() => import("@/pages/AboutPage").then((m) => ({ default: m.AboutPage })));
-const ConcordPage = lazy(() => import("@/concord-v1/pages/ConcordPage").then((m) => ({ default: m.ConcordPage })));
-const ConcordV2Page = lazy(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page })));
-const DMsPage = lazy(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage })));
-const GroupPage = lazy(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage })));
-const InvitePage = lazy(() => import("@/concord-v1/pages/InvitePage"));
-const InviteV2Page = lazy(() => import("@/concord-v2/pages/InviteV2Page"));
-const MeshPage = lazy(() => import("@/pages/MeshPage"));
-const ChangelogPage = lazy(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage })));
-const NotFound = lazy(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound })));
-const PrivacyPolicyPage = lazy(() => import("@/pages/PrivacyPolicyPage").then((m) => ({ default: m.PrivacyPolicyPage })));
-const ServerPage = lazy(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage })));
-const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
-const SharePage = lazy(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage })));
-const TermsPage = lazy(() => import("@/pages/TermsPage").then((m) => ({ default: m.TermsPage })));
-const WelcomePage = lazy(() => import("@/pages/WelcomePage").then((m) => ({ default: m.WelcomePage })));
+//
+// Each import is wrapped with lazyWithReload so a stale-chunk fetch after a
+// deploy (an open tab referencing pruned hashes) triggers a one-time reload to
+// a consistent build instead of surfacing as a crash.
+const AboutPage = lazy(lazyWithReload(() => import("@/pages/AboutPage").then((m) => ({ default: m.AboutPage }))));
+const ConcordPage = lazy(lazyWithReload(() => import("@/concord-v1/pages/ConcordPage").then((m) => ({ default: m.ConcordPage }))));
+const ConcordV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page }))));
+const DMsPage = lazy(lazyWithReload(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage }))));
+const GroupPage = lazy(lazyWithReload(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage }))));
+const InvitePage = lazy(lazyWithReload(() => import("@/concord-v1/pages/InvitePage")));
+const InviteV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/InviteV2Page")));
+const MeshPage = lazy(lazyWithReload(() => import("@/pages/MeshPage")));
+const ChangelogPage = lazy(lazyWithReload(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage }))));
+const NotFound = lazy(lazyWithReload(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound }))));
+const PrivacyPolicyPage = lazy(lazyWithReload(() => import("@/pages/PrivacyPolicyPage").then((m) => ({ default: m.PrivacyPolicyPage }))));
+const ServerPage = lazy(lazyWithReload(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage }))));
+const SettingsPage = lazy(lazyWithReload(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage }))));
+const SharePage = lazy(lazyWithReload(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage }))));
+const TermsPage = lazy(lazyWithReload(() => import("@/pages/TermsPage").then((m) => ({ default: m.TermsPage }))));
+const WelcomePage = lazy(lazyWithReload(() => import("@/pages/WelcomePage").then((m) => ({ default: m.WelcomePage }))));
 
 /**
  * Land the user somewhere sensible.

@@ -2,6 +2,7 @@ import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { clearChunkReloadGuard } from "@/lib/chunkReload";
 import { signalWebReady } from "@/lib/webReady";
 
 import App from "./App.tsx";
@@ -34,6 +35,10 @@ createRoot(document.getElementById("root")!).render(
 // Tell the native launch splash the web layer has painted, so it lifts onto
 // real content instead of a blank WebView frame (Android only; no-op elsewhere).
 signalWebReady();
+
+// The tree mounted without a stale-chunk crash: clear the one-time reload guard
+// so a LATER deploy in this same session can recover again.
+requestAnimationFrame(() => clearChunkReloadGuard());
 
 // Register the service worker for offline app-shell caching and Web Push.
 // Best-effort: PWA install + push stays unavailable if registration fails or

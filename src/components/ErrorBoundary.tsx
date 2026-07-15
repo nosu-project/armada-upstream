@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
+import { clearChunkReloadGuard, isChunkLoadError, tryChunkReload } from "@/lib/chunkReload";
+
 interface Props {
   children: ReactNode;
 }
@@ -24,6 +26,15 @@ export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
+    // A stale-chunk boot after a deploy (an open tab loaded across a deploy,
+    // referencing hashes that were pruned server-side) surfaces here as e.g.
+    // "useContext(...) is null" or a failed dynamic import. Recover with a
+    // one-time hard reload to a consistent build instead of showing the crash
+    // screen. If we've already reloaded once this session, fall through to the
+    // fallback so we don't loop.
+    if (isChunkLoadError(error) && tryChunkReload()) {
+      return { error: null };
+    }
     return { error };
   }
 
@@ -32,6 +43,9 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   private handleReload = () => {
+    // A user-initiated reload should always actually reload, even if the
+    // one-time auto-recovery guard is set.
+    clearChunkReloadGuard();
     window.location.reload();
   };
 
