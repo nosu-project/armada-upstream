@@ -1420,7 +1420,9 @@ function ConversationList({
       {/* Account switcher pinned to the bottom, matching the server channel
           sidebar (DMs require an account, so the user is always present). */}
       <div className="px-3 pb-safe shrink-0">
-        <LoginArea className="w-full flex" />
+        <div className="pb-2">
+          <LoginArea className="w-full flex" />
+        </div>
       </div>
     </aside>
   );
