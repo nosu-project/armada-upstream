@@ -4,6 +4,7 @@ import type { GroupKey } from "@/concord-v2/lib/derive";
 import { openPlaneWraps } from "@/concord-v2/lib/planeSync";
 import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { emitWireScopes } from "@/wire/bus";
 import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
@@ -58,7 +59,13 @@ function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined
   if (h) return `nip29:${h}`;
   if (ev.kind === 4) return "dm";
   const z = tagValue(ev, "z");
-  if (z) return `c1:${spec?.v1ByZ.get(z) ?? z}`;
+  if (z) {
+    // A control edition (kind-3308) carries the community's control `#z`, which
+    // wakes the roster/metadata/banlist fold, NOT a channel timeline.
+    const ctlCommunity = spec?.v1CtlByZ.get(z);
+    if (ctlCommunity) return `c1ctl:${ctlCommunity}`;
+    return `c1:${spec?.v1ByZ.get(z) ?? z}`;
+  }
   return undefined;
 }
 
@@ -319,8 +326,10 @@ function plaintextCandidate(
   // sealed at ingest, so we can't recover author/body/mention here. Emit a
   // channel-level candidate; the notifier hook resolves the community route +
   // names from the V1 list and treats it as an "all messages" signal only.
+  // ONLY the message kind notifies — edits/deletes/reactions and control
+  // editions (3308, which carry a control `#z`, not a channel one) stay silent.
   const z = tagValue(ev, "z");
-  if (z) {
+  if (z && ev.kind === KIND_COMMUNITY_MESSAGE && !spec?.v1CtlByZ.has(z)) {
     const channelId = spec?.v1ByZ.get(z) ?? z;
     return {
       plane: "c1",

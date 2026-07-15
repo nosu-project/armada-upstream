@@ -12,6 +12,8 @@
  *   - `nip29:<groupId>`      — a NIP-29 group's timeline changed
  *   - `dm`                   — a kind-4 DM arrived
  *   - `c1:<channelIdHex>`    — a Concord V1 channel's sealed history changed
+ *   - `c1ctl:<communityIdHex>` — a Concord V1 community's control plane changed
+ *     (a new sealed kind-3308 roster/metadata/banlist edition landed)
  *   - `c2:<channelIdHex>`    — a Concord V2 channel's rumor store changed
  *   - `c2park:<streamPk>`    — a V2 wrap for this stream address was PARKED
  *     (the wire held no key for it); a hook holding that stream's key should

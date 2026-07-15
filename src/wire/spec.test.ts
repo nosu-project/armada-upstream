@@ -133,6 +133,27 @@ describe("buildWireSpec", () => {
     expect(spec.v1ByZ.get("z3")).toBe("chan2");
   });
 
+  it("holds a separate control-#z filter per relay and maps control z → community", () => {
+    const spec = buildWireSpec({
+      pubkey: PUBKEY,
+      groups: [],
+      dmRelays: [],
+      dmFollows: [],
+      concord1: [],
+      concord1Control: [
+        { relays: ["wss://c.relay"], z: "ctlZ1", communityId: "comm1" },
+        { relays: ["wss://c.relay"], z: "ctlZ2", communityId: "comm2" },
+      ],
+      concord2: [],
+    });
+
+    expect(spec.subs).toHaveLength(1);
+    // Control (3308) is its own filter, distinct from the message plane.
+    expect(spec.subs[0].filters).toEqual([{ kinds: [3308], "#z": ["ctlZ1", "ctlZ2"] }]);
+    expect(spec.v1CtlByZ.get("ctlZ1")).toBe("comm1");
+    expect(spec.v1CtlByZ.get("ctlZ2")).toBe("comm2");
+  });
+
   it("merges Concord V2 stream authors per community relay and maps pk → channel", () => {
     const chanA = v2Channel(1, ["pkA1", "pkA2"]);
     const chanB = v2Channel(2, ["pkB1"]);

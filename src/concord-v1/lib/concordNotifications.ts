@@ -1,6 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { channelPseudonym } from "@/concord-v1/lib/derive";
+import { controlPseudonym } from "@/concord-v1/lib/control";
 import { acceptInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
 import type { Community } from "@/concord-v1/lib/types";
 import type { ConcordList } from "@/concord-v1/lib/concord";
@@ -102,6 +103,45 @@ export function buildConcordSubs(list: ConcordList | undefined): ConcordSub[] {
         channelName: channel.name,
       });
     }
+  }
+  return subs;
+}
+
+/**
+ * One community's Concord V1 CONTROL-plane subscription: the relays it lives on,
+ * the control `#z` pseudonym (kind-3308 editions — roster/metadata/banlist), and
+ * the community id for scope naming. The wire holds a standing subscription to
+ * this address so a new role/metadata/ban edition lands LIVE for every joined
+ * community, not only the one you have open — mirroring the V2 `concord2Control`
+ * plane. Control editions stay sealed in the store (the fold opens them), so no
+ * decrypt key is carried here.
+ */
+export interface ConcordControlSub {
+  relays: string[];
+  /** The control `#z` pseudonym (hex). */
+  z: string;
+  /** Community id (hex) for the bus scope + deep-link. */
+  communityId: string;
+}
+
+/** Build the per-community Concord V1 control-plane subscriptions. */
+export function buildConcordControlSubs(list: ConcordList | undefined): ConcordControlSub[] {
+  if (!list) return [];
+  const subs: ConcordControlSub[] = [];
+  for (const entry of list.entries) {
+    const invite = entry.current.keys.invite as CommunityInvite | undefined;
+    if (!invite) continue;
+    let community: Community;
+    try {
+      community = acceptInvite(invite);
+    } catch {
+      continue;
+    }
+    if (community.relays.length === 0) continue;
+    const z = controlPseudonym(community.serverRootKey, community.id, community.serverRootEpoch);
+    // Use the derived community id hex (not entry.communityId) so it matches the
+    // `bytesToHex(community.id)` scope key the roster hook subscribes on.
+    subs.push({ relays: community.relays, z, communityId: bytesToHex(community.id) });
   }
   return subs;
 }

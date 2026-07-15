@@ -77,6 +77,7 @@ function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
     v2CommunityByChannel: new Map(),
     v2CtlByPk: new Map(),
     v1ByZ: new Map(),
+    v1CtlByZ: new Map(),
     dm17ByPk: new Map(),
     sig: "",
     ...spec,
@@ -137,6 +138,16 @@ describe("ingestWireEvents", () => {
     );
     expect(store.events).toHaveLength(1);
     expect(scopes.has("c1:chan1")).toBe(true);
+  });
+
+  it("routes a sealed V1 control edition to the store, scoped c1ctl:<community>", async () => {
+    const { store, sinks } = makeSinks({ v1CtlByZ: new Map([["ctlZ", "comm1"]]) });
+    const scopes = await collectScopes(() =>
+      ingestWireEvents(sinks, [plainEvent(3308, [["z", "ctlZ"]])]),
+    );
+    expect(store.events).toHaveLength(1);
+    expect(scopes.has("c1ctl:comm1")).toBe(true);
+    expect(scopes.has("c1:ctlZ")).toBe(false);
   });
 
   it("decrypts V2 wraps for held streams into the rumor store (never armada-events)", async () => {

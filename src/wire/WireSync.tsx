@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
-import { buildConcordSubs } from "@/concord-v1/lib/concordNotifications";
+import { buildConcordSubs, buildConcordControlSubs } from "@/concord-v1/lib/concordNotifications";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { openChatBatch } from "@/concord-v2/lib/chat";
@@ -354,6 +354,7 @@ export function WireSync() {
         dmFollows: followData?.pubkeys ?? [],
         dm17WrapAddrs,
         concord1: buildConcordSubs(concordData?.list),
+        concord1Control: buildConcordControlSubs(concordData?.list),
         concord2,
         concord2Control,
       }),

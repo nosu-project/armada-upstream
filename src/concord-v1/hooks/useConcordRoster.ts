@@ -1,10 +1,11 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useWireScopes } from "@/wire/useWireScopes";
 import { useDeferredFold } from "@/concord-v1/hooks/useDeferredFold";
 import {
   buildGrantEditionUnsigned,
@@ -56,15 +57,20 @@ function controlFilter(community: Community, limit = 500): NostrFilter {
  * waiting on the network (which still runs and reconciles). Mirrors the
  * channel-message seed in `useConcordChannelMessages`.
  *
- * `active` gates the NETWORK fan-out (and the 30s poll), not the IndexedDB seed
- * or the persisted fold snapshot. The server rail renders one button per
- * community on every page and only needs the icon/name — served from the
- * persisted `metadata:` snapshot with no network. So the rail passes
+ * `active` gates the NETWORK fan-out (and the on-open catch-up), not the
+ * IndexedDB seed or the persisted fold snapshot. The server rail renders one
+ * button per community on every page and only needs the icon/name — served from
+ * the persisted `metadata:` snapshot with no network. So the rail passes
  * `active = false`, and the open community's page passes `active = true`:
- * navigating INTO a community is what syncs its control plane, instead of
- * fanning out a per-relay 3308 query for every community on pageload. All
- * consumers share the `["concord","control",cid]` key, so the rail button for
- * the open community reuses the page's live query.
+ * navigating INTO a community is what triggers its control-plane catch-up.
+ *
+ * NETWORK OWNERSHIP: this hook holds no standing socket and runs no poll. Live
+ * control editions arrive through the wire's standing `c1ctl` subscription (see
+ * wire/spec.ts + wire/ingest.ts), which stores the sealed 3308 editions into
+ * armada-events and rings `c1ctl:<communityId>`; the bus listener below re-reads
+ * the store on that doorbell for EVERY joined community (even a rail button that
+ * can't be reached by invalidation). The only network this hook issues is a
+ * single on-open catch-up fetch when `active` flips true.
  */
 export function useConcordControlEvents(community: Community | undefined, active = true) {
   const { nostr } = useNostr();
@@ -74,7 +80,18 @@ export function useConcordControlEvents(community: Community | undefined, active
   const cidHex = community ? bytesToHex(community.id) : null;
   const queryKey = ["concord", "control", cidHex] as const;
 
-  // Seed from the local store before the network resolves.
+  /** Read the sealed 3308 editions from the local store, merged into the cache. */
+  const readStore = async () => {
+    if (!community) return;
+    const store = await eventStore;
+    const cached = await store.query([controlFilter(community)]);
+    if (cached.length === 0) return;
+    queryClient.setQueryData<NostrEvent[]>(queryKey, (old) => mergeById(old ?? [], cached));
+  };
+
+  // Seed from the local store before the network resolves, and re-read whenever
+  // the wire lands a new control edition (rings `c1ctl:<communityId>`) — this is
+  // the live path, covering every joined community, not just the open one.
   useEffect(() => {
     if (!community) return;
     let cancelled = false;
@@ -93,56 +110,41 @@ export function useConcordControlEvents(community: Community | undefined, active
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cidHex, eventStore, queryClient]);
 
-  // Live subscription (open community only): stream new control editions as they
-  // land instead of waiting up to a poll interval, so a new role/metadata edit/
-  // ban/channel shows within seconds. Each EVENT is merged into the same query
-  // cache the fold reads; the poll below stays as a gap-filler for dropped subs.
-  useEffect(() => {
-    if (!community || !active) return;
-    const controller = new AbortController();
-    const since = Math.floor(Date.now() / 1000);
-    const { limit: _limit, ...base } = controlFilter(community);
-    const filter = { ...base, since };
-    for (const url of community.relays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req([filter], { signal: controller.signal })) {
-            if (msg[0] === "EVENT") {
-              const event = msg[2] as NostrEvent;
-              queryClient.setQueryData<NostrEvent[]>(queryKey, (old) =>
-                old?.some((e) => e.id === event.id) ? old : mergeById(old ?? [], [event]),
-              );
-            }
-          }
-        } catch {
-          // Subscription ended — the poll covers gaps.
-        }
-      })();
-    }
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, cidHex, active, queryClient]);
+  useWireScopes((scopes) => {
+    if (cidHex && scopes.has(`c1ctl:${cidHex}`)) void readStore();
+  });
+
+  // Throttle the on-open network catch-up so it can't re-fan-out on every render.
+  const lastPull = useRef(0);
 
   return useQuery<NostrEvent[]>({
     queryKey,
     enabled: Boolean(community) && active,
     staleTime: 15_000,
-    // The live subscription above provides real-time freshness; the poll is a
-    // longer-interval safety net for a dropped/expired subscription.
-    refetchInterval: active ? 60_000 : false,
+    // Healing backstop; new editions arrive via the wire bus above.
+    refetchInterval: active ? 5 * 60_000 : false,
+    refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
-      const results = await Promise.all(
-        community!.relays.map((url) =>
-          nostr
-            .relay(url)
-            .query([controlFilter(community!)], {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-            })
-            .catch(() => [] as NostrEvent[]),
-        ),
-      );
-      // Union with what we already have (seed/prior fetch): control editions are
-      // append-only version chains, so a relay returning a partial page must
+      // Read the store first (the wire keeps it fresh); then a throttled
+      // authoritative catch-up from the relays for anything the live sub missed
+      // while offline (or since the last background heal).
+      const now = Date.now();
+      const doPull = now - lastPull.current >= 30_000;
+      if (doPull) lastPull.current = now;
+      const results = doPull
+        ? await Promise.all(
+            community!.relays.map((url) =>
+              nostr
+                .relay(url)
+                .query([controlFilter(community!)], {
+                  signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+                })
+                .catch(() => [] as NostrEvent[]),
+            ),
+          )
+        : [];
+      // Union with what we already have (seed/prior fetch/wire): control editions
+      // are append-only version chains, so a relay returning a partial page must
       // never drop editions we already hold — the fold picks the head per entity.
       const fetched = results.flat();
       const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
