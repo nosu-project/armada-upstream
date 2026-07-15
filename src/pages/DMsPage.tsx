@@ -1349,7 +1349,7 @@ function ConversationList({
               on the row (not the header's top padding). */}
           <div
             className={cn(
-              "absolute inset-y-0 inset-x-0 z-10 flex items-center gap-1.5 pl-4 pr-1",
+              "absolute inset-y-0 inset-x-0 z-10 flex items-center gap-1.5 pl-4 pr-2",
               "bg-chrome",
               "transition-transform duration-300 ease-in-out",
               searchOpen
@@ -1357,7 +1357,7 @@ function ConversationList({
                 : "translate-x-full pointer-events-none",
             )}
           >
-            <Search className="size-3.5 text-muted-foreground shrink-0" />
+            <Search className="size-4 text-muted-foreground shrink-0" />
             <Input
               ref={searchInputRef}
               value={search}
@@ -1367,16 +1367,16 @@ function ConversationList({
               }}
             placeholder="Search messages…"
             aria-label="Search conversations"
-              className="h-6 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              className="h-8 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
             />
             <Button
               variant="ghost"
               size="icon"
               aria-label="Close search"
-              className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+              className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
               onClick={closeSearch}
             >
-              <X className="size-3.5" />
+              <X className="size-4" />
             </Button>
           </div>
         </div>
