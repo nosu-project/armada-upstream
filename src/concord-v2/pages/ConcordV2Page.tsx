@@ -1221,13 +1221,13 @@ export function ConcordV2Page() {
   };
 
   const handleDissolve = async () => {
-    if (!confirm("Permanently delete this community for everyone? This cannot be undone.")) return;
+    if (!confirm("Permanently dissolve this community for everyone? This cannot be undone.")) return;
     try {
       await dissolve();
-      toast({ title: "Community deleted" });
+      toast({ title: "Community dissolved" });
       navigateTo("/");
     } catch (e) {
-      toast({ title: "Couldn't delete", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      toast({ title: "Couldn't dissolve", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }
   };
 
@@ -1355,7 +1355,7 @@ export function ConcordV2Page() {
                         }}
                       >
                         <Trash2 className="size-4" />
-                        Delete community
+                        Dissolve community
                       </button>
                     )}
                   </>
@@ -1753,7 +1753,7 @@ export function ConcordV2Page() {
                     <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-destructive/10 border border-destructive/30 flex items-center gap-3">
                       <Trash2 className="size-5 shrink-0 text-destructive" />
                       <div className="min-w-0 flex-1 text-sm">
-                        <p className="font-medium text-destructive">This community was deleted by its owner.</p>
+                        <p className="font-medium text-destructive">This community was dissolved by its owner.</p>
                         <p className="text-muted-foreground">
                           It's now read-only. You can still browse the history, or remove it from your list.
                         </p>

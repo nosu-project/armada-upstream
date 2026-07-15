@@ -239,7 +239,7 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
   const dissolve = useMutation<void, Error, void>({
     mutationFn: async () => {
       if (!user || !community) throw new Error("Not ready.");
-      if (user.pubkey !== community.owner) throw new Error("Only the owner can delete the community.");
+      if (user.pubkey !== community.owner) throw new Error("Only the owner can dissolve the community.");
       const wrap = await sealDissolved(community.id, user.pubkey, user.signer);
       const results = await Promise.allSettled(
         community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
