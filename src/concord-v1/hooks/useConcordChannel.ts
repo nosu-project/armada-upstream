@@ -215,6 +215,14 @@ const WINDOW_SIZE = 30;
  */
 const LOCAL_REACTION_READ = 150;
 
+/**
+ * Minimum gap between authoritative reaction network refreshes. New reactions
+ * arrive live through the wire bus (each ringing `c1:<channel>`), so the relay
+ * top-up need only run periodically to catch retractions and cold history —
+ * not once per incoming reaction.
+ */
+const REACTION_PULL_MIN_INTERVAL_MS = 30_000;
+
 
 /**
  * Backfill the local store from the relays, walking older history with `until`
@@ -970,9 +978,6 @@ export function useConcordReactions(community: Community | undefined, channel: C
     () => (community && channel ? channelWire(community, channel) : undefined),
     [community, channel],
   );
-  // Address-set signature, so the live effect re-subscribes when a rekey is
-  // caught up. Kept as a primitive dep.
-  const zsSig = wire?.epochSig ?? "";
 
   // Restore the last persisted tally from IndexedDB on mount, so reactions paint
   // INSTANTLY on a refresh of a visited channel instead of waiting for the
@@ -993,45 +998,27 @@ export function useConcordReactions(community: Community | undefined, channel: C
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persistKey, channelIdHex, queryClient]);
 
-  // Live subscription: stream new reactions and fold them into the cached tally
-  // the instant the relay forwards them (replaces waiting on the 30s poll).
-  useEffect(() => {
-    if (!community || !channel || !channelIdHex || !wire) return;
-    const w = wire;
-    const controller = new AbortController();
-    const since = Math.floor(Date.now() / 1000) - 5;
-
-    const apply = async (events: NostrEvent[]) => {
-      const opened = await w.openBatch(events, { signal: controller.signal, kinds: [KIND_COMMUNITY_REACTION] });
-      if (opened.length === 0) return;
-      queryClient.setQueryData<ReactionTallyMap>(queryKey, (old) => tallyReactions(old, opened));
-    };
-
-    for (const url of community.relays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req(
-            [w.filter([KIND_COMMUNITY_REACTION], { since })],
-            { signal: controller.signal },
-          )) {
-            if (msg[0] === "EVENT") await apply([msg[2] as NostrEvent]);
-          }
-        } catch {
-          // Subscription ended (abort or relay closed) — the poll covers gaps.
-        }
-      })();
+  // Live reactions arrive through the wire: `KIND_COMMUNITY_REACTION` is in the
+  // wire's V1 `#z` filter (see wire/spec.ts), so a new reaction outer lands in
+  // armada-events and rings `c1:<channelId>`. Re-read (and re-tally) the store
+  // on that doorbell instead of holding a per-channel reaction socket.
+  useWireScopes((scopes) => {
+    if (channelIdHex && scopes.has(`c1:${channelIdHex}`)) {
+      void queryClient.invalidateQueries({ queryKey });
     }
+  });
 
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, community, channelIdHex, zsSig, queryClient]);
+  // Throttle the authoritative network refresh so a burst of bus invalidations
+  // (one per incoming reaction) doesn't fan out a full-history query each time;
+  // the store re-read below always runs, the relay top-up is rate-limited.
+  const lastReactionPull = useRef(0);
 
   const query = useQuery<ReactionTallyMap>({
     queryKey,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
-    // Backstop poll; the live subscription delivers new reactions instantly.
-    refetchInterval: 30_000,
+    // Healing backstop; new reactions arrive via the wire bus above.
+    refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const w = wire!;
       const store = await eventStore;
@@ -1053,31 +1040,38 @@ export function useConcordReactions(community: Community | undefined, channel: C
       const localOpened = await w.openBatch(localSealed, { signal, kinds: [KIND_COMMUNITY_REACTION] });
       const local = tallyReactions(undefined, localOpened);
 
-      // 2. BACKGROUND refresh from the relays (NOT awaited — never gates render).
-      void (async () => {
-        if (signal.aborted) return;
-        try {
-          const results = await Promise.all(
-            community!.relays.map((url) =>
-              nostr
-                .relay(url)
-                .query([w.filter([KIND_COMMUNITY_REACTION], { limit: 500 })], {
-                  signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-                })
-                .catch(() => [] as NostrEvent[]),
-            ),
-          );
+      // 2. BACKGROUND refresh from the relays (NOT awaited — never gates render),
+      //    throttled so incremental wire-driven invalidations don't each trigger
+      //    a full-history fan-out. The wire's live subscription already delivers
+      //    new reactions into the store; this is a periodic authoritative rebuild
+      //    that also catches retractions.
+      const now = Date.now();
+      if (now - lastReactionPull.current >= REACTION_PULL_MIN_INTERVAL_MS) {
+        lastReactionPull.current = now;
+        void (async () => {
           if (signal.aborted) return;
-          const opened = await w.openBatch(results.flat(), { signal, kinds: [KIND_COMMUNITY_REACTION] });
-          if (signal.aborted || opened.length === 0) return;
-          // Authoritative rebuild from the full network set (not a merge), so a
-          // reaction that was retracted upstream isn't retained. The live
-          // subscription handles incremental adds between refreshes.
-          queryClient.setQueryData<ReactionTallyMap>(queryKey, tallyReactions(undefined, opened));
-        } catch {
-          // Best-effort; the local-first tally already rendered.
-        }
-      })();
+          try {
+            const results = await Promise.all(
+              community!.relays.map((url) =>
+                nostr
+                  .relay(url)
+                  .query([w.filter([KIND_COMMUNITY_REACTION], { limit: 500 })], {
+                    signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+                  })
+                  .catch(() => [] as NostrEvent[]),
+              ),
+            );
+            if (signal.aborted) return;
+            const opened = await w.openBatch(results.flat(), { signal, kinds: [KIND_COMMUNITY_REACTION] });
+            if (signal.aborted || opened.length === 0) return;
+            // Authoritative rebuild from the full network set (not a merge), so a
+            // reaction that was retracted upstream isn't retained.
+            queryClient.setQueryData<ReactionTallyMap>(queryKey, tallyReactions(undefined, opened));
+          } catch {
+            // Best-effort; the local-first tally already rendered.
+          }
+        })();
+      }
 
       return local;
     },
