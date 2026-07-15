@@ -1582,20 +1582,52 @@ public class NotificationRelayService extends Service {
                 return;
             }
 
-            // Every chat-plane kind rides an identical wrap. Only messages
-            // (kind 9) and thread replies (kind 1111) notify — reactions
-            // (7), edits (5/3302), deletes (5) and other chat-plane kinds
+            // Every chat-plane kind rides an identical wrap. Messages (kind 9),
+            // thread replies (kind 1111), and reactions (kind 7) to YOUR own
+            // message notify — a reaction only when its `p` tag names you
+            // (NIP-25, carried on the encrypted rumor). Edits (5/3302), deletes
+            // (5), reactions to others' messages, and other chat-plane kinds
             // stay silent. V1 has no such filter (it notifies for every
             // decrypted inner); V2 is tighter because it subscribes to ALL
             // kind-1059 wraps, including non-message chat-plane traffic the
             // WebView handles silently.
             int rumorKind = rumor.optInt("kind", -1);
-            if (rumorKind != 9 && rumorKind != 1111) {
-                return;
-            }
             final String author2 = rumor.optString("pubkey");
             if (author2.equals(userPubkey)) {
-                return; // our own message echoed back
+                return; // our own message / reaction echoed back
+            }
+
+            // Reaction to your own message: mirror the NIP-29 path with a
+            // "Reacted 👍 to your message" line, gated on the reactions pref.
+            if (rumorKind == 7) {
+                if (!isMentioned(rumor, userPubkey)) {
+                    return; // a reaction to someone else's message — silent
+                }
+                if (!prefBool("reactions", true)) {
+                    return;
+                }
+                final Concord2Stream fStR = st;
+                final String reactionLine = "Reacted " + reactionEmoji(rumor) + " to your message";
+                final long rtsR = rumor.optLong("created_at", 0);
+                final long fTsR = (rtsR > 0 ? rtsR * 1000L : System.currentTimeMillis());
+                // A reaction is always directed at you (mention=true), so it
+                // breaks through active-room suppression like a mention.
+                if (isActivelyViewed("c2:" + fStR.channelId, null, /*mention=*/true)) {
+                    return;
+                }
+                resolveAuthor(author2, relayUrl, profile -> {
+                    String name = displayName(profile, author2);
+                    String picture = profile != null ? profile.picture : null;
+                    if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 reaction: " + fStR.name + " / " + name);
+                    enqueueRoomMessage(
+                            "c2:" + fStR.channelId, fStR.name, fStR.url,
+                            /*isGroup=*/true, author2, name, picture, reactionLine, fTsR, /*mention=*/true);
+                });
+                return;
+            }
+
+            if (rumorKind != 9 && rumorKind != 1111) {
+                return;
             }
             boolean mentionsMe2 = isMentioned(rumor, userPubkey);
             // Concord rooms reuse the group-message prefs: always notify on a

@@ -27,6 +27,18 @@ export interface NotifyCandidate {
    * for V1 (sealed at ingest — mentions can't be detected without decrypt).
    */
   mention: boolean;
+  /**
+   * Whether this is a reaction (kind 7) to one of the current user's own
+   * messages. Only ever set for a reaction that `p`-tags the user; a reaction
+   * to someone else's message is never a candidate. Shapes the notification as
+   * "reacted to your message" and gates on the `reactions` pref / level.
+   */
+  reaction?: boolean;
+  /**
+   * The reaction emoji / shortcode (normalized: `+`→👍, `-`→👎), for the
+   * "Reacted X to your message" body. Set only when `reaction` is true.
+   */
+  reactionEmoji?: string;
   /** The real event kind (NIP-29 kind, 4 for DM, decrypted rumor kind for c2). */
   kind: number;
   /**

@@ -1,9 +1,10 @@
 import { openChatBatch } from "@/concord-v2/lib/chat";
-import { KIND_MESSAGE } from "@/concord-v2/lib/kinds";
+import { KIND_MESSAGE, KIND_REACTION } from "@/concord-v2/lib/kinds";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import { openPlaneWraps } from "@/concord-v2/lib/planeSync";
 import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { reactionContentKey } from "@/hooks/useReactions";
 import { emitWireScopes } from "@/wire/bus";
 import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
 
@@ -224,13 +225,36 @@ function v2Candidates(
     ? `/c/${encodeURIComponent(communityIdHex)}/${encodeURIComponent(channel.idHex)}`
     : "";
   for (const r of opened) {
-    if (r.kind !== KIND_MESSAGE) continue; // reactions/edits/deletes don't notify
     if (self && r.author === self) continue; // never notify on our own message
+    const pTagsMe = Boolean(self) && r.tags.some(([n, v]) => n === "p" && v === self);
+
+    // A reaction (kind 7) notifies ONLY when it p-tags the current user (i.e.
+    // someone reacted to YOUR message). The reacted-to author is carried on the
+    // encrypted rumor's `p` tag (NIP-25), invisible to the relay. Any other
+    // non-message kind (edit/delete) still stays silent.
+    if (r.kind === KIND_REACTION) {
+      if (!pTagsMe) continue;
+      out.push({
+        plane: "c2",
+        author: r.author,
+        createdAt: r.createdAt,
+        mention: true, // a reaction to your message is directed at you
+        reaction: true,
+        reactionEmoji: reactionContentKey(r.content),
+        kind: r.kind,
+        roomKey: `c2:${channel.idHex}`,
+        readKey: channel.idHex,
+        path,
+        channelIdHex: channel.idHex,
+      });
+      continue;
+    }
+    if (r.kind !== KIND_MESSAGE) continue; // edits/deletes don't notify
     out.push({
       plane: "c2",
       author: r.author,
       createdAt: r.createdAt,
-      mention: Boolean(self) && r.tags.some(([n, v]) => n === "p" && v === self),
+      mention: pTagsMe,
       kind: r.kind,
       body: preview(r.content),
       roomKey: `c2:${channel.idHex}`,

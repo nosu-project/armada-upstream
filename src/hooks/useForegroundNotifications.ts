@@ -240,6 +240,11 @@ export function useForegroundNotifications(): void {
             if (cand.plane === "dm") {
               title = `${name} sent you a message`;
               body = body ?? "New direct message";
+            } else if (cand.reaction) {
+              // A reaction to your own message (V2). Mirrors the NIP-29 native
+              // string: "Reacted 👍 to your message".
+              title = name;
+              body = `Reacted ${cand.reactionEmoji ?? "👍"} to your message`;
             } else {
               title = cand.mention ? `${name} mentioned you` : name;
             }
