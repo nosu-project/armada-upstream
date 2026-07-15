@@ -4,6 +4,42 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.28.0] - 2026-07-15
+
+A private direct messages release. Armada now sends and receives fully
+encrypted, metadata-hiding DMs — including images and files — and raises
+notifications for incoming messages on both desktop and Android. You can search
+your whole DM history and jump straight to matching messages. When a person
+hasn't set up private messaging, Armada tells you plainly and lets you choose
+whether to fall back to older, less-private encryption rather than silently
+downgrading. Profile hovercards now pick up each person's own color theme, and
+desktop voice tells you how to fix a microphone that's blocked by your OS.
+
+### Added
+- Private direct messages: fully encrypted DMs that hide who you're talking to,
+  with support for sending images and files
+- Notifications for incoming DMs while the app is running, plus Android
+  background notifications for new DMs
+- Notifications when someone reacts to your message in a Concord community
+- Search across your full DM history, with matching text highlighted and a
+  tap-to-jump list
+
+### Changed
+- When a recipient hasn't enabled private messaging, Armada now explains the
+  situation and asks you to explicitly opt in to legacy encryption instead of
+  quietly using the less-private format; the privacy badge is now tap-to-open
+  with plain-language detail
+- DM headers are decluttered: search and options moved into an overflow menu,
+  with a padlock badge on the avatar
+- Profile hovercards are tinted with the person's own color theme
+
+### Fixed
+- "Skip for now" on the welcome screen is remembered, so onboarding isn't forced
+  on every relaunch
+- Desktop voice now guides you to the OS privacy setting when the microphone is
+  blocked at the system level, instead of just failing
+- Profile cards no longer briefly flip to an older version of someone's profile
+
 ## [0.27.3] - 2026-07-14
 
 A notifications release. Armada now raises real notifications for incoming
