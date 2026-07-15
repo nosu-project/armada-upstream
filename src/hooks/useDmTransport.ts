@@ -15,6 +15,19 @@ import type { OpenedDm } from "@/lib/nip17/protocol";
 const EMPTY_TALLIES: ReactionTally[] = [];
 
 /**
+ * Thrown by {@link useDmTransport}'s `send` when the peer isn't reachable over
+ * NIP-17 and the caller hasn't opted into the legacy kind-4 downgrade. The DM
+ * page catches this to surface an explicit "send with legacy encryption"
+ * affordance instead of silently downgrading.
+ */
+export class LegacyFallbackRequired extends Error {
+  constructor() {
+    super("This person can't receive private (NIP-17) messages yet.");
+    this.name = "LegacyFallbackRequired";
+  }
+}
+
+/**
  * Build a {@link ChatTransport} for a 1:1 DM thread, so DMs render through the
  * same `MessageTimeline` / `ChatMessage` path as NIP-29 groups and Concord
  * communities instead of a bespoke timeline.
@@ -26,9 +39,13 @@ const EMPTY_TALLIES: ReactionTally[] = [];
  *   - NIP-17 gift-wrapped rumors (kind 14/15) — the modern plane, with
  *     reactions (kind-7 rumors) and deletes (kind-5 rumors) in-band.
  *
- * Sends route by capability: NIP-17 when the peer has published a kind-10050
- * DM-relay list (the spec's "ready to receive" signal) and the signer does
- * NIP-44; kind-4 otherwise. Reactions/deletes exist only on the NIP-17 plane.
+ * Sends prefer NIP-17 whenever the peer has published a kind-10050 DM-relay
+ * list (the spec's "ready to receive" signal) and the signer does NIP-44.
+ * When the peer is NOT NIP-17-reachable, the legacy kind-4 plane is the only
+ * option — but it's a privacy downgrade (kind-4 leaks who's talking and when),
+ * so it is NEVER used silently: `send` refuses with `LegacyFallbackRequired`
+ * and the caller must opt in explicitly (`send(text, tags, { allowLegacy })`)
+ * after telling the user. Reactions/deletes exist only on the NIP-17 plane.
  *
  * Two kind-4-specific concerns the shared timeline can't model are surfaced
  * alongside the transport for the page's `renderMessage` to handle:
@@ -54,8 +71,14 @@ export function useDmTransport(peer: string): {
   decryptDeclined: boolean;
   /** Whether any row is still an encrypted placeholder. */
   hasEncrypted: boolean;
-  /** Sign + optimistically send a DM; resolves once rendered (relay in bg). */
-  send: (text: string, tags?: string[][]) => Promise<void>;
+  /** Whether the peer can receive private NIP-17 DMs (published a kind-10050 inbox). */
+  canDm17: boolean;
+  /**
+   * Sign + optimistically send a DM; resolves once rendered (relay in bg).
+   * Routes NIP-17 when the peer is reachable; otherwise throws
+   * {@link LegacyFallbackRequired} unless `opts.allowLegacy` opts into kind-4.
+   */
+  send: (text: string, tags?: string[][], opts?: { allowLegacy?: boolean }) => Promise<void>;
 } {
   const { user } = useCurrentUser();
   const {
@@ -273,14 +296,18 @@ export function useDmTransport(peer: string): {
   const dm17Send = dm17.send;
   const dm17Enabled = dm17.canSend;
   const sendText = useCallback(
-    async (text: string, tags?: string[][]) => {
+    async (text: string, tags?: string[][], opts?: { allowLegacy?: boolean }) => {
       if (dm17Enabled) {
         // Drop group-scoping tags the composer builds for relay chats; keep
         // content tags (imeta/q/emoji) inside the sealed rumor.
         const extraTags = (tags ?? []).filter(([name]) => name !== "h" && name !== "p");
         await dm17Send(text, extraTags);
-      } else {
+      } else if (opts?.allowLegacy) {
+        // Explicit user opt-in only: kind-4 is a privacy downgrade, never the
+        // silent default (see LegacyFallbackRequired).
         await sendKind4(text);
+      } else {
+        throw new LegacyFallbackRequired();
       }
     },
     [dm17Enabled, dm17Send, sendKind4],
@@ -316,6 +343,7 @@ export function useDmTransport(peer: string): {
     decryptAll,
     decryptDeclined,
     hasEncrypted,
+    canDm17: dm17Enabled,
     send: sendText,
   };
 }

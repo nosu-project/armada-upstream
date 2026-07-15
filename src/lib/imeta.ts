@@ -64,6 +64,37 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
   return map;
 }
 
+/**
+ * Parse a NIP-17 kind-15 file message (`content` is the blob URL; the file
+ * metadata rides in TOP-LEVEL tags, not an `imeta` tag) into an
+ * {@link ImetaEntry}. This is the shape Amethyst/0xChat send for encrypted DM
+ * attachments: `file-type` (MIME), `x`/`ox` (hashes), `size`, `dim`,
+ * `blurhash`, `thumb`/`image`, and the `encryption-algorithm` /
+ * `decryption-key` / `decryption-nonce` triple.
+ *
+ * Returns `undefined` when `url` isn't a usable http(s) URL. Encryption is
+ * attached only when the params parse as valid AES-GCM (see
+ * {@link parseImetaEncryption}); a file message with no/invalid encryption
+ * still yields an entry so a plaintext attachment renders.
+ */
+export function parseFileMessageTags(url: string, tags: string[][]): ImetaEntry | undefined {
+  if (!/^https?:\/\//i.test(url)) return undefined;
+  const flat: Record<string, string> = {};
+  for (const [name, value] of tags) {
+    if (name && value !== undefined && !(name in flat)) flat[name] = value;
+  }
+  return {
+    url,
+    thumbnail: flat.thumb ?? flat.image,
+    // NIP-17 file messages use `file-type` for the MIME; fall back to `m`.
+    mime: flat["file-type"] ?? flat.m,
+    dim: flat.dim,
+    blurhash: flat.blurhash,
+    name: flat.name,
+    encryption: parseImetaEncryption(flat),
+  };
+}
+
 /** Lowercase-hex validator (even length, hex digits only). */
 function isHex(s: string | undefined, len?: number): s is string {
   if (!s) return false;

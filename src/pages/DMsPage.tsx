@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,7 +43,7 @@ import {
   useDMSupport,
 } from "@/hooks/useDirectMessages";
 import { useDm17Conversations, useDm17Support, useEnsureDmInbox } from "@/hooks/useDm17";
-import { useDmTransport } from "@/hooks/useDmTransport";
+import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
@@ -230,16 +231,57 @@ function DmPlaceholderRow({
  * A subtle per-message marker for DMs that arrived over legacy NIP-04 (kind
  * 4). Rendered next to the author name so mixed-protocol threads make the
  * encryption downgrade visible at a glance; NIP-17 rumors carry no badge.
+ *
+ * The whole pill is a click/tap-to-open Popover (not a hover-only tooltip), so
+ * the plain-language explanation is reachable on touch, matching the app's
+ * other info affordances (e.g. the invite-link "About" popover).
  */
 function DmLegacyBadge() {
   return (
-    <span
-      className="inline-flex items-center gap-0.5 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground/80 shrink-0 select-none"
-      title="Sent with legacy NIP-04 encryption"
-    >
-      <Lock className="size-2.5" aria-hidden />
-      NIP-04
-    </span>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-0.5 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground/80 hover:text-foreground shrink-0 select-none"
+          aria-label="Older, less private encryption. Tap for details."
+        >
+          <Lock className="size-2.5" aria-hidden />
+          NIP-04
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" className="w-64 p-3 text-xs font-normal text-muted-foreground">
+        Sent with older DM encryption. It hides the message text, but not the
+        fact that you two are talking or when. Newer messages use stronger,
+        fully private encryption.
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * Shown in place of the composer when the peer can't receive private (NIP-17)
+ * DMs. Sending would fall back to legacy NIP-04 (kind 4), which leaks metadata
+ * (who's talking, and when), so we make the downgrade an explicit, informed
+ * choice rather than a silent default.
+ */
+function DmLegacyFallbackNotice({ name, onEnable }: { name: string; onEnable: () => void }) {
+  return (
+    <div className="mx-2 mb-3 rounded-lg border border-border/60 bg-muted/40 px-4 py-3 text-sm">
+      <div className="flex items-start gap-2.5">
+        <Lock className="size-4 mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 space-y-2">
+          <p className="text-muted-foreground">
+            <span className="font-medium text-foreground">{name}</span> hasn't set
+            up private messaging yet, so we can't send them a fully-private DM.
+            You can still message them with older encryption — it hides what you
+            say, but not that you're talking or when.
+          </p>
+          <Button variant="outline" size="sm" onClick={onEnable}>
+            Message with legacy encryption
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -294,6 +336,18 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   // in-band convention, so the control is hidden on legacy threads).
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   useEffect(() => setReplyTo(undefined), [peer]);
+
+  // Legacy-encryption opt-in. When the peer can't receive private (NIP-17)
+  // DMs, we DON'T silently downgrade to kind-4 (which leaks who's talking and
+  // when). The composer is replaced by a notice until the user explicitly
+  // chooses to send with legacy encryption; the choice is per-conversation and
+  // resets when switching peers.
+  const [legacyAllowed, setLegacyAllowed] = useState(false);
+  useEffect(() => setLegacyAllowed(false), [peer]);
+  // Block sending only once we KNOW the peer has no NIP-17 inbox. While the
+  // thread (and the peer's kind-10050 lookup) is still loading, assume the
+  // private path so we don't flash a legacy notice for a reachable peer.
+  const legacyBlocked = !dm17Enabled && !transport.isLoading && !legacyAllowed;
 
   // Jump-to-quoted-message support (the reply context line is clickable).
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
@@ -449,9 +503,17 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         // Armada) PLUS a plain `e` parent tag — NIP-17's own reply convention —
         // so foreign clients render the reply relationship too.
         const finalTags = replyTo ? [...tags, ["e", replyTo.id]] : tags;
-        await send(text, finalTags);
+        await send(text, finalTags, { allowLegacy: legacyAllowed });
         setReplyTo(undefined);
       } catch (e) {
+        // The peer can't receive private DMs and legacy hasn't been enabled —
+        // reveal the opt-in notice instead of a scary error (the composer is
+        // hidden while this is true, so this is belt-and-suspenders for a race
+        // where reachability flips between render and submit).
+        if (e instanceof LegacyFallbackRequired) {
+          setLegacyAllowed(false);
+          throw e;
+        }
         // Only signing/encryption errors reach here (publish failures are
         // surfaced inline on the message). Keep the composer content to retry.
         toast({
@@ -462,7 +524,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         throw e;
       }
     },
-    [send, toast, replyTo],
+    [send, toast, replyTo, legacyAllowed],
   );
 
   const handleMute = useCallback(async () => {
@@ -741,18 +803,27 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         />
       )}
 
-      <ChatComposer
-        relayUrl="dm"
-        groupId={peer}
-        messages={[]}
-        placeholder={`Message ${name}…`}
-        // Quote-replies use the NIP-C7 `q` marker (rich context, shared with
-        // Concord's renderer); handleSubmit adds the NIP-17 `e` parent tag.
-        replyTo={replyTo}
-        replyMarker="nipc7"
-        onCancelReply={() => setReplyTo(undefined)}
-        sendOverride={handleSubmit}
-      />
+      {legacyBlocked ? (
+        <DmLegacyFallbackNotice name={name} onEnable={() => setLegacyAllowed(true)} />
+      ) : (
+        <ChatComposer
+          relayUrl="dm"
+          groupId={peer}
+          messages={[]}
+          placeholder={`Message ${name}…`}
+          // Quote-replies use the NIP-C7 `q` marker (rich context, shared with
+          // Concord's renderer); handleSubmit adds the NIP-17 `e` parent tag.
+          replyTo={replyTo}
+          replyMarker="nipc7"
+          onCancelReply={() => setReplyTo(undefined)}
+          // Encrypt file attachments client-side (AES-256-GCM) before Blossom
+          // upload, à la Concord/Vector — but only on the private NIP-17 plane.
+          // Legacy kind-4 has no imeta channel to carry the decryption key, so
+          // an encrypted upload there would be an undecryptable blob.
+          encryptAttachments={dm17Enabled}
+          sendOverride={handleSubmit}
+        />
+      )}
 
       <AlertDialog open={muteConfirmOpen} onOpenChange={setMuteConfirmOpen}>
         <AlertDialogContent>

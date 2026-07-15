@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseImetaMap } from "./imeta";
+import { parseFileMessageTags, parseImetaMap } from "./imeta";
 
 describe("parseImetaMap encryption fields", () => {
   it("parses Vector / 0xChat encrypted-attachment imeta", () => {
@@ -63,5 +63,50 @@ describe("parseImetaMap encryption fields", () => {
       key: "a".repeat(64),
       nonce: "b".repeat(32),
     });
+  });
+});
+
+describe("parseFileMessageTags (NIP-17 kind-15 top-level tags)", () => {
+  // The exact shape Amethyst sends for an encrypted DM image.
+  const url = "https://blossom.primal.net/04feb9edb5d4ab38cfebba1b2241e929935c0c34f3bde94e6315dc75d0b51605";
+  const tags = [
+    ["alt", "Encrypted file in chat"],
+    ["p", "86184109eae937d8d6f980b4a0b46da4ef0d983eade403ee1b4c0b6bde238b47", "wss://relay.ditto.pub/"],
+    ["encryption-algorithm", "aes-gcm"],
+    ["decryption-key", "2ba22dd1814e0587d73fbe9f544d0c08f58502ec1d078363380b362301507c7e"],
+    ["decryption-nonce", "84d8e88286054d466167d1394b6a98cd"],
+    ["x", "04feb9edb5d4ab38cfebba1b2241e929935c0c34f3bde94e6315dc75d0b51605"],
+    ["size", "128814"],
+    ["file-type", "image/jpeg"],
+    ["ox", "92b9ff334f9ab499a529f7a8c63b46400dd6971104079195b036ac53e09c0665"],
+    ["client", "Amethyst"],
+  ];
+
+  it("reads MIME from file-type and the AES-GCM decryption params from top-level tags", () => {
+    const entry = parseFileMessageTags(url, tags);
+    expect(entry).toBeDefined();
+    expect(entry!.url).toBe(url);
+    expect(entry!.mime).toBe("image/jpeg");
+    expect(entry!.encryption).toEqual({
+      algorithm: "aes-gcm",
+      key: "2ba22dd1814e0587d73fbe9f544d0c08f58502ec1d078363380b362301507c7e",
+      nonce: "84d8e88286054d466167d1394b6a98cd",
+    });
+  });
+
+  it("yields a plaintext entry when no encryption params are present", () => {
+    const entry = parseFileMessageTags(url, [["file-type", "image/png"]]);
+    expect(entry?.mime).toBe("image/png");
+    expect(entry?.encryption).toBeUndefined();
+  });
+
+  it("rejects a non-http(s) URL", () => {
+    expect(parseFileMessageTags("javascript:alert(1)", tags)).toBeUndefined();
+    expect(parseFileMessageTags("", tags)).toBeUndefined();
+  });
+
+  it("prefers `thumb` then `image` for the thumbnail", () => {
+    expect(parseFileMessageTags(url, [["thumb", "https://t/1"], ["image", "https://t/2"]])?.thumbnail).toBe("https://t/1");
+    expect(parseFileMessageTags(url, [["image", "https://t/2"]])?.thumbnail).toBe("https://t/2");
   });
 });

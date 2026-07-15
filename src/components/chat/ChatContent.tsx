@@ -21,7 +21,8 @@ import { writeClipboardText } from "@/lib/clipboard";
 import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
-import { parseImetaMap } from "@/lib/imeta";
+import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
+import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { splitInlineCode, splitMarkdownBlocks } from "@/lib/markdown";
 import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
@@ -174,8 +175,14 @@ function isOnlyEmojisOrCustom(text: string, emojiMap: Map<string, string>): bool
   return true;
 }
 
-/** Kinds whose imeta tags describe attached media for the content body. */
-const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 1111, 1222, 1244, 3300]);
+/**
+ * Kinds whose imeta tags describe attached media for the content body.
+ * Includes NIP-17 DM rumors (14 chat, 15 file): like Concord (3300), an
+ * encrypted DM attachment lives only in the `imeta` (ciphertext Blossom URL +
+ * `decryption-key`/`decryption-nonce`), so it must be parsed for the body to
+ * emit — and decrypt — the embed.
+ */
+const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 14, 15, 1111, 1222, 1244, 3300]);
 
 /**
  * Plain-text length (of the raw content, before tokenizing/rendering) past
@@ -225,6 +232,15 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     const imetaByUrl = isMediaImetaKind
       ? parseImetaMap(event.tags)
       : new Map<string, ImetaEntry>();
+    // NIP-17 kind-15 file messages (Amethyst/0xChat) carry NO imeta tag: the
+    // blob URL is the whole content and the file/encryption metadata rides in
+    // TOP-LEVEL tags (`file-type`, `x`, `decryption-key`, …). Synthesize an
+    // imeta entry from those so the URL is classified as media and its
+    // decryption key is picked up, exactly like an imeta attachment.
+    if (event.kind === KIND_DM_FILE && !imetaByUrl.has(text.trim())) {
+      const fileEntry = parseFileMessageTags(text.trim(), event.tags);
+      if (fileEntry) imetaByUrl.set(fileEntry.url, fileEntry);
+    }
     const imetaMimeByUrl = new Map<string, string>();
     for (const [u, entry] of imetaByUrl) {
       const safe = sanitizeUrl(u);

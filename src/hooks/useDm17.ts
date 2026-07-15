@@ -40,6 +40,7 @@ import { useDmRelayList, useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { effectiveDmRelays } from "@/contexts/AppContext";
+import { APP_RELAYS } from "@/lib/platform";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import {
@@ -90,23 +91,36 @@ export function useDm17Support(): boolean {
 
 /** One inbox-announce attempt per (session, pubkey) — see useEnsureDmInbox. */
 const inboxAnnounced = new Set<string>();
+/** One DM-relay auto-adopt attempt per (session, pubkey) — see useEnsureDmInbox. */
+const dmRelaysAdopted = new Set<string>();
 
 /**
- * Ensure the viewer is REACHABLE over NIP-17: publish a kind-10050 DM-relay
- * list (their effective DM relays) if they haven't published one. NIP-17
- * senders MUST only deliver to a recipient's 10050 relays — no list means
- * "not ready to receive" and compliant clients won't even try. Called from
- * the DMs page (an interactive surface, so a signer prompt is in context);
- * once per session, best-effort, and never overwrites an existing list
- * (Settings' "use my own DM relays" stays authoritative).
+ * Ensure the viewer is REACHABLE over NIP-17 and reads/writes DMs where they
+ * declared:
+ *
+ *   - No published kind-10050 list → publish one (their effective DM relays).
+ *     NIP-17 senders MUST only deliver to a recipient's 10050 relays; no list
+ *     means "not ready to receive" and compliant clients won't even try.
+ *   - HAS a published list but "use my own DM relays" is off and they've never
+ *     customized the DM-relay set → adopt the published list and flip the
+ *     toggle on. The user's declared inbox is the canonical place their DMs
+ *     live, so it should be the default read/write set — otherwise DMs land on
+ *     their 10050 relays but we read from the app relays. A deliberate later
+ *     toggle-off / custom list is preserved (we only auto-adopt the untouched
+ *     default, once per session).
+ *
+ * Called from the DMs page (an interactive surface, so a signer prompt is in
+ * context); once per session, best-effort, and never overwrites an existing
+ * list.
  */
 export function useEnsureDmInbox(): void {
   const { user } = useCurrentUser();
-  const { config } = useAppContext();
+  const { config, updateConfig } = useAppContext();
   const support = useDm17Support();
-  const { hasList, isLoading, publish } = useDmRelayList();
+  const { hasList, isLoading, relays: publishedRelays, publish } = useDmRelayList();
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
+  const publishedKey = publishedRelays.join(",");
 
   useEffect(() => {
     const self = user?.pubkey;
@@ -119,6 +133,27 @@ export function useEnsureDmInbox(): void {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.pubkey, support, isLoading, hasList, relayKey]);
+
+  // Adopt a published 10050 as the user's own DM relays when they haven't
+  // opted in and haven't customized the (app-relay-default) list.
+  useEffect(() => {
+    const self = user?.pubkey;
+    if (!self || isLoading || !hasList || publishedRelays.length === 0) return;
+    if (config.useOwnDmRelays) return;
+    // Only adopt an untouched default — never clobber a deliberate custom list.
+    const isDefaultDmRelays =
+      config.dmRelays.length === APP_RELAYS.length &&
+      config.dmRelays.every((r, i) => r === APP_RELAYS[i]);
+    if (!isDefaultDmRelays) return;
+    if (dmRelaysAdopted.has(self)) return;
+    dmRelaysAdopted.add(self);
+    updateConfig((current) => ({
+      ...current,
+      useOwnDmRelays: true,
+      dmRelays: publishedRelays,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.pubkey, isLoading, hasList, publishedKey, config.useOwnDmRelays]);
 }
 
 /**
@@ -261,7 +296,16 @@ function useDm17SyncCtx(): SyncCtx | undefined {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
-  const relays = effectiveDmRelays(config);
+  // Read wraps from the union of our effective DM relays AND our PUBLISHED
+  // kind-10050 inbox. NIP-17 senders deliver to whatever we published in our
+  // 10050; if the user hasn't opted into "use my own DM relays",
+  // effectiveDmRelays is just the app relays and we'd miss wraps that landed
+  // on our declared inbox. Unioning both is where our messages actually are.
+  const { relays: publishedRelays } = useDmRelayList();
+  const relays = useMemo(
+    () => [...new Set([...effectiveDmRelays(config), ...publishedRelays])],
+    [config, publishedRelays],
+  );
   const relayKey = relays.join(",");
   return useMemo(() => {
     if (!user?.pubkey || !user.signer.nip44) return undefined;
@@ -320,7 +364,9 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   const { consent } = useDecryptConsent();
   const support = useDm17Support();
   const peerInboxRelays = useDmRelaysFor(peer);
-  const myRelays = effectiveDmRelays(config);
+  // Where OUR copies live and where our other sessions read: the same union the
+  // inbox sync uses (effective DM relays ∪ our published kind-10050 inbox).
+  const myRelays = ctx?.relays ?? effectiveDmRelays(config);
 
   const self = user?.pubkey;
   const canSend = support && !!peer && peerInboxRelays.length > 0;
@@ -427,7 +473,14 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       if (wrapSelf && myRelays.length > 0) {
         void nostr.group(myRelays).event(wrapSelf, { signal: AbortSignal.timeout(8000) }).catch(() => {});
       }
-      await nostr.group(peerInboxRelays).event(wrapPeer, { signal: AbortSignal.timeout(8000) });
+      // Deliver the peer copy to their published inbox (NIP-17's rule) UNIONED
+      // with our own DM relays. The peer's 10050 relays are where a compliant
+      // client reads, but writing there ALSO requires us to reach them; adding
+      // our own relays hedges against a peer inbox we can't publish to (auth,
+      // downtime) and lets our other sessions/the recipient's fallback readers
+      // find the wrap. Deduped so shared relays aren't double-published.
+      const peerTargets = [...new Set([...peerInboxRelays, ...myRelays])];
+      await nostr.group(peerTargets).event(wrapPeer, { signal: AbortSignal.timeout(8000) });
     },
     [nostr, user, self, peer, rawKey, peerInboxRelays, myRelays],
   );

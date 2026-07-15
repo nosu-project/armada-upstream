@@ -1,5 +1,6 @@
-import { parseImetaMap } from "@/lib/imeta";
+import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { IMAGE_URL_REGEX } from "@/lib/mediaUrls";
+import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 
 import type { ChatMsg } from "@/components/chat/transport";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
@@ -48,6 +49,15 @@ export function replyPreviewText(content: string): string {
  * encrypted Blossom blobs), else the first inline image URL by extension.
  */
 export function firstImageRef(event: ChatMsg): EncryptedRef | undefined {
+  // NIP-17 kind-15 file messages carry the blob URL in content and the
+  // file/encryption metadata in top-level tags (no imeta) — synthesize the
+  // entry so its decryption key rides into the thumbnail ref.
+  if (event.kind === KIND_DM_FILE) {
+    const fileEntry = parseFileMessageTags(event.content.trim(), event.tags);
+    if (fileEntry && (fileEntry.mime?.startsWith("image/") || IMAGE_URL_REGEX.test(fileEntry.url))) {
+      return { url: fileEntry.url, encryption: fileEntry.encryption, mime: fileEntry.mime };
+    }
+  }
   const imeta = parseImetaMap(event.tags);
   for (const entry of imeta.values()) {
     const isImage = entry.mime?.startsWith("image/") || IMAGE_URL_REGEX.test(entry.url);
