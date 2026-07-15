@@ -165,6 +165,28 @@ export interface ArmadaNotificationPlugin {
       /** "mentions only" — suppress non-mention messages (older binaries notify all). */
       mentionOnly?: boolean;
     }>;
+    /**
+     * NIP-17 gift-wrapped DM subscriptions (nips#2396). For each follows
+     * conversation the WebView can derive an address for (nsec logins only),
+     * the deterministic conversation wrap address to filter on plus the two
+     * NIP-44 conversation keys that open wrap → seal → rumor — so the service
+     * shows a rich "<sender>: <preview>" DM notification WITHOUT ever holding
+     * the identity key (exactly like concord2Subs' per-stream convKey). The
+     * service subscribes `{kinds:[1059], "#p":[userPubkey]}` on the DM relays
+     * and only opens/notifies wraps whose author matches a `wrapPk` here;
+     * everything else is left to the WebView's own DM inbox sync. Empty for
+     * extension/bunker logins (no raw key to derive the keys).
+     */
+    dm17Subs?: Array<{
+      /** Conversation wrap address (x-only hex) — the wrap author to match. */
+      wrapPk: string;
+      /** NIP-44 key (hex) opening the outer wrap → seal. */
+      wrapConvKey: string;
+      /** NIP-44 key (hex) opening the inner seal → rumor. */
+      dmConvKey: string;
+      /** The conversation peer (hex) — deep link (/dms/<peer>) + name. */
+      peer: string;
+    }>;
   }): Promise<void>;
 }
 

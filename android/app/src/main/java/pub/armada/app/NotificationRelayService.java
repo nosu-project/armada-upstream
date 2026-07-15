@@ -153,6 +153,15 @@ public class NotificationRelayService extends Service {
     //   relayToPks2: relay url → the stream pubkeys that live on that relay
     private final java.util.Map<String, Concord2Stream> pkToStream2 = new java.util.HashMap<>();
     private final java.util.Map<String, Set<String>> relayToPks2 = new java.util.HashMap<>();
+    // NIP-17 gift-wrapped DM subscriptions (nips#2396):
+    //   pkToDm17: conversation wrap address (kind-1059 author, hex) → the two
+    //             NIP-44 conversation keys that open wrap → seal → rumor, plus
+    //             the peer for routing/name. Derived in the WebView from the raw
+    //             nsec key (never shipped here); one entry per followed peer.
+    // The DM wrap filter is `{kinds:[1059], "#p":[userPubkey]}` on the DM relays
+    // (the sender is hidden, so it can't be authors-scoped); only wraps whose
+    // AUTHOR is in this map are opened + notified — the rest are the WebView's.
+    private final java.util.Map<String, Dm17Conv> pkToDm17 = new java.util.HashMap<>();
     // De-dupe notifications across relays/reconnects for this service lifetime.
     private final Set<String> notifiedIds = new HashSet<>();
     // Connect time; we only notify for events at/after this to avoid backfill spam.
@@ -258,6 +267,26 @@ public class NotificationRelayService extends Service {
             this.epoch = epoch;
             this.name = name;
             this.url = url;
+        }
+    }
+
+    /**
+     * Per-conversation NIP-17 DM decrypt material (nips#2396). A gift wrap has
+     * two NIP-44 layers under two different keys, both derived in the WebView
+     * from the raw nsec key and shipped here (the identity key itself never
+     * crosses the bridge — same trust model as {@link Concord2Stream}):
+     *   - wrapConvKey opens the OUTER wrap (kind 1059) → the kind-13 seal;
+     *   - dmConvKey opens the INNER seal → the rumor (kind 14/15/7/5).
+     * Keyed by the deterministic conversation wrap address (the wrap author).
+     */
+    private static final class Dm17Conv {
+        final byte[] wrapConvKey; // raw 32-byte NIP-44 key: wrap → seal
+        final byte[] dmConvKey;   // raw 32-byte NIP-44 key: seal → rumor
+        final String peer;        // conversation peer pubkey (hex)
+        Dm17Conv(byte[] wrapConvKey, byte[] dmConvKey, String peer) {
+            this.wrapConvKey = wrapConvKey;
+            this.dmConvKey = dmConvKey;
+            this.peer = peer;
         }
     }
 
@@ -405,6 +434,7 @@ public class NotificationRelayService extends Service {
         }
         parseConcordSubs(sp.getString("concordSubs", null));
         parseConcord2Subs(sp.getString("concord2Subs", null));
+        parseDm17Subs(sp.getString("dm17Subs", null));
 
         // The relays to connect to: NIP-29 group relays ∪ DM relays ∪ Concord relays.
         Set<String> allRelays = new LinkedHashSet<>(relayUrls);
@@ -547,6 +577,36 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /**
+     * Parse the NIP-17 DM subscriptions JSON
+     * ([{wrapPk, wrapConvKey, dmConvKey, peer}, …]) into the wrap-address →
+     * decrypt-material map. These wraps are addressed to us by `#p` (the sender
+     * is hidden), so unlike Concord V2 there is no per-relay author set — the
+     * DM relays already carry the `{kinds:[1059], "#p":[me]}` filter, and this
+     * map decides which arriving wraps we can open + attribute.
+     */
+    private void parseDm17Subs(String json) {
+        pkToDm17.clear();
+        if (json == null) return;
+        try {
+            JSONArray arr = new JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject sub = arr.optJSONObject(i);
+                if (sub == null) continue;
+                String wrapPk = sub.optString("wrapPk", null);
+                byte[] wrapConvKey = ConcordCrypto.hexToBytes(sub.optString("wrapConvKey", null));
+                byte[] dmConvKey = ConcordCrypto.hexToBytes(sub.optString("dmConvKey", null));
+                String peer = sub.optString("peer", null);
+                if (wrapPk == null || wrapPk.isEmpty() || peer == null || peer.isEmpty()) continue;
+                if (wrapConvKey == null || wrapConvKey.length != 32) continue;
+                if (dmConvKey == null || dmConvKey.length != 32) continue;
+                pkToDm17.put(wrapPk, new Dm17Conv(wrapConvKey, dmConvKey, peer));
+            }
+        } catch (JSONException e) {
+            Log.w(TAG, "Failed to parse dm17Subs", e);
+        }
+    }
+
     // ── Per-relay connection ────────────────────────────────────────────────
 
     private class RelayConnection {
@@ -577,6 +637,7 @@ public class NotificationRelayService extends Service {
         // Prefix for one-shot kind-39000 group-metadata lookups.
         final String groupPrefix = "ah-" + Long.toHexString(System.nanoTime() + 5) + "-";
         final String subConcord2 = "a2-" + Long.toHexString(System.nanoTime() + 6);
+        final String subDm17 = "a7-" + Long.toHexString(System.nanoTime() + 7);
         // One-shot lookup sub id → the full pubkey / group id it was issued
         // for. Entries are removed when the lookup resolves; capped clears
         // protect against relays that never answer.
@@ -697,6 +758,19 @@ public class NotificationRelayService extends Service {
                     f4.put("#p", new JSONArray().put(userPubkey));
                     f4.put("since", sinceSec);
                     webSocket.send(reqMessage(subDm, f4));
+                }
+                // NIP-17 gift-wrapped DMs (kind 1059) addressed to me, on the
+                // DM/app relays. The wrap AUTHOR hides the sender, so this can't
+                // be authors-scoped — it's a broad `#p` inbox filter, and only
+                // wraps whose author matches a known conversation address
+                // (pkToDm17) get opened + notified in handleEvent; the rest are
+                // the WebView's DM inbox sync to handle. Empty map ⇒ no sub.
+                if (dmRelays.contains(relayUrl) && !pkToDm17.isEmpty()) {
+                    JSONObject f6 = new JSONObject();
+                    f6.put("kinds", new JSONArray().put(1059));
+                    f6.put("#p", new JSONArray().put(userPubkey));
+                    f6.put("since", sinceSec);
+                    webSocket.send(reqMessage(subDm17, f6));
                 }
                 // Concord (E2E) channel messages on this relay, by #z pseudonym.
                 Set<String> zs = relayToZs.get(relayUrl);
@@ -1256,6 +1330,94 @@ public class NotificationRelayService extends Service {
     }
 
     /**
+     * Open a NIP-17 gift wrap (kind 1059) whose author is a known conversation
+     * address, using the two shipped conversation keys (nips#2396): wrapConvKey
+     * decrypts the outer wrap → the kind-13 seal, dmConvKey decrypts the seal →
+     * the rumor (kind 14/15/7/5). Returns the verified rumor, or null on any
+     * failure (wrong key, spoofed author, foreign seal).
+     *
+     * Anti-spoof (mirrors the WebView's openDmWrap): the rumor's author must
+     * equal the seal's signer, AND the seal's signer must be the conversation
+     * peer this address belongs to — a wrap signed by the shared conversation
+     * key can't smuggle in a seal claiming to be from someone else.
+     */
+    private static JSONObject openDm17(JSONObject wrap, Dm17Conv conv) {
+        try {
+            String wrapContent = wrap.optString("content", "");
+            if (wrapContent.isEmpty()) return null;
+            String sealJson = ConcordCrypto.decrypt(conv.wrapConvKey, wrapContent);
+            if (sealJson == null) return null;
+            JSONObject seal = new JSONObject(sealJson);
+            if (seal.optInt("kind", -1) != 13) return null;
+            String sealAuthor = seal.optString("pubkey", "");
+            // The seal must be from the conversation peer (dmConvKey is the
+            // pairwise key with exactly that peer; a seal from anyone else
+            // wouldn't decrypt, but bind it explicitly regardless).
+            if (sealAuthor.isEmpty() || !sealAuthor.equals(conv.peer)) return null;
+
+            String rumorJson = ConcordCrypto.decrypt(conv.dmConvKey, seal.optString("content", ""));
+            if (rumorJson == null) return null;
+            JSONObject rumor = new JSONObject(rumorJson);
+            String rumorAuthor = rumor.optString("pubkey", "");
+            if (rumorAuthor.isEmpty() || !rumorAuthor.equals(sealAuthor)) return null;
+            return rumor;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Notify for a NIP-17 DM wrap. Only wraps whose author is a known
+     * conversation address (pkToDm17) reach here; unknown wraps are the
+     * WebView's DM inbox sync to handle. Decrypts to "<sender>: <preview>"
+     * exactly like Concord V2 — the identity key never entered native code,
+     * only the two per-conversation NIP-44 keys derived in the WebView.
+     */
+    private void handleDm17Wrap(JSONObject wrap, String id, String relayUrl) {
+        Dm17Conv conv = pkToDm17.get(wrap.optString("pubkey"));
+        if (conv == null) return; // not a conversation we can open — WebView's job
+        long cts = wrap.optLong("created_at", 0);
+        if (cts + 1 > sinceSec) sinceSec = cts + 1;
+        notifiedIds.add(id);
+
+        if (!prefBool("directMessages", true)) return;
+
+        JSONObject rumor = openDm17(wrap, conv);
+        final String peer = conv.peer;
+        final String url = "/dms/" + peer;
+        if (rumor == null) {
+            // Couldn't open with this conversation's peer-bound key. Most often
+            // this is our OWN sent copy (the self-copy shares the conversation
+            // address but its seal is from us, not the peer) or a malformed
+            // wrap — either way, stay silent rather than fire a misattributed
+            // "someone messaged you". The WebView's inbox sync reconciles it.
+            return;
+        }
+
+        // Only chat/file messages notify (kind 14/15); in-band reactions (7)
+        // and deletes (5) stay silent, matching the WebView's DM rumor kinds.
+        int rumorKind = rumor.optInt("kind", -1);
+        if (rumorKind != 14 && rumorKind != 15) return;
+        final String author = rumor.optString("pubkey", "");
+        if (author.isEmpty() || author.equals(userPubkey)) return; // our own copy
+        // A DM is inherently directed at the user; treat it as a mention for the
+        // active-room break-through, matching the WebView notifier.
+        if (isActivelyViewed("dm:" + peer, null, /*mention=*/true)) return;
+        final String preview = truncate(
+                rumorKind == 15 ? "Sent a file" : rumor.optString("content"));
+        final long rts = rumor.optLong("created_at", 0);
+        final long fTs = (rts > 0 ? rts * 1000L : System.currentTimeMillis());
+        resolveAuthor(author, relayUrl, profile -> {
+            String name = displayName(profile, author);
+            String picture = profile != null ? profile.picture : null;
+            String line = preview.isEmpty() ? "Sent you a direct message" : preview;
+            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 from=" + name);
+            enqueueRoomMessage("dm:" + peer, name, url, /*isGroup=*/false,
+                    author, name, picture, line, fTs, /*mention=*/true);
+        });
+    }
+
+    /**
      * Per-room cache key for the plugin's rolling event cache (see
      * ArmadaNotificationPlugin.getRoomEvents): NIP-29 events key by their group
      * (`h` tag), Concord V1 sealed outers by pseudonym (`z` tag), Concord V2
@@ -1271,7 +1433,11 @@ public class NotificationRelayService extends Service {
         }
         if (kind == 1059) {
             Concord2Stream st = pkToStream2.get(event.optString("pubkey"));
-            return st != null ? "c2:" + st.channelId : null;
+            if (st != null) return "c2:" + st.channelId;
+            // A NIP-17 DM wrap shares the single "dm" cache bucket (the WebView
+            // splits threads by counterparty itself, like kind-4).
+            if (pkToDm17.containsKey(event.optString("pubkey"))) return "dm";
+            return null;
         }
         String h = tagValue(event, "h");
         return h != null ? "h:" + h : null;
@@ -1394,6 +1560,9 @@ public class NotificationRelayService extends Service {
         if (kind == 1059) {
             Concord2Stream st = pkToStream2.get(event.optString("pubkey"));
             if (st == null) {
+                // Not a Concord V2 wrap — maybe a NIP-17 DM wrap from a known
+                // conversation address (nips#2396). Handle + return there.
+                handleDm17Wrap(event, id, relayUrl);
                 return;
             }
             long cts = event.optLong("created_at", 0);

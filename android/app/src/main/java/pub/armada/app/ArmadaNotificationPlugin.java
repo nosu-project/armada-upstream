@@ -396,6 +396,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         String dmFollowsRaw = arrayToString(call.getArray("dmFollows"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         String concord2SubsRaw = arrayToString(call.getArray("concord2Subs"));
+        String dm17SubsRaw = arrayToString(call.getArray("dm17Subs"));
         // prefs is a flat object of booleans; store its JSON verbatim.
         String prefsRaw = null;
         try {
@@ -426,6 +427,8 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("concordSubs");
             if (concord2SubsRaw != null) editor.putString("concord2Subs", concord2SubsRaw);
             else editor.remove("concord2Subs");
+            if (dm17SubsRaw != null) editor.putString("dm17Subs", dm17SubsRaw);
+            else editor.remove("dm17Subs");
             if (prefsRaw != null) editor.putString("prefs", prefsRaw);
             // Bump a revision so the running service's SharedPreferences
             // listener always fires even if the values look unchanged.

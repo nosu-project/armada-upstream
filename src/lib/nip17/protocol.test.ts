@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDmRumor,
   conversationWrapKey,
+  dm17NativeConv,
   dmChatTags,
   dmDeleteTags,
   dmPeerOf,
@@ -201,6 +202,60 @@ describe("NIP-17 seal + wrap round trip", () => {
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
     const wrap = wrapDmSeal(seal, recipientPk);
     expect(await openDmWrap(wrap, rawSigner(recipientSk), recipientPk)).toBeUndefined();
+  });
+});
+
+describe("dm17NativeConv (Android background decrypt material)", () => {
+  const senderSk = generateSecretKey();
+  const senderPk = getPublicKey(senderSk);
+  const recipientSk = generateSecretKey();
+  const recipientPk = getPublicKey(recipientSk);
+
+  // What the Android service does with the two shipped hex keys: decrypt the
+  // outer wrap with wrapConvKey → the kind-13 seal, then the seal with
+  // dmConvKey → the rumor. This must recover the exact message a real
+  // conversation-wrap-key send produces, using ONLY the derived keys (never
+  // the recipient's secret key).
+  function nativeOpen(wrap: { pubkey: string; content: string }, conv: ReturnType<typeof dm17NativeConv>) {
+    const sealJson = nip44Decrypt(wrap.content, hexToBytes(conv.wrapConvKey));
+    const seal = JSON.parse(sealJson) as { kind: number; pubkey: string; content: string };
+    const rumorJson = nip44Decrypt(seal.content, hexToBytes(conv.dmConvKey));
+    return { seal, rumor: JSON.parse(rumorJson) as { kind: number; pubkey: string; content: string } };
+  }
+
+  it("derives keys that open the recipient's inbound wrap → seal → rumor", async () => {
+    // The recipient derives the material for their conversation with senderPk.
+    const conv = dm17NativeConv(recipientSk, senderPk);
+
+    // The sender sends a real conversation-wrap-key DM to the recipient.
+    const convKey = conversationWrapKey(senderSk, recipientPk);
+    const rumor = buildDmRumor({
+      kind: KIND_DM_CHAT,
+      content: "native path",
+      tags: dmChatTags(recipientPk),
+      pubkey: senderPk,
+    });
+    const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
+    const wrap = wrapDmSeal(seal, recipientPk, { wrapSk: convKey.sk });
+
+    // The wrap the service filters on IS this conversation's address.
+    expect(wrap.pubkey).toBe(conv.wrapPk);
+    expect(conv.peer).toBe(senderPk);
+
+    // The two derived keys open both layers with no secret key.
+    const { seal: openedSeal, rumor: openedRumor } = nativeOpen(wrap, conv);
+    expect(openedSeal.kind).toBe(13);
+    expect(openedSeal.pubkey).toBe(senderPk); // seal author == the peer
+    expect(openedRumor.kind).toBe(KIND_DM_CHAT);
+    expect(openedRumor.pubkey).toBe(senderPk);
+    expect(openedRumor.content).toBe("native path");
+  });
+
+  it("is symmetric on wrapPk with the sender's derivation", () => {
+    const recipientConv = dm17NativeConv(recipientSk, senderPk);
+    const senderConv = dm17NativeConv(senderSk, recipientPk);
+    // Both sides address the same conversation.
+    expect(recipientConv.wrapPk).toBe(senderConv.wrapPk);
   });
 });
 

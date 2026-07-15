@@ -338,3 +338,48 @@ export async function openDmWrap(
     return undefined;
   }
 }
+
+// ── Native-notification decrypt material (nips#2396) ─────────────────────────
+
+/**
+ * The two NIP-44 conversation keys the Android background service needs to open
+ * one conversation's gift wraps WITHOUT the raw identity key — the exact
+ * "ship a derived conversation key, never the secret key" pattern Concord V2
+ * uses (see concordNotifications2.ts). Two layers, two keys:
+ *
+ *   - `wrapConvKey` = conv(rawSk, wrapPk): opens the OUTER wrap (kind 1059) →
+ *     seal. Symmetric with the sender's conv(wrapSk, self), so it decrypts our
+ *     inbound wrap regardless of who signed it.
+ *   - `dmConvKey` = conv(rawSk, peerPk): opens the INNER seal (kind 13) →
+ *     rumor. This is the pairwise identity conversation key; the seal is
+ *     nip44-encrypted under conv(senderIdentity, self) == conv(self, sender).
+ *
+ * `wrapPk` is the deterministic conversation address the service filters on
+ * (`{kinds:[1059], "#p":[self]}` then match author == wrapPk). Requires the
+ * viewer's raw secret key (nsec logins) and a known `peerPk` (a follow), so
+ * it's derivable for exactly the conversations the wire already attributes.
+ *
+ * SECURITY: only the two per-conversation NIP-44 keys leave the WebView, never
+ * `rawSk`. Each opens exactly one conversation — the same trust surface as the
+ * V2 stream `convKey` and the decrypt-at-rest rumor store.
+ */
+export interface Dm17NativeConv {
+  /** Conversation wrap address (x-only hex) — the wrap author to match. */
+  wrapPk: string;
+  /** NIP-44 key (hex) opening the outer wrap → seal. */
+  wrapConvKey: string;
+  /** NIP-44 key (hex) opening the inner seal → rumor. */
+  dmConvKey: string;
+  /** The conversation peer (hex) — routing + name. */
+  peer: string;
+}
+
+export function dm17NativeConv(rawSk: Uint8Array, peerPk: string): Dm17NativeConv {
+  const wrapPk = conversationWrapKey(rawSk, peerPk).pk;
+  return {
+    wrapPk,
+    wrapConvKey: bytesToHex(getConversationKey(rawSk, wrapPk)),
+    dmConvKey: bytesToHex(getConversationKey(rawSk, peerPk)),
+    peer: peerPk,
+  };
+}
