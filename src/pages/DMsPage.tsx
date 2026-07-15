@@ -40,6 +40,7 @@ import {
   useDMConversations,
   useDMSupport,
 } from "@/hooks/useDirectMessages";
+import { useDm17Conversations, useDm17Support, useEnsureDmInbox } from "@/hooks/useDm17";
 import { useDmTransport } from "@/hooks/useDmTransport";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
@@ -228,7 +229,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const name = getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
-  const { transport, encryptedIds, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+  const { transport, encryptedIds, dm17Ids, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(peer);
   const { messages } = transport;
   const { markRead } = useReadState();
@@ -365,13 +366,16 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   }, [messages, peer, markRead]);
 
   const handleSubmit = useCallback(
-    async (text: string) => {
+    async (text: string, tags: string[][]) => {
       try {
         // Resolves as soon as the message is signed + optimistically rendered;
         // relay delivery happens in the background and is reflected by the
         // message's status (sending / failed + retry), so the composer clears
         // immediately and the send button never blocks on the relay.
-        await send(text);
+        // Routed by the transport: NIP-17 gift wraps when the peer publishes a
+        // kind-10050 inbox (composer content tags ride inside the sealed
+        // rumor), legacy kind-4 otherwise.
+        await send(text, tags);
       } catch (e) {
         // Only signing/encryption errors reach here (publish failures are
         // surfaced inline on the message). Keep the composer content to retry.
@@ -619,6 +623,24 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 canModerate={transport.canModerate}
                 sendStatus={transport.sendStatusFor?.(msg.id)}
                 onRetry={transport.retry ? () => transport.retry!(msg) : undefined}
+                onDiscard={
+                  dm17Ids.has(msg.id) && transport.discard
+                    ? () => transport.discard!(msg.id)
+                    : undefined
+                }
+                // Reactions ride the NIP-17 plane (kind-7 rumors sealed into
+                // the conversation); available whenever the transport is.
+                reactions={transport.reactionsFor?.(msg.id)}
+                // Deleting is a wrapped kind-5 into the conversation — own
+                // NIP-17 messages only (kind-4 has no in-band delete).
+                onDelete={
+                  dm17Ids.has(msg.id) && msg.pubkey === user?.pubkey && transport.deleteMessage
+                    ? transport.deleteMessage
+                    : undefined
+                }
+                // NIP-17 rumors are unsigned — the context menu offers "View
+                // event JSON" instead of relay-addressable off-ramps.
+                rumor={dm17Ids.has(msg.id) ? msg : undefined}
                 continuation={continuation}
               />
             )
@@ -897,7 +919,7 @@ function ConversationList({
   isLoadingMore,
   className,
 }: {
-  rows: { peer: string; latest: NostrEvent }[];
+  rows: { peer: string; latest: NostrEvent; plaintext?: string }[];
   previews: Record<string, string>;
   activePeer: string | undefined;
   dmSupported: boolean;
@@ -1040,7 +1062,7 @@ function ConversationList({
                 key={c.peer}
                 peer={c.peer}
                 preview={c.latest}
-                previewText={previews[c.peer]}
+                previewText={c.plaintext ?? previews[c.peer]}
                 query={search}
                 unread={
                   Boolean(c.latest) &&
@@ -1085,9 +1107,19 @@ export function DMsPage() {
   const navigate = useNavigate();
   const { peer: rawPeer } = useParams<{ peer: string }>();
   const { user } = useCurrentUser();
+  // Either plane makes DMs usable: kind-4 needs nip04, NIP-17 needs nip44.
   const dmSupported = useDMSupport();
+  const dm17Supported = useDm17Support();
   const { conversations, previews, isLoading, loadMore, hasMore, isLoadingMore } =
     useDMConversations({ decryptPreviews: true });
+  // NIP-17 conversations (decrypted rumors from the local store). Interactive:
+  // opening the DMs page is where the one-time decrypt-consent prompt may
+  // legitimately appear (same moment the kind-4 previews could open it).
+  const { conversations: dm17Conversations } = useDm17Conversations({ interactive: true });
+  // Make the viewer reachable over NIP-17: publish their kind-10050 inbox
+  // list (once, if absent) so other clients know where — and that — they can
+  // deliver gift-wrapped DMs.
+  useEnsureDmInbox();
   const { data: followData } = useFollowList();
   const [composing, setComposing] = useState(false);
   // The conversation list is always narrowed to people the user follows (kind
@@ -1126,17 +1158,38 @@ export function DMsPage() {
     if (composing) setRenderedPeer(undefined);
   }, [composing]);
 
-  // Conversations plus the active peer if it's a brand-new thread. The list is
-  // always narrowed to followed peers — but always keep the peer whose thread is
-  // currently open so the row you're reading never vanishes.
+  // Conversations plus the active peer if it's a brand-new thread. Kind-4 and
+  // NIP-17 conversations merge per peer (newest message wins; a NIP-17 rumor
+  // is already plaintext, so it carries its own preview text). The list is
+  // always narrowed to followed peers — but always keep the peer whose thread
+  // is currently open so the row you're reading never vanishes.
   const rows = useMemo(() => {
-    let list = conversations.map((c) => ({ peer: c.peer, latest: c.latest }));
+    const byPeer = new Map<string, { peer: string; latest: NostrEvent; plaintext?: string }>();
+    for (const c of conversations) byPeer.set(c.peer, { peer: c.peer, latest: c.latest });
+    for (const c of dm17Conversations) {
+      const existing = byPeer.get(c.peer);
+      if (existing && existing.latest.created_at >= c.latest.createdAt) continue;
+      byPeer.set(c.peer, {
+        peer: c.peer,
+        latest: {
+          id: c.latest.rumorId,
+          pubkey: c.latest.author,
+          created_at: c.latest.createdAt,
+          kind: c.latest.kind,
+          content: c.latest.content,
+          tags: c.latest.tags,
+          sig: "",
+        },
+        plaintext: c.latest.content,
+      });
+    }
+    let list = [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
     list = list.filter((c) => followedPubkeys.has(c.peer) || c.peer === activePeer);
     if (activePeer && !list.some((c) => c.peer === activePeer)) {
       list.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent });
     }
     return list;
-  }, [conversations, activePeer, followedPubkeys]);
+  }, [conversations, dm17Conversations, activePeer, followedPubkeys]);
 
   const openPeer = useCallback(
     (pubkey: string) => {
@@ -1190,7 +1243,7 @@ export function DMsPage() {
             rows={rows}
             previews={previews}
             activePeer={activePeer}
-            dmSupported={dmSupported}
+            dmSupported={dmSupported || dm17Supported}
             isLoading={isLoading}
             onCompose={startComposing}
             openPeer={openPeer}
