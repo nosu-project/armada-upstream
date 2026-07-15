@@ -18,6 +18,7 @@ import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDm17RawKey } from "@/hooks/useDm17";
+import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
@@ -32,7 +33,7 @@ import { onRelayReopened } from "@/lib/relayReopen";
 import { logSync } from "@/lib/syncLog";
 import { emitWireScopes } from "@/wire/bus";
 import { ingestWireEvents } from "@/wire/ingest";
-import { buildWireSpec, type WireSpec } from "@/wire/spec";
+import { buildWireSpec, stampRoundSince, type WireSpec } from "@/wire/spec";
 
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { GroupKey } from "@/concord-v2/lib/derive";
@@ -306,6 +307,7 @@ export function WireSync() {
   const { data: followData } = useFollowList();
   const { data: concordData } = useConcordList();
   const rawKey = useDm17RawKey();
+  const { relays: publishedDmRelays } = useDmRelayList();
   const concord2 = useWireConcord2Channels();
   const concord2Control = useWireConcord2Control();
   const nip29Groups = useWireNip29Groups();
@@ -332,6 +334,20 @@ export function WireSync() {
   // useDm17's own decrypt path). Follows-scoped, matching the unread dot. This
   // does NOT enter the resubscribe signature — the `#p` gift-wrap filter is
   // unchanged as follows come and go; only ingest attribution shifts.
+  // The relays to hold the live kind-1059 gift-wrap subscription on. MUST match
+  // the set useDm17's inbox scan reads from (useDm17SyncCtx): our effective DM
+  // relays UNIONED with our PUBLISHED kind-10050 inbox. NIP-17 senders deliver a
+  // wrap to the recipient's published 10050 relays; on a default login
+  // (useOwnDmRelays off) effectiveDmRelays is just the app relays, so without the
+  // union the wire would listen on the wrong relays and never receive the wrap
+  // LIVE — only useDm17's 60s poll (which does union the 10050 relays) would
+  // fetch it, which is exactly the "DMs only show up after ~30-60s / a refresh"
+  // bug. Deduped.
+  const dmRelays = useMemo(
+    () => [...new Set([...effectiveDmRelays(config), ...publishedDmRelays])],
+    [config, publishedDmRelays],
+  );
+
   const dm17WrapAddrs = useMemo(() => {
     if (!rawKey) return [];
     const out: Array<{ wrapPk: string; peerPk: string }> = [];
@@ -350,7 +366,7 @@ export function WireSync() {
       buildWireSpec({
         pubkey: user?.pubkey,
         groups,
-        dmRelays: effectiveDmRelays(config),
+        dmRelays,
         dmFollows: followData?.pubkeys ?? [],
         dm17WrapAddrs,
         concord1: buildConcordSubs(concordData?.list),
@@ -358,7 +374,7 @@ export function WireSync() {
         concord2,
         concord2Control,
       }),
-    [user?.pubkey, groups, config, followData?.pubkeys, dm17WrapAddrs, concordData, concord2, concord2Control],
+    [user?.pubkey, groups, dmRelays, followData?.pubkeys, dm17WrapAddrs, concordData, concord2, concord2Control],
   );
 
   // The ingest path reads the spec lazily so long-lived subscriptions always
@@ -443,6 +459,11 @@ export function WireSync() {
             wakeSleep?.();
           });
           let sawAnything = false;
+          // Whether the round's stored replay has finished (EOSE seen): events
+          // after it are LIVE arrivals. Ingest uses this to keep replayed DM
+          // wraps (the wrap filter's since rewinds the NIP-59 backdate window —
+          // see stampRoundSince) from re-firing notifications every round.
+          let eosed = false;
           let lastMsgAt = started;
           let ingested = 0;
           let rotated = false;
@@ -462,15 +483,16 @@ export function WireSync() {
           }
           try {
             for await (const msg of nostr.relay(relay).req(
-              filters.map((f) => ({ ...f, since })),
+              stampRoundSince(filters, since, now),
               { signal: roundSignal },
             )) {
               sawAnything = true;
               lastMsgAt = Date.now();
+              if (msg[0] === "EOSE") eosed = true;
               if (msg[0] === "EVENT") {
                 backoff = 1_000;
                 const event = msg[2] as NostrEvent;
-                await ingestWireEvents(sinksRef.current, [event]);
+                await ingestWireEvents(sinksRef.current, [event], { live: eosed });
                 ingested += 1;
                 writeCursor(relay, event.created_at);
               }
@@ -511,7 +533,7 @@ export function WireSync() {
     if (!isNativeRuntime()) return;
     let cancelled = false;
 
-    const ingest = (raw: string[]) => {
+    const ingest = (raw: string[], live: boolean) => {
       const events: NostrEvent[] = [];
       for (const json of raw) {
         try {
@@ -521,14 +543,15 @@ export function WireSync() {
         }
       }
       if (events.length > 0 && !cancelled) {
-        void ingestWireEvents(sinksRef.current, events);
+        void ingestWireEvents(sinksRef.current, events, { live });
       }
     };
 
     // Drain anything buffered while the WebView was down (open / resume).
+    // NOT live: the native service already notified for these as they arrived.
     const drain = () => {
       ArmadaNotification.drainEvents()
-        .then(({ events }) => ingest(events))
+        .then(({ events }) => ingest(events, false))
         .catch(() => undefined);
     };
     drain();
@@ -545,7 +568,7 @@ export function WireSync() {
 
     let liveHandle: { remove: () => void } | undefined;
     ArmadaNotification.addListener("relayEvent", ({ event }) => {
-      ingest([event]);
+      ingest([event], true);
     })
       .then((h) => {
         if (cancelled) h.remove();

@@ -10,7 +10,10 @@
  *
  * Scopes are plain strings:
  *   - `nip29:<groupId>`      — a NIP-29 group's timeline changed
- *   - `dm`                   — a kind-4 DM arrived
+ *   - `dm`                   — a kind-4 DM arrived, or the NIP-17 rumor store
+ *     changed (a DM sync/send/delete wrote rumors) — re-read
+ *   - `dm:wrap`              — the wire saw a live inbound NIP-17 gift wrap it
+ *     can't decrypt itself; useDm17 force-syncs to fetch + decrypt + store it
  *   - `c1:<channelIdHex>`    — a Concord V1 channel's sealed history changed
  *   - `c1ctl:<communityIdHex>` — a Concord V1 community's control plane changed
  *     (a new sealed kind-3308 roster/metadata/banlist edition landed)

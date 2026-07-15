@@ -218,3 +218,87 @@ export async function updateDm17Cursor(self: string, patch: Partial<Dm17Cursor>)
   };
   await writeFolded(cursorKey(self), next);
 }
+
+// ── Live inbound-wrap buffer ────────────────────────────────────────────────
+//
+// The wire's standing kind-1059 subscription RECEIVES a DM gift wrap live, but
+// can't decrypt it (that needs the user's signer + the consent gate, owned by
+// useDm17). Rather than have useDm17 re-fetch the same wrap from the relays —
+// a second round-trip that re-pays NIP-42 auth on gating relays (the ~10-20s
+// live-DM latency) — the wire stashes the RAW wrap here and rings `dm:wrap`.
+// useDm17 drains and decrypts the in-hand ciphertext directly: no re-query.
+//
+// The wire's wrap filter deliberately rewinds `since` by the NIP-59 backdate
+// window (see stampRoundSince), so every fresh REQ round REPLAYS recent wraps.
+// A session-seen id set makes buffering idempotent: a replayed wrap is never
+// re-buffered, never re-rings the doorbell, and never re-notifies. Bounded so
+// a flood can't grow unboundedly; ciphertext only, never persisted.
+
+/** Cap on buffered live wraps (a burst past this falls back to the poll). */
+const LIVE_WRAP_CAP = 256;
+/** Cap on remembered wrap ids (oldest halves are shed — the poll dedupes deeper). */
+const LIVE_SEEN_CAP = 4096;
+const liveWraps = new Map<string, NostrEvent>();
+/** Ids ever accepted into the buffer this session (replay dedupe). */
+const liveWrapSeen = new Set<string>();
+
+function rememberLiveWrap(id: string): void {
+  if (liveWrapSeen.size >= LIVE_SEEN_CAP) {
+    // Shed the oldest half (Sets iterate in insertion order).
+    let drop = LIVE_SEEN_CAP >> 1;
+    for (const old of liveWrapSeen) {
+      liveWrapSeen.delete(old);
+      if (--drop <= 0) break;
+    }
+  }
+  liveWrapSeen.add(id);
+}
+
+/**
+ * Stash raw DM gift wraps the wire received live. Returns the wraps actually
+ * accepted — ids already seen this session (a replayed round) are skipped, so
+ * callers can gate the `dm:wrap` doorbell / notifications on genuinely new
+ * arrivals.
+ */
+export function bufferLiveDmWraps(wraps: NostrEvent[]): NostrEvent[] {
+  const fresh: NostrEvent[] = [];
+  for (const w of wraps) {
+    if (liveWrapSeen.has(w.id)) continue;
+    if (liveWraps.size >= LIVE_WRAP_CAP) continue;
+    rememberLiveWrap(w.id);
+    liveWraps.set(w.id, w);
+    fresh.push(w);
+  }
+  return fresh;
+}
+
+/**
+ * Put drained wraps BACK (a consent-gate decline deferred the decrypt). This
+ * bypasses the session-seen skip — the ids were marked seen when first
+ * buffered — so the interactive retry / poll backstop can drain them again.
+ */
+export function rebufferLiveDmWraps(wraps: NostrEvent[]): void {
+  for (const w of wraps) {
+    if (liveWraps.size >= LIVE_WRAP_CAP && !liveWraps.has(w.id)) continue;
+    liveWraps.set(w.id, w);
+  }
+}
+
+/** Whether any live wraps are currently buffered awaiting a drain. */
+export function hasBufferedLiveDmWraps(): boolean {
+  return liveWraps.size > 0;
+}
+
+/** Take (and clear) the buffered live wraps for decryption by useDm17. */
+export function drainLiveDmWraps(): NostrEvent[] {
+  if (liveWraps.size === 0) return [];
+  const out = [...liveWraps.values()];
+  liveWraps.clear();
+  return out;
+}
+
+/** Reset the buffer AND the session-seen ids (tests only). */
+export function resetLiveDmWraps(): void {
+  liveWraps.clear();
+  liveWrapSeen.clear();
+}

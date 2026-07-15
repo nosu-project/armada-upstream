@@ -63,9 +63,12 @@ import {
   type OpenedDm,
 } from "@/lib/nip17/protocol";
 import {
+  drainLiveDmWraps,
+  hasBufferedLiveDmWraps,
   queryDm17Conversations,
   queryDm17Thread,
   readDm17Cursor,
+  rebufferLiveDmWraps,
   updateDm17Cursor,
   writeDm17Rumors,
 } from "@/lib/nip17/dm17Store";
@@ -239,6 +242,74 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
 }
 
 /**
+ * Decrypt DM gift wraps the wire buffered from its live subscription — the
+ * fast live path. The wraps are already in hand (the wire received them on its
+ * standing kind-1059 sub), so this does NO relay round-trip: it drains the
+ * buffer and opens the ciphertext directly, eliminating the re-fetch (and its
+ * NIP-42 auth re-handshake) that made live DMs lag ~10-20s.
+ *
+ * Returns "consumed" when the drained wraps are handled (new rumors stored, or
+ * everything already decrypted by an earlier pass/poll — nothing outstanding
+ * either way), "empty" when the buffer held nothing at all (a spurious ring or
+ * an overflowed buffer), or "deferred" when the consent gate declined (the
+ * wraps are re-buffered for the interactive retry / poll backstop). Callers
+ * fall back to a forced inbox fetch only on "empty" — so a lost wrap is never
+ * stranded until the 60s poll, and a mere replay never re-queries the relays.
+ *
+ * Concurrent callers COALESCE onto one pass: the interactive thread and the
+ * DMs page both listen on `dm:wrap`, and the drain is destructive — racing it
+ * would hand one of them an empty buffer (and a needless fallback fetch).
+ * Only INTERACTIVE surfaces should call this: a non-interactive consumer would
+ * consume the buffer just to defer on the consent gate.
+ */
+let liveDm17Pass: Promise<"consumed" | "empty" | "deferred"> | undefined;
+
+export async function openLiveDm17Wraps(
+  ctx: SyncCtx,
+  opts?: { interactive?: boolean },
+): Promise<"consumed" | "empty" | "deferred"> {
+  const prior = liveDm17Pass;
+  if (prior) {
+    const result = await prior;
+    // A wrap buffered while the shared pass ran still needs a drain — go
+    // again. Never loop on "deferred": the decline re-buffered the wraps, and
+    // re-running would spin on the consent gate.
+    if (result === "deferred" || !hasBufferedLiveDmWraps()) return result;
+    return openLiveDm17Wraps(ctx, opts);
+  }
+  const pass = runLiveDm17Pass(ctx, opts);
+  liveDm17Pass = pass;
+  try {
+    return await pass;
+  } finally {
+    liveDm17Pass = undefined;
+  }
+}
+
+async function runLiveDm17Pass(
+  ctx: SyncCtx,
+  opts?: { interactive?: boolean },
+): Promise<"consumed" | "empty" | "deferred"> {
+  if (!ctx.self || !ctx.signer.nip44) return "empty";
+  const wraps = drainLiveDmWraps();
+  if (wraps.length === 0) return "empty";
+  const seen = seenSetFor(ctx.self);
+  const fresh = wraps.filter((w) => !seen.has(w.id));
+  // Everything drained was already decrypted (an earlier pass, the poll, or a
+  // backfill beat us to it) — handled, NOT "empty": no fallback fetch needed.
+  if (fresh.length === 0) return "consumed";
+  // openAndStore is consent-gated and writes the recovered rumors (ringing
+  // `dm`). On decline, re-buffer so the next interactive pass / poll retries.
+  if (!(await openAndStore(ctx, fresh, opts?.interactive ?? false))) {
+    rebufferLiveDmWraps(fresh);
+    return "deferred";
+  }
+  const newest = Math.max(...wraps.map((w) => w.created_at));
+  await updateDm17Cursor(ctx.self, { newest });
+  return "consumed";
+}
+
+/**
  * Top up the viewer's gift-wrap inbox from their DM relays. Throttled per
  * viewer; a consent decline leaves the cursor unadvanced so the wraps are
  * retried once consent flips.
@@ -408,9 +479,27 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     refetchOnReconnect: true,
   });
 
-  // The store write path (sync, sends, deletes) announces `dm`; re-read.
+  // Two DM doorbells:
+  //   - `dm:wrap` — the wire buffered live inbound NIP-17 gift wrap(s) it can't
+  //     decrypt (needs our signer + consent gate). Decrypt the IN-HAND wraps
+  //     directly — no relay round-trip, so the message streams in ~instantly
+  //     instead of re-fetching (which re-paid NIP-42 auth: the ~10-20s lag).
+  //     Concurrent surfaces coalesce onto one pass (see openLiveDm17Wraps); a
+  //     genuinely EMPTY buffer (overflow / spurious ring) falls back to a
+  //     forced fetch so a lost wrap is never stranded until the poll.
+  //   - `dm` — the store changed (our decrypt/sends/deletes wrote rumors).
+  //     Re-read only; never decrypt-again (that would loop on its own `dm` ring).
   useWireScopes((scopes) => {
-    if (self && peer && scopes.has("dm")) {
+    if (!self || !peer || !ctx) {
+      if (scopes.has("dm") || scopes.has("dm:wrap")) void queryClient.invalidateQueries({ queryKey });
+      return;
+    }
+    if (scopes.has("dm:wrap")) {
+      void openLiveDm17Wraps(ctx, { interactive: true }).then((result) => {
+        if (result === "empty") void syncDm17Inbox(ctx, { force: true, interactive: true });
+      });
+    }
+    if (scopes.has("dm") || scopes.has("dm:wrap")) {
       void queryClient.invalidateQueries({ queryKey });
     }
   });
@@ -750,7 +839,21 @@ export function useDm17Conversations(opts?: { interactive?: boolean }): {
   });
 
   useWireScopes((scopes) => {
-    if (self && scopes.has("dm")) {
+    if (!self) return;
+    if (ctx && scopes.has("dm:wrap")) {
+      // An INTERACTIVE conversations surface (the DMs page) always drains —
+      // it may open the one-time consent prompt. The always-mounted
+      // non-interactive unread dot drains only when decryption can proceed
+      // SILENTLY (nsec login, or consent already granted): openAndStore never
+      // defers then, so the dot lights live even with no DM surface open
+      // instead of waiting on the 60s poll. When a prompt would be needed it
+      // stays hands-off (never prompts from the rail) — and even a raced
+      // consent flip is loss-proof now: a deferred pass re-buffers, and
+      // concurrent surfaces coalesce onto one pass (see openLiveDm17Wraps).
+      const silent = !signerNeedsApproval(ctx.method) || getDecryptConsent() === "allowed";
+      if (interactive || silent) void openLiveDm17Wraps(ctx, { interactive });
+    }
+    if (scopes.has("dm") || scopes.has("dm:wrap")) {
       void queryClient.invalidateQueries({ queryKey });
     }
   });

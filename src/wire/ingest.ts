@@ -3,6 +3,7 @@ import { KIND_MESSAGE, KIND_REACTION } from "@/concord-v2/lib/kinds";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import { openPlaneWraps } from "@/concord-v2/lib/planeSync";
 import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
+import { bufferLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
@@ -83,9 +84,21 @@ function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined
  * After the store write, the affected conversation scopes are announced on the
  * wire bus; hooks re-read the store. Writes are idempotent (stores dedupe by
  * id), so overlapping transports are harmless.
+ *
+ * `opts.live` marks events STREAMED live (post-EOSE / the APK's live feed) as
+ * opposed to a round's stored replay (pre-EOSE / the APK's buffered drain).
+ * Only live NIP-17 DM wraps produce notify candidates: their candidates are
+ * stamped with the ingest wall clock (the wrap's own `created_at` is NIP-59
+ * backdated), so a replayed wrap would look brand-new to the notifier and
+ * re-alert on every fresh round / relaunch.
  */
-export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): Promise<void> {
+export async function ingestWireEvents(
+  sinks: WireSinks,
+  events: NostrEvent[],
+  opts?: { live?: boolean },
+): Promise<void> {
   if (events.length === 0) return;
+  const live = opts?.live ?? true;
   const spec = sinks.getSpec();
   const self = sinks.getSelfPubkey?.();
   const scopes = new Set<string>();
@@ -98,6 +111,7 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
   const ctlWraps: NostrEvent[] = [];
   const toPark: NostrEvent[] = [];
   const plain: NostrEvent[] = [];
+  const dmWraps: NostrEvent[] = [];
   for (const ev of events) {
     if (!ev || typeof ev.id !== "string" || typeof ev.kind !== "number") continue;
     if (WRAP_KINDS.has(ev.kind)) {
@@ -108,23 +122,48 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
         else wrapsByChannel.set(channel, [ev]);
       } else if (spec?.v2CtlByPk.has(ev.pubkey)) {
         ctlWraps.push(ev);
+      } else if (self && ev.kind === KIND_DM_WRAP && ev.tags.some(([n, v]) => n === "p" && v === self)) {
+        // A NIP-17 gift wrap addressed to the viewer (kind-1059, `#p` = self —
+        // the wire's DM filter). The wire can't decrypt it (that needs the
+        // user's NIP-44 + the consent gate, both owned by useDm17). Rather than
+        // make useDm17 RE-FETCH the same wrap from the relays (a second
+        // round-trip that re-pays NIP-42 auth on gating relays — the ~10-20s
+        // live-DM latency), BUFFER the raw wrap in hand and ring `dm:wrap`.
+        // useDm17 drains and decrypts it directly (no re-query); its store write
+        // then rings `dm` for the re-read. (Two scopes deliberately: `dm:wrap` =
+        // "live wraps are buffered, decrypt them"; `dm` = "the store changed,
+        // re-read" — so decryption isn't re-triggered by its own store write.)
+        // It is NOT parked (parking treats it as a dead Concord V2 pending wrap).
+        dmWraps.push(ev);
       } else {
-        // A NIP-17 DM gift wrap from a known conversation address (nips#2396):
-        // attribute it to the peer and NOTIFY without unwrapping. We do NOT
-        // persist or park it — useDm17 owns fetching + decrypting DM wraps on
-        // its own schedule (the sealed wrap is never stored). Wraps we can't
-        // attribute (ephemeral-key senders, non-follows, first contact) simply
-        // produce no notification; useDm17 still surfaces them in-app.
-        const dmPeer = spec?.dm17ByPk.get(ev.pubkey);
-        if (dmPeer) {
-          const cand = dm17Candidate(ev, dmPeer, self);
-          if (cand) candidates.push(cand);
-        } else {
-          toPark.push(ev);
-        }
+        // A wrap for a stream we hold no key for yet (V2 control/invite plane,
+        // or a just-joined channel whose spec hasn't refreshed) — park it.
+        toPark.push(ev);
       }
     } else {
       plain.push(ev);
+    }
+  }
+  if (dmWraps.length > 0) {
+    // The buffer dedupes by session-seen id: the wire's wrap filter rewinds
+    // `since` by the NIP-59 backdate window (stampRoundSince), so every fresh
+    // round REPLAYS recent wraps — only genuinely new ones ring the doorbell.
+    const freshDmWraps = bufferLiveDmWraps(dmWraps);
+    if (freshDmWraps.length > 0) {
+      scopes.add("dm:wrap");
+      // Notify only for LIVE arrivals attributable to a known conversation
+      // (nips#2396). Replayed wraps (pre-EOSE / APK drain) stay silent — their
+      // candidates carry a fresh wall-clock stamp and would re-alert. An
+      // unattributable wrap (ephemeral-key sender, non-follow, first contact,
+      // bunker/extension login) still wakes decryption via `dm:wrap`.
+      if (live) {
+        for (const ev of freshDmWraps) {
+          const dmPeer = spec?.dm17ByPk.get(ev.pubkey);
+          if (!dmPeer) continue;
+          const cand = dm17Candidate(ev, dmPeer, self);
+          if (cand) candidates.push(cand);
+        }
+      }
     }
   }
 

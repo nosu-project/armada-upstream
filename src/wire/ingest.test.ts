@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { bytesToHex, channelGroupKey, controlGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
 import { KIND_CONTROL, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { peekPendingWraps, queryByStreams, queryChannelRumors } from "@/concord-v2/lib/rumorStore";
+import { drainLiveDmWraps, resetLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 
@@ -21,7 +22,10 @@ import { ingestWireEvents, type WireEventStore } from "./ingest";
 import { registerNotifySink, type NotifyCandidate } from "./notify";
 import type { WireSpec } from "./spec";
 
-afterEach(() => resetWireBus());
+afterEach(() => {
+  resetWireBus();
+  resetLiveDmWraps();
+});
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -205,6 +209,61 @@ describe("ingestWireEvents", () => {
     expect(parked.some((w) => w.id === wrap.id)).toBe(true);
   });
 
+  it("buffers a live NIP-17 gift wrap addressed to the viewer and rings dm:wrap (not parked, not stored)", async () => {
+    const self = "9".repeat(64);
+    const { store, sinks } = makeSinks({});
+    const withSelf = { ...sinks, getSelfPubkey: () => self };
+    // A kind-1059 gift wrap #p-tagged to the viewer (the wire's DM filter),
+    // whose author is an unknown pubkey (ephemeral-key sender / bunker login,
+    // so no dm17ByPk attribution).
+    const wrap = plainEvent(1059, [["p", self]]);
+    wrap.pubkey = "a".repeat(64);
+
+    const scopes = await collectScopes(() => ingestWireEvents(withSelf, [wrap]));
+
+    expect(scopes.has("dm:wrap"), "a live DM wrap must wake useDm17").toBe(true);
+    // The raw wrap is buffered in hand so useDm17 decrypts it WITHOUT a re-fetch.
+    const buffered = drainLiveDmWraps();
+    expect(buffered.map((w) => w.id)).toEqual([wrap.id]);
+    // It must NOT be parked as a dead Concord V2 pending wrap, nor stored.
+    expect(scopes.has(`c2park:${wrap.pubkey}`)).toBe(false);
+    expect(store.events).toHaveLength(0);
+    expect((await peekPendingWraps([wrap.pubkey]))).toHaveLength(0);
+  });
+
+  it("ignores a REPLAYED DM wrap: no re-buffer, no dm:wrap re-ring (the wrap filter's since rewind replays every round)", async () => {
+    const self = "9".repeat(64);
+    const { sinks } = makeSinks({});
+    const withSelf = { ...sinks, getSelfPubkey: () => self };
+    const wrap = plainEvent(1059, [["p", self]]);
+    wrap.pubkey = "a".repeat(64);
+
+    // First delivery: buffered + doorbell. Drained by the DM hook.
+    const first = await collectScopes(() => ingestWireEvents(withSelf, [wrap]));
+    expect(first.has("dm:wrap")).toBe(true);
+    expect(drainLiveDmWraps().map((w) => w.id)).toEqual([wrap.id]);
+
+    // A rotated round replays the same wrap: silence, nothing buffered.
+    const replay = await collectScopes(() => ingestWireEvents(withSelf, [wrap]));
+    expect(replay.has("dm:wrap")).toBe(false);
+    expect(drainLiveDmWraps()).toHaveLength(0);
+  });
+
+  it("still parks a kind-1059 wrap NOT addressed to the viewer (a genuine unknown V2 stream)", async () => {
+    const self = "9".repeat(64);
+    const { sinks } = makeSinks({});
+    const withSelf = { ...sinks, getSelfPubkey: () => self };
+    const wrap = plainEvent(1059, [["p", "someone-else"]]);
+    wrap.pubkey = "b".repeat(64);
+
+    const scopes = await collectScopes(() => ingestWireEvents(withSelf, [wrap]));
+
+    expect(scopes.has("dm:wrap")).toBe(false);
+    expect(drainLiveDmWraps()).toHaveLength(0); // nothing buffered
+    expect(scopes.has(`c2park:${wrap.pubkey}`)).toBe(true);
+    expect((await peekPendingWraps([wrap.pubkey])).some((w) => w.id === wrap.id)).toBe(true);
+  });
+
   it("skips malformed lines without dropping the rest of the batch", async () => {
     const { store, sinks } = makeSinks({});
     const good = plainEvent(9, [["h", "g1"]]);
@@ -346,6 +405,31 @@ describe("ingestWireEvents — foreground notify candidates", () => {
     // The wrap is NOT parked — useDm17 owns fetching/decrypting DM wraps.
     const parked = await peekPendingWraps([wrapPk]);
     expect(parked.some((w) => w.id === wrap.id)).toBe(false);
+  });
+
+  it("never emits a DM candidate for a REPLAYED NIP-17 wrap (live:false — pre-EOSE / APK drain)", async () => {
+    // Candidates for DM wraps are wall-clock-stamped (the wrap's created_at is
+    // backdated), so a replayed wrap would look brand-new to the notifier and
+    // re-alert on every fresh round / relaunch. The wrap still buffers for the
+    // decrypt path — only the notification is suppressed.
+    const wrapPk = "a".repeat(64);
+    const wrap: NostrEvent = {
+      id: "f".repeat(64),
+      kind: 1059,
+      pubkey: wrapPk,
+      created_at: Math.floor(Date.now() / 1000) - 3600,
+      content: "sealed",
+      tags: [["p", SELF]],
+      sig: "",
+    };
+    const { captured, off, sinks } = withSink({ dm17ByPk: new Map([[wrapPk, PEER]]) });
+    try {
+      await ingestWireEvents(sinks, [wrap], { live: false });
+    } finally {
+      off();
+    }
+    expect(captured).toHaveLength(0);
+    expect(drainLiveDmWraps().map((w) => w.id)).toEqual([wrap.id]);
   });
 
   it("never emits a DM candidate for our own self-copy wrap (author resolves to self)", async () => {

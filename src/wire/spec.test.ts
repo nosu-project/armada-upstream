@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { buildWireSpec } from "./spec";
+import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
+
+import { buildWireSpec, stampRoundSince } from "./spec";
 
 import type { ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import type { GroupKey } from "@/concord-v2/lib/derive";
@@ -233,5 +235,51 @@ describe("buildWireSpec", () => {
     const a = buildWireSpec({ ...base, groups: [{ id: "g1", relay: "wss://a" }, { id: "g2", relay: "wss://a" }] });
     const b = buildWireSpec({ ...base, groups: [{ id: "g2", relay: "wss://a" }, { id: "g1", relay: "wss://a" }] });
     expect(a.sig).toBe(b.sig);
+  });
+});
+
+describe("stampRoundSince", () => {
+  const NOW = 1_800_000_000;
+  const SINCE = NOW - 60; // a cursor-derived resume point
+
+  it("stamps the cursor since onto every filter EXCEPT the NIP-17 wrap inbox", () => {
+    const dm17 = buildWireSpec({
+      pubkey: PUBKEY,
+      groups: [{ id: "g1", relay: "wss://dm.relay" }],
+      dmRelays: ["wss://dm.relay"],
+      dmFollows: ["a".repeat(64)],
+      concord1: [],
+      concord2: [],
+    });
+    const stamped = stampRoundSince(dm17.subs[0].filters, SINCE, NOW);
+
+    for (const f of stamped) {
+      if (f.kinds?.length === 1 && f.kinds[0] === 1059 && !f.authors) {
+        // A gift wrap's created_at is NIP-59-backdated up to 2 days, and relays
+        // apply `since` to live events too — a cursor-derived since would filter
+        // out virtually every LIVE wrap (the "DMs only arrive on the poll" lag).
+        expect(f.since).toBeLessThanOrEqual(NOW - MAX_WRAP_BACKDATE_SECS);
+        // The rewind replays stored wraps each round; the limit bounds it.
+        expect(f.limit).toBeGreaterThan(0);
+      } else {
+        expect(f.since).toBe(SINCE);
+        expect(f.limit).toBeUndefined();
+      }
+    }
+    // Sanity: the set really contained both shapes.
+    expect(stamped.some((f) => f.kinds?.[0] === 1059)).toBe(true);
+    expect(stamped.some((f) => f.kinds?.[0] === 9)).toBe(true);
+  });
+
+  it("keeps the cursor since on a Concord V2 wrap filter (authors-scoped, real timestamps)", () => {
+    const stamped = stampRoundSince([{ kinds: [1059], authors: ["pkA1"] }], SINCE, NOW);
+    expect(stamped[0].since).toBe(SINCE);
+    expect(stamped[0].limit).toBeUndefined();
+  });
+
+  it("takes the deeper of cursor since and the backdate rewind for the wrap filter", () => {
+    const deepCursor = NOW - 6 * 24 * 60 * 60; // device off for days
+    const stamped = stampRoundSince([{ kinds: [1059], "#p": [PUBKEY] }], deepCursor, NOW);
+    expect(stamped[0].since).toBe(deepCursor);
   });
 });

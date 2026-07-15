@@ -1,4 +1,5 @@
 import { normalizeRelayUrl } from "@/lib/platform";
+import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_REACTION, KIND_COMMUNITY_CONTROL } from "@/concord-v1/lib/kinds";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
@@ -16,6 +17,45 @@ const KIND_DELETE = 5;
 const KIND_DM = 4;
 /** NIP-59 gift-wrap kind — carries a NIP-17 (kind-14/15) private DM. */
 const KIND_GIFT_WRAP = 1059;
+
+/** Slack added behind the NIP-59 backdate window (clock skew, borderline wraps). */
+const WRAP_SINCE_SLACK_SECS = 3600;
+/** Stored-replay cap for the DM gift-wrap filter on each fresh REQ round. */
+const DM_WRAP_REPLAY_LIMIT = 100;
+
+/**
+ * Whether a filter is the wire's NIP-17 DM gift-wrap inbox filter
+ * (`{kinds:[1059], "#p":[me]}`). Concord V2 wrap filters share the kind but
+ * are `authors`-scoped (stream addresses) and carry no `#p`.
+ */
+function isDmWrapInboxFilter(f: NostrFilter): boolean {
+  return !f.authors && f.kinds?.length === 1 && f.kinds[0] === KIND_GIFT_WRAP && Boolean(f["#p"]?.length);
+}
+
+/**
+ * Stamp a round's filters with their resume `since`.
+ *
+ * Every filter gets the cursor-derived `since` — EXCEPT the NIP-17 gift-wrap
+ * inbox filter. A gift wrap's `created_at` is backdated up to 2 days into the
+ * past (NIP-59 `tweakedPast`), and relays apply `since` to LIVE streamed
+ * events too, so a cursor-derived `since` (≈ now − 60s) filters out virtually
+ * every live wrap: only a backdate that randomly lands inside the overlap
+ * window would pass (~0.03%). That deafness is exactly the "DMs only arrive on
+ * the 30-60s poll" lag — the standing sub never received the wrap at all.
+ *
+ * So the wrap filter's `since` rewinds the full backdate window (+ slack)
+ * behind `now`, and takes the cursor `since` when it reaches even deeper (a
+ * device off for days replays what the window covers). The rewind means every
+ * fresh round replays up to 2 days of stored wraps; `limit` bounds that replay
+ * (newest-first), and ingest dedupes re-deliveries by wrap id — deeper catch-up
+ * is the DM inbox poll's job (which already rewinds the same window).
+ */
+export function stampRoundSince(filters: NostrFilter[], since: number, now: number): NostrFilter[] {
+  const wrapSince = Math.min(since, now - MAX_WRAP_BACKDATE_SECS - WRAP_SINCE_SLACK_SECS);
+  return filters.map((f) =>
+    isDmWrapInboxFilter(f) ? { ...f, since: wrapSince, limit: DM_WRAP_REPLAY_LIMIT } : { ...f, since },
+  );
+}
 
 /**
  * Everything the app needs listened-to, as plain data. This is the SAME shape

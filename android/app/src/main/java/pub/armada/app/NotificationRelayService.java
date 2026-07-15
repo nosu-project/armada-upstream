@@ -166,6 +166,20 @@ public class NotificationRelayService extends Service {
     private final Set<String> notifiedIds = new HashSet<>();
     // Connect time; we only notify for events at/after this to avoid backfill spam.
     private long sinceSec;
+    // Service start (never advanced): the notify floor for NIP-17 DM rumors,
+    // whose OUTER wrap timestamps are useless for since-gating (see below).
+    private long dm17FloorSec;
+
+    // NIP-59 backdates a gift wrap's `created_at` by up to 2 days, and relays
+    // apply `since` to LIVE streamed events too — so a `since` anywhere near
+    // `now` filters out virtually every live NIP-17 DM wrap (only a backdate
+    // that randomly lands inside the window would pass). The DM wrap filter
+    // therefore rewinds `since` by the full backdate window (+ 1h slack) and
+    // asks for NO stored replay (`limit: 0` — live-only; history is the
+    // WebView's DM inbox sync to handle). For relays that ignore `limit: 0`,
+    // notifiedIds dedupes within the service lifetime and dm17FloorSec (the
+    // rumor's REAL timestamp vs service start) suppresses stale replays.
+    private static final long DM17_SINCE_REWIND_SEC = 2 * 24 * 3600 + 3600;
 
     // roomKey → the accumulating per-room notification (Signal/Discord style).
     // The roomKey is a stable identifier for the conversation (NIP-29 groupId,
@@ -380,6 +394,7 @@ public class NotificationRelayService extends Service {
                 .build();
 
         sinceSec = System.currentTimeMillis() / 1000;
+        dm17FloorSec = sinceSec;
         registerNetworkCallback();
         registerConfigListener();
     }
@@ -765,11 +780,16 @@ public class NotificationRelayService extends Service {
                 // wraps whose author matches a known conversation address
                 // (pkToDm17) get opened + notified in handleEvent; the rest are
                 // the WebView's DM inbox sync to handle. Empty map ⇒ no sub.
+                // `since` rewinds the NIP-59 backdate window (a wrap's outer
+                // created_at is up to 2 days in the past, so `since = sinceSec`
+                // never matches a live wrap) and `limit: 0` skips the stored
+                // replay that rewind would otherwise pull in (live-only).
                 if (dmRelays.contains(relayUrl) && !pkToDm17.isEmpty()) {
                     JSONObject f6 = new JSONObject();
                     f6.put("kinds", new JSONArray().put(1059));
                     f6.put("#p", new JSONArray().put(userPubkey));
-                    f6.put("since", sinceSec);
+                    f6.put("since", Math.max(0, sinceSec - DM17_SINCE_REWIND_SEC));
+                    f6.put("limit", 0);
                     webSocket.send(reqMessage(subDm17, f6));
                 }
                 // Concord (E2E) channel messages on this relay, by #z pseudonym.
@@ -1377,6 +1397,10 @@ public class NotificationRelayService extends Service {
         Dm17Conv conv = pkToDm17.get(wrap.optString("pubkey"));
         if (conv == null) return; // not a conversation we can open — WebView's job
         long cts = wrap.optLong("created_at", 0);
+        // Clamp to the wall clock: a hostile future-stamped wrap must not drag
+        // sinceSec forward and deafen every other filter's reconnect resume.
+        long nowSec = System.currentTimeMillis() / 1000;
+        if (cts > nowSec) cts = nowSec;
         if (cts + 1 > sinceSec) sinceSec = cts + 1;
         notifiedIds.add(id);
 
@@ -1400,6 +1424,15 @@ public class NotificationRelayService extends Service {
         if (rumorKind != 14 && rumorKind != 15) return;
         final String author = rumor.optString("pubkey", "");
         if (author.isEmpty() || author.equals(userPubkey)) return; // our own copy
+        // Stale-replay floor: the RUMOR carries the real send time (only the
+        // outer wrap/seal are backdated). The wrap filter asks for live-only
+        // (`limit: 0`), but a relay that ignores that would replay the whole
+        // rewound `since` window on every (re)connect — and notifiedIds resets
+        // with the service. Anything sent before this service started was
+        // either already notified by the previous incarnation or is the
+        // WebView's inbox sync to surface.
+        final long rtsFloor = rumor.optLong("created_at", 0);
+        if (rtsFloor > 0 && rtsFloor < dm17FloorSec) return;
         // A DM is inherently directed at the user; treat it as a mention for the
         // active-room break-through, matching the WebView notifier.
         if (isActivelyViewed("dm:" + peer, null, /*mention=*/true)) return;
