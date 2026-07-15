@@ -330,10 +330,17 @@ export interface Dm17Thread {
   isLoading: boolean;
   /**
    * Whether NIP-17 sends to this peer are possible: the signer does NIP-44
-   * and the peer has PUBLISHED a kind-10050 DM-relay list (the spec's
-   * "ready to receive" signal). When false, callers use the kind-4 path.
+   * and we have somewhere to publish the gift wrap — the peer's published
+   * kind-10050 inbox, or (when they have none) our own app/DM relays as a
+   * best-effort fallback. When false, callers use the kind-4 path.
    */
   canSend: boolean;
+  /**
+   * Whether the peer has PUBLISHED a kind-10050 inbox (guaranteed-reachable
+   * private delivery). When false but `canSend` is true, we're delivering the
+   * private DM to shared relays best-effort — reachable if the peer reads them.
+   */
+  hasPeerInbox: boolean;
   /** Send a chat message (kind 14). Resolves once optimistically rendered. */
   send: (content: string, extraTags?: string[][]) => Promise<void>;
   /** Send a kind-7 reaction targeting a message in this conversation. */
@@ -369,7 +376,14 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   const myRelays = ctx?.relays ?? effectiveDmRelays(config);
 
   const self = user?.pubkey;
-  const canSend = support && !!peer && peerInboxRelays.length > 0;
+  // NIP-17 send is possible when the signer does NIP-44 and we have SOMEWHERE
+  // to publish the gift wrap. The spec's canonical target is the peer's
+  // published kind-10050 inbox; when they have none we fall back to our own
+  // (app / DM) relays — fully private (still gift-wrapped, no metadata leak),
+  // and reachable whenever the peer reads those shared relays (the common
+  // Armada case). `hasPeerInbox` lets the UI flag best-effort delivery.
+  const hasPeerInbox = peerInboxRelays.length > 0;
+  const canSend = support && !!peer && (hasPeerInbox || myRelays.length > 0);
 
   // Optimistic outgoing rumors (pending/failed), keyed by rumor id. Confirmed
   // sends land in the store and drop out of here.
@@ -674,6 +688,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     reactionsByTarget,
     isLoading: query.isLoading,
     canSend,
+    hasPeerInbox,
     send,
     react,
     removeReaction,

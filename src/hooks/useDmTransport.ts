@@ -59,8 +59,14 @@ export function useDmTransport(peer: string): {
   encryptedIds: Set<string>;
   /** Ids of NIP-17 rumors (unsigned; the page passes the `rumor` menu prop). */
   dm17Ids: Set<string>;
-  /** Whether sends go over NIP-17 (peer published an inbox + signer nip44). */
+  /** Whether sends go over NIP-17 (we have somewhere to publish the wrap). */
   dm17Enabled: boolean;
+  /**
+   * Whether private (NIP-17) delivery is GUARANTEED-reachable: the peer
+   * published a kind-10050 inbox. When false but `dm17Enabled` is true, the
+   * private DM is delivered best-effort to shared app/DM relays.
+   */
+  dm17DeliveryGuaranteed: boolean;
   /** Decrypt a placeholder message by id (on scroll into view). */
   decryptVisible: (id: string) => void;
   /** Explicitly decrypt one message (per-message "Decrypt" button). */
@@ -338,6 +344,7 @@ export function useDmTransport(peer: string): {
     encryptedIds,
     dm17Ids,
     dm17Enabled,
+    dm17DeliveryGuaranteed: dm17.hasPeerInbox,
     decryptVisible,
     decryptOne,
     decryptAll,

@@ -355,7 +355,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const name = getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
-  const { transport, encryptedIds, dm17Ids, dm17Enabled, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+  const { transport, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(peer);
   const { messages } = transport;
   const { markRead } = useReadState();
@@ -861,23 +861,33 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       {legacyBlocked ? (
         <DmLegacyFallbackNotice name={name} onEnable={() => setLegacyAllowed(true)} />
       ) : (
-        <ChatComposer
-          relayUrl="dm"
-          groupId={peer}
-          messages={[]}
-          placeholder={`Message ${name}…`}
-          // Quote-replies use the NIP-C7 `q` marker (rich context, shared with
-          // Concord's renderer); handleSubmit adds the NIP-17 `e` parent tag.
-          replyTo={replyTo}
-          replyMarker="nipc7"
-          onCancelReply={() => setReplyTo(undefined)}
-          // Encrypt file attachments client-side (AES-256-GCM) before Blossom
-          // upload, à la Concord/Vector — but only on the private NIP-17 plane.
-          // Legacy kind-4 has no imeta channel to carry the decryption key, so
-          // an encrypted upload there would be an undecryptable blob.
-          encryptAttachments={dm17Enabled}
-          sendOverride={handleSubmit}
-        />
+        <>
+          {dm17Enabled && !dm17DeliveryGuaranteed && (
+            <p className="mx-2 mb-1 px-2 text-[11px] leading-snug text-muted-foreground/80">
+              <Lock className="mr-1 inline size-3 align-[-1px]" aria-hidden />
+              {name} hasn't set up private messaging yet. Your message is still
+              fully private (encrypted); it's sent to shared relays and reaches
+              them once they open Armada.
+            </p>
+          )}
+          <ChatComposer
+            relayUrl="dm"
+            groupId={peer}
+            messages={[]}
+            placeholder={`Message ${name}…`}
+            // Quote-replies use the NIP-C7 `q` marker (rich context, shared with
+            // Concord's renderer); handleSubmit adds the NIP-17 `e` parent tag.
+            replyTo={replyTo}
+            replyMarker="nipc7"
+            onCancelReply={() => setReplyTo(undefined)}
+            // Encrypt file attachments client-side (AES-256-GCM) before Blossom
+            // upload, à la Concord/Vector — but only on the private NIP-17 plane.
+            // Legacy kind-4 has no imeta channel to carry the decryption key, so
+            // an encrypted upload there would be an undecryptable blob.
+            encryptAttachments={dm17Enabled}
+            sendOverride={handleSubmit}
+          />
+        </>
       )}
 
       <AlertDialog open={muteConfirmOpen} onOpenChange={setMuteConfirmOpen}>
