@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.28.2] - 2026-07-15
+
+A direct-message polish release. You can now react to and quote DMs on mobile by
+tapping a message to reveal its action toolbar, and the conversation-list header
+gets larger, easier-to-tap search and new-message buttons that match the rest of
+the DM interface.
+
+### Added
+- Tap a direct message on mobile to reveal its action toolbar for reacting,
+  quoting, and more
+
+### Changed
+- Larger, easier-to-tap search and new-message buttons in the DM conversation
+  list, matching the conversation top bar
+
 ## [0.28.1] - 2026-07-15
 
 A messaging and reliability release. Private DMs now arrive the instant they're
