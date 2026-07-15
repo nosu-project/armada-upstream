@@ -333,6 +333,32 @@ function naddrToSigner(naddr: string): string | undefined {
 }
 
 /**
+ * Whether `input` names a V2 invite bundle coordinate — an `…/invite/<naddr>`
+ * path (or bare `naddr`) whose naddr is a valid invite-bundle coordinate —
+ * REGARDLESS of whether the `#fragment` secret is present. Use this to route a
+ * link to the invite UI (which can then explain a missing secret) rather than
+ * letting a fragment-less invite fall through to a generic event card: the
+ * bundle's content is encrypted and can never render as a plain event.
+ */
+export function isInviteUrl(input: string): boolean {
+  const trimmed = input.trim();
+  let naddr: string | undefined;
+  if (/^naddr1[a-z0-9]+/i.test(trimmed)) {
+    naddr = trimmed.split("#")[0];
+  } else {
+    let url: URL;
+    try {
+      url = new URL(trimmed);
+    } catch {
+      return false;
+    }
+    if (!url.pathname.startsWith(INVITE_PATH_PREFIX)) return false;
+    naddr = decodeURIComponent(url.pathname.slice(INVITE_PATH_PREFIX.length)).replace(/\/$/, "");
+  }
+  return !!naddr && naddrToSigner(naddr) !== undefined;
+}
+
+/**
  * Parse a V2 invite from a full URL (`…/invite/<naddr>#<fragment>`) or the
  * domain-agnostic bare form (`<naddr>#<fragment>`). Returns undefined for
  * anything that isn't recognizably a V2 invite (so callers can fall through to

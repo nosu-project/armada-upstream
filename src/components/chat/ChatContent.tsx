@@ -22,7 +22,7 @@ import { writeClipboardText } from "@/lib/clipboard";
 import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
-import { parseInviteLink } from "@/concord-v2/lib/invite";
+import { isInviteUrl } from "@/concord-v2/lib/invite";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { splitInlineCode, splitMarkdownBlocks } from "@/lib/markdown";
@@ -377,7 +377,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
           const isEndOfLine = lineSuffix.trim() === "";
 
           const naddrFromUrl = extractNaddrFromUrl(url);
-          const isInvite = parseInviteLink(url) !== undefined;
+          const isInvite = isInviteUrl(url);
           if (isEndOfLine && isInvite) {
             out.push({ type: "invite-embed", url });
           } else if (isInvite) {
@@ -518,7 +518,8 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
       const token = result[i];
       const isBlock = token.type === "image-embed" || token.type === "media-embed"
         || token.type === "nevent-embed"
-        || (token.type === "naddr-embed" && !token.url) || token.type === "lightning-invoice"
+        || (token.type === "naddr-embed" && (!token.url || token.addr.kind === 30030))
+        || token.type === "lightning-invoice"
         || token.type === "code-block" || token.type === "quote"
         || token.type === "invite-embed";
 
@@ -812,9 +813,12 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         if (disableNoteEmbeds || inQuote) {
           return <TruncatedNostrLink key={key} encode={() => nip19.naddrEncode(token.addr)} />;
         }
+        // The emoji-pack card is self-contained (name, preview, Add button), so
+        // hide the raw URL above it — same as invite cards.
+        const hideUrl = token.addr.kind === 30030;
         return (
           <span key={key}>
-            {token.url && (
+            {token.url && !hideUrl && (
               <a
                 href={token.url}
                 target="_blank"

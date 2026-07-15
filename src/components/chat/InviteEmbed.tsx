@@ -28,16 +28,14 @@ interface InviteEmbedProps {
 export function InviteEmbed({ url, className }: InviteEmbedProps) {
   const invite = parseInviteLink(url);
   if (!invite) {
+    // A recognizable invite link that lost its `#fragment` (e.g. a client that
+    // dropped the URL hash) can't be joined — the secret lives in the fragment.
+    // Say so plainly rather than showing a broken event card or a bare link.
     return (
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary hover:underline break-all"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {url}
-      </a>
+      <InviteTombstone
+        message="This invite link is missing its secret (the part after #). Ask for a fresh link."
+        className={className}
+      />
     );
   }
   return <InviteCard invite={invite} className={className} />;
