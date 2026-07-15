@@ -1558,7 +1558,11 @@ export function ServerRail({
         // rail; widens to the full desktop rail at the `sidebar:` breakpoint.
         "flex flex-col items-center gap-4 sidebar:gap-5 w-[60px] sidebar:w-[72px] shrink-0 overflow-y-auto bg-chrome-deep select-none",
         "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
-        "pb-[var(--safe-area-pad-bottom,0.75rem)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]",
+        // Match the ChannelSidebar account switcher, which sits inside pb-safe
+        // AND adds an extra pb-2 (0.5rem) so it ends at the same line above the
+        // safe-area inset. Fold that same 0.5rem into the rail's base padding so
+        // the settings icon lines up with the switcher instead of sitting lower.
+        "pb-[calc(var(--safe-area-pad-bottom,0.75rem)+0.5rem)] sidebar:pb-[calc(var(--safe-area-pad-bottom-tight,0.25rem)+0.5rem)]",
         // Lock scrolling while dragging so the rail doesn't fight the gesture.
         reordering && "overflow-hidden",
         className,
