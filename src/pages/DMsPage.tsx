@@ -309,16 +309,19 @@ function DmLegacyBadge() {
  * we deliver it to shared app relays, so it reaches the peer once they read
  * them. Click/tap-to-open Popover, mirroring {@link DmLegacyBadge}.
  */
-function DmBestEffortBadge({ name }: { name: string }) {
+function DmBestEffortBadge({ name, className }: { name: string; className?: string }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center justify-center rounded-full p-0.5 text-muted-foreground/80 hover:text-foreground shrink-0 select-none"
+          className={cn(
+            "inline-flex items-center justify-center rounded-full bg-chrome p-0.5 text-muted-foreground/90 shadow-sm ring-1 ring-border/60 hover:text-foreground select-none",
+            className,
+          )}
           aria-label="Private, best-effort delivery. Tap for details."
         >
-          <Lock className="size-3" aria-hidden />
+          <Lock className="size-2.5" aria-hidden />
         </button>
       </PopoverTrigger>
       <PopoverContent side="bottom" className="w-64 p-3 text-xs font-normal text-muted-foreground">
@@ -644,16 +647,20 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         >
           <ChevronLeft className="size-5" />
         </Button>
-        <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-7">
-          <AvatarImage src={author.data?.metadata?.picture} alt={name} />
-          <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
-            {name[0]?.toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
+        <div className="relative shrink-0">
+          <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-7">
+            <AvatarImage src={author.data?.metadata?.picture} alt={name} />
+            <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+              {name[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+          {dm17Enabled && !dm17DeliveryGuaranteed && (
+            <DmBestEffortBadge name={name} className="absolute -bottom-1 -right-1" />
+          )}
+        </div>
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           <h1 className="font-semibold truncate min-w-0">{name}</h1>
           <BotPill metadata={author.data?.metadata} />
-          {dm17Enabled && !dm17DeliveryGuaranteed && <DmBestEffortBadge name={name} />}
         </div>
         {/* Who's in this DM's voice room (others, not us) — shown whether or
             not we've joined, so the peer waiting in a call is visible. */}
@@ -681,28 +688,9 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             </TooltipContent>
           </Tooltip>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Search messages"
-              aria-pressed={searchOpen}
-              className={cn(
-                "size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground",
-                searchOpen && "text-foreground",
-              )}
-              onClick={() => setSearchOpen(true)}
-            >
-              <Search className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Search messages</TooltipContent>
-        </Tooltip>
-
         {/* Secondary actions overflow into a … menu to keep the bar uncluttered:
-            notification level, View on Ditto, and Mute. Call + Search stay
-            inline as the primary conversation actions. */}
+            search, notification level, View on Ditto, and Mute. Only Call stays
+            inline as the primary conversation action. */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -715,6 +703,10 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52 p-1.5">
+            <DropdownMenuItem className="px-3 py-2" onClick={() => setSearchOpen(true)}>
+              <Search className="size-4" />
+              Search messages
+            </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger className="px-3 py-2">
                 {(() => {
