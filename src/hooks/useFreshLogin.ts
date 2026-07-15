@@ -2,6 +2,24 @@ import { useNostrLogin } from "@nostrify/react/login";
 import { useEffect, useRef, useState } from "react";
 
 /**
+ * A pubkey whose imminent fresh login should NOT raise the sync gate. Set by
+ * the account-creation wizard right before it logs the new key in: a brand-new
+ * account has no settings, no group list and no communities to catch up on, so
+ * blocking onboarding behind a (network-bound, seconds-long on mobile) sync
+ * overlay is pointless and hides the profile/community wizard steps. The next
+ * fresh login for this pubkey is silently absorbed into the seen-baseline.
+ */
+let suppressedFreshPubkey: string | undefined;
+
+/**
+ * Mark the next fresh login as a wizard signup so {@link useFreshLogin} skips
+ * the sync gate for it. Idempotent; cleared once consumed.
+ */
+export function suppressNextSyncGate(pubkey: string): void {
+  suppressedFreshPubkey = pubkey;
+}
+
+/**
  * Detects a *fresh* login: a user who just authenticated (or a freshly switched
  * account), as opposed to a session that was simply restored from storage on a
  * cold start / reload.
@@ -16,6 +34,9 @@ import { useEffect, useRef, useState } from "react";
  * "restored" baseline. Any pubkey that appears *after* mount (i.e. the active
  * pubkey changes to one we hadn't seen at startup) is a fresh login. The result
  * is the fresh pubkey, or `undefined` once it's been acknowledged/cleared.
+ *
+ * A signup from the account wizard opts out via {@link suppressNextSyncGate}:
+ * its pubkey is folded into the baseline without ever raising the gate.
  */
 export function useFreshLogin(): {
   /** The pubkey of a just-completed fresh login, or `undefined`. */
@@ -45,6 +66,12 @@ export function useFreshLogin(): {
     const seen = seenRef.current!;
     if (!seen.has(activePubkey)) {
       seen.add(activePubkey);
+      // A wizard signup opted out: fold it into the baseline (done above) but
+      // never raise the gate for it. Consume the one-shot suppression.
+      if (suppressedFreshPubkey === activePubkey) {
+        suppressedFreshPubkey = undefined;
+        return;
+      }
       setFreshPubkey(activePubkey);
     }
   }, [activePubkey]);

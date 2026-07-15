@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
@@ -123,6 +124,11 @@ export function WelcomePage() {
       if (decoded.type !== "nsec") throw new Error("Invalid nsec");
       const pubkey = getPublicKey(decoded.data);
       await saveNsec(nip19.npubEncode(pubkey), nsec);
+      // Brand-new account: nothing to catch up on, so skip the post-login sync
+      // gate. Otherwise its full-screen overlay paints over the profile/add
+      // wizard steps (SyncGate is z-100, the wizard z-50) while a network-bound
+      // sync runs — on a slow phone that looks like onboarding was skipped.
+      suppressNextSyncGate(pubkey);
       login.nsec(nsec);
       setStep("profile");
     } catch {
