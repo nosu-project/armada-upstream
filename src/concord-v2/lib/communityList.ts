@@ -55,6 +55,15 @@ export interface CommunityListEntry {
   current: JoinMaterial;
   /** ms; tiebreaks against a tombstone. */
   added_at: number;
+  /**
+   * The Refounding epoch that EXCLUDED me (a kick/ban rekey that carried no
+   * blob for me). Being excluded is NOT leaving: the entry stays LIVE and on
+   * the rail, but read-only — my keys can't decrypt this epoch. Cleared
+   * automatically when `current.root_epoch` advances past it (a later
+   * Refounding re-included me), so re-inclusion needs no explicit reset.
+   * Only the user's own Leave or the owner's Dissolve ever removes an icon.
+   */
+  excluded_at_epoch?: number;
   [k: string]: unknown;
 }
 
@@ -107,15 +116,33 @@ function earliest(a: JoinMaterial, b: JoinMaterial): JoinMaterial {
 }
 
 function mergeEntry(x: CommunityListEntry, y: CommunityListEntry): CommunityListEntry {
-  return {
+  const current = freshest(x.current, y.current);
+  // The higher exclusion epoch wins the merge, but an exclusion is only
+  // meaningful while it still bites the current epoch: once `current` advances
+  // past it (a later Refounding re-included me), it's stale and dropped.
+  const excludedAt = maxDefined(x.excluded_at_epoch, y.excluded_at_epoch);
+  const merged: CommunityListEntry = {
     ...x,
     ...y,
     community_id: x.community_id,
-    current: freshest(x.current, y.current),
+    current,
     seed: earliest(x.seed, y.seed),
     // The newest add wins liveness races against a tombstone, so keep the max.
     added_at: Math.max(x.added_at, y.added_at),
   };
+  if (excludedAt !== undefined && excludedAt >= current.root_epoch) {
+    merged.excluded_at_epoch = excludedAt;
+  } else {
+    delete merged.excluded_at_epoch;
+  }
+  return merged;
+}
+
+/** The larger of two optional numbers, or undefined if neither is set. */
+function maxDefined(a: number | undefined, b: number | undefined): number | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return Math.max(a, b);
 }
 
 /**
@@ -156,6 +183,20 @@ export function liveEntries(list: CommunityList): CommunityListEntry[] {
   return list.entries.filter((e) => isLive(list, e.community_id));
 }
 
+/**
+ * Whether the member has been EXCLUDED at their current epoch — a kick/ban
+ * Refounding they got no key for. The community stays live and on the rail
+ * (only Leave/Dissolve remove an icon), but it renders read-only: the member
+ * can't decrypt this epoch. A later Refounding that re-includes them advances
+ * `current.root_epoch` past the marker, clearing it (see {@link mergeEntry}).
+ */
+export function isExcluded(entry: CommunityListEntry): boolean {
+  return (
+    typeof entry.excluded_at_epoch === "number" &&
+    entry.excluded_at_epoch >= entry.current.root_epoch
+  );
+}
+
 /** Add/refresh a membership. Pure. */
 export function addToList(list: CommunityList, entry: CommunityListEntry): CommunityList {
   return mergeCommunityLists(list, { entries: [entry], tombstones: [] });
@@ -164,6 +205,26 @@ export function addToList(list: CommunityList, entry: CommunityListEntry): Commu
 /** Tombstone a membership (leave/removed). Pure. */
 export function removeFromList(list: CommunityList, communityId: string, removedAt: number): CommunityList {
   return mergeCommunityLists(list, { entries: [], tombstones: [{ community_id: communityId, removed_at: removedAt }] });
+}
+
+/**
+ * Mark a membership EXCLUDED at `epoch` (a kick/ban Refounding I got no blob
+ * for). Unlike {@link removeFromList}, this NEVER hides the icon: being kicked
+ * is not the same as leaving. The entry stays live and read-only until either
+ * a later Refounding re-includes me (auto-clearing the marker) or I choose to
+ * leave. Idempotent — a lower/equal epoch never lowers the marker. Pure.
+ */
+export function markExcluded(list: CommunityList, communityId: string, epoch: number): CommunityList {
+  const idx = list.entries.findIndex((e) => e.community_id === communityId);
+  if (idx === -1) return list;
+  const entries = list.entries.map((e, i) => {
+    if (i !== idx) return e;
+    // Only bite while >= current epoch; a stale marker below `current` is moot.
+    if (epoch < e.current.root_epoch) return e;
+    const prior = typeof e.excluded_at_epoch === "number" ? e.excluded_at_epoch : -Infinity;
+    return { ...e, excluded_at_epoch: Math.max(prior, epoch) };
+  });
+  return { ...list, entries };
 }
 
 /**
@@ -182,9 +243,15 @@ export function removeFromList(list: CommunityList, communityId: string, removed
 export function refreshCurrent(list: CommunityList, current: JoinMaterial, addedAt = Date.now()): CommunityList {
   const idx = list.entries.findIndex((e) => e.community_id === current.community_id);
   if (idx === -1) return list;
-  const entries = list.entries.map((e, i) =>
-    i === idx ? { ...e, current, added_at: Math.max(e.added_at, addedAt) } : e,
-  );
+  const entries = list.entries.map((e, i) => {
+    if (i !== idx) return e;
+    const next: CommunityListEntry = { ...e, current, added_at: Math.max(e.added_at, addedAt) };
+    // Adopting a fresh epoch is re-inclusion: drop a now-stale exclusion marker.
+    if (typeof next.excluded_at_epoch === "number" && next.excluded_at_epoch < current.root_epoch) {
+      delete next.excluded_at_epoch;
+    }
+    return next;
+  });
   return { ...list, entries };
 }
 

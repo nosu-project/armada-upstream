@@ -50,6 +50,7 @@ vi.mock("@/concord-v1/hooks/useDecryptedCommunityImage", () => ({
 vi.mock("@/concord-v2/hooks/useCommunityList2", () => ({
   useCommunity2: () => undefined,
   useLiveCommunities2: () => [],
+  useIsExcluded2: () => false,
 }));
 vi.mock("@/concord-v2/hooks/useControlPlane2", () => ({
   useChannels2: () => [],

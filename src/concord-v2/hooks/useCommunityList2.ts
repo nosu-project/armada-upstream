@@ -9,7 +9,9 @@ import {
   addToList,
   assertListBounds,
   EMPTY_COMMUNITY_LIST,
+  isExcluded,
   liveEntries,
+  markExcluded,
   mergeCommunityLists,
   refreshCurrent,
   rehydrateCommunity,
@@ -177,6 +179,7 @@ export function useCommunityList2() {
 export type CommunityListAction =
   | { type: "add"; entry: CommunityListEntry }
   | { type: "remove"; communityId: string; removedAt?: number }
+  | { type: "exclude"; communityId: string; epoch: number }
   | { type: "refresh-current"; current: JoinMaterial };
 
 function applyAction(list: CommunityList, action: CommunityListAction): CommunityList {
@@ -185,6 +188,8 @@ function applyAction(list: CommunityList, action: CommunityListAction): Communit
       return addToList(list, action.entry);
     case "remove":
       return removeFromList(list, action.communityId, action.removedAt ?? Date.now());
+    case "exclude":
+      return markExcluded(list, action.communityId, action.epoch);
     case "refresh-current":
       return refreshCurrent(list, action.current);
   }
@@ -274,4 +279,14 @@ export function useCommunity2(idHex: string | undefined): CommunityV2 | undefine
 export function useCommunityEntry2(idHex: string | undefined): CommunityListEntry | undefined {
   const { data } = useCommunityList2();
   return useMemo(() => data?.list.entries.find((e) => e.community_id === idHex), [data, idHex]);
+}
+
+/**
+ * Whether I've been EXCLUDED (kicked/banned) from this community at its current
+ * epoch — the icon stays, but the community is read-only until a Refounding
+ * re-includes me or I leave.
+ */
+export function useIsExcluded2(idHex: string | undefined): boolean {
+  const entry = useCommunityEntry2(idHex);
+  return useMemo(() => (entry ? isExcluded(entry) : false), [entry]);
 }

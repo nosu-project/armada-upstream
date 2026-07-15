@@ -1,21 +1,20 @@
 /**
- * Regression: a Concord V2 community the user is STILL a member of disappears
- * from the rail permanently once a rekey adoption and an old removal tombstone
- * meet in the merge.
+ * Liveness regressions for the Concord V2 Community List.
  *
- * `refreshCurrent` (the rekey-adoption write) replaces `current` but does NOT
- * bump `added_at` — it keeps the original join time. Liveness is decided by
- * `isLive`: `entry.added_at > tomb.removed_at`. So if ANY tombstone exists with
- * a `removed_at` later than the original `added_at` — e.g. a transient
- * kick/refound round on another device, or a stale removal the member has since
- * recovered from by adopting a newer epoch — the adopted-and-kept entry is
- * judged dead forever, even though the member currently holds a valid current
- * epoch key.
+ * Two rules under test:
  *
- * A rekey adoption is proof of CURRENT membership; it must win liveness over an
- * older removal, exactly like a re-join does (addToList bumps added_at). Because
- * it doesn't, the community vanishes and — since the tombstone is permanent and
- * the merge is deterministic across devices — stays gone until a real re-join.
+ *  1. A rekey/Refounding adoption (`refreshCurrent`) is proof of CURRENT
+ *     membership, so it must win liveness over an older removal tombstone —
+ *     exactly like a re-join does. `refreshCurrent` bumps `added_at` for this;
+ *     without it, a member who leaves (tombstone) then re-joins and adopts a
+ *     newer epoch would be judged dead forever, since the merge is
+ *     deterministic and tombstones are permanent.
+ *
+ *  2. Being KICKED/BANNED is not the same as leaving: it must NEVER remove the
+ *     icon. The rekey watcher marks the entry read-only (`markExcluded`)
+ *     instead of tombstoning it, so the community stays live and on the rail
+ *     until the user chooses to leave (or a later Refounding re-includes them,
+ *     which clears the marker). Only a real Leave / owner Dissolve tombstones.
  */
 
 import { describe, expect, it } from "vitest";
@@ -23,8 +22,10 @@ import { describe, expect, it } from "vitest";
 import {
   addToList,
   EMPTY_COMMUNITY_LIST,
+  isExcluded,
   isLive,
   liveEntries,
+  markExcluded,
   mergeCommunityLists,
   refreshCurrent,
   removeFromList,
@@ -52,29 +53,28 @@ function entryOf(material: JoinMaterial, addedAt: number): CommunityListEntry {
 }
 
 describe("rekey adoption vs. an older removal tombstone", () => {
-  it("re-included after an exclusion: adoption must resurrect (single-device, rekey-watcher only)", () => {
-    // The exact sequence the rekey watcher can produce on ONE device:
-    //  1. join at t=1000
-    //  2. refound epoch 1 EXCLUDES the member → watcher writes a `remove`
-    //     tombstone at removed_at=2000 (useRekey2.ts:212).
-    //  3. the owner refounds AGAIN at epoch 2 and RE-INCLUDES the member →
-    //     watcher adopts and writes `refresh-current` (useRekey2.ts:200), which
-    //     keeps added_at=1000.
-    // The member now holds the epoch-2 key (definitively a current member),
-    // but isLive compares added_at(1000) > removed_at(2000) → false. Gone.
+  it("re-included after a leave/removal tombstone: adoption must resurrect", () => {
+    // A tombstone now comes ONLY from a real Leave or the owner's Dissolve
+    // (the rekey watcher no longer tombstones — see the exclusion suite below).
+    // But a resurrection can still legitimately need to beat one: the member
+    //  1. joins at t=1000
+    //  2. leaves at removed_at=2000 (tombstone)
+    //  3. is re-invited and adopts epoch 2 via refresh-current, which keeps
+    //     added_at=1000 unless bumped.
+    // Holding the epoch-2 key proves current membership, so it must win.
     const seed = jm({ root_epoch: 0 });
     const cid = seed.community_id;
 
     let list = addToList(EMPTY_COMMUNITY_LIST, entryOf(seed, 1000));
-    list = removeFromList(list, cid, 2000); // excluded in the first refound
+    list = removeFromList(list, cid, 2000); // left
     expect(isLive(list, cid)).toBe(false);
 
-    // Re-included: the watcher adopts epoch 2 via refresh-current.
+    // Re-included: adopt epoch 2 via refresh-current.
     const epoch2 = jm({ ...seed, root_epoch: 2, community_root: bytesToHex(random32()) });
     list = refreshCurrent(list, epoch2);
     expect(list.entries[0].current.root_epoch).toBe(2); // key adopted
 
-    // Holding the current key proves membership — must be live. It isn't.
+    // Holding the current key proves membership — must be live.
     expect(isLive(list, cid)).toBe(true);
   });
 
@@ -90,9 +90,9 @@ describe("rekey adoption vs. an older removal tombstone", () => {
     expect(deviceA.entries[0].current.root_epoch).toBe(1);
     expect(isLive(deviceA, cid)).toBe(true);
 
-    // Device B saw a transient removal at t=2000 (e.g. a mid-refound race /
-    // brief exclusion the member has since recovered from by adopting epoch 1
-    // on device A). The tombstone is permanent.
+    // Device B saw a transient removal at t=2000 (a stale Leave the member has
+    // since undone by re-joining/adopting epoch 1 on device A). The tombstone
+    // is permanent.
     const deviceB = removeFromList(addToList(EMPTY_COMMUNITY_LIST, entryOf(seed, 1000)), cid, 2000);
     expect(isLive(deviceB, cid)).toBe(false);
 
@@ -104,5 +104,69 @@ describe("rekey adoption vs. an older removal tombstone", () => {
     // (2000), so the adopted entry is judged dead and the community vanishes.
     expect(liveEntries(merged).map((e) => e.current.name)).toContain("Fleet");
     expect(isLive(merged, cid)).toBe(true);
+  });
+});
+
+describe("exclusion (kick/ban) never removes the icon — read-only, not gone", () => {
+  it("markExcluded keeps the community LIVE but flags it read-only", () => {
+    const seed = jm({ root_epoch: 0 });
+    const cid = seed.community_id;
+    let list = addToList(EMPTY_COMMUNITY_LIST, entryOf(seed, 1000));
+
+    // Kicked at epoch 1 (a Refounding I got no key for). The watcher used to
+    // tombstone here, vanishing the icon; now it only marks exclusion.
+    list = markExcluded(list, cid, 1);
+
+    // Still live (still on the rail), but read-only.
+    expect(isLive(list, cid)).toBe(true);
+    expect(liveEntries(list).map((e) => e.current.name)).toContain("Fleet");
+    expect(isExcluded(list.entries[0])).toBe(true);
+  });
+
+  it("adopting a later epoch (re-inclusion) clears the exclusion", () => {
+    const seed = jm({ root_epoch: 0 });
+    const cid = seed.community_id;
+    let list = addToList(EMPTY_COMMUNITY_LIST, entryOf(seed, 1000));
+    list = markExcluded(list, cid, 1);
+    expect(isExcluded(list.entries[0])).toBe(true);
+
+    // A later Refounding re-includes me at epoch 2 → adopt it.
+    const epoch2 = jm({ ...seed, root_epoch: 2, community_root: bytesToHex(random32()) });
+    list = refreshCurrent(list, epoch2);
+
+    expect(list.entries[0].current.root_epoch).toBe(2);
+    expect(isExcluded(list.entries[0])).toBe(false); // marker cleared
+    expect(isLive(list, cid)).toBe(true);
+  });
+
+  it("the exclusion marker merges deterministically and stays cleared once superseded", () => {
+    const seed = jm({ root_epoch: 0 });
+    const cid = seed.community_id;
+
+    // Device A: kicked at epoch 1, still read-only.
+    const deviceA = markExcluded(addToList(EMPTY_COMMUNITY_LIST, entryOf(seed, 1000)), cid, 1);
+    expect(isExcluded(deviceA.entries[0])).toBe(true);
+
+    // Device B: re-included, adopted epoch 2.
+    const epoch2 = jm({ ...seed, root_epoch: 2, community_root: bytesToHex(random32()) });
+    const deviceB = refreshCurrent(addToList(EMPTY_COMMUNITY_LIST, entryOf(seed, 1000)), epoch2);
+
+    // Merge either way: current is epoch 2, so the epoch-1 exclusion is stale.
+    const merged1 = mergeCommunityLists(deviceA, deviceB);
+    const merged2 = mergeCommunityLists(deviceB, deviceA);
+    expect(merged1.entries[0].current.root_epoch).toBe(2);
+    expect(isExcluded(merged1.entries[0])).toBe(false);
+    expect(isExcluded(merged2.entries[0])).toBe(false);
+    expect(isLive(merged1, cid)).toBe(true);
+  });
+
+  it("a stale exclusion below the current epoch never bites", () => {
+    const seed = jm({ root_epoch: 3 });
+    const cid = seed.community_id;
+    let list = addToList(EMPTY_COMMUNITY_LIST, entryOf(seed, 1000));
+    // A late-arriving exclusion for an OLD epoch I've already moved past.
+    list = markExcluded(list, cid, 1);
+    expect(isExcluded(list.entries[0])).toBe(false);
+    expect(isLive(list, cid)).toBe(true);
   });
 });

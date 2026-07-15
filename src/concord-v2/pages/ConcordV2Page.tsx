@@ -48,7 +48,7 @@ import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
-import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
+import { useCommunity2, useIsExcluded2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
@@ -700,6 +700,10 @@ export function ConcordV2Page() {
 
   // React to base-rekey rotations (adopt the new epoch, or discover removal).
   useRekeyWatch2(baseCommunity);
+
+  // Kicked/banned: the community stays on the rail but goes read-only (the
+  // composer is swapped for a banner). Cleared automatically if re-included.
+  const excluded = useIsExcluded2(communityId);
 
   const [channelIdHex, setChannelIdHex] = useState<string | null>(routeChannelId ?? null);
   useEffect(() => {
@@ -1762,6 +1766,26 @@ export function ConcordV2Page() {
                         onClick={handleLeave}
                       >
                         {isLeaving ? <Loader2 className="size-4 animate-spin" /> : "Remove"}
+                      </Button>
+                    </div>
+                  ) : excluded ? (
+                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 border border-border flex items-center gap-3">
+                      <Lock className="size-5 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1 text-sm">
+                        <p className="font-medium">You no longer have access to this community.</p>
+                        <p className="text-muted-foreground">
+                          A moderator rotated its keys without you. Your history stays readable; new
+                          messages won't. It reappears if you're re-invited — or you can leave.
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 clip-corner-lg"
+                        disabled={isLeaving}
+                        onClick={handleLeave}
+                      >
+                        {isLeaving ? <Loader2 className="size-4 animate-spin" /> : "Leave"}
                       </Button>
                     </div>
                   ) : (

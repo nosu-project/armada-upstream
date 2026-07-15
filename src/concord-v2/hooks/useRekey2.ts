@@ -49,11 +49,13 @@ const ZERO_SCOPE = new Uint8Array(32);
  *     adopt the new root (retaining the prior for history) and record the
  *     refounder as the new epoch's snapshot authority;
  *   - a complete rotation with NO blob for me across ALL chunks, published
- *     at/after I joined → I've been removed; the membership entry is
- *     tombstoned. A missing chunk is never a removal — the watcher just keeps
- *     refetching. Neither is a complete rotation that predates my join: it is
- *     community history I was never part of (a stale public invite drops me
- *     ONTO a past Refounding), so its lack of a blob for me means nothing.
+ *     at/after I joined → I've been excluded (kicked/banned): the membership is
+ *     marked read-only at that epoch but STAYS on the rail. Only the user's own
+ *     Leave or the owner's Dissolve ever removes an icon. A missing chunk is
+ *     never an exclusion — the watcher just keeps refetching. Neither is a
+ *     complete rotation that predates my join: it is community history I was
+ *     never part of (a stale public invite drops me ONTO a past Refounding),
+ *     so its lack of a blob for me means nothing.
  */
 export function useRekeyWatch2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
@@ -233,13 +235,18 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
 
       // Every chunk of at least one complete rotation held, none carries my
       // locator, AND that rotation was published at/after I joined → I've been
-      // excluded. Tombstone the membership (the UI reflects it). A rotation that
-      // entirely predates my join is community history, not a removal.
+      // excluded (kicked/banned). Being excluded is NOT leaving: mark the entry
+      // read-only at this epoch but KEEP it on the rail. It disappears only if
+      // the user chooses to leave or the owner dissolves. A later Refounding
+      // that re-includes me (adoption above) clears the marker. A rotation that
+      // entirely predates my join is community history, not an exclusion.
       if (sawExcludingRotation) {
         handled.current.add(key);
-        await updateList({ type: "remove", communityId: community.idHex }).catch(() =>
-          handled.current.delete(key),
-        );
+        await updateList({
+          type: "exclude",
+          communityId: community.idHex,
+          epoch: Number(nextEpoch),
+        }).catch(() => handled.current.delete(key));
         queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });
       }
     })();

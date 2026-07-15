@@ -1,4 +1,4 @@
-import { Bluetooth, FolderOpen, Headphones, MessageSquare, Plus, Settings } from "lucide-react";
+import { Bluetooth, FolderOpen, Headphones, Lock, MessageSquare, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
@@ -30,7 +30,7 @@ import { useConcord1Unread } from "@/concord-v1/hooks/useConcord1Unread";
 import { useConcordMetadata } from "@/concord-v1/hooks/useConcordMetadata";
 import { useCommunityImageDescriptors } from "@/concord-v1/hooks/useCommunityImageDescriptors";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
-import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
+import { useCommunity2, useIsExcluded2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useConcord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
@@ -777,6 +777,9 @@ function Concord2Button({
   // REQ per relay for every community on pageload — the community's page
   // (active=true) syncs it on navigation, sharing this query key.
   const { data: folded } = useControlFold2(community, false);
+  // Kicked/banned: the icon STAYS (only Leave/Dissolve remove it), but we mark
+  // it so the user isn't left wondering why the room went read-only.
+  const excluded = useIsExcluded2(communityId);
   const displayName = folded?.metadata?.name || name;
   const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
   const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
@@ -852,6 +855,16 @@ function Concord2Button({
                       <span className="text-sm font-semibold">{initials}</span>
                     )}
                   </span>
+                  {/* Excluded (kicked/banned): a lock badge; the icon stays put
+                      until the user leaves or is re-included by a Refounding. */}
+                  {excluded ? (
+                    <span
+                      className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-muted text-muted-foreground ring-2 ring-background"
+                      aria-label="You no longer have access to this community"
+                    >
+                      <Lock className="size-2.5" />
+                    </span>
+                  ) : null}
                   {/* Unread / mention indicator (hidden while active — you're reading it). */}
                   {!isActive && anyMention ? (
                     <span
@@ -875,6 +888,7 @@ function Concord2Button({
         </TooltipTrigger>
         <RailTooltipContent side="right" className="font-medium">
           {displayName}
+          {excluded ? <span className="ml-1 font-normal text-muted-foreground">· no access</span> : null}
         </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
