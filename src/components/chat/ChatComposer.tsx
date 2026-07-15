@@ -56,7 +56,7 @@ import { encryptFileForUpload } from "@/lib/encryptedMedia";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
-import { botTag, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
+import { invocationTags, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
@@ -282,7 +282,7 @@ interface ChatComposerProps {
    */
   encryptAttachments?: boolean;
   /**
-   * Whether this conversation may offer bot commands.
+   * Whether this conversation may offer bot commands to a roster of bots.
    *
    * Off by default, and deliberately a decision the surface makes rather than
    * something inferred: an invocation carries a `["bot", <pubkey>]` routing tag,
@@ -290,9 +290,21 @@ interface ChatComposerProps {
    * inside the encrypted rumor) or where nothing is hidden anyway (a public
    * NIP-29 group). It must stay OFF for NIP-04 direct messages, whose tags are
    * plaintext on the wire: a routing tag there would publish "this pubkey is
-   * commanding that bot" to every relay carrying the conversation.
+   * commanding that bot" to every relay carrying the conversation. For a 1:1 DM
+   * with a single bot, use {@link botDmPeer} instead, which routes by recipient
+   * and emits no tag at all.
    */
   botCommands?: boolean;
+  /**
+   * The counterparty of a 1:1 DM, when that counterparty is (or may be) a bot.
+   *
+   * Enables the `/` picker for that one bot's commands and — because a DM's sole
+   * recipient IS the bot — sends the invocation as plain content with NO routing
+   * tag. That makes it transport-agnostic and leak-free: nothing bot-specific
+   * ever reaches a tag, so it is safe even on legacy kind-4 (only the encrypted
+   * content carries the command). Non-bot peers simply contribute no commands.
+   */
+  botDmPeer?: string;
   /**
    * Members who have spoken in this conversation, most recent first — used to
    * rank a bot command's `user`-argument picker. NIP-29 groups can leave this
@@ -321,7 +333,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, recentAuthors, conversationRelays }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -377,9 +389,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   // ── Bot commands ─────────────────────────────────────────────────────────
   // The bots in this conversation publish their command catalogs as replaceable
-  // kind-10304 manifests. Gated on the `botCommands` opt-in, never inferred from
-  // the roster: a surface that gains a member list must not thereby gain the
-  // right to put a routing tag on a transport that cannot hide it.
+  // kind-10304 manifests. Gated on an explicit opt-in (`botCommands` for a room,
+  // `botDmPeer` for a 1:1), never inferred from the roster: a surface that gains
+  // a member list must not thereby gain the right to put a routing tag on a
+  // transport that cannot hide it. A DM emits no routing tag at all.
   /** The command whose arguments are being collected, if any. */
   const [botCommand, setBotCommand] = useState<BotCommandEntry | null>(null);
   /** The bot the user picked from, so a name two bots share still routes correctly. */
@@ -390,12 +403,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     () => conversationRelays ?? (isDM ? undefined : [relayUrl]),
     [conversationRelays, isDM, relayUrl],
   );
+  // A DM offers exactly its counterparty's commands; a room offers its roster's.
+  const botRoster = useMemo(
+    () => (botDmPeer ? [botDmPeer] : memberPubkeys),
+    [botDmPeer, memberPubkeys],
+  );
+  const botCommandsEnabled = botCommands || botDmPeer !== undefined;
   const {
     entries: botEntries,
     bots: botPubkeys,
     profiles: botProfiles,
     isLoading: botsLoading,
-  } = useBotManifests(botCommands ? memberPubkeys : undefined, botRelays);
+  } = useBotManifests(botCommandsEnabled ? botRoster : undefined, botRelays);
 
   // Members ranked by how recently they spoke, for a `user` argument's picker.
   // Caller-supplied when the timeline lives elsewhere (Concord); otherwise read
@@ -1059,12 +1078,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     void executeSlash(command, parsed?.command === command ? parsed.arg : "");
   }, [executeSlash]);
 
-  /** Send a bot invocation, addressed to the bot that declared the command. */
+  /**
+   * Send a bot invocation. In a room it carries a `["bot", <pubkey>]` routing
+   * tag so the right bot answers; in a 1:1 DM the recipient IS the bot, so it
+   * sends as plain content with no tag (nothing bot-specific ever hits a tag).
+   */
   const sendInvocation = useCallback(async (bot: string, name: string, text: string) => {
     rememberBotCommand(bot, name);
     armedBotRef.current = undefined;
-    await publishMessage(text, [botTag(bot)]);
-  }, [publishMessage, rememberBotCommand]);
+    await publishMessage(text, invocationTags(bot, { dm: botDmPeer !== undefined }));
+  }, [publishMessage, rememberBotCommand, botDmPeer]);
 
   /** Pick a bot's command from the `/` menu. */
   const runBotFromMenu = useCallback((entry: BotCommandEntry) => {

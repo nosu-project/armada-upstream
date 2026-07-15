@@ -340,11 +340,11 @@ Two implementations interoperate. They share no code and are written in differen
 
 **[Vector](https://vectorapp.io)** (Rust) is the reference implementation, covering both ends: the wire layer in `vector-core` (`bot_interface.rs`), a bot SDK that generates and publishes a manifest from a bot's declared command handlers and dispatches incoming invocations back to them, and a client `/` command picker. Commands run unchanged over NIP-17 direct messages and over encrypted group channels.
 
-**[Armada](https://gitlab.com/soapbox-pub/armada)** (TypeScript) is an independent client implementation: manifest validation, bot discovery from `kind:0`, a `/` picker with guided per-argument entry, local type-checking, and invocation over an encrypted group transport and a public one.
+**[Armada](https://gitlab.com/soapbox-pub/armada)** (TypeScript) is an independent client implementation: manifest validation, bot discovery from `kind:0`, a `/` picker with guided per-argument entry, local type-checking, and invocation over an encrypted group transport, a NIP-17 direct message, and a public one.
 
 A bot built on Vector's SDK is discovered, rendered, argument-checked and invoked by Armada with no shared code between the two, over a transport neither one special-cases, and answers. That is the property this NIP exists to make possible.
 
-Armada deliberately offers no bot commands over NIP-04 direct messages, whose tags are not encrypted. See [Security considerations](#security-considerations).
+In a 1:1 direct message the sole recipient IS the bot, so Armada sends the invocation with no `bot` tag: routing is unambiguous, and nothing bot-specific ever reaches a tag. It offers no bot commands over legacy NIP-04, whose tags are not encrypted anyway. See [Security considerations](#security-considerations).
 
 ## Appendix: provisional kind number
 

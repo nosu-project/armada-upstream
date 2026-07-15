@@ -345,6 +345,12 @@ export interface ChatMessageProps {
    * relay-addressable event id that doesn't exist for a rumor.
    */
   rumor?: unknown;
+  /**
+   * Command names a bot in this conversation declares. Lets an untagged `/cmd`
+   * with arguments render as an action line in a 1:1 DM (which sends
+   * invocations untagged), without ever promoting undeclared `/word` prose.
+   */
+  knownCommands?: ReadonlySet<string>;
 }
 
 /**
@@ -403,6 +409,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   mentionHighlight = true,
   nameBadge,
   rumor,
+  knownCommands,
 }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
@@ -413,8 +420,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // A command reads as an action ("JSKitty ran /greet with Concordia"), not as a
   // wall of raw arguments. The content still carries them for the bot.
   const invocation = useMemo(
-    () => commandLine(event.content, event.tags),
-    [event.content, event.tags],
+    () => commandLine(event.content, event.tags, knownCommands),
+    [event.content, event.tags, knownCommands],
   );
   // An inline reply renders a "replying to …" line above the body. The page
   // resolves it per-protocol (NIP-29 NIP-10 `e`, Concord NIP-C7 `q`) and passes

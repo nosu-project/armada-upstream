@@ -6,6 +6,7 @@ import {
   botTag,
   buildInvocationText,
   commandLine,
+  invocationTags,
   normalizeUser,
   parseBotManifest,
   parseInvocation,
@@ -559,6 +560,22 @@ describe("commandLine (how an invocation renders in the timeline)", () => {
     expect(commandLine("/PING", [])).toEqual({ name: "ping", bot: undefined });
     expect(commandLine("/Roll 20", tagged)).toEqual({ name: "roll", bot: BOT_A });
   });
+
+  // A 1:1 DM sends invocations untagged, so the timeline recognises them by the
+  // bot's declared command set instead of a tag.
+  const known = new Set(["announce", "roll"]);
+
+  it("promotes an untagged invocation with arguments when the bot declares it", () => {
+    expect(commandLine("/announce meow meowers", [], known)).toEqual({ name: "announce", bot: undefined });
+  });
+
+  it("folds the command word against the known set too", () => {
+    expect(commandLine("/Announce hello", [], known)).toEqual({ name: "announce", bot: undefined });
+  });
+
+  it("still hides nothing: an undeclared /word with prose stays text", () => {
+    expect(commandLine("/shrug I give up", [], known)).toBeUndefined();
+  });
 });
 
 describe("the bot routing tag", () => {
@@ -578,5 +595,20 @@ describe("the bot routing tag", () => {
   it("caps how many bots one message may address", () => {
     const tags = Array.from({ length: 12 }, (_, i) => botTag(String(i).repeat(64)));
     expect(addressedBots(tags)).toHaveLength(8);
+  });
+});
+
+describe("invocationTags (room vs 1:1 DM routing)", () => {
+  it("tags a room invocation with the chosen bot", () => {
+    expect(invocationTags(BOT_A)).toEqual([["bot", BOT_A]]);
+  });
+
+  it("sends a DM invocation untagged — the recipient IS the bot", () => {
+    expect(invocationTags(BOT_A, { dm: true })).toEqual([]);
+  });
+
+  it("round-trips: a room invocation reads back as addressed, a DM as broadcast", () => {
+    expect(addressedBots(invocationTags(BOT_A))).toEqual([BOT_A]);
+    expect(addressedBots(invocationTags(BOT_A, { dm: true }))).toEqual([]);
   });
 });

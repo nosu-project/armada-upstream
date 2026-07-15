@@ -200,6 +200,17 @@ export function botTag(pubkeyHex: string): string[] {
   return [BOT_TAG, pubkeyHex];
 }
 
+/**
+ * The tags that route an invocation to `botHex`. A room may hold several bots,
+ * so the invocation carries a `["bot", <hex>]` tag naming the one to answer. A
+ * 1:1 DM's sole recipient IS the bot, so it routes by recipient and carries no
+ * tag — nothing bot-specific ever reaches a tag, which keeps it leak-free even
+ * on transports that don't encrypt tags.
+ */
+export function invocationTags(botHex: string, opts?: { dm?: boolean }): string[][] {
+  return opts?.dm ? [] : [botTag(botHex)];
+}
+
 /** Hex pubkeys a message addresses. Empty ⇒ broadcast: any matching bot may answer. */
 export function addressedBots(tags: string[][]): string[] {
   const out: string[] = [];
@@ -222,23 +233,31 @@ export interface CommandLine {
 /**
  * Whether a message reads as "X ran /y with Z" rather than as its raw text.
  *
- * Only when it provably IS an invocation: either it addresses a bot, or it is a
- * bare `/command` with nothing after it. An untagged `/word` followed by prose
- * stays ordinary text, because a rendering rule must never be able to hide what
- * someone actually said — `/shrug I give up` is a sentence, not a command.
+ * Only when it provably IS an invocation: it addresses a bot, or it is a bare
+ * `/command` with nothing after it, or its command word is one `knownCommands`
+ * declares. An untagged `/word` followed by prose stays ordinary text, because
+ * a rendering rule must never be able to hide what someone actually said —
+ * `/shrug I give up` is a sentence, not a command (unless a bot here truly
+ * declares `shrug`, in which case it IS one). `knownCommands` is how a 1:1 DM,
+ * which sends invocations untagged, still recognises its bot's commands.
  *
  * The arguments are deliberately not returned. The raw content still carries
  * them for the bot; the timeline just does not need to shout them.
  */
-export function commandLine(content: string, tags: string[][]): CommandLine | undefined {
+export function commandLine(
+  content: string,
+  tags: string[][],
+  knownCommands?: ReadonlySet<string>,
+): CommandLine | undefined {
   const text = content.trim();
   // Case-insensitive, and folded, for the same reason the parser folds: `/PING`
   // is a valid invocation, so it must not send as one and then render as prose.
   const match = /^\/([A-Za-z0-9_-]{1,32})(\s|$)/.exec(text);
   if (!match) return undefined;
+  const name = match[1].toLowerCase();
   const bots = addressedBots(tags);
-  if (bots.length === 0 && text !== `/${match[1]}`) return undefined;
-  return { name: match[1].toLowerCase(), bot: bots[0] };
+  if (bots.length === 0 && text !== `/${match[1]}` && !knownCommands?.has(name)) return undefined;
+  return { name, bot: bots[0] };
 }
 
 // ── Tokenizer ────────────────────────────────────────────────────────────────
