@@ -1,7 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
-
 import { useDeferredFold } from "@/concord-v2/hooks/useDeferredFold2";
 import {
   controlGroups,
@@ -18,13 +17,13 @@ import { bytesToHex, dissolvedGroupKey, grantLocator, hex32 } from "@/concord-v2
 import type { AuthorityCitation } from "@/concord-v2/lib/edition";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
-import { queryByStreams, writeOpened, peekPendingWraps, ackPendingWraps } from "@/concord-v2/lib/rumorStore";
+import { queryByStreams, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { openWrap, type OpenedEvent, type Rumor, type StreamSigner } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { logSync } from "@/lib/syncLog";
 import { onWireScopes } from "@/wire/bus";
 
-import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
  * The persisted control-fold snapshot key for a community (see
@@ -33,16 +32,23 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
  */
 export const controlFoldKey = (idHex: string) => `concord2-fold:${idHex}`;
 
-/** The relay filter selecting a community's control plane across held epochs. */
-function controlFilter(community: CommunityV2, limit = 500): NostrFilter {
-  return { kinds: [KIND_WRAP], authors: controlGroups(community).map((g) => g.pk), limit };
-}
-
 /**
  * Fetch the community's Control Plane. Wraps are decrypted once into the
  * opened-event store; this query reads back from it with no decrypt. A
  * persisted `since` cursor means editions already seen are never refetched.
  * `active` gates the network fetch, not the local read.
+ *
+ * NETWORK OWNERSHIP: this hook holds no standing sockets and runs no poll.
+ * Live control editions arrive through the wire's standing `c2ctl`
+ * subscription (see wire/spec.ts + wire/ingest.ts), which decrypts them into
+ * the opened-event store and rings `c2ctl:<idHex>`; the seed effect below
+ * re-reads on that bus. The slow catch-up for communities you haven't opened is
+ * the global {@link syncControlPlane} sweep (ControlPlaneSync). The only
+ * network this hook itself issues is a SINGLE on-open catch-up sweep (shared,
+ * single-flight, cursor-gated via {@link sweepControl}) so navigating into a
+ * community surfaces anything the live sub missed while offline. The query's
+ * `queryFn` is a pure store read — it exists so react-query invalidation (e.g.
+ * after publishing an edition) re-folds from the store.
  */
 export function useControlEvents2(community: CommunityV2 | undefined, active = true) {
   const { nostr } = useNostr();
@@ -53,9 +59,9 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
   const queryKey = ["concord2", "control", cidHex, epochSig] as const;
 
   // Seed from the opened-event cache (paints rail icons without network).
-  // Re-seeds on the `c2ctl:<id>` wire bus when the background sweep stores
-  // new editions — a rail button with active=false can't be reached by
-  // invalidation, so the bus is its only wake-up.
+  // Re-seeds on the `c2ctl:<id>` wire bus when the wire's live subscription (or
+  // the background sweep) stores new editions — a rail button with active=false
+  // can't be reached by invalidation, so the bus is its only wake-up.
   useEffect(() => {
     if (!community) return;
     let cancelled = false;
@@ -84,61 +90,40 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cidHex, epochSig, queryClient]);
 
-  // Live subscription (open community only). Live events do NOT advance
-  // any cursor — cursors only advance from relay query results (issue #19).
+  // On-open catch-up: when the community becomes active (you navigate into it),
+  // run ONE control sweep so an edition published while the live wire sub was
+  // down — or since the last 5-min background sweep — surfaces promptly without
+  // waiting for the next global tick. This is the shared, single-flight,
+  // cursor-gated sweepControl (it coalesces with the background sweep and never
+  // re-pays history), NOT a standing socket. Runs once per community-open;
+  // liveness thereafter is the wire's `c2ctl` subscription. Freshly-opened
+  // events land in the store and wake the seed effect via `c2ctl:<id>`.
   useEffect(() => {
     if (!community || !active) return;
-    const controller = new AbortController();
-    const groups = controlGroups(community);
-    const since = Math.floor(Date.now() / 1000);
-    const { limit: _limit, ...base } = controlFilter(community);
-    const filter = { ...base, since };
-    for (const url of community.relays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req([filter], {
-            signal: controller.signal,
-          })) {
-            if (msg[0] === "EVENT") {
-              const opened = openPlaneWraps([msg[2] as NostrEvent], groups);
-              if (opened.length === 0) continue;
-              writeOpened(opened);
-              queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], opened));
-            }
-          }
-        } catch {
-          // Subscription ended — the poll covers gaps.
-        }
-      })();
-    }
-    return () => controller.abort();
+    let cancelled = false;
+    void sweepControl(nostr, community, {
+      onFresh: (fresh) => {
+        if (cancelled || fresh.length === 0) return;
+        queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], fresh));
+      },
+    }).catch(() => {
+      // Best-effort — the background sweep and live wire sub cover any miss.
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, cidHex, epochSig, active, queryClient]);
+  }, [nostr, cidHex, epochSig, active]);
 
   return useQuery<OpenedEvent[]>({
     queryKey,
     enabled: Boolean(community) && active,
     staleTime: 15_000,
-    // The live `req` is the primary path; this poll is a gap-filler.
-    refetchInterval: active ? 5 * 60_000 : false,
-    refetchIntervalInBackground: false,
     queryFn: async () => {
       const groups = controlGroups(community!);
-      // Drain wraps the native service parked (it can't decrypt).
-      const parked = await peekPendingWraps(groups.map((g) => g.pk));
-      if (parked.length > 0) {
-        const opened = openPlaneWraps(parked, groups);
-        writeOpened(opened);
-        // Only ack wraps that decoded; the rest stay parked for a retry.
-        const openedWrapIds = new Set(opened.map((o) => o.wrapId));
-        ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
-      }
-      // Fetch via the shared plane-sweep discipline (per-relay cursors,
-      // auth-gated, coalesced with the global sweep).
-      const fresh = await sweepControl(nostr, community!);
       const stored = await queryByStreams(groups.map((g) => g.pk));
       const prev = queryClient.getQueryData<OpenedEvent[]>(queryKey) ?? [];
-      return mergeOpened(prev, stored, fresh);
+      return mergeOpened(prev, stored);
     },
   });
 }

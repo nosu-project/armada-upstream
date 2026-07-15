@@ -11,7 +11,8 @@ import { openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView } from "@/concord-v2/lib/community";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { controlGroups } from "@/concord-v2/lib/control";
-import { ackPendingWraps, peekPendingWraps, writeRumors } from "@/concord-v2/lib/rumorStore";
+import { openPlaneWraps } from "@/concord-v2/lib/planeSync";
+import { ackPendingWraps, peekPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -559,23 +560,41 @@ export function WireSync() {
   }, []);
 
   // ── Parked-wrap drain: decrypt what the service left us, as keys appear ──
+  // Covers BOTH chat wraps (→ rumor store, `c2:` scope) and control-plane wraps
+  // (→ opened-event store, `c2ctl:` scope). The native service parks any wrap it
+  // can't open; the wire holds the keys, so it drains them here whenever the
+  // spec (hence the held key set) changes. useControlEvents2 no longer polls to
+  // drain parked control wraps — this is the single drain for both planes.
   useEffect(() => {
-    if (spec.v2ByPk.size === 0) return;
+    if (spec.v2ByPk.size === 0 && spec.v2CtlByPk.size === 0) return;
     let cancelled = false;
     void (async () => {
       try {
-        const parked = await peekPendingWraps([...spec.v2ByPk.keys()]);
+        const parked = await peekPendingWraps([...spec.v2ByPk.keys(), ...spec.v2CtlByPk.keys()]);
         if (parked.length === 0 || cancelled) return;
         const scopes = new Set<string>();
         const acked: string[] = [];
+
+        // Chat wraps → rumor store, grouped per owning channel.
         const byChannel = new Map<ChannelV2, NostrEvent[]>();
+        // Control wraps → opened-event store, grouped per owning community.
+        const ctlByCommunity = new Map<string, { groups: GroupKey[]; wraps: NostrEvent[] }>();
         for (const wrap of parked) {
           const channel = spec.v2ByPk.get(wrap.pubkey);
-          if (!channel) continue;
-          const list = byChannel.get(channel);
-          if (list) list.push(wrap);
-          else byChannel.set(channel, [wrap]);
+          if (channel) {
+            const list = byChannel.get(channel);
+            if (list) list.push(wrap);
+            else byChannel.set(channel, [wrap]);
+            continue;
+          }
+          const ctl = spec.v2CtlByPk.get(wrap.pubkey);
+          if (ctl) {
+            const bucket = ctlByCommunity.get(ctl.idHex);
+            if (bucket) bucket.wraps.push(wrap);
+            else ctlByCommunity.set(ctl.idHex, { groups: ctl.groups, wraps: [wrap] });
+          }
         }
+
         for (const [channel, wraps] of byChannel) {
           const opened = await openChatBatch(wraps, channel);
           if (opened.length === 0) continue;
@@ -584,6 +603,16 @@ export function WireSync() {
           const openedWrapIds = new Set(opened.map((o) => o.wrapId));
           acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
         }
+
+        for (const [idHex, { groups, wraps }] of ctlByCommunity) {
+          const opened = openPlaneWraps(wraps, groups);
+          if (opened.length === 0) continue;
+          await writeOpened(opened);
+          scopes.add(`c2ctl:${idHex}`);
+          const openedWrapIds = new Set(opened.map((o) => o.wrapId));
+          acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
+        }
+
         ackPendingWraps(acked);
         if (scopes.size > 0) emitWireScopes(scopes);
       } catch {
