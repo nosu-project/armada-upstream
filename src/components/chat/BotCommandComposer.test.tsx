@@ -108,7 +108,7 @@ describe("BotCommandComposer", () => {
   it("offers a choice argument's values rather than making the user recall them", () => {
     const { onSubmit } = mount("react");
     const emoji = screen.getByLabelText("emoji");
-    fireEvent.pointerDown(emoji);
+    // The only field is a choice, so its menu is already open on mount.
     // An optional choice can also simply be skipped.
     expect(screen.getByText("(skip)")).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByText("🔥"));
@@ -124,8 +124,7 @@ describe("BotCommandComposer", () => {
     // The field shows the name; the wire carries the canonical npub.
     expect(who).toHaveValue("Alice");
 
-    const style = screen.getByLabelText("style");
-    fireEvent.pointerDown(style);
+    // Picking a member advances to `style` and opens its menu automatically.
     fireEvent.pointerDown(screen.getByText("pirate"));
 
     fireEvent.keyDown(screen.getByLabelText("times"), { key: "Enter" });
@@ -185,6 +184,25 @@ describe("BotCommandComposer", () => {
       .map((b) => names.find((n) => b.textContent?.includes(n)))
       .filter((n): n is string => Boolean(n));
     expect(order).toEqual(["Charlie", "Alpha", "Bravo"]);
+  });
+
+  it("opens a choice's menu when you advance into it from the previous field", () => {
+    // `/calc <a:number> <op:choice> <b:number>` — advancing off `a` should land
+    // inside `op`'s dropdown, not on a closed trigger.
+    mount("calc");
+    expect(screen.queryByText("add")).not.toBeInTheDocument(); // op closed at first
+    const a = screen.getByLabelText("a");
+    fireEvent.change(a, { target: { value: "3" } });
+    fireEvent.keyDown(a, { key: "Enter" }); // advance to op
+    expect(screen.getByText("add")).toBeInTheDocument();
+    expect(screen.getByText("mul")).toBeInTheDocument();
+  });
+
+  it("opens the first field's menu on mount when it is a selector", () => {
+    // `/react [emoji:choice]` — the only field is a choice, so its options show
+    // immediately rather than making the user click the trigger first.
+    mount("react");
+    expect(screen.getByText("🔥")).toBeInTheDocument();
   });
 
   it("abandons the command on Escape", () => {

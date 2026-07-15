@@ -59,6 +59,9 @@ function orderByRecency(pubkeys: string[], recent: string[]): string[] {
   return [...pubkeys].sort((a, b) => (rank.get(a) ?? absent) - (rank.get(b) ?? absent));
 }
 
+/** Argument types whose field carries a drop-up, so landing on it should open it. */
+const MENU_TYPES = new Set<string>(["choice", "bool", "user"]);
+
 /**
  * Collects a bot command's arguments in typed fields instead of making the user
  * type a command line.
@@ -96,6 +99,13 @@ export function BotCommandComposer({
 
   useEffect(() => {
     fieldRefs.current[0]?.focus();
+    // If the first argument is itself a selector, open it on mount too.
+    const type = args[0]?.type;
+    if (type && MENU_TYPES.has(type)) {
+      setMenuFor(0);
+      setMenuIndex(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setValue = useCallback((i: number, value: string) => {
@@ -111,7 +121,14 @@ export function BotCommandComposer({
       const pos = caret === "end" ? el.value.length : 0;
       el.setSelectionRange(pos, pos);
     }
-  }, []);
+    // Moving onto a field that has a drop-up opens it, so finishing one argument
+    // lands you inside the next one's picker rather than on a closed trigger.
+    const type = args[i]?.type;
+    if (type && MENU_TYPES.has(type)) {
+      setMenuFor(i);
+      setMenuIndex(0);
+    }
+  }, [args]);
 
   /** Options for a field's drop-up, or none when the field has no menu. */
   const optionsFor = useCallback(
