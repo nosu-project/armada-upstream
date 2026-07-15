@@ -1501,7 +1501,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       : <Plus className={cn("size-5 transition-transform", plusOpen && "rotate-45")} />}
                   </button>
                 </PopoverTrigger>
-                <PopoverContent side="top" align="start" sideOffset={8} className="w-44 p-1.5 rounded-xl border-border shadow-lg">
+                <PopoverContent
+                  side="top"
+                  align="start"
+                  sideOffset={8}
+                  // Don't yank focus back to the "+" trigger on close — items that
+                  // redirect focus (Poll, Commands) set it themselves, and the
+                  // default restore would clobber the textarea they just focused.
+                  onCloseAutoFocus={(e) => e.preventDefault()}
+                  className="w-44 p-1.5 rounded-xl border-border shadow-lg"
+                >
                   <div className="flex flex-col gap-0.5">
                     <button
                       type="button"
