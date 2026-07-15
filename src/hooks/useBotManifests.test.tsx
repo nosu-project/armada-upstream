@@ -24,15 +24,20 @@ const COMMUNITY_RELAY = "wss://community.example";
 // kind-10304 manifests for `nostr.group(relays).query`. A test seeds them and
 // the hook reads them back, exactly as it would from a real relay.
 const h = vi.hoisted(() => ({
-  pool: [] as NostrEvent[],
+  pool: [] as NostrEvent[], // what the network relays serve
+  cache: [] as NostrEvent[], // what the local event store holds
   capturedManifestRelays: [] as string[],
 }));
 
+// A deliberately sloppy relay: it honours the AUTHOR filter but returns every
+// kind it holds for those authors, ignoring the `kinds` filter — which real
+// relays are supposed to respect but a hostile or buggy one need not. That is
+// exactly the condition the hook's own kind filtering defends against, so the
+// mock must not do the filtering for it.
 function match(filters: { kinds?: number[]; authors?: string[] }[]): NostrEvent[] {
   const out: NostrEvent[] = [];
   for (const f of filters) {
     for (const ev of h.pool) {
-      if (f.kinds && !f.kinds.includes(ev.kind)) continue;
       if (f.authors && !f.authors.includes(ev.pubkey)) continue;
       out.push(ev);
     }
@@ -43,9 +48,7 @@ function match(filters: { kinds?: number[]; authors?: string[] }[]): NostrEvent[
 vi.mock("@nostrify/react", () => ({
   useNostr: () => ({
     nostr: {
-      // kind-0 sweep goes through the plain pool.
-      query: async (filters: { kinds?: number[]; authors?: string[] }[]) => match(filters),
-      // manifest fetch goes through an explicit relay set — capture it.
+      // Both sweeps go through an explicit relay set — capture it.
       group: (relays: string[]) => {
         h.capturedManifestRelays = relays;
         return { query: async (filters: { kinds?: number[]; authors?: string[] }[]) => match(filters) };
@@ -56,6 +59,21 @@ vi.mock("@nostrify/react", () => ({
 
 vi.mock("@/hooks/useAppContext", () => ({
   useAppContext: () => ({ config: { appRelays: ["wss://app.example"] } }),
+}));
+
+// The local event store: filters by author, ignores kind (same dumb-store shape).
+vi.mock("@/hooks/useEventStore", () => ({
+  useEventStore: () =>
+    Promise.resolve({
+      query: async (filters: { authors?: string[] }[]) => {
+        const out: NostrEvent[] = [];
+        for (const f of filters) for (const ev of h.cache) {
+          if (f.authors && !f.authors.includes(ev.pubkey)) continue;
+          out.push(ev);
+        }
+        return out;
+      },
+    }),
 }));
 
 let seq = 1000;
@@ -79,6 +97,7 @@ function render(members: string[] | undefined, relays?: string[]) {
 
 beforeEach(() => {
   h.pool = [];
+  h.cache = [];
   h.capturedManifestRelays = [];
 });
 
@@ -95,6 +114,20 @@ describe("useBotManifests", () => {
     expect(result.current.bots).toEqual([BOT_A]); // the human is not a bot
     expect(result.current.entries.map((e) => e.command.name)).toEqual(["ping", "roll"]);
     expect(result.current.entries.every((e) => e.bot === BOT_A)).toBe(true);
+  });
+
+  it("detects a bot the network won't serve but the local cache holds", async () => {
+    // The real regression: a member's Bot pill renders from the cached kind-0,
+    // but a fresh relay query returns nothing (slow, auth-gated, or the profile
+    // only ever lived on a relay the pool doesn't cover). Detection must agree
+    // with the pill, so the cache is read too. The manifest still comes over the
+    // network here, proving the two sources compose.
+    h.cache = [kind0(BOT_A, { bot: true, name: "Alice" })];
+    h.pool = [manifest(BOT_A, [{ name: "ping" }])];
+    const { result } = render([BOT_A]);
+    await waitFor(() => expect(result.current.entries.length).toBe(1));
+    expect(result.current.bots).toEqual([BOT_A]);
+    expect(result.current.entries[0].command.name).toBe("ping");
   });
 
   it("surfaces member profiles as a by-product, for the user-arg picker", async () => {

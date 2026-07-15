@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
+import { useEventStore } from "@/hooks/useEventStore";
 import { BOT_MANIFEST_KIND, parseBotManifest, type BotCommandEntry } from "@/lib/botCommands";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -116,6 +117,7 @@ export function useBotManifests(
 ): BotManifestsResult {
   const { nostr } = useNostr();
   const { config } = useAppContext();
+  const eventStore = useEventStore();
 
   // Sorted + joined so the query key is stable under member-list reordering, and
   // changes the moment the participant set actually changes.
@@ -125,16 +127,33 @@ export function useBotManifests(
   );
   const membersKey = members.join(",");
 
+  // Both sweeps search the same union: the conversation's own relays (a Concord
+  // bot's profile AND manifest live on its community relay), the app relays, and
+  // the public indexers. Bot detection has to look where the bot actually is —
+  // querying only the pool misses a bot whose kind-0 never reached it, even
+  // though its member row shows a Bot pill (the pill reads the local cache,
+  // filled from the community relay on join).
+  const relays = useMemo(
+    () =>
+      [...new Set([...(conversationRelays ?? []), ...config.appRelays, ...BOT_DISCOVERY_RELAYS])].sort(),
+    [conversationRelays, config.appRelays],
+  );
+  const relayKey = relays.join(",");
+
   const botsQuery = useQuery({
-    queryKey: ["bot-flags", membersKey],
+    queryKey: ["bot-flags", membersKey, relayKey],
     queryFn: async ({ signal }) => {
       const asked = new Set(members);
-      const events = await queryChunked(
-        (filters, opts) => nostr.query(filters, opts),
-        [0],
-        members,
-        signal,
-      );
+      // Merge the local cache with the network. The cache is what a member's Bot
+      // pill already reads (via useAuthor), so reading it here makes detection
+      // agree with what the user sees, even when a fresh relay query is slow,
+      // auth-gated, or simply lacks a profile the client synced on join.
+      const store = await eventStore;
+      const [cached, network] = await Promise.all([
+        store.query([{ kinds: [0], authors: members }]) as Promise<NostrEvent[]>,
+        queryChunked((filters, opts) => nostr.group(relays).query(filters, opts), [0], members, signal),
+      ]);
+      const events = [...cached, ...network];
       const bots: string[] = [];
       const profiles: Record<string, BotRosterProfile> = {};
       for (const [pubkey, ev] of newestPerAuthor(events, asked, 0)) {
@@ -165,15 +184,6 @@ export function useBotManifests(
 
   const bots = botsQuery.data?.bots ?? EMPTY;
   const botsKey = bots.join(",");
-
-  // Sorted so the key is stable however the caller ordered them, and so a
-  // caller passing a fresh array each render does not churn the query.
-  const relays = useMemo(
-    () =>
-      [...new Set([...(conversationRelays ?? []), ...config.appRelays, ...BOT_DISCOVERY_RELAYS])].sort(),
-    [conversationRelays, config.appRelays],
-  );
-  const relayKey = relays.join(",");
 
   const manifestsQuery = useQuery({
     // The relay set is part of the identity of this result: querying a different
