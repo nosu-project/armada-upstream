@@ -649,6 +649,10 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   return {
     conversations,
     previews: previews.data ?? {},
+    /** All fetched kind-4 ciphertext events (both directions), newest-first.
+     *  Exposed so the conversation list can search across locally-decrypted
+     *  history (pairing each event with its render-cache plaintext). */
+    events: query.data ?? [],
     // Loading until the events query AND the mute set are both settled, so the
     // list shows a spinner rather than an unfiltered flash on cold start.
     isLoading: query.isLoading || !muteReady,

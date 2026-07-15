@@ -153,6 +153,29 @@ export async function queryDm17Conversations(
     .sort((a, b) => b.latest.createdAt - a.latest.createdAt);
 }
 
+/**
+ * Every locally-cached chat/file rumor whose decrypted content matches
+ * `query` (case-insensitive substring), across all conversation partners.
+ * Purely local — the rumors are already decrypted at rest, so this never
+ * prompts the signer. Newest-first, capped at `limit` matches.
+ */
+export async function searchDm17Rumors(
+  query: string,
+  opts: { limit?: number; scan?: number; signal?: AbortSignal } = {},
+): Promise<OpenedDm[]> {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const events = await dm17Store().query(
+    [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], limit: opts.scan ?? 2000 }],
+    { signal: opts.signal },
+  );
+  const matches = events
+    .map(storedToDm17)
+    .filter((o) => o.peer && o.content.toLowerCase().includes(needle))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  return matches.slice(0, opts.limit ?? 200);
+}
+
 // ── Sync cursor ───────────────────────────────────────────────────────────────
 //
 // The inbox scan's resume position, persisted so a cold launch tops up from

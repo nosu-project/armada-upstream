@@ -43,6 +43,7 @@ import {
   useDMSupport,
 } from "@/hooks/useDirectMessages";
 import { useDm17Conversations, useDm17Support, useEnsureDmInbox } from "@/hooks/useDm17";
+import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
@@ -110,6 +111,7 @@ function ConversationRow({
   selfPubkey,
   voiceRelay,
   query,
+  messageMatch,
   active,
   onClick,
 }: {
@@ -121,6 +123,7 @@ function ConversationRow({
   selfPubkey: string | undefined;
   voiceRelay: string | undefined;
   query: string;
+  messageMatch: string | undefined;
   active: boolean;
   onClick: () => void;
 }) {
@@ -142,17 +145,18 @@ function ConversationRow({
   const others = (participants ?? []).filter((pk) => pk !== selfPubkey);
   const othersInVoice = !inCall && others.length > 0;
 
-  // When searching, hide rows whose contact name / handle / last-message
-  // preview don't match; matching rows stay visible with the matched text
-  // highlighted below. DMs are E2E-encrypted and only the last message is
-  // decrypted in the list, so search covers name + handle + that preview
-  // (full-message-history search would require decrypting every thread).
+  // When searching, hide rows that match neither the contact name / handle nor
+  // any locally-decrypted message. A message hit (`messageMatch`, resolved by
+  // the parent across BOTH DM planes' decrypted history) keeps the row and
+  // replaces the preview line with the matching snippet, highlighted.
   const q = query.trim().toLowerCase();
-  const previewMatches = q.length > 0 && (previewText ?? "").toLowerCase().includes(q);
-  if (q) {
-    const haystack = `${name} ${metadata?.nip05 ?? ""} ${previewText ?? ""}`.toLowerCase();
-    if (!haystack.includes(q)) return null;
-  }
+  const nameMatches = q.length > 0 && `${name} ${metadata?.nip05 ?? ""}`.toLowerCase().includes(q);
+  if (q && !nameMatches && messageMatch === undefined) return null;
+
+  // Which text to show on the second line: the matching message when the hit
+  // came from history, otherwise the usual last-message preview.
+  const secondLine = messageMatch ?? previewText;
+  const secondLineHighlight = q && secondLine ? secondLine.toLowerCase().includes(q) : false;
 
   return (
     <button
@@ -176,9 +180,13 @@ function ConversationRow({
           </div>
           <BotPill metadata={metadata} />
         </div>
-        {preview && (
+        {(preview || secondLine) && (
           <div className={cn("text-xs truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
-            {previewText ? <Highlight text={previewText} query={previewMatches ? query : ""} /> : "Encrypted message"}
+            {secondLine ? (
+              <Highlight text={secondLine} query={secondLineHighlight ? query : ""} />
+            ) : (
+              "Encrypted message"
+            )}
           </div>
         )}
       </div>
@@ -1125,6 +1133,7 @@ function NewDMPane({
 function ConversationList({
   rows,
   previews,
+  events,
   activePeer,
   dmSupported,
   isLoading,
@@ -1137,6 +1146,7 @@ function ConversationList({
 }: {
   rows: { peer: string; latest: NostrEvent; plaintext?: string }[];
   previews: Record<string, string>;
+  events: NostrEvent[];
   activePeer: string | undefined;
   dmSupported: boolean;
   isLoading: boolean;
@@ -1154,6 +1164,10 @@ function ConversationList({
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Search across locally-decrypted message history (both DM planes), grouped
+  // per peer. Purely local — never prompts the signer.
+  const messageMatches = useDmMessageSearch(search, events, user?.pubkey);
 
   // Focus the search field when it expands. `preventScroll` avoids the browser
   // scrolling to reveal the input as it slides in from off-screen.
@@ -1323,6 +1337,7 @@ function ConversationList({
                 preview={c.latest}
                 previewText={c.plaintext ?? previews[c.peer]}
                 query={search}
+                messageMatch={messageMatches.get(c.peer)?.text}
                 unread={
                   Boolean(c.latest) &&
                   c.latest.pubkey !== user?.pubkey &&
@@ -1369,7 +1384,7 @@ export function DMsPage() {
   // Either plane makes DMs usable: kind-4 needs nip04, NIP-17 needs nip44.
   const dmSupported = useDMSupport();
   const dm17Supported = useDm17Support();
-  const { conversations, previews, isLoading, loadMore, hasMore, isLoadingMore } =
+  const { conversations, previews, events, isLoading, loadMore, hasMore, isLoadingMore } =
     useDMConversations({ decryptPreviews: true });
   // NIP-17 conversations (decrypted rumors from the local store). Interactive:
   // opening the DMs page is where the one-time decrypt-consent prompt may
@@ -1501,6 +1516,7 @@ export function DMsPage() {
           <ConversationList
             rows={rows}
             previews={previews}
+            events={events}
             activePeer={activePeer}
             dmSupported={dmSupported || dm17Supported}
             isLoading={isLoading}
