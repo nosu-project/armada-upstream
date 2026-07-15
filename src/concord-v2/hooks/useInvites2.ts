@@ -58,6 +58,37 @@ async function readInviteList(
   }
 }
 
+/**
+ * Fetch and decrypt the user's Invite List, MERGING every copy the pool
+ * returns rather than trusting a single newest event: tombstones union and win
+ * terminally (CORD-05 §4), so a relay whose "newest" copy predates another
+ * device's revocation can never resurrect the revoked link. Also returns the
+ * newest `created_at` seen, for replaceable-event monotonicity on write.
+ */
+export async function fetchInviteList(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  user: NUser,
+  signal?: AbortSignal,
+): Promise<{ list: InviteList; newestCreatedAt: number }> {
+  const events = await nostr.query(
+    [{ kinds: [KIND_INVITE_LIST], authors: [user.pubkey], limit: 1 }],
+    { signal: signal ?? AbortSignal.timeout(8000) },
+  );
+  let list = EMPTY_INVITE_LIST;
+  let newestCreatedAt = 0;
+  // Oldest → newest, so the newest copy's unknown top-level fields win the merge.
+  for (const event of events.sort((a, b) => a.created_at - b.created_at)) {
+    // Monotonicity counts EVERY copy, even an undecryptable one: a relay keeps
+    // only the newest replaceable per author, so a rewrite must outbid
+    // whatever sits there, readable or not.
+    newestCreatedAt = Math.max(newestCreatedAt, event.created_at);
+    const copy = await readInviteList(event, user.signer, user.pubkey);
+    if (!copy) continue;
+    list = mergeInviteLists(list, copy);
+  }
+  return { list, newestCreatedAt };
+}
+
 export function useInviteList2() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -67,12 +98,8 @@ export function useInviteList2() {
     enabled: Boolean(user?.signer.nip44),
     staleTime: 60_000,
     queryFn: async ({ signal }) => {
-      const events = await nostr.query(
-        [{ kinds: [KIND_INVITE_LIST], authors: [user!.pubkey], limit: 1 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-      );
-      const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-      return (await readInviteList(latest, user!.signer, user!.pubkey)) ?? EMPTY_INVITE_LIST;
+      const { list } = await fetchInviteList(nostr, user!, AbortSignal.any([signal, AbortSignal.timeout(8000)]));
+      return list;
     },
   });
 }
@@ -87,16 +114,11 @@ function useUpdateInviteList2() {
     scope: { id: "concord2-invite-list" },
     mutationFn: async (patch: InviteList) => {
       if (!user?.signer.nip44) throw new Error("NIP-44 unsupported.");
-      const events = await nostr.query(
-        [{ kinds: [KIND_INVITE_LIST], authors: [user.pubkey], limit: 1 }],
-        { signal: AbortSignal.timeout(8000) },
-      );
-      const prev = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-      const remote = (await readInviteList(prev, user.signer, user.pubkey)) ?? EMPTY_INVITE_LIST;
+      const { list: remote, newestCreatedAt } = await fetchInviteList(nostr, user);
       const cached = queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey)) ?? EMPTY_INVITE_LIST;
       const next = mergeInviteLists(mergeInviteLists(remote, cached), patch);
 
-      const createdAt = Math.max(Math.floor(Date.now() / 1000), (prev?.created_at ?? 0) + 1);
+      const createdAt = Math.max(Math.floor(Date.now() / 1000), newestCreatedAt + 1);
       const content = await user.signer.nip44.encrypt(user.pubkey, JSON.stringify(next));
       const event = await user.signer.signEvent({ kind: KIND_INVITE_LIST, content, tags: [], created_at: createdAt });
       queryClient.setQueryData(inviteListKey(user.pubkey), next);

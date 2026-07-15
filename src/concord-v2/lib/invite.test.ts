@@ -4,6 +4,7 @@ import { bytesToHex, communityIdOf, hex32, random32 } from "@/concord-v2/lib/der
 import {
   buildBundleEvent,
   buildInviteUrl,
+  buildRefreshedBundleEvents,
   buildRevocationEvent,
   decodeFragment,
   encodeFragment,
@@ -159,6 +160,54 @@ describe("invite links", () => {
     expect(parseInviteLink("https://armada.example.com/invite#sometokenpayload_here123")).toBeUndefined();
     expect(parseInviteLink("wss://relay.example.com")).toBeUndefined();
     expect(parseInviteLink("hello world")).toBeUndefined();
+  });
+});
+
+describe("bundle refresh after a Refounding (CORD-05 §2)", () => {
+  it("re-posts every live link's bundle at the current keys, preserving per-link expiry/label", () => {
+    const { bundle } = makeBundle();
+    const linkA = mintLinkSigner();
+    const linkB = mintLinkSigner();
+    const tokenA = mintToken();
+    const tokenB = mintToken();
+
+    // The community Refounded: a fresh root at epoch 1. The refreshed bundle
+    // carries the CURRENT keys (what buildBundle reads post-rotation).
+    const fresh: InviteBundle = {
+      ...bundle,
+      community_root: bytesToHex(random32()),
+      root_epoch: 1,
+    };
+    const futureSecs = Math.floor(Date.now() / 1000) + 3600;
+    const events = buildRefreshedBundleEvents(fresh, [
+      { token: bytesToHex(tokenA), signer_sk: bytesToHex(linkA.sk), expires_at: futureSecs, label: "Reddit" },
+      { token: bytesToHex(tokenB), signer_sk: bytesToHex(linkB.sk) },
+    ]);
+    expect(events.length).toBe(2);
+
+    // Each event sits at its own link's coordinate and decrypts with its token.
+    const a = parseBundleEvent(events[0], linkA.pk, tokenA, Date.now());
+    expect(events[0].pubkey).toBe(linkA.pk);
+    expect(a.root_epoch).toBe(1); // the CURRENT epoch, not the stale 0
+    expect(a.community_root).toBe(fresh.community_root);
+    expect(a.expires_at).toBe(futureSecs * 1000); // seconds → ms, preserved
+    expect(a.label).toBe("Reddit");
+
+    const b = parseBundleEvent(events[1], linkB.pk, tokenB, Date.now());
+    expect(b.root_epoch).toBe(1);
+    expect(b.expires_at).toBeUndefined();
+  });
+
+  it("skips a malformed entry rather than throwing", () => {
+    const { bundle } = makeBundle();
+    const link = mintLinkSigner();
+    const token = mintToken();
+    const events = buildRefreshedBundleEvents(bundle, [
+      { token: "not-hex", signer_sk: "also-not-hex" },
+      { token: bytesToHex(token), signer_sk: bytesToHex(link.sk) },
+    ]);
+    expect(events.length).toBe(1);
+    expect(events[0].pubkey).toBe(link.pk);
   });
 });
 

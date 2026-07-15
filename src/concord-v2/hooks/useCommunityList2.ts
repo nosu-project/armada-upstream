@@ -13,6 +13,7 @@ import {
   liveEntries,
   markExcluded,
   mergeCommunityLists,
+  refreshChannels,
   refreshCurrent,
   rehydrateCommunity,
   removeFromList,
@@ -180,7 +181,8 @@ export type CommunityListAction =
   | { type: "add"; entry: CommunityListEntry }
   | { type: "remove"; communityId: string; removedAt?: number }
   | { type: "exclude"; communityId: string; epoch: number }
-  | { type: "refresh-current"; current: JoinMaterial };
+  | { type: "refresh-current"; current: JoinMaterial }
+  | { type: "refresh-channels"; communityId: string; channels: JoinMaterial["channels"] };
 
 function applyAction(list: CommunityList, action: CommunityListAction): CommunityList {
   switch (action.type) {
@@ -192,6 +194,8 @@ function applyAction(list: CommunityList, action: CommunityListAction): Communit
       return markExcluded(list, action.communityId, action.epoch);
     case "refresh-current":
       return refreshCurrent(list, action.current);
+    case "refresh-channels":
+      return refreshChannels(list, action.communityId, action.channels);
   }
 }
 

@@ -54,7 +54,7 @@ import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useGuestbook2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useModeration2 } from "@/concord-v2/hooks/useModeration2";
-import { useRekeyWatch2 } from "@/concord-v2/hooks/useRekey2";
+import { useChannelRekeyWatch2, useRekeyWatch2 } from "@/concord-v2/hooks/useRekey2";
 import { useRoles2 } from "@/concord-v2/hooks/useRoles2";
 import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
@@ -700,6 +700,9 @@ export function ConcordV2Page() {
 
   // React to base-rekey rotations (adopt the new epoch, or discover removal).
   useRekeyWatch2(baseCommunity);
+  // And per-held-private-channel rotations (CORD-06 §2): adopt fresh channel
+  // keys or drop a channel we've been removed from. No-op without any.
+  useChannelRekeyWatch2(baseCommunity);
 
   // Kicked/banned: the community stays on the rail but goes read-only (the
   // composer is swapped for a banner). Cleared automatically if re-included.

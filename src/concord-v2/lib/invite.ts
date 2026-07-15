@@ -14,6 +14,7 @@
  * link.
  */
 
+import { hexToBytes } from "@noble/hashes/utils.js";
 import { decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from "nostr-tools/pure";
 import type { NostrEvent } from "nostr-tools/pure";
@@ -89,6 +90,34 @@ export function validateBundle(bundle: InviteBundle): InviteBundle {
     throw new InviteError("owner-mismatch", "bundle's owner does not reproduce its community_id");
   }
   return bundle;
+}
+
+/**
+ * Re-post events for every live link, carrying `bundle` (the CURRENT keys) at
+ * each link's coordinate (CORD-05 §2). `entries` are the creator's Invite List
+ * entries for this community — each supplies the `token` + `signer_sk` needed
+ * to author its coordinate. A malformed entry is skipped. The per-link
+ * `expires_at`/`label` are preserved from the entry; everything else (root,
+ * epoch, channels, relays, name) comes from the fresh `bundle`.
+ */
+export function buildRefreshedBundleEvents(
+  bundle: InviteBundle,
+  entries: Array<{ token: string; signer_sk: string; expires_at?: number; label?: string }>,
+): NostrEvent[] {
+  const events: NostrEvent[] = [];
+  for (const entry of entries) {
+    try {
+      const perLink: InviteBundle = {
+        ...bundle,
+        ...(entry.expires_at ? { expires_at: entry.expires_at * 1000 } : {}),
+        ...(entry.label ? { label: entry.label } : {}),
+      };
+      events.push(buildBundleEvent(perLink, hexToBytes(entry.token), hexToBytes(entry.signer_sk)));
+    } catch {
+      // A malformed stored entry can't be refreshed; skip it.
+    }
+  }
+  return events;
 }
 
 /** Build the addressable bundle event: `(33301, link_signer, d="")`, marked live. */

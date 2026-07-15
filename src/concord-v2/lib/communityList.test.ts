@@ -7,6 +7,7 @@ import {
   isLive,
   liveEntries,
   mergeCommunityLists,
+  refreshChannels,
   rehydrateCommunity,
   removeFromList,
   toJoinMaterial,
@@ -98,6 +99,39 @@ describe("community list merge (CORD-02 §8)", () => {
     const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(jm));
     const merged = mergeCommunityLists(list, EMPTY_COMMUNITY_LIST);
     expect((merged.entries[0].current as Record<string, unknown>).vector_custom).toEqual({ theme: "dark" });
+  });
+});
+
+describe("refreshChannels (channel-scope rekey adoption/exclusion, CORD-06 §2)", () => {
+  const chan = (id: string, epoch: number) => ({ id, key: bytesToHex(random32()), epoch, name: "sec" });
+
+  it("replaces current's channel set WITHOUT bumping added_at (a channel rotation is not re-inclusion proof)", () => {
+    const a = chan("11".repeat(32), 0);
+    const jm = makeJoinMaterial({ channels: [a] });
+    const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(jm, 1234));
+
+    const rotated = { ...a, key: bytesToHex(random32()), epoch: 1 };
+    const next = refreshChannels(list, jm.community_id, [rotated]);
+
+    expect(next.entries[0].current.channels).toEqual([rotated]);
+    expect(next.entries[0].added_at).toBe(1234); // untouched — feeds the exclusion-vs-history decision
+    expect(next.entries[0].seed.channels).toEqual([a]); // seed keeps the original key for history
+  });
+
+  it("an excluded channel is dropped from current (visible removal) while seed retains it", () => {
+    const a = chan("11".repeat(32), 0);
+    const b = chan("22".repeat(32), 0);
+    const jm = makeJoinMaterial({ channels: [a, b] });
+    const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(jm));
+
+    const next = refreshChannels(list, jm.community_id, [a]); // b removed
+    expect(next.entries[0].current.channels).toEqual([a]);
+    expect(next.entries[0].seed.channels).toEqual([a, b]);
+  });
+
+  it("an unknown community is a no-op", () => {
+    const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(makeJoinMaterial()));
+    expect(refreshChannels(list, "ff".repeat(32), [])).toEqual(list);
   });
 });
 

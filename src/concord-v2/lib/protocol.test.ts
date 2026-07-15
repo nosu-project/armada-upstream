@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { foldTimeline, openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView, mintCommunity } from "@/concord-v2/lib/community";
 import { rehydrateCommunity, toJoinMaterial } from "@/concord-v2/lib/communityList";
+import { bundleToEntry } from "@/concord-v2/hooks/useCommunityActions2";
 import {
   buildBanlistEdition,
   buildChannelEdition,
@@ -23,7 +24,7 @@ import {
   sealEdition,
 } from "@/concord-v2/lib/control";
 import { baseRekeyGroupKey, bytesToHex, epochKeyCommitment, hex32, random32 } from "@/concord-v2/lib/derive";
-import { buildInviteUrl, buildBundleEvent, mintLinkSigner, mintToken, parseBundleEvent, parseInviteLink, type InviteBundle } from "@/concord-v2/lib/invite";
+import { buildInviteUrl, buildBundleEvent, buildRefreshedBundleEvents, mintLinkSigner, mintToken, parseBundleEvent, parseInviteLink, type InviteBundle } from "@/concord-v2/lib/invite";
 import { KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import {
   base64ToBytes,
@@ -269,6 +270,92 @@ describe("Concord V2 end to end", () => {
     );
     const malloryRead = await openChatBatch([e1wrap], malloryChannels[0]);
     expect(malloryRead.length).toBe(0);
+  });
+
+  // Regression: a still-live public invite link MUST hand a fresh joiner the
+  // CURRENT epoch after a Refounding, never a superseded one. CORD-05 §2: "the
+  // creator re-posting under it refreshes the bundle (fresh keys behind the same
+  // URL, e.g. after a Rekey), so a link shared once survives every rotation."
+  // CORD-06 §3: after a Refounding "only a fresh joiner waits on the re-anchor"
+  // — they land on the current epoch. The bug: the Refounding never re-posted
+  // the bundle, so the link kept vending root_epoch 0; the joiner rehydrated at
+  // epoch 0 and every message they sent bound to the stale epoch (the reported
+  // "new user on epoch 0 instead of 1"). The fix re-posts each live bundle with
+  // the current keys (useRefound2 → refreshInviteBundlesFor → buildRefreshedBundleEvents).
+  it("a live invite link vends the CURRENT epoch to a late joiner after a Refounding", async () => {
+    const owner = member();
+
+    // ── 1. Create the community (epoch 0) and mint a public invite link. The
+    // creator records the link's token + signer secret in their Invite List
+    // (CORD-05 §4) — exactly what a refresh later needs to re-author the
+    // coordinate.
+    const { community: e0 } = mintCommunity("Test Fleet", owner.pubkey, ["wss://relay.example"]);
+    const token = mintToken();
+    const link = mintLinkSigner();
+    const inviteEntry = { token: bytesToHex(token), signer_sk: bytesToHex(link.sk) };
+
+    // The bundle a mint posts is a snapshot of the community's CURRENT keys —
+    // exactly what useInviteActions2.buildBundle() reads (community.root /
+    // community.rootEpoch), here at epoch 0.
+    const bundleAtEpoch = (c: CommunityV2): InviteBundle => ({
+      community_id: c.idHex,
+      owner: owner.pubkey,
+      owner_salt: bytesToHex(c.ownerSalt),
+      community_root: bytesToHex(c.root),
+      root_epoch: Number(c.rootEpoch),
+      channels: [],
+      relays: c.relays,
+      name: "Test Fleet",
+      creator_npub: owner.pubkey,
+    });
+    // The addressable coordinate (33301, link_signer, d=""); the newest event at
+    // it wins. A refresh replaces it (CORD-05 §2).
+    const coordinate: NostrEvent[] = [buildBundleEvent(bundleAtEpoch(e0), token, link.sk)];
+    const url = buildInviteUrl("https://armada.example.com", link.pk, token, e0.relays);
+
+    // ── 2. The owner Refounds to epoch 1 (ban/convert): newEpoch = rootEpoch+1,
+    // a fresh root. The link is NOT revoked — it stays live and shareable.
+    const rotatedOwner: CommunityV2 = {
+      ...e0,
+      root: random32(),
+      rootEpoch: 1n,
+      heldRoots: [{ epoch: 1n, key: random32() }, ...e0.heldRoots],
+      refounder: owner.pubkey,
+    };
+
+    // A helper for "who does the live link produce a joiner at, right now?" —
+    // the production join path: fetch newest at the coordinate, decrypt,
+    // entry-ify, rehydrate.
+    const joinNow = (): CommunityV2 => {
+      const parsedLink = parseInviteLink(url)!;
+      const newest = [...coordinate].sort((a, b) => b.created_at - a.created_at)[0];
+      const fetched = parseBundleEvent(newest, parsedLink.linkSigner, parsedLink.token, Date.now());
+      return rehydrateCommunity(bundleToEntry(fetched))!;
+    };
+
+    // ── 3a. WITHOUT the CORD-05 §2 refresh, the still-live link keeps vending
+    // epoch 0 — the bug, reproduced.
+    expect(joinNow().rootEpoch).toBe(0n);
+
+    // ── 3b. THE FIX: the Refounding re-posts every live bundle at the current
+    // keys via the production helper. `created_at` must exceed the stale event so
+    // the newest-wins coordinate serves it.
+    const refreshed = buildRefreshedBundleEvents(bundleAtEpoch(rotatedOwner), [inviteEntry]).map((e) => ({
+      ...e,
+      created_at: e.created_at + 10,
+    }));
+    coordinate.push(...refreshed);
+
+    // ── 4. Now a fresh joiner following the same link lands on epoch 1, and
+    // their #general channel binds to the current epoch.
+    const joiner = joinNow();
+    const fold = foldControlState(openControlWraps([], controlGroups(joiner)), joiner.id, joiner.owner);
+    const [general] = channelsView(joiner, {
+      ...fold,
+      channels: new Map([[e0.idHex, { channelIdHex: e0.idHex, name: "general", isPrivate: false, deleted: false }]]),
+    });
+    expect(joiner.rootEpoch).toBe(1n);
+    expect(general.current.epoch).toBe(1n);
   });
 
   it("hex32 round-trips through the whole flow (sanity)", () => {

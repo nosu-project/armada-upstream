@@ -256,6 +256,31 @@ export function refreshCurrent(list: CommunityList, current: JoinMaterial, added
 }
 
 /**
+ * Replace a membership's private-channel set inside `current` — a
+ * channel-scope rekey adoption (fresh key at the next channel epoch) or a
+ * channel exclusion (the channel dropped so it visibly disappears, CORD-06
+ * §2). Unlike {@link refreshCurrent} this NEVER bumps `added_at`: a channel
+ * rotation says nothing about community-level membership, and `added_at`
+ * feeds the base exclusion-vs-history decision.
+ *
+ * Merge caveat (CORD-02 §8): `current` snapshots at the same `root_epoch`
+ * tie-break on canonical bytes, so a same-root-epoch channel bump can lose a
+ * merge to a stale sibling until the watcher re-adopts — deterministic either
+ * way, and the rekey events stay fetchable. An excluded channel's original
+ * key survives in `seed` for history. Pure.
+ */
+export function refreshChannels(
+  list: CommunityList,
+  communityId: string,
+  channels: JoinMaterial["channels"],
+): CommunityList {
+  const idx = list.entries.findIndex((e) => e.community_id === communityId);
+  if (idx === -1) return list;
+  const entries = list.entries.map((e, i) => (i === idx ? { ...e, current: { ...e.current, channels } } : e));
+  return { ...list, entries };
+}
+
+/**
  * Enforce the membership cap: the count bounds the common case, the NIP-44
  * byte cap is the law — the caller must ALSO verify the serialized list fits
  * before publishing (CORD-02 §8).
