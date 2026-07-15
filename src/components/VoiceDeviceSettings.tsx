@@ -13,6 +13,11 @@ import {
 } from "@/components/ui/select";
 import { ownAvServers } from "@/concord-v2/hooks/useVoice2";
 import { probeAvBroker } from "@/concord-v2/lib/voice";
+import {
+  desktopMicAccessStatus,
+  isDesktop,
+  openDesktopMicSettings,
+} from "@/lib/desktop";
 import { CONCORD_AV_SERVERS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import {
@@ -47,6 +52,9 @@ export function VoiceDeviceSettings() {
   const [micId, setMicId] = useState<string>(() => getPreferredMicId() ?? "default");
   const [speakerId, setSpeakerId] = useState<string>(() => getPreferredSpeakerId() ?? "default");
   const [permissionError, setPermissionError] = useState<string | null>(null);
+  // True when the mic is blocked by the OS privacy setting (desktop app), not
+  // by our in-app handler — in that case we can deep-link the user to Settings.
+  const [osMicBlocked, setOsMicBlocked] = useState(false);
 
   // Voice server (advanced): the server used to start calls in empty Concord
   // voice channels and to host DM calls. Device-local; empty = build defaults.
@@ -108,6 +116,26 @@ export function VoiceDeviceSettings() {
     return () => navigator.mediaDevices?.removeEventListener?.("devicechange", refreshDevices);
   }, [refreshDevices]);
 
+  // On the desktop app, warn up front if the OS privacy setting blocks apps
+  // from using the mic (the common "denied by default" case on Windows), so the
+  // user isn't left guessing after a silent getUserMedia failure.
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let cancelled = false;
+    void desktopMicAccessStatus().then((status) => {
+      if (cancelled) return;
+      if (status === "denied" || status === "restricted") {
+        setOsMicBlocked(true);
+        setPermissionError(
+          "Microphone access is turned off for apps in your system settings.",
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const stopMicTest = useCallback(() => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
@@ -123,6 +151,7 @@ export function VoiceDeviceSettings() {
 
   const startMicTest = useCallback(async () => {
     setPermissionError(null);
+    setOsMicBlocked(false);
     try {
       // Capture the chosen mic with no processing so the meter reflects the raw
       // input. Reusing the selected deviceId ties the meter to the picker.
@@ -163,8 +192,24 @@ export function VoiceDeviceSettings() {
       setTesting(true);
       rafRef.current = requestAnimationFrame(tick);
     } catch (err) {
+      const denied = err instanceof Error && err.name === "NotAllowedError";
+      // On desktop, distinguish an OS-level block (Windows "let desktop apps
+      // use the microphone" / macOS privacy) from an in-app denial. When the OS
+      // is the blocker we surface a deep-link to the right Settings page — this
+      // is the usual cause of "mic denied by default" on Windows.
+      if (denied && isDesktop()) {
+        const status = await desktopMicAccessStatus();
+        if (status === "denied" || status === "restricted") {
+          setOsMicBlocked(true);
+          setPermissionError(
+            "Microphone access is turned off for apps in your system settings.",
+          );
+          stopMicTest();
+          return;
+        }
+      }
       setPermissionError(
-        err instanceof Error && err.name === "NotAllowedError"
+        denied
           ? "Microphone access denied. Allow it in your browser to test."
           : "Could not access the microphone.",
       );
@@ -304,7 +349,22 @@ export function VoiceDeviceSettings() {
             })}
           </div>
         </div>
-        {permissionError && <p className="text-xs text-destructive">{permissionError}</p>}
+        {permissionError && (
+          <div className="space-y-1.5">
+            <p className="text-xs text-destructive">{permissionError}</p>
+            {osMicBlocked && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-7 gap-2 clip-corner-lg"
+                onClick={() => void openDesktopMicSettings()}
+              >
+                Open microphone settings
+              </Button>
+            )}
+          </div>
+        )}
         {testing && !permissionError && (
           <p className="text-xs text-muted-foreground">Speak — the meter should move.</p>
         )}

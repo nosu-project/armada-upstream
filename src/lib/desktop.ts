@@ -14,12 +14,26 @@ export interface ScreenSource {
   isScreen: boolean;
 }
 
+/**
+ * OS-level microphone access status, independent of the in-app permission
+ * handler. "granted" always on Linux; reflects the system privacy setting on
+ * macOS (TCC) and Windows ("let desktop apps use the microphone").
+ */
+export type MicAccessStatus =
+  | "not-determined"
+  | "granted"
+  | "denied"
+  | "restricted"
+  | "unknown";
+
 interface ArmadaDesktopBridge {
   isDesktop: true;
   setBadge: (count: number) => void;
   getInfo: () => Promise<{ platform: string; version: string }>;
   getScreenSources: () => Promise<ScreenSource[]>;
   onPickScreenSource: (handler: () => string | null | Promise<string | null>) => void;
+  getMicAccessStatus: () => Promise<MicAccessStatus>;
+  openMicPrivacySettings: () => Promise<boolean>;
 }
 
 declare global {
@@ -42,5 +56,35 @@ export function setDesktopBadge(count: number): void {
     desktop()?.setBadge(count);
   } catch {
     // ignore
+  }
+}
+
+/**
+ * OS-level microphone access status in the desktop app. Resolves "granted" on
+ * the web (where the browser/OS handles the prompt) and whenever the bridge is
+ * unavailable, so callers can treat anything other than "denied"/"restricted"
+ * as "try getUserMedia and let the browser prompt".
+ */
+export async function desktopMicAccessStatus(): Promise<MicAccessStatus> {
+  const bridge = desktop();
+  if (!bridge?.getMicAccessStatus) return "granted";
+  try {
+    return await bridge.getMicAccessStatus();
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Open the OS microphone privacy settings (Windows/macOS). Returns true if a
+ * settings page was opened, false on web or unsupported platforms.
+ */
+export async function openDesktopMicSettings(): Promise<boolean> {
+  const bridge = desktop();
+  if (!bridge?.openMicPrivacySettings) return false;
+  try {
+    return await bridge.openMicPrivacySettings();
+  } catch {
+    return false;
   }
 }

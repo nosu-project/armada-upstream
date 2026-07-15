@@ -26,6 +26,7 @@ const {
   ipcMain,
   desktopCapturer,
   session,
+  systemPreferences,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -344,6 +345,14 @@ function installDisplayMediaHandler() {
 // for our own app:// origin only; everything else is denied. On macOS the OS
 // additionally gates mic/camera behind TCC — the Info.plist usage strings for
 // that live in electron-builder.yml (extendInfo).
+//
+// Windows has its own OS-level gate: Settings → Privacy → Microphone →
+// "Let desktop apps access your microphone". When that's off, Chromium's
+// getUserMedia rejects with NotAllowedError no matter what our handlers say,
+// so the app looks "denied by default". We can't flip that toggle for the
+// user, but we expose the OS access status (via getMediaAccessStatus) and a
+// deep-link to the relevant Settings page (armada:mic-access-status /
+// armada:open-mic-settings IPC below) so the renderer can guide them.
 
 const ALLOWED_PERMISSIONS = new Set([
   "media", // getUserMedia (microphone + camera)
@@ -386,6 +395,38 @@ function installIpc() {
     platform: process.platform,
     version: app.getVersion(),
   }));
+
+  // OS-level microphone access status. On macOS/Windows this reflects the
+  // system privacy setting (not our in-app permission handler); on Linux it's
+  // always "granted". Values: "not-determined" | "granted" | "denied" |
+  // "restricted" | "unknown".
+  ipcMain.handle("armada:mic-access-status", () => {
+    try {
+      return systemPreferences.getMediaAccessStatus("microphone");
+    } catch {
+      return "unknown";
+    }
+  });
+
+  // Open the OS microphone privacy settings so the user can allow desktop apps
+  // to use the mic. No-op (resolves false) on platforms without a deep link.
+  ipcMain.handle("armada:open-mic-settings", async () => {
+    try {
+      if (process.platform === "win32") {
+        await shell.openExternal("ms-settings:privacy-microphone");
+        return true;
+      }
+      if (process.platform === "darwin") {
+        await shell.openExternal(
+          "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        );
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  });
 }
 
 // ── App lifecycle ────────────────────────────────────────────────────────────

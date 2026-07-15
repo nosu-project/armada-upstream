@@ -18,6 +18,21 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   getInfo: () => ipcRenderer.invoke("armada:platform"),
 
   /**
+   * OS-level microphone access status. Reflects the system privacy setting
+   * (macOS TCC / Windows "let desktop apps use the microphone"), independent of
+   * our in-app permission handler. Resolves to one of: "not-determined" |
+   * "granted" | "denied" | "restricted" | "unknown" (always "granted" on Linux).
+   */
+  getMicAccessStatus: () => ipcRenderer.invoke("armada:mic-access-status"),
+
+  /**
+   * Open the OS microphone privacy settings so the user can allow desktop apps
+   * to use the mic. Resolves true if a settings page was opened, false if the
+   * platform has no deep link.
+   */
+  openMicPrivacySettings: () => ipcRenderer.invoke("armada:open-mic-settings"),
+
+  /**
    * List shareable screens/windows for the in-app screen-share picker.
    * Returns [{ id, name, thumbnail, appIcon, isScreen }].
    */
