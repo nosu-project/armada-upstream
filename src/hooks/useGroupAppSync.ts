@@ -50,7 +50,10 @@ export function useGroupAppSync(
   const { data: stateEvents } = useQuery<NostrEvent[]>({
     queryKey,
     enabled,
-    refetchInterval: 3000,
+    // Durable state arrives LIVE via the session subscription below; this poll
+    // is only a slow healing backstop for a dropped socket (was an aggressive
+    // 3s poll that ran for the whole app session).
+    refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const events = await nostr
         .relay(relayUrl!)
@@ -121,8 +124,12 @@ export function useGroupAppSync(
     [enabled, groupId, uuid, relayUrl, publish],
   );
 
-  // Realtime subscription: deliver incoming frames from *other* participants to
-  // any registered listeners. A single live `req` is shared across listeners.
+  // Session subscriptions (mounted only while an app is open): one live `req`
+  // for realtime frames (ephemeral, delivered straight to listeners, never
+  // stored) and one for durable state updates (merged into the query cache so
+  // app state arrives live instead of on a poll). Deliberately NOT on the
+  // always-on wire — a webxdc session is single, ephemeral, and latency-
+  // sensitive; the wire is for ambient timeline/control ingestion.
   const listenersRef = useRef(new Set<(data: Uint8Array) => void>());
   const selfPubkey = user?.pubkey;
 
@@ -131,6 +138,7 @@ export function useGroupAppSync(
     const controller = new AbortController();
     const since = Math.floor(Date.now() / 1000);
 
+    // Realtime frames → listeners.
     (async () => {
       try {
         for await (const msg of nostr.relay(relayUrl!).req(
@@ -155,8 +163,30 @@ export function useGroupAppSync(
       }
     })();
 
+    // Durable state updates → query cache (live, deduped by id).
+    (async () => {
+      try {
+        for await (const msg of nostr.relay(relayUrl!).req(
+          [{ kinds: [KIND_GROUP_WEBXDC_UPDATE], "#h": [groupId!], "#i": [uuid], since }],
+          { signal: controller.signal },
+        )) {
+          if (msg[0] === "EVENT") {
+            const event = msg[2] as NostrEvent;
+            queryClient.setQueryData<NostrEvent[]>(queryKey, (old) => {
+              if (old?.some((e) => e.id === event.id)) return old;
+              return [...(old ?? []), event].sort((a, b) => a.created_at - b.created_at);
+            });
+          } else if (msg[0] === "CLOSED") {
+            break;
+          }
+        }
+      } catch {
+        // subscription ended (abort/error)
+      }
+    })();
+
     return () => controller.abort();
-  }, [enabled, nostr, relayUrl, groupId, uuid, selfPubkey]);
+  }, [enabled, nostr, relayUrl, groupId, uuid, selfPubkey, queryClient, queryKey]);
 
   const onRealtime = useCallback((cb: (data: Uint8Array) => void) => {
     listenersRef.current.add(cb);
