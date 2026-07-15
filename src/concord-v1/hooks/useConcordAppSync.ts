@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -60,14 +60,19 @@ export function useConcordAppSync(
 ): AppSync {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const queryClient = useQueryClient();
 
   const enabled = Boolean(community && channel && uuid && user);
   const channelIdHex = channel ? bytesToHex(channel.id) : null;
+  const stateKey = useMemo(() => ["concord", "app-state", channelIdHex, uuid], [channelIdHex, uuid]);
 
   const { data: opened } = useQuery<OpenedMessage[]>({
-    queryKey: ["concord", "app-state", channelIdHex, uuid],
+    queryKey: stateKey,
     enabled,
-    refetchInterval: 3000,
+    // Durable state arrives LIVE via the session subscription below; this poll
+    // is only a slow healing backstop for a dropped socket (was an aggressive
+    // 3s poll that ran for the whole app session).
+    refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const epochKeys = readEpochKeys(channel!);
       const zs = channelPseudonyms(channel!);
@@ -158,8 +163,15 @@ export function useConcordAppSync(
     [uuid, publishSealed],
   );
 
-  // Realtime subscription: live `req` for sealed 3310 frames, decrypt, deliver
-  // only `rt` frames for this session from *other* participants.
+  // Session subscription: one live `req` for sealed 3310 frames on this app's
+  // `#z` addresses. It carries BOTH planes — realtime frames (`rt:1`) are
+  // delivered straight to the onRealtime listeners (sub-second, never stored),
+  // and durable state frames (`rt` unset) are folded into the query cache so
+  // state arrives live instead of on a poll. This is a session-scoped socket
+  // (mounted only while an app is open), deliberately NOT on the always-on wire:
+  // the wire is for ambient timeline/control ingestion, and routing latency-
+  // sensitive realtime frames through the store would add a persist→re-read hop
+  // and pollute the event store with ephemeral frames.
   const listenersRef = useRef(new Set<(data: Uint8Array) => void>());
   const selfPubkey = user?.pubkey;
 
@@ -183,11 +195,20 @@ export function useConcordAppSync(
             }
             try {
               const m = openMessageMulti(msg[2] as NostrEvent, channel.id, epochKeys);
-              if (m.author === selfPubkey) continue;
               if (tagValue(m.tags, "i") !== uuid) continue;
-              if (tagValue(m.tags, "rt") !== "1") continue;
-              const bytes = base64ToBytes(m.content);
-              for (const cb of listenersRef.current) cb(bytes);
+              if (tagValue(m.tags, "rt") === "1") {
+                // Realtime plane: deliver to listeners (skip our own echoes).
+                if (m.author === selfPubkey) continue;
+                const bytes = base64ToBytes(m.content);
+                for (const cb of listenersRef.current) cb(bytes);
+                continue;
+              }
+              // Durable state plane: fold the new frame into the cached list
+              // (dedup by message id), so app state updates live.
+              queryClient.setQueryData<OpenedMessage[]>(stateKey, (old) => {
+                if (old?.some((e) => e.messageId === m.messageId)) return old;
+                return [...(old ?? []), m].sort((a, b) => a.ms - b.ms);
+              });
             } catch {
               // not ours / invalid → skip
             }
