@@ -20,6 +20,7 @@ import {
   type RemoteParticipant,
   type RoomOptions,
 } from "livekit-client";
+import { Capacitor } from "@capacitor/core";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -262,6 +263,19 @@ const audioPublishDefaults = {
 } as const;
 
 /**
+ * On the native APK, backgrounding the WebView (opening the system share sheet
+ * for a link, or handing off to an external browser) fires the page-lifecycle
+ * `freeze`/`pagehide` events on the document. LiveKit's `disconnectOnPageLeave`
+ * default (true) treats those as the tab unloading and tears the room down —
+ * which on Android kicks you out of an active call the moment you tap a link.
+ * A Capacitor app's backgrounding is transient, not a page unload, and the call
+ * is meant to persist across it (the room stays mounted in CallProvider), so we
+ * disable that teardown on native. On the web (a real browser tab) it stays on,
+ * so navigating away / closing the tab still cleanly leaves the call.
+ */
+const disconnectOnPageLeave = !Capacitor.isNativePlatform();
+
+/**
  * Shared capture/encoding room options (mic device + audio processing + video
  * presets). Read per mount; rooms remount on room switch.
  */
@@ -273,6 +287,7 @@ function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
     return {
       adaptiveStream: true,
       dynacast: true,
+      disconnectOnPageLeave,
       audioCaptureDefaults: {
         ...(micId ? { deviceId: micId } : {}),
         noiseSuppression: processing.noiseSuppression,
@@ -657,6 +672,7 @@ function ConcordVoiceRoom({
     const opts: RoomOptions = {
       adaptiveStream: true,
       dynacast: true,
+      disconnectOnPageLeave,
       e2ee: { keyProvider, worker },
       audioCaptureDefaults: {
         ...(micId ? { deviceId: micId } : {}),
