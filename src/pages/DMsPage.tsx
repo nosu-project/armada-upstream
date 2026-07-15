@@ -412,6 +412,17 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   useEffect(() => setReplyTo(undefined), [peer]);
 
+  // Mobile tap-to-reveal for the per-message action toolbar (react/quote/etc.).
+  // On touch devices the toolbar is inert until the row is tapped active; a
+  // second tap on a control fires it. Mirrors Concord chats' behavior so DMs
+  // can be reacted to / quoted on mobile.
+  const [activeId, setActiveId] = useState<string | undefined>(undefined);
+  const toggleActive = useCallback(
+    (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
+    [],
+  );
+  useEffect(() => setActiveId(undefined), [peer]);
+
   // Legacy-encryption opt-in. When the peer can't receive private (NIP-17)
   // DMs, we DON'T silently downgrade to kind-4 (which leaks who's talking and
   // when). The composer is replaced by a notice until the user explicitly
@@ -906,6 +917,8 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 // event JSON" instead of relay-addressable off-ramps.
                 rumor={dm17Ids.has(msg.id) ? msg : undefined}
                 continuation={continuation}
+                active={activeId === msg.id}
+                onToggleActive={toggleActive}
               />
             )
           }
