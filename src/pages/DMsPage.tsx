@@ -6,9 +6,10 @@ import { useNavigate, useParams, Navigate } from "react-router-dom";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage } from "@/components/chat/ChatMessage";
+import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpers";
 import { MessageRow } from "@/components/chat/MessageRow";
-import { MessageTimeline } from "@/components/chat/MessageTimeline";
+import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
@@ -54,6 +55,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { DM_VOICE_RELAYS, PLATFORM_RELAYS } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
@@ -224,12 +226,60 @@ function DmPlaceholderRow({
   );
 }
 
+/**
+ * A subtle per-message marker for DMs that arrived over legacy NIP-04 (kind
+ * 4). Rendered next to the author name so mixed-protocol threads make the
+ * encryption downgrade visible at a glance; NIP-17 rumors carry no badge.
+ */
+function DmLegacyBadge() {
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground/80 shrink-0 select-none"
+      title="Sent with legacy NIP-04 encryption"
+    >
+      <Lock className="size-2.5" aria-hidden />
+      NIP-04
+    </span>
+  );
+}
+
+/**
+ * DM inline-reply context: resolve the quoted message from the loaded thread
+ * (NIP-17 rumors aren't relay-fetchable) and render the shared "replying
+ * to …" chrome. Clicking jumps the timeline to the parent.
+ */
+function DmReplyContext({ parent, onJump }: { parent: NostrEvent | undefined; onJump: (id: string) => void }) {
+  const author = useAuthor(parent?.pubkey);
+  const name = parent ? getDisplayName(author.data?.metadata, parent.pubkey) : "";
+  if (!parent) return null;
+  const image = firstImageRef(parent);
+  return (
+    <ReplyContextLine
+      name={name}
+      preview={<ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} />}
+      thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
+      onClick={() => onJump(parent.id)}
+    />
+  );
+}
+
+/**
+ * The message a DM replies to, if any. Our own sends carry a NIP-C7 `q`
+ * (rich quote, shared with Concord's renderer); foreign NIP-17 clients use a
+ * plain `e` parent tag per the spec — accept either. Kind-4 rows carry no
+ * tags, so they never resolve.
+ */
+function dmReplyToId(msg: NostrEvent): string | undefined {
+  if (msg.kind !== KIND_DM_CHAT && msg.kind !== KIND_DM_FILE) return undefined;
+  return getQuoteReplyToId(msg) ?? msg.tags.find(([name, value]) => name === "e" && value)?.[1];
+}
+
 function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
-  const { transport, encryptedIds, dm17Ids, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+  const { transport, encryptedIds, dm17Ids, dm17Enabled, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(peer);
   const { messages } = transport;
   const { markRead } = useReadState();
@@ -239,6 +289,25 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { config } = useAppContext();
   const { activeCall, joinDmCall, voiceRoomPubkeys } = useCall();
   const muteUser = useMuteUser();
+
+  // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no
+  // in-band convention, so the control is hidden on legacy threads).
+  const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
+  useEffect(() => setReplyTo(undefined), [peer]);
+
+  // Jump-to-quoted-message support (the reply context line is clickable).
+  const timelineRef = useRef<MessageTimelineHandle | null>(null);
+  const jumpToMessage = useCallback((id: string) => {
+    timelineRef.current?.scrollToMessage(id);
+  }, []);
+
+  // The loaded thread by id, for resolving quoted parents locally (NIP-17
+  // rumors aren't relay-fetchable).
+  const messagesById = useMemo(() => {
+    const map = new Map<string, NostrEvent>();
+    for (const m of messages) map.set(m.id, m);
+    return map;
+  }, [messages]);
 
   // Inline message search: toggled from the header, filters the loaded thread
   // client-side (no extra relay queries). The mute confirm dialog is opened
@@ -375,7 +444,13 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         // Routed by the transport: NIP-17 gift wraps when the peer publishes a
         // kind-10050 inbox (composer content tags ride inside the sealed
         // rumor), legacy kind-4 otherwise.
-        await send(text, tags);
+        //
+        // A quote-reply carries the composer's NIP-C7 `q` tag (rich context in
+        // Armada) PLUS a plain `e` parent tag — NIP-17's own reply convention —
+        // so foreign clients render the reply relationship too.
+        const finalTags = replyTo ? [...tags, ["e", replyTo.id]] : tags;
+        await send(text, finalTags);
+        setReplyTo(undefined);
       } catch (e) {
         // Only signing/encryption errors reach here (publish failures are
         // surfaced inline on the message). Keep the composer content to retry.
@@ -387,7 +462,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         throw e;
       }
     },
-    [send, toast],
+    [send, toast, replyTo],
   );
 
   const handleMute = useCallback(async () => {
@@ -586,6 +661,8 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                   canModerate={transport.canModerate}
                   highlight={searchQuery}
                   sendStatus={transport.sendStatusFor?.(msg.id)}
+                  mentionHighlight={false}
+                  nameBadge={!dm17Ids.has(msg.id) ? <DmLegacyBadge /> : undefined}
                   continuation={false}
                 />
               ))}
@@ -595,6 +672,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       ) : (
         <MessageTimeline
           transport={transport}
+          handleRef={timelineRef}
           className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
           emptyState={
             <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -628,6 +706,21 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                     ? () => transport.discard!(msg.id)
                     : undefined
                 }
+                // In a DM every message p-tags you — that's addressing, not a
+                // mention. Don't paint the whole thread as highlights.
+                mentionHighlight={false}
+                // Mark messages that arrived over legacy NIP-04 encryption.
+                nameBadge={!dm17Ids.has(msg.id) ? <DmLegacyBadge /> : undefined}
+                // Quote-replies (NIP-17 sends only): the toolbar/context-menu
+                // "Quote" primes the composer; the quoted parent renders above
+                // the body and clicking it jumps the timeline.
+                onReply={dm17Enabled ? setReplyTo : undefined}
+                replyContext={(() => {
+                  const replyId = dmReplyToId(msg);
+                  return replyId ? (
+                    <DmReplyContext parent={messagesById.get(replyId)} onJump={jumpToMessage} />
+                  ) : undefined;
+                })()}
                 // Reactions ride the NIP-17 plane (kind-7 rumors sealed into
                 // the conversation); available whenever the transport is.
                 reactions={transport.reactionsFor?.(msg.id)}
@@ -653,6 +746,11 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         groupId={peer}
         messages={[]}
         placeholder={`Message ${name}…`}
+        // Quote-replies use the NIP-C7 `q` marker (rich context, shared with
+        // Concord's renderer); handleSubmit adds the NIP-17 `e` parent tag.
+        replyTo={replyTo}
+        replyMarker="nipc7"
+        onCancelReply={() => setReplyTo(undefined)}
         sendOverride={handleSubmit}
       />
 

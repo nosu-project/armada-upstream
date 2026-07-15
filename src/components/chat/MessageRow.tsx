@@ -60,6 +60,12 @@ interface MessageRowProps {
   pending?: boolean;
   /** Whether to show an "(edited)" marker next to the timestamp. */
   edited?: boolean;
+  /**
+   * A small badge rendered next to the author's name (after the bot pill) —
+   * e.g. the DM page's "NIP-04" legacy-encryption marker. Hidden on
+   * continuation rows (no header line).
+   */
+  nameBadge?: ReactNode;
   /** Extra controls rendered right-aligned on the header row (action toolbar). */
   actions?: ReactNode;
   /** Extra content rendered above the body (e.g. a reply-context line). */
@@ -91,6 +97,7 @@ export const MessageRow = memo(function MessageRow({
   children,
   pending,
   edited,
+  nameBadge,
   actions,
   beforeBody,
   afterBody,
@@ -214,6 +221,7 @@ export const MessageRow = memo(function MessageRow({
               </ProfilePreviewCard>
             )}
             <BotPill metadata={metadata} />
+            {nameBadge}
             {label && (
               <Badge variant="secondary" className="text-[10px] font-medium shrink min-w-0 max-w-[35%]">
                 <span className="truncate">{label}</span>

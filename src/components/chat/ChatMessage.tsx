@@ -317,6 +317,18 @@ export interface ChatMessageProps {
   /** Render compactly as a continuation of the previous same-author message. */
   continuation?: boolean;
   /**
+   * Whether p-tagging the current user highlights the row as a mention.
+   * Defaults on (group surfaces). DMs turn it off: a NIP-17 kind-14 rumor
+   * always p-tags the recipient (the `p` set IS the conversation), so every
+   * received message would light up as a "mention".
+   */
+  mentionHighlight?: boolean;
+  /**
+   * A small badge rendered next to the author's name (after the bot pill) —
+   * e.g. the DM page's "NIP-04" legacy-encryption marker.
+   */
+  nameBadge?: ReactNode;
+  /**
    * When set, this message is an unsigned rumor (e.g. a Concord V2 sealed chat
    * event) rather than a relay-addressable signed event. The context menu then
    * offers "View event JSON" (a dialog with this object, pretty-printed) instead
@@ -379,6 +391,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
   active = false,
   onToggleActive,
   continuation = false,
+  mentionHighlight = true,
+  nameBadge,
   rumor,
 }: ChatMessageProps) {
   const { user } = useCurrentUser();
@@ -396,8 +410,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const isOwn = user?.pubkey === event.pubkey;
   // Highlight messages that mention you or reply to you: both add a `p` tag for
   // the current user (NIP-27 mention / NIP-10 reply). Not your own messages.
+  // Suppressed where a `p` tag is addressing, not mentioning (DMs).
   const mentionsMe = Boolean(
-    user && !isOwn && event.tags.some(([name, value]) => name === "p" && value === user.pubkey),
+    mentionHighlight &&
+      user && !isOwn && event.tags.some(([name, value]) => name === "p" && value === user.pubkey),
   );
   // Only plain chat messages are editable (polls carry structured tags).
   const canEdit = isOwn && event.kind === KIND_GROUP_CHAT && !isPending && !isFailed && Boolean(onEdit);
@@ -682,6 +698,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
           createdAt={event.created_at}
           pending={isPending}
           edited={wasEdited && !isEditing}
+          nameBadge={nameBadge}
           actions={toolbar}
           beforeBody={hasReplyContext ? replyContext : undefined}
           afterBody={afterBody}
