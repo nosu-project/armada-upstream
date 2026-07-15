@@ -307,10 +307,10 @@ function DmLegacyFallbackNotice({ name, onEnable }: { name: string; onEnable: ()
           <p className="text-muted-foreground">
             <span className="font-medium text-foreground">{name}</span> hasn't set
             up private messaging yet, so we can't send them a fully-private DM.
-            You can still message them with older encryption — it hides what you
+            You can still message them with older encryption. It hides what you
             say, but not that you're talking or when.
           </p>
-          <Button variant="outline" size="sm" onClick={onEnable}>
+          <Button size="sm" className="clip-corner-lg" onClick={onEnable}>
             Message with legacy encryption
           </Button>
         </div>
