@@ -53,6 +53,11 @@ export const byteLength = (s: string): number => new TextEncoder().encode(s).len
 
 export type BotArgType = "string" | "int" | "number" | "bool" | "user" | "choice";
 
+/** The argument types this client can render. Anything else is a future addition
+ *  to the spec that makes its command undrawable here (see parseBotManifest). */
+const KNOWN_ARG_TYPES: readonly BotArgType[] = ["string", "int", "number", "bool", "user", "choice"];
+const isKnownArgType = (t: string): t is BotArgType => (KNOWN_ARG_TYPES as readonly string[]).includes(t);
+
 /**
  * Unknown object fields are stripped rather than rejected (zod objects strip by
  * default), so a manifest from a newer producer stays usable here.
@@ -60,7 +65,10 @@ export type BotArgType = "string" | "int" | "number" | "bool" | "user" | "choice
 const BotArgSchema = z
   .object({
     name: z.string().regex(NAME_RE),
-    type: z.enum(["string", "int", "number", "bool", "user", "choice"]),
+    // Permissive on purpose: an unrecognised type parses here and is dropped at
+    // the command level (parseBotManifest), so a type added by a future producer
+    // hides only its own command instead of blanking the whole manifest.
+    type: z.string().min(1),
     description: z.string().optional(),
     required: z.boolean().optional(),
     choices: z.array(z.string()).optional(),
@@ -77,7 +85,9 @@ const BotArgSchema = z
       if (choices.some((c) => byteLength(c) < 1 || byteLength(c) > MAX_CHOICE_BYTES)) {
         ctx.addIssue({ code: "custom", message: "choice value out of bounds" });
       }
-    } else if (choices.length > 0) {
+    } else if (isKnownArgType(a.type) && choices.length > 0) {
+      // A KNOWN non-choice type must not carry choices. An unknown type is left
+      // alone — we can't know its rules, and its command drops regardless.
       ctx.addIssue({ code: "custom", message: "choices on a non-choice argument" });
     }
   })
@@ -131,14 +141,34 @@ const BotManifestSchema = z
   })
   .transform((m) => ({ v: m.v, commands: m.commands ?? [] }));
 
-export type BotArg = z.infer<typeof BotArgSchema>;
-export type BotCommand = z.infer<typeof BotCommandSchema>;
-export type BotManifest = z.infer<typeof BotManifestSchema>;
+/** A validated argument. `type` is always one this client can render. */
+export interface BotArg {
+  name: string;
+  type: BotArgType;
+  description: string;
+  required: boolean;
+  choices: string[];
+}
+export interface BotCommand {
+  name: string;
+  description: string;
+  args: BotArg[];
+}
+export interface BotManifest {
+  v: 1;
+  commands: BotCommand[];
+}
 
 /**
- * Parse a manifest event's `content`. Fail-closed: a manifest that breaks any
- * rule has no usable interface and is ignored entirely rather than partially
- * rendered.
+ * Parse a manifest event's `content`.
+ *
+ * Fail-closed on genuine invalidity: a manifest that breaks a structural rule
+ * (bad `v`, oversize, a malformed command) is ignored entirely rather than
+ * partially rendered. But forward compatibility is graceful: a command whose
+ * argument list uses a type this client does not recognise is *hidden*, not
+ * fatal — its positions can't be rendered safely, yet the rest of the bot's
+ * commands stay usable. That lets a future producer add an argument type without
+ * blanking every older client's picker.
  */
 export function parseBotManifest(content: string): BotManifest | undefined {
   if (byteLength(content) > MAX_MANIFEST_BYTES) return undefined;
@@ -149,7 +179,18 @@ export function parseBotManifest(content: string): BotManifest | undefined {
     return undefined;
   }
   const parsed = BotManifestSchema.safeParse(json);
-  return parsed.success ? parsed.data : undefined;
+  if (!parsed.success) return undefined;
+
+  const commands: BotCommand[] = [];
+  for (const c of parsed.data.commands) {
+    if (!c.args.every((a) => isKnownArgType(a.type))) continue; // undrawable → hide it
+    commands.push({
+      name: c.name,
+      description: c.description,
+      args: c.args.map((a) => ({ ...a, type: a.type as BotArgType })),
+    });
+  }
+  return { v: parsed.data.v, commands };
 }
 
 // ── The routing tag ──────────────────────────────────────────────────────────

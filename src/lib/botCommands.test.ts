@@ -99,6 +99,49 @@ describe("parseBotManifest", () => {
     expect(m!.commands[0]).toEqual({ name: "ping", description: "", args: [] });
   });
 
+  it("hides a command that uses an unknown argument type, keeping the rest", () => {
+    // Forward compatibility: the day the spec adds a 7th type and one bot adopts
+    // it, an older client must not lose that bot's OTHER commands. The command
+    // can't be part-rendered (positions would shift), so it's dropped whole.
+    const m = parseBotManifest(
+      JSON.stringify({
+        v: 1,
+        commands: [
+          { name: "ping", args: [] },
+          { name: "pay", args: [{ name: "amt", type: "int" }, { name: "when", type: "duration" }] },
+          { name: "roll", args: [{ name: "sides", type: "int" }] },
+        ],
+      }),
+    );
+    expect(m).toBeDefined();
+    expect(m!.commands.map((c) => c.name)).toEqual(["ping", "roll"]);
+  });
+
+  it("does not let an unknown type carrying choices reject the manifest", () => {
+    // A known non-choice arg with choices is malformed and fatal; an UNKNOWN one
+    // has rules we can't know, so its command is simply hidden, not fatal.
+    const m = parseBotManifest(
+      JSON.stringify({
+        v: 1,
+        commands: [
+          { name: "ok", args: [] },
+          { name: "future", args: [{ name: "x", type: "money", choices: ["usd", "eur"] }] },
+        ],
+      }),
+    );
+    expect(m!.commands.map((c) => c.name)).toEqual(["ok"]);
+  });
+
+  it("still rejects the WHOLE manifest for a genuine structural error", () => {
+    // Graceful degrade is only for unknown types. A real violation (choices on a
+    // KNOWN non-choice type) is a malformed producer and fails fail-closed.
+    const json = JSON.stringify({
+      v: 1,
+      commands: [{ name: "cmd", args: [{ name: "x", type: "int", choices: ["1"] }] }],
+    });
+    expect(parseBotManifest(json)).toBeUndefined();
+  });
+
   it("rejects malformed JSON", () => {
     expect(parseBotManifest("{not json")).toBeUndefined();
   });
