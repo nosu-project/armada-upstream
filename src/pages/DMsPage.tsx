@@ -1311,18 +1311,18 @@ function ConversationList({
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Messages
             </span>
-            <div className="flex items-center gap-0.5">
+            <div className="flex items-center gap-2">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-5 text-muted-foreground hover:text-foreground"
+                    className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
                     aria-label="Search conversations"
                     aria-pressed={searchOpen}
                     onClick={() => setSearchOpen(true)}
                   >
-                    <Search className="size-3.5" />
+                    <Search className="size-4" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Search conversations</TooltipContent>
@@ -1332,7 +1332,7 @@ function ConversationList({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-5"
+                    className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
                     aria-label="New message"
                     onClick={onCompose}
                   >
