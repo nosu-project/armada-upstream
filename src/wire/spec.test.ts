@@ -46,7 +46,7 @@ describe("buildWireSpec", () => {
     expect(b?.filters).toEqual([{ kinds: [9, 1068, 5], "#h": ["g3"] }]);
   });
 
-  it("adds sent + friends-only received DM filters on the DM relays", () => {
+  it("adds sent + friends-only received DM filters plus the NIP-17 gift-wrap inbox on the DM relays", () => {
     const spec = buildWireSpec({
       pubkey: PUBKEY,
       groups: [],
@@ -60,7 +60,34 @@ describe("buildWireSpec", () => {
     expect(spec.subs[0].filters).toEqual([
       { kinds: [4], authors: [PUBKEY] },
       { kinds: [4], authors: ["a".repeat(64), "b".repeat(64)], "#p": [PUBKEY] },
+      { kinds: [1059], "#p": [PUBKEY] },
     ]);
+  });
+
+  it("maps NIP-17 conversation wrap addresses to their peer (dm17ByPk), without touching the sig", () => {
+    const inputs = {
+      pubkey: PUBKEY,
+      groups: [],
+      dmRelays: ["wss://dm.relay"],
+      dmFollows: ["a".repeat(64)],
+      concord1: [],
+      concord2: [],
+    };
+    const withAddrs = buildWireSpec({
+      ...inputs,
+      dm17WrapAddrs: [
+        { wrapPk: "1".repeat(64), peerPk: "a".repeat(64) },
+        { wrapPk: "2".repeat(64), peerPk: "b".repeat(64) },
+      ],
+    });
+    const without = buildWireSpec(inputs);
+
+    expect(withAddrs.dm17ByPk.get("1".repeat(64))).toBe("a".repeat(64));
+    expect(withAddrs.dm17ByPk.get("2".repeat(64))).toBe("b".repeat(64));
+    expect(without.dm17ByPk.size).toBe(0);
+    // The wrap-address map must NOT change the subscription set (the kind-1059
+    // #p filter is identical either way), so it never forces a resubscribe.
+    expect(withAddrs.sig).toBe(without.sig);
   });
 
   it("omits DM filters entirely when logged out", () => {

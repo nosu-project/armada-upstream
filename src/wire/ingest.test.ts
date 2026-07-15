@@ -77,6 +77,7 @@ function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
     v2CommunityByChannel: new Map(),
     v2CtlByPk: new Map(),
     v1ByZ: new Map(),
+    dm17ByPk: new Map(),
     sig: "",
     ...spec,
   };
@@ -294,5 +295,66 @@ describe("ingestWireEvents — foreground notify candidates", () => {
       body: "sealed hi",
       path: `/c/comm-hex/${idHex}`,
     });
+  });
+
+  it("emits a DM candidate for a NIP-17 wrap whose author is a known conversation address", async () => {
+    // A kind-1059 wrap from a follows-scoped conversation address (nips#2396).
+    // The wire attributes it to the peer WITHOUT unwrapping, so mention=true,
+    // no body, and — critically — it uses the ingest wall-clock time, not the
+    // wrap's NIP-59-backdated created_at.
+    const wrapPk = "a".repeat(64);
+    const now = Math.floor(Date.now() / 1000);
+    const wrap: NostrEvent = {
+      id: "d".repeat(64),
+      kind: 1059,
+      pubkey: wrapPk,
+      created_at: now - 2 * 24 * 60 * 60, // backdated 2 days (NIP-59)
+      content: "sealed",
+      tags: [["p", SELF]],
+      sig: "",
+    };
+    const { captured, off, sinks } = withSink({ dm17ByPk: new Map([[wrapPk, PEER]]) });
+    try {
+      await ingestWireEvents(sinks, [wrap]);
+    } finally {
+      off();
+    }
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({
+      plane: "dm",
+      peer: PEER,
+      author: PEER,
+      mention: true,
+      roomKey: `dm:${PEER}`,
+      path: `/dms/${PEER}`,
+    });
+    expect(captured[0].body).toBeUndefined();
+    // Live-stamped, not the backdated wrap time (which would trip the notifier's
+    // session-floor / dedupe gates).
+    expect(captured[0].createdAt).toBeGreaterThanOrEqual(now);
+    // The wrap is NOT parked — useDm17 owns fetching/decrypting DM wraps.
+    const parked = await peekPendingWraps([wrapPk]);
+    expect(parked.some((w) => w.id === wrap.id)).toBe(false);
+  });
+
+  it("never emits a DM candidate for our own self-copy wrap (author resolves to self)", async () => {
+    const wrapPk = "b".repeat(64);
+    const wrap: NostrEvent = {
+      id: "e".repeat(64),
+      kind: 1059,
+      pubkey: wrapPk,
+      created_at: Math.floor(Date.now() / 1000),
+      content: "sealed",
+      tags: [["p", SELF]],
+      sig: "",
+    };
+    // A self-copy conversation address maps back to SELF.
+    const { captured, off, sinks } = withSink({ dm17ByPk: new Map([[wrapPk, SELF]]) });
+    try {
+      await ingestWireEvents(sinks, [wrap]);
+    } finally {
+      off();
+    }
+    expect(captured).toHaveLength(0);
   });
 });

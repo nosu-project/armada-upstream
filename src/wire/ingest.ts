@@ -14,6 +14,8 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Gift-wrap kinds (Concord V2 / NIP-59) — never persisted sealed. */
 const WRAP_KINDS = new Set([1059, 21059]);
+/** NIP-59 gift-wrap kind — the DM candidate's reported kind for a NIP-17 wrap. */
+const KIND_DM_WRAP = 1059;
 /** Legacy NIP-04 direct message kind (Armada's DM plane). */
 const KIND_DM = 4;
 /** NIP-88 poll kind — a channel-activity message in NIP-29 timelines. */
@@ -99,7 +101,19 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
       } else if (spec?.v2CtlByPk.has(ev.pubkey)) {
         ctlWraps.push(ev);
       } else {
-        toPark.push(ev);
+        // A NIP-17 DM gift wrap from a known conversation address (nips#2396):
+        // attribute it to the peer and NOTIFY without unwrapping. We do NOT
+        // persist or park it — useDm17 owns fetching + decrypting DM wraps on
+        // its own schedule (the sealed wrap is never stored). Wraps we can't
+        // attribute (ephemeral-key senders, non-follows, first contact) simply
+        // produce no notification; useDm17 still surfaces them in-app.
+        const dmPeer = spec?.dm17ByPk.get(ev.pubkey);
+        if (dmPeer) {
+          const cand = dm17Candidate(ev, dmPeer, self);
+          if (cand) candidates.push(cand);
+        } else {
+          toPark.push(ev);
+        }
       }
     } else {
       plain.push(ev);
@@ -168,6 +182,34 @@ export async function ingestWireEvents(sinks: WireSinks, events: NostrEvent[]): 
 
   if (scopes.size > 0) emitWireScopes(scopes);
   feedNotifyCandidates(candidates);
+}
+
+/**
+ * Build a DM notify candidate for an inbound NIP-17 gift wrap whose author
+ * matches a known conversation address (nips#2396). The wrap is never
+ * unwrapped here, so there is no body preview and no per-message mention
+ * signal (a DM is inherently directed at the viewer). The wrap's `created_at`
+ * is NIP-59-backdated (up to 2 days into the past), which would trip the
+ * notifier's session-floor / dedupe gates — so the candidate is stamped with
+ * the ingest wall-clock time instead (this wrap is arriving live now).
+ */
+function dm17Candidate(
+  wrap: NostrEvent,
+  peer: string,
+  self: string | undefined,
+): NotifyCandidate | undefined {
+  if (self && peer === self) return undefined; // a self-copy wrap: never notify
+  return {
+    plane: "dm",
+    author: peer,
+    createdAt: Math.floor(Date.now() / 1000),
+    mention: true, // a DM is inherently directed at the user
+    kind: KIND_DM_WRAP,
+    roomKey: `dm:${peer}`,
+    readKey: `dm:${peer}`,
+    path: `/dms/${peer}`,
+    peer,
+  };
 }
 
 /** Build notify candidates for a batch of decrypted V2 chat rumors. */

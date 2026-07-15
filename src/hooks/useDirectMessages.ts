@@ -1207,7 +1207,7 @@ export function useDirectMessages(peer: string | undefined) {
       // instead of the thread silently sitting on skeletons.
       if (events.length > 0 && ok === 0 && signerNeedsApproval(user!.method)) setDecryptConsent("declined");
     })();
-  }, [self, peer, user?.signer.nip04, eventStore, queryClient, queryKey]);
+  }, [self, peer, user, eventStore, queryClient, queryKey]);
 
   return {
     messages: query.data ?? [],
