@@ -18,6 +18,7 @@ import { nip19 } from "nostr-tools";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BotCommandComposer } from "@/components/chat/BotCommandComposer";
+import { authorsByRecency } from "@/components/chat/transport";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { firstImageRef } from "@/components/chat/messageHelpers";
@@ -293,6 +294,13 @@ interface ChatComposerProps {
    */
   botCommands?: boolean;
   /**
+   * Members who have spoken in this conversation, most recent first — used to
+   * rank a bot command's `user`-argument picker. NIP-29 groups can leave this
+   * unset (it's derived from `messages`); Concord passes `messages: []`, so its
+   * pages supply this from their own timeline.
+   */
+  recentAuthors?: string[];
+  /**
    * Relays this conversation's own traffic uses, searched for bot manifests
    * alongside the app relays and the public indexers — a bot may publish its
    * manifest only to the community it serves, where no indexer would see it.
@@ -313,7 +321,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, conversationRelays }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, recentAuthors, conversationRelays }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -388,6 +396,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     profiles: botProfiles,
     isLoading: botsLoading,
   } = useBotManifests(botCommands ? memberPubkeys : undefined, botRelays);
+
+  // Members ranked by how recently they spoke, for a `user` argument's picker.
+  // Caller-supplied when the timeline lives elsewhere (Concord); otherwise read
+  // off the messages this composer already has (NIP-29).
+  const recentAuthorsResolved = useMemo(
+    () => recentAuthors ?? authorsByRecency(messages),
+    [recentAuthors, messages],
+  );
 
   const botRecentsKey = `armada-bot-recents:${user?.pubkey ?? ""}`;
   const [botRecents, setBotRecents] = useState<string[]>([]);
@@ -1459,6 +1475,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 entry={botCommand}
                 memberPubkeys={memberPubkeys ?? []}
                 profiles={botProfiles}
+                recentAuthors={recentAuthorsResolved}
                 onSubmit={submitBotCommand}
                 onCancel={cancelBotCommand}
               />

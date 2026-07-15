@@ -30,6 +30,23 @@ export type { ReactInput, ReactionTally, SendStatus };
 export type ChatMsg = NostrEvent;
 
 /**
+ * Participants ordered by how recently they last spoke, most recent first,
+ * deduped. Feeds a bot command's `user`-argument picker so the people active in
+ * this conversation surface ahead of the rest of the roster.
+ */
+export function authorsByRecency(messages: ChatMsg[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of [...messages].sort((a, b) => b.created_at - a.created_at)) {
+    if (!seen.has(m.pubkey)) {
+      seen.add(m.pubkey);
+      out.push(m.pubkey);
+    }
+  }
+  return out;
+}
+
+/**
  * Adapt a non-`NostrEvent` message (a decrypted Concord `OpenedMessage`, a
  * decrypted DM) into the shared `ChatMsg` shape so it renders through the same
  * `MessageRow`/`ChatContent`/`ChatMessage` path. Rendering never re-verifies the

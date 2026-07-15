@@ -72,7 +72,7 @@ import { cn, pickDefaultChannel } from "@/lib/utils";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
 
-import { threadSummary } from "@/components/chat/transport";
+import { authorsByRecency, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
@@ -1116,6 +1116,9 @@ export function ConcordV2Page() {
 
   // Inject `openThread` (page-owned panel state) onto the data transport.
   const transport = useMemo(() => ({ ...baseTransport, openThread }), [baseTransport, openThread]);
+  // Recently-active members, for a bot command's `user`-argument picker. Concord
+  // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
+  const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
   // Background catch-up visibility. `channelSyncing` = a sync task scoped to
   // the channel on screen (its backfill/gap-bridge round is running). The bar
@@ -1796,6 +1799,7 @@ export function ConcordV2Page() {
                         messages={[]}
                         mentionPubkeys={memberPubkeys}
                         botCommands
+                        recentAuthors={recentAuthors}
                         conversationRelays={community?.relays}
                         placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                         sendOverride={handleSend}

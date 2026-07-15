@@ -62,7 +62,7 @@ import { channelZs } from "@/concord-v1/lib/concordNotifications";
 import { type Channel, type Community, type CommunityImage } from "@/concord-v1/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 
-import { threadSummary } from "@/components/chat/transport";
+import { authorsByRecency, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
@@ -559,6 +559,9 @@ export function ConcordPage() {
   // Inject `openThread` (page-owned panel state) onto the data transport, so the
   // shared ChatMessage's reply action opens the thread.
   const transport = useMemo(() => ({ ...baseTransport, openThread }), [baseTransport, openThread]);
+  // Recently-active members, for a bot command's `user`-argument picker (Concord
+  // hands ChatComposer `messages: []`, so it supplies this from its timeline).
+  const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
   // Adapt the folded Concord roster to the shared MemberList's props. The
   // control-plane roster only enumerates the owner + members granted a role —
@@ -1038,6 +1041,7 @@ export function ConcordPage() {
                 messages={[]}
                 mentionPubkeys={memberPubkeys}
                 botCommands
+                recentAuthors={recentAuthors}
                 conversationRelays={community?.relays}
                 placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                 sendOverride={handleSend}

@@ -24,6 +24,12 @@ interface BotCommandComposerProps {
   memberPubkeys: string[];
   /** Names and faces for those candidates (already resolved by the bot sweep). */
   profiles: Record<string, BotRosterProfile>;
+  /**
+   * Members who have spoken in this channel, most recent first. A `user`
+   * argument's picker surfaces them ahead of the rest, so the people you're
+   * likely to name are at the top. Empty ⇒ no activity known ⇒ roster order.
+   */
+  recentAuthors?: string[];
   /** Canonical invocation text, ready to send. */
   onSubmit: (text: string) => void;
   onCancel: () => void;
@@ -40,6 +46,18 @@ const MAX_USER_OPTIONS = 6;
 
 const displayName = (pubkey: string, profiles: Record<string, BotRosterProfile>): string =>
   profiles[pubkey]?.name || `${pubkey.slice(0, 8)}…`;
+
+/**
+ * Members who spoke most recently first, everyone else after in the order given.
+ * `recent` is most-recent-first; with no activity this is a stable no-op, so the
+ * picker falls back to plain roster order.
+ */
+function orderByRecency(pubkeys: string[], recent: string[]): string[] {
+  if (recent.length === 0) return pubkeys;
+  const rank = new Map(recent.map((pk, i) => [pk, i] as const));
+  const absent = recent.length; // everyone not in `recent` ranks equal, after
+  return [...pubkeys].sort((a, b) => (rank.get(a) ?? absent) - (rank.get(b) ?? absent));
+}
 
 /**
  * Collects a bot command's arguments in typed fields instead of making the user
@@ -59,6 +77,7 @@ export function BotCommandComposer({
   entry,
   memberPubkeys,
   profiles,
+  recentAuthors = [],
   onSubmit,
   onCancel,
 }: BotCommandComposerProps) {
@@ -107,11 +126,12 @@ export function BotCommandComposer({
       }
       if (arg.type === "user") {
         const q = query.toLowerCase();
-        return memberPubkeys
-          .filter((pk) => {
-            if (!q) return true;
-            return displayName(pk, profiles).toLowerCase().includes(q) || pk.includes(q);
-          })
+        const matched = memberPubkeys.filter(
+          (pk) => !q || displayName(pk, profiles).toLowerCase().includes(q) || pk.includes(q),
+        );
+        // Recently-active members first; the picker shows the top few, so the
+        // person you mean is usually already there before you finish typing.
+        return orderByRecency(matched, recentAuthors)
           .slice(0, MAX_USER_OPTIONS)
           .map((pk) => ({
             value: pk,
@@ -121,7 +141,7 @@ export function BotCommandComposer({
       }
       return [];
     },
-    [args, memberPubkeys, profiles],
+    [args, memberPubkeys, profiles, recentAuthors],
   );
 
   const menuOptions = useMemo(

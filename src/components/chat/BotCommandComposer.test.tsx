@@ -164,6 +164,29 @@ describe("BotCommandComposer", () => {
     expect(screen.queryByText("pirate")).not.toBeInTheDocument();
   });
 
+  it("orders the user picker by recent activity, then roster order", () => {
+    const M1 = "1".repeat(64);
+    const M2 = "2".repeat(64);
+    const M3 = "3".repeat(64);
+    render(
+      <BotCommandComposer
+        entry={entry("greet")}
+        memberPubkeys={[M1, M2, M3]}
+        profiles={{ [M1]: { name: "Alpha" }, [M2]: { name: "Bravo" }, [M3]: { name: "Charlie" } }}
+        recentAuthors={[M3, M1]} // Charlie spoke most recently, then Alpha; Bravo is quiet
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    fireEvent.focus(screen.getByLabelText("who"));
+    const names = ["Alpha", "Bravo", "Charlie"];
+    const order = screen
+      .getAllByRole("button")
+      .map((b) => names.find((n) => b.textContent?.includes(n)))
+      .filter((n): n is string => Boolean(n));
+    expect(order).toEqual(["Charlie", "Alpha", "Bravo"]);
+  });
+
   it("abandons the command on Escape", () => {
     const { onCancel } = mount("roll");
     fireEvent.keyDown(screen.getByLabelText("sides"), { key: "Escape" });
