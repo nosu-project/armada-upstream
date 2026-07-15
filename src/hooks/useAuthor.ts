@@ -1,11 +1,16 @@
 import { type NostrEvent, type NostrMetadata, NSchema as n } from '@nostrify/nostrify';
 import { useNostr } from '@nostrify/react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useCacheFirstSeed } from '@/hooks/useCacheFirstSeed';
 import { useEventStore } from '@/hooks/useEventStore';
 
 export type AuthorResult = { event?: NostrEvent; metadata?: NostrMetadata };
+
+/** The TanStack Query key holding a pubkey's parsed kind-0 profile. */
+export function authorQueryKey(pubkey: string): [string, string] {
+  return ['author', pubkey];
+}
 
 /** Parse a kind-0 event into metadata + event, or return just the event on parse failure. */
 export function parseAuthorEvent(event: NostrEvent): { event: NostrEvent; metadata?: NostrMetadata } {
@@ -15,6 +20,22 @@ export function parseAuthorEvent(event: NostrEvent): { event: NostrEvent; metada
   } catch {
     return { event };
   }
+}
+
+/**
+ * Write a kind-0 event into the shared `['author', pubkey]` cache, but only if
+ * it's newer than whatever is already there. Kind 0 is replaceable, so a plain
+ * `setQueryData` from a background query (follow-profiles, notifications) can
+ * clobber a fresher profile another path already resolved — the profile then
+ * "flips" back to older metadata. Everyone seeding the author cache must go
+ * through here so newest-wins holds cache-wide, mirroring the store's
+ * replaceable semantics and the `useCacheFirstSeed` guard.
+ */
+export function seedAuthorCache(queryClient: QueryClient, pubkey: string, event: NostrEvent): void {
+  const key = authorQueryKey(pubkey);
+  const existing = queryClient.getQueryData<AuthorResult>(key);
+  if (existing?.event && existing.event.created_at >= event.created_at) return;
+  queryClient.setQueryData<AuthorResult>(key, parseAuthorEvent(event));
 }
 
 export function useAuthor(pubkey: string | undefined) {

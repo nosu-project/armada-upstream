@@ -11,7 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { requestMention } from "@/hooks/useMentionBus";
-import { useProfileTheme } from "@/hooks/useProfileTheme";
+import { useProfileTheme, usePrefetchProfileTheme } from "@/hooks/useProfileTheme";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -221,10 +221,17 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
  */
 export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps) {
   const [open, setOpen] = useState(false);
+  const prefetchTheme = usePrefetchProfileTheme();
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverTrigger
+        asChild
+        onPointerEnter={() => prefetchTheme(pubkey)}
+        onFocus={() => prefetchTheme(pubkey)}
+      >
+        {children}
+      </PopoverTrigger>
       {open && <ThemedPreviewContent pubkey={pubkey} onClose={() => setOpen(false)} />}
     </Popover>
   );
@@ -236,7 +243,7 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
  * (if any) as scoped CSS variables on the card element.
  */
 function ThemedPreviewContent({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
-  const dittoTheme = useProfileTheme(pubkey).data;
+  const dittoTheme = useProfileTheme(pubkey).data?.theme;
   const themeStyle = dittoTheme ? buildThemeVarStyle(dittoTheme.colors) : undefined;
 
   return (

@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
+import { seedAuthorCache } from "@/hooks/useAuthor";
 
 import type { NostrEvent, NostrMetadata } from "@nostrify/nostrify";
 
@@ -130,7 +131,9 @@ function useFollowProfiles(followedPubkeys: string[]) {
         try {
           const metadata = n.json().pipe(n.metadata()).parse(event.content);
           profiles.push({ pubkey, metadata, event });
-          queryClient.setQueryData(["author", pubkey], { event, metadata });
+          // Seed the shared author cache newest-wins, never downgrading a
+          // fresher profile another path already resolved.
+          seedAuthorCache(queryClient, pubkey, event);
         } catch {
           // Skip unparseable metadata.
         }

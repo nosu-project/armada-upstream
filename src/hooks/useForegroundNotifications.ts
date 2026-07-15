@@ -10,7 +10,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { parseAuthorEvent, type AuthorResult } from "@/hooks/useAuthor";
+import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/hooks/useAuthor";
 import {
   foregroundNotifyIntent,
   notificationsApiAvailable,
@@ -153,7 +153,7 @@ export function useForegroundNotifications(): void {
         if (ev) {
           const parsed = parseAuthorEvent(ev);
           // Seed the author cache so the next lookup is synchronous.
-          qc.setQueryData<AuthorResult>(["author", pubkey], parsed);
+          seedAuthorCache(qc, pubkey, ev);
           if (parsed.metadata) return getDisplayName(parsed.metadata, pubkey);
         }
       } catch {
