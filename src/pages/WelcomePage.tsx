@@ -87,7 +87,7 @@ function WizardShell({ step, maxWidth = "max-w-sm", children }: {
 }
 
 export function WelcomePage() {
-  const { config } = useAppContext();
+  const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
@@ -105,6 +105,14 @@ export function WelcomePage() {
     setNsec(nip19.nsecEncode(generateSecretKey()));
     setShowKey(false);
     setStep("download");
+  };
+
+  // "Skip for now": leave onboarding for DMs. Persist the choice so a fresh
+  // account with no community isn't forced back onto the getting-started
+  // screen on every relaunch (see the redirect guards below and HomeRedirect).
+  const skipOnboarding = () => {
+    updateConfig((c) => ({ ...c, onboardingSkipped: true }));
+    navigate("/dms");
   };
 
   // Save the key via the best available method (credential manager on
@@ -166,6 +174,13 @@ export function WelcomePage() {
   }
   if (user && firstRoute) {
     return <Navigate to={firstRoute} replace />;
+  }
+  // Already skipped and still community-less: don't force the create/join
+  // takeover again on relaunch. Only redirect when not mid-wizard, so a user
+  // who deliberately steps into the "add" step here (or reaches it via signup)
+  // still sees it.
+  if (user && config.onboardingSkipped && step === null) {
+    return <Navigate to="/dms" replace />;
   }
 
   // ── Wizard step 1: generate the key ─────────────────────────────────────
@@ -301,7 +316,7 @@ export function WelcomePage() {
         <Button
           variant="ghost"
           className="mx-auto text-muted-foreground"
-          onClick={() => navigate("/dms")}
+          onClick={skipOnboarding}
         >
           Skip for now
         </Button>
@@ -319,7 +334,7 @@ export function WelcomePage() {
           <Button
             variant="ghost"
             className="mx-auto text-muted-foreground"
-            onClick={() => navigate("/dms")}
+            onClick={skipOnboarding}
           >
             Skip for now
           </Button>
