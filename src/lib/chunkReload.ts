@@ -17,10 +17,16 @@
 const RELOAD_FLAG = "armada:chunk-reloaded";
 
 /**
- * Heuristic: does this error look like a failed module/chunk fetch rather than
- * an application logic bug? Matches the messages browsers use for a dynamic
- * import that 404s, times out, or returns the wrong MIME type — plus the
- * downstream React symptom of a chunk resolving to an empty/HTML module.
+ * Heuristic: does this error look like a stale/mismatched-build boot after a
+ * deploy rather than an application logic bug? Matches two families:
+ *  1. A dynamic import that 404s, times out, or returns the wrong MIME type
+ *     (the chunk hash was pruned server-side) — plus a chunk resolving to an
+ *     empty/HTML module.
+ *  2. A render-phase crash from a MIX of old cached + new vendor chunks (e.g. an
+ *     old vendor-radix wired to a fresh vendor-react). The duplicate/mismatched
+ *     React copies surface as a hook called on a null dispatcher/context
+ *     (`c.useContext(...) is null`, "Invalid hook call", …) — no chunk-y
+ *     message, but still a stale-build symptom that a one-time reload fixes.
  */
 export function isChunkLoadError(error: unknown): boolean {
   const message =
@@ -31,7 +37,22 @@ export function isChunkLoadError(error: unknown): boolean {
     /Importing a module script failed/i.test(message) ||
     /'?text\/html'?.*not a valid JavaScript MIME type/i.test(message) ||
     /Loading (?:chunk|CSS chunk) .* failed/i.test(message) ||
-    /ChunkLoadError/i.test(message)
+    /ChunkLoadError/i.test(message) ||
+    // A deploy that pruned old hashed chunks can leave a tab booting with a
+    // MIX of old cached and new vendor chunks (e.g. an old vendor-radix against
+    // a fresh vendor-react). The mismatched React instances then blow up in the
+    // render phase rather than at import time — most often as a hook called on
+    // a context that belongs to the "other" React copy. These have no chunk-y
+    // message, so match the well-known React internal-hook null shapes too, so
+    // the one-time reload recovers instead of stranding the user on the crash
+    // screen. Reading a property (`.useContext`, `.useState`, …) of a null
+    // dispatcher is the tell for a duplicate/mismatched React on boot.
+    /\.use[A-Z]\w*\(?\.{0,3}\)? is null/i.test(message) ||
+    /(?:null|undefined) is not an object.*\.use[A-Z]/i.test(message) ||
+    /Cannot read propert(?:y|ies) of null \(reading 'use[A-Z]/i.test(message) ||
+    /Cannot read property 'use[A-Z]\w*' of null/i.test(message) ||
+    /Invalid hook call/i.test(message) ||
+    /dispatcher is null/i.test(message)
   );
 }
 
