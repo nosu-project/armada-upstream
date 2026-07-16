@@ -4,6 +4,16 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.28.4] - 2026-07-16
+
+A small fix for menus on narrow screens. Submenus opened from a message or
+conversation menu — such as the Encryption and Notifications options — no longer
+run off the edge of the screen, so their choices stay fully visible and tappable.
+
+### Fixed
+- Nested menus (like the DM Encryption and Notifications submenus) no longer
+  overflow off the side of the screen on narrow displays
+
 ## [0.28.3] - 2026-07-16
 
 A direct-message and community-security release. Each DM conversation now has an
