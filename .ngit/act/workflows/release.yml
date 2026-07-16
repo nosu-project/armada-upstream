@@ -1,9 +1,12 @@
 name: Android release
 
-# Signed Android APK + AAB on version tags (vX.Y.Z), then a Zapstore publish.
-# Ported from the GitLab `build-apk` + `publish-zapstore` jobs to ngit-ci
-# (act / GitHub Actions syntax). Results and artifacts surface on
-# gitworkshop.dev against the tagged commit.
+# Signed Android APK + AAB on version tags (vX.Y.Z), then a Zapstore publish —
+# all in ONE job. Ported from the GitLab `build-apk` + `publish-zapstore` jobs
+# to ngit-ci (act / GitHub Actions syntax). We keep build+publish in a single
+# job on purpose: act's local artifact server round-trips a multi-file wildcard
+# upload back as a 3-byte stub, so handing the APK across jobs via
+# upload/download-artifact fed zsp an empty file. Results and artifacts surface
+# on gitworkshop.dev against the tagged commit.
 #
 # ── Version ──────────────────────────────────────────────────────────────────
 # The version is carried by the git tag (vX.Y.Z), never a committed field:
@@ -33,9 +36,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    outputs:
-      version: ${{ steps.version.outputs.name }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -136,6 +137,7 @@ jobs:
           ./gradlew assembleRelease bundleRelease
 
       - name: Collect and name artifacts
+        id: artifacts
         env:
           VERSION_NAME: ${{ steps.version.outputs.name }}
         run: |
@@ -145,6 +147,7 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk "$out/Armada-v$VERSION_NAME.apk"
           cp android/app/build/outputs/bundle/release/app-release.aab "$out/Armada-v$VERSION_NAME.aab"
           ls -lh "$out"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
 
       # The APK/AAB are signed now; remove the keystore and password file.
       - name: Remove release signing material
@@ -152,39 +155,22 @@ jobs:
         run: |
           rm -f android/key.properties android/app/my-upload-key.keystore
 
-      # Uploaded to Blossom by the coordinator (when the operator enables
-      # Blossom); each file appears as an `artifact` tag on the Job Result and
-      # is downloadable by the dependent job.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: armada-android-v${{ steps.version.outputs.name }}
-          path: |
-            ${{ runner.temp }}/armada-android-v${{ steps.version.outputs.name }}/Armada-v${{ steps.version.outputs.name }}.apk
-            ${{ runner.temp }}/armada-android-v${{ steps.version.outputs.name }}/Armada-v${{ steps.version.outputs.name }}.aab
-          if-no-files-found: error
-
-  publish-zapstore:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: build
-    steps:
-      - uses: actions/checkout@v4
-
+      # Publish to Zapstore in the SAME job. We deliberately do NOT hand the APK
+      # off via upload/download-artifact: under act's local artifact server the
+      # multi-file wildcard upload round-trips back as a 3-byte stub (digests
+      # match on upload, but the download is empty), which then makes `zsp`
+      # choke on a non-APK. Building and publishing in one job keeps the real
+      # 7 MB signed APK on disk the whole time.
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-
-      - name: Download signed APK
-        uses: actions/download-artifact@v4
-        with:
-          name: armada-android-v${{ needs.build.outputs.version }}
-          path: release-artifacts
 
       - name: Publish to Zapstore
         env:
           SIGN_WITH: ${{ secrets.ZAPSTORE_BUNKER_URL }}
           ZAPSTORE_CLIENT_KEY: ${{ secrets.ZAPSTORE_CLIENT_KEY }}
-          VERSION_NAME: ${{ needs.build.outputs.version }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          ARTIFACT_DIR: ${{ steps.artifacts.outputs.dir }}
           RELAY_URLS: wss://relay.zapstore.dev,wss://relay.ditto.pub,wss://relay.dreamith.to,wss://relay.primal.net
           BLOSSOM_URL: https://blossom.ditto.pub
         run: |
@@ -192,8 +178,21 @@ jobs:
           : "${SIGN_WITH:?Set the ZAPSTORE_BUNKER_URL secret.}"
           : "${ZAPSTORE_CLIENT_KEY:?Set the ZAPSTORE_CLIENT_KEY secret.}"
 
-          apk_path="release-artifacts/Armada-v$VERSION_NAME.apk"
+          apk_path="$ARTIFACT_DIR/Armada-v$VERSION_NAME.apk"
           test -f "$apk_path"
+
+          # Guard against a truncated/empty APK reaching zsp: a real signed APK
+          # is several MB and must be a valid ZIP. Fail loudly here rather than
+          # letting zsp die on an unreadable archive.
+          apk_size="$(stat -c%s "$apk_path")"
+          if [ "$apk_size" -lt 1000000 ]; then
+            echo "APK at $apk_path is only ${apk_size} bytes — expected a multi-MB signed APK. Aborting." >&2
+            exit 1
+          fi
+          unzip -l "$apk_path" >/dev/null 2>&1 || {
+            echo "APK at $apk_path is not a valid ZIP/APK archive. Aborting." >&2
+            exit 1
+          }
 
           go install github.com/zapstore/zsp@latest
           export PATH="$(go env GOPATH)/bin:$PATH"
@@ -211,6 +210,6 @@ jobs:
           release_config="$(mktemp zapstore-release.XXXXXX.yaml)"
           trap 'rm -f "$release_config"' EXIT
           cp zapstore.yaml "$release_config"
-          sed -i "2i release_source: ./$apk_path" "$release_config"
+          sed -i "2i release_source: $apk_path" "$release_config"
           sed -i "2i version: $VERSION_NAME" "$release_config"
           zsp publish --quiet --skip-metadata --skip-preview "$release_config"
