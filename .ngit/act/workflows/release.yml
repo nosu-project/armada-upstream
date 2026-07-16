@@ -199,48 +199,55 @@ jobs:
           # tagged build, and so the version is reproducible from the logs.
           go install github.com/zapstore/zsp@v0.4.12
           export PATH="$(go env GOPATH)/bin:$PATH"
-          zsp --version || true
 
-          # Restore the persistent NIP-46 client key so the bunker recognizes
-          # this workflow as the same application across runs. zsp stores keys
-          # at ~/.config/zsp/bunker-keys/<bunker-pubkey>.key
-          bunker_pubkey="${SIGN_WITH#bunker://}"
-          bunker_pubkey="${bunker_pubkey%%\?*}"
-          test "$bunker_pubkey" != "$SIGN_WITH"
-          umask 077
-          mkdir -p ~/.config/zsp/bunker-keys
-          printf '%s\n' "$ZAPSTORE_CLIENT_KEY" > ~/.config/zsp/bunker-keys/"$bunker_pubkey".key
-
-          release_config="$(mktemp zapstore-release.XXXXXX.yaml)"
-          trap 'rm -f "$release_config"' EXIT
-          cp zapstore.yaml "$release_config"
-          sed -i "2i release_source: $apk_path" "$release_config"
-          sed -i "2i version: $VERSION_NAME" "$release_config"
-          cat "$release_config"
-
-          # --json is a GLOBAL flag and MUST precede the `publish` subcommand:
-          # `zsp --json publish ...`. Placed after `publish` it is silently
-          # ignored and zsp exits 1 with no message — exactly the opaque failure
-          # we chased. It makes zsp non-interactive and writes the real error to
-          # stderr as {"error":"..."}. act truncates the failing step's console
-          # log, so also capture to a file a later step uploads as an artifact.
-          # --skip-certificate-linking: the ngit-ci Android upload key was
-          # rotated, so the new signing cert isn't yet linked to the publishing
-          # identity; without this zsp aborts a first publish under a new cert.
-          out="$RUNNER_TEMP/zsp-output.txt"
+          # Everything from here (bunker parsing, config prep, zsp) is traced
+          # into a single file that a later step ALWAYS uploads as an artifact.
+          # act truncates a failing step's console log at the failure point, so
+          # earlier attempts died invisibly — e.g. a bad ${SIGN_WITH} format made
+          # the `test` below exit under `set -e` with nothing on the console.
+          # Redact the client key; never trace it.
+          out="${RUNNER_TEMP:-/tmp}/zsp-output.txt"
           set +e
-          zsp --json publish \
-            --skip-metadata \
-            --skip-preview \
-            --skip-certificate-linking \
-            "$release_config" >"$out" 2>&1
+          {
+            set -x
+            zsp --version || true
+
+            # Restore the persistent NIP-46 client key so the bunker recognizes
+            # this workflow as the same application across runs. zsp stores keys
+            # at ~/.config/zsp/bunker-keys/<bunker-pubkey>.key
+            bunker_pubkey="${SIGN_WITH#bunker://}"
+            bunker_pubkey="${bunker_pubkey%%\?*}"
+            # Report (don't silently `set -e`-exit) if the scheme wasn't stripped.
+            if [ "$bunker_pubkey" = "$SIGN_WITH" ]; then
+              echo "SIGN_WITH does not look like a bunker:// URL (no scheme stripped); cannot derive bunker pubkey." >&2
+              set +x; exit 1
+            fi
+            umask 077
+            mkdir -p ~/.config/zsp/bunker-keys
+            printf '%s\n' "$ZAPSTORE_CLIENT_KEY" > ~/.config/zsp/bunker-keys/"$bunker_pubkey".key
+
+            release_config="$(mktemp zapstore-release.XXXXXX.yaml)"
+            cp zapstore.yaml "$release_config"
+            sed -i "2i release_source: $apk_path" "$release_config"
+            sed -i "2i version: $VERSION_NAME" "$release_config"
+            cat "$release_config"
+
+            # --json is a GLOBAL flag and MUST precede `publish`; after it, it is
+            # silently ignored and zsp exits 1 with no message.
+            # --skip-certificate-linking: the ngit-ci upload key was rotated, so
+            # its cert isn't linked to the publishing identity yet.
+            zsp --json publish \
+              --skip-metadata \
+              --skip-preview \
+              --skip-certificate-linking \
+              "$release_config"
+          } >"$out" 2>&1
           zsp_rc=$?
-          set -e
-          echo "=== zsp output (rc=$zsp_rc) ==="
+          echo "=== zsp publish sequence output (rc=$zsp_rc) ==="
           cat "$out" || true
           exit "$zsp_rc"
 
-      # act truncates the failing step's console log, so surface zsp's captured
+      # act truncates the failing step's console log, so surface the captured
       # output through the reliable artifact channel whenever publish fails.
       - name: Upload zsp output on failure
         if: ${{ failure() }}
