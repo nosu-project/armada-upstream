@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.30.1] - 2026-07-16
+
+Polish for community admins and a quieter sync experience. Invite-link
+management now shows which key epoch each of your links serves, warns when a
+link has fallen behind after a rekey, and lets you inspect a link's stored
+record (with secrets redacted). The invite-links, member-health, and audit-log
+admin views now open on mobile too. And the old full-width "Syncing…" bar is
+gone, replaced by an unobtrusive spinning dot in the corner of the channel icon
+that you can tap for details.
+
+### Added
+- Invite links now show the key epoch they serve, nudge you when a link has
+  fallen behind after a community rekey, and offer a details view of the link's
+  stored record (secrets redacted)
+
+### Changed
+- The invite-links, member-health, and audit-log admin views now open on mobile
+- Replaced the full-width "Syncing…" bar with a passive spinning dot on the
+  channel icon; tap it for what's syncing
+
 ## [0.30.0] - 2026-07-16
 
 Bot commands come to Armada. Communities and DMs can now surface bot commands
