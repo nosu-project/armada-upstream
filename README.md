@@ -16,10 +16,8 @@ ordinary relays; only members can read them.
 
 Armada also supports [NIP-29 relay-based
 groups](https://github.com/nostr-protocol/nips/blob/master/29.md) for operators
-who want to **self-host a server** and own membership, moderation, and data. The
-optional self-hostable backend (NIP-29 relay + LiveKit voice + Concord AV
-broker) lives in a separate repo,
-[`armada-relay`](https://gitlab.com/soapbox-pub/armada-relay).
+who want a **relay-backed server** that owns membership, moderation, and data —
+point the client at any NIP-29 relay.
 
 This repository is the **client** — the web app (React 19 + Vite + Tailwind +
 shadcn/ui + Nostrify), the Capacitor Android project (`android/`), and the
@@ -35,8 +33,7 @@ time; it talks to relays and voice brokers over runtime-configurable URLs.
   client-specific Concord conventions are documented in
   [CORD.md](CORD.md), the CORD analog of a project's `NIP.md`.
 - **NIP-29 servers** — relays act as servers; channels are NIP-29 groups.
-  Requires a relay to point at (self-host via `armada-relay`, or use any
-  external NIP-29 relay).
+  Requires a relay to point at (use any external NIP-29 relay).
 - **Auth** — sign in with your key: nsec, NIP-07 extension, or NIP-46
   bunker/nostrconnect. Your identity is portable across devices.
 - **App relays** — configurable general-purpose relays for non-community traffic
@@ -88,12 +85,6 @@ the box; other hostnames need HTTPS.
   it over a custom secure scheme. CI produces Linux/Windows/macOS installers on
   tags.
 - **Web** — `Dockerfile` (nginx-served static build) + `nginx.conf`.
-
-## Self-hosting a backend
-
-To run your own NIP-29 relay, LiveKit SFU, and Concord AV broker, see the
-[`armada-relay`](https://gitlab.com/soapbox-pub/armada-relay) repo. Its
-`docker-compose.yml` can optionally build this client from a sibling checkout.
 
 ## License
 
