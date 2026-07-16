@@ -1,0 +1,137 @@
+name: Desktop release
+
+# Electron desktop installers on version tags (vX.Y.Z): Linux (AppImage + deb)
+# and Windows (NSIS Setup + portable, cross-built from Linux via wine). macOS
+# .dmg is NOT built here — act runs jobs in Linux containers only; the macOS
+# build stays on the GitLab mirror (.gitlab-ci.yml, manual `macos` runner).
+#
+# Armada desktop is a SOVEREIGN, standalone client: it bundles the web build
+# and serves it over a custom secure scheme (electron/main.js). The bundle is
+# compiled with EMPTY platform relays so nothing is baked in.
+#
+# Each job builds its own web bundle rather than sharing an artifact: ngit-ci
+# resolves `needs` inside one act invocation, so a shared-build fan-in would
+# force both platforms onto one job — building twice keeps them independent.
+# The version is carried by the git tag (vX.Y.Z), stamped into the Electron
+# app's package.json at build time.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build standalone web bundle
+        env:
+          VITE_PLATFORM_RELAYS: ""
+        run: |
+          set -eu
+          npm ci
+          npx vite build -l error
+          cp dist/index.html dist/404.html
+          rm -rf electron/dist
+          cp -r dist electron/dist
+
+      - name: Build Linux installers
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          VERSION="${TAG#v}"
+          cd electron
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json
+          npm install --no-audit --no-fund
+          npx electron-builder --linux --config electron-builder.yml --publish never
+
+      - name: Collect artifacts
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          out="$RUNNER_TEMP/armada-linux-$TAG"
+          mkdir -p "$out"
+          cp electron/release/*.AppImage "$out/Armada-$TAG-linux-x86_64.AppImage"
+          cp electron/release/*.deb "$out/Armada-$TAG-linux-amd64.deb"
+          ls -lh "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armada-desktop-linux-${{ github.ref_name }}
+          path: ${{ runner.temp }}/armada-linux-${{ github.ref_name }}/*
+          if-no-files-found: error
+
+  windows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build standalone web bundle
+        env:
+          VITE_PLATFORM_RELAYS: ""
+        run: |
+          set -eu
+          npm ci
+          npx vite build -l error
+          cp dist/index.html dist/404.html
+          rm -rf electron/dist
+          cp -r dist electron/dist
+
+      # electron-builder needs wine to produce Windows installers on Linux.
+      # The act runner image is not the electronuserland/builder:wine image the
+      # GitLab job used, so install wine explicitly here.
+      - name: Install wine
+        run: |
+          set -eu
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends wine wine32 wine64 >/dev/null || \
+            sudo apt-get install -y --no-install-recommends wine >/dev/null
+
+      - name: Build Windows installers
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          VERSION="${TAG#v}"
+          cd electron
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json
+          npm install --no-audit --no-fund
+          npx electron-builder --win --config electron-builder.yml --publish never
+
+      - name: Collect artifacts
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          out="$RUNNER_TEMP/armada-windows-$TAG"
+          mkdir -p "$out"
+          cp electron/release/*Setup*.exe "$out/Armada-$TAG-Setup.exe"
+          # The portable build is the non-Setup .exe.
+          cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out/Armada-$TAG-windows-portable.exe"
+          ls -lh "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armada-desktop-windows-${{ github.ref_name }}
+          path: ${{ runner.temp }}/armada-windows-${{ github.ref_name }}/*
+          if-no-files-found: error

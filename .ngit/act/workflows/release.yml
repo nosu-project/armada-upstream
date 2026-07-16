@@ -1,0 +1,208 @@
+name: Android release
+
+# Signed Android APK + AAB on version tags (vX.Y.Z), then a Zapstore publish.
+# Ported from the GitLab `build-apk` + `publish-zapstore` jobs to ngit-ci
+# (act / GitHub Actions syntax). Results and artifacts surface on
+# gitworkshop.dev against the tagged commit.
+#
+# ── Version ──────────────────────────────────────────────────────────────────
+# The version is carried by the git tag (vX.Y.Z), never a committed field:
+#   VERSION_NAME = tag minus leading "v"   (v2.1.0 -> 2.1.0)
+#   VERSION_CODE = git commit count         (was $CI_PIPELINE_IID on GitLab;
+#                  ngit-ci has no pipeline counter, so use the monotonic
+#                  `git rev-list --count HEAD`)
+#
+# ── Secrets (provisioned by the ngit-ci operator for this repo's alias) ──────
+# Injected ONLY on maintainer-authored triggers (a tag push by a maintainer
+# qualifies). Ask the operator to set, keyed to this repo's #ALIAS:
+#   ANDROID_KEYSTORE_BASE64  base64 of the JKS upload keystore (alias: upload)
+#   KEYSTORE_PASSWORD        keystore store password
+#   KEY_PASSWORD             upload key password (== store password; PKCS12
+#                            uses a single password, so the two must match)
+#   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer for Zapstore
+#   ZAPSTORE_CLIENT_KEY      persistent zsp NIP-46 client key (hex) for it
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so `git rev-list --count HEAD` is stable/monotonic.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Derive version
+        id: version
+        run: |
+          set -eu
+          TAG="${GITHUB_REF_NAME}"
+          VERSION_NAME="${TAG#v}"
+          VERSION_CODE="$(git rev-list --count HEAD)"
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION_NAME (code $VERSION_CODE) from tag $TAG"
+
+      - name: Stamp version into android/app/build.gradle
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: |
+          set -eu
+          sed -i "s/versionCode [0-9]*/versionCode ${VERSION_CODE}/" android/app/build.gradle
+          sed -i "s/versionName \"[^\"]*\"/versionName \"${VERSION_NAME}\"/" android/app/build.gradle
+
+      - name: Configure release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -eu
+          : "${ANDROID_KEYSTORE_BASE64:?Set the ANDROID_KEYSTORE_BASE64 secret.}"
+          : "${KEYSTORE_PASSWORD:?Set the KEYSTORE_PASSWORD secret.}"
+
+          # Decode the JKS and migrate JKS -> PKCS12 for Gradle. PKCS12 uses a
+          # single password, so key and store passwords must match (that is the
+          # KEY_PASSWORD == KEYSTORE_PASSWORD invariant).
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/my-upload-key.jks
+          keytool -importkeystore \
+            -srckeystore android/app/my-upload-key.jks \
+            -destkeystore android/app/my-upload-key.keystore \
+            -deststoretype pkcs12 \
+            -srcstorepass "$KEYSTORE_PASSWORD" \
+            -deststorepass "$KEYSTORE_PASSWORD" \
+            -srcalias upload \
+            -destalias upload \
+            -noprompt
+          rm android/app/my-upload-key.jks
+
+          cat > android/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}
+          keyAlias=upload
+          storeFile=my-upload-key.keystore
+          EOF
+
+      - name: Build web assets and sync into Capacitor
+        env:
+          # Non-hosted client: no baked-in relays (the user adds servers). DM
+          # voice falls back to the public instance via platform.ts. NEVER pin
+          # ws://localhost here — it's meaningless on a phone.
+          VITE_PLATFORM_RELAYS: ""
+        run: |
+          set -eu
+          npm ci
+          npx vite build -l error
+          cp dist/index.html dist/404.html
+          npx cap sync android
+
+      - name: Build signed release APK + AAB
+        run: |
+          set -eu
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease bundleRelease
+
+      - name: Collect and name artifacts
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -eu
+          out="$RUNNER_TEMP/armada-android-v$VERSION_NAME"
+          mkdir -p "$out"
+          cp android/app/build/outputs/apk/release/app-release.apk "$out/Armada-v$VERSION_NAME.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "$out/Armada-v$VERSION_NAME.aab"
+          ls -lh "$out"
+
+      # The APK/AAB are signed now; remove the keystore and password file.
+      - name: Remove release signing material
+        if: ${{ always() }}
+        run: |
+          rm -f android/key.properties android/app/my-upload-key.keystore
+
+      # Uploaded to Blossom by the coordinator (when the operator enables
+      # Blossom); each file appears as an `artifact` tag on the Job Result and
+      # is downloadable by the dependent job.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armada-android-v${{ steps.version.outputs.name }}
+          path: |
+            ${{ runner.temp }}/armada-android-v${{ steps.version.outputs.name }}/Armada-v${{ steps.version.outputs.name }}.apk
+            ${{ runner.temp }}/armada-android-v${{ steps.version.outputs.name }}/Armada-v${{ steps.version.outputs.name }}.aab
+          if-no-files-found: error
+
+  publish-zapstore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Download signed APK
+        uses: actions/download-artifact@v4
+        with:
+          name: armada-android-v${{ needs.build.outputs.version }}
+          path: release-artifacts
+
+      - name: Publish to Zapstore
+        env:
+          SIGN_WITH: ${{ secrets.ZAPSTORE_BUNKER_URL }}
+          ZAPSTORE_CLIENT_KEY: ${{ secrets.ZAPSTORE_CLIENT_KEY }}
+          VERSION_NAME: ${{ needs.build.outputs.version }}
+          RELAY_URLS: wss://relay.zapstore.dev,wss://relay.ditto.pub,wss://relay.dreamith.to,wss://relay.primal.net
+          BLOSSOM_URL: https://blossom.ditto.pub
+        run: |
+          set -eu
+          : "${SIGN_WITH:?Set the ZAPSTORE_BUNKER_URL secret.}"
+          : "${ZAPSTORE_CLIENT_KEY:?Set the ZAPSTORE_CLIENT_KEY secret.}"
+
+          apk_path="release-artifacts/Armada-v$VERSION_NAME.apk"
+          test -f "$apk_path"
+
+          go install github.com/zapstore/zsp@latest
+          export PATH="$(go env GOPATH)/bin:$PATH"
+
+          # Restore the persistent NIP-46 client key so the bunker recognizes
+          # this workflow as the same application across runs. zsp stores keys
+          # at ~/.config/zsp/bunker-keys/<bunker-pubkey>.key
+          bunker_pubkey="${SIGN_WITH#bunker://}"
+          bunker_pubkey="${bunker_pubkey%%\?*}"
+          test "$bunker_pubkey" != "$SIGN_WITH"
+          umask 077
+          mkdir -p ~/.config/zsp/bunker-keys
+          printf '%s\n' "$ZAPSTORE_CLIENT_KEY" > ~/.config/zsp/bunker-keys/"$bunker_pubkey".key
+
+          release_config="$(mktemp zapstore-release.XXXXXX.yaml)"
+          trap 'rm -f "$release_config"' EXIT
+          cp zapstore.yaml "$release_config"
+          sed -i "2i release_source: ./$apk_path" "$release_config"
+          sed -i "2i version: $VERSION_NAME" "$release_config"
+          zsp publish --quiet --skip-metadata --skip-preview "$release_config"

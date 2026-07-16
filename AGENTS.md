@@ -29,6 +29,42 @@ run this before committing changes.
 
 `npm run dev` serves at http://localhost:8080.
 
+## CI: ngit-ci (primary) and GitLab (mirror)
+
+The repository is a Nostr Git repo; CI runs on **ngit-ci** — a self-hosted,
+Nostr-native coordinator that watches the repo announcement and executes
+workflows in `.ngit/act/workflows/` with [`act`](https://github.com/nektos/act)
+(GitHub Actions-compatible syntax, one Linux container per job). Results and
+build artifacts are published to Nostr and shown on gitworkshop.dev against the
+commit/PR.
+
+| Workflow | Trigger | What |
+|----------|---------|------|
+| `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build) and `npm audit --audit-level=high` |
+| `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
+| `release.yml` | tag `v*` | signed Android APK + AAB, then Zapstore publish |
+| `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb) and Windows (NSIS + portable) |
+
+Notes specific to ngit-ci (vs the old GitLab pipeline):
+
+- **No pipeline counter.** Android `versionCode` is `git rev-list --count HEAD`
+  (GitLab used `$CI_PIPELINE_IID`). `versionName` is still the tag minus `v`.
+- **Secrets are operator-provisioned and maintainer-gated.** `${{ secrets.* }}`
+  is populated only for secrets the ngit-ci operator has provisioned for this
+  repo's `#ALIAS`, and only on maintainer-authored triggers (a maintainer's
+  push, or a maintainer's PR). Third-party PRs run with empty secrets. There is
+  no `GITHUB_TOKEN`. Required secrets: `ANDROID_KEYSTORE_BASE64`,
+  `KEYSTORE_PASSWORD`, `KEY_PASSWORD`, `ZAPSTORE_BUNKER_URL`,
+  `ZAPSTORE_CLIENT_KEY`, and for web deploy `DEPLOY_SSH_KEY_BASE64`
+  (+ optional `DEPLOY_SSH_CONFIG_BASE64`, `DEPLOY_TARGET`, `VITE_PLATFORM_RELAYS`).
+- **No macOS.** act runs Linux containers only; the macOS `.dmg` and the GitLab
+  Release / generic-package links stay on the GitLab mirror (`.gitlab-ci.yml`)
+  until switch-over. Keep `.gitlab-ci.yml` working as a mirror; do not delete it
+  yet.
+- **act images are minimal.** They are not full GitHub-hosted runners: use setup
+  actions (`actions/setup-node`, `setup-java`, `android-actions/setup-android`)
+  and install anything else explicitly (e.g. `rsync`, `wine`).
+
 ## How the client reaches backends (no build-time coupling)
 
 The client talks to relays and voice brokers over **runtime-configurable URLs**,

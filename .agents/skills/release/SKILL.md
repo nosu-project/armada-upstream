@@ -6,10 +6,11 @@ description: Publish a new Armada release with versioning, changelog, and git ta
 # Release Skill (Armada)
 
 This skill guides you through publishing a new release of Armada. Pushing a
-version tag (`vX.Y.Z`) triggers the GitLab CI pipeline, which builds the signed
-Android APK/AAB and the desktop installers (Linux + Windows; macOS is manual),
-uploads them to the generic package registry, and creates a GitLab Release with
-download links.
+version tag (`vX.Y.Z`) triggers CI, which builds the signed Android APK/AAB and
+the desktop installers. CI now runs primarily on **ngit-ci** (Nostr-native,
+workflows in `.ngit/act/workflows/`); the GitLab pipeline (`.gitlab-ci.yml`) is
+kept as a mirror during the migration and still produces the macOS `.dmg` and
+the GitLab Release/package links. Both fire on the same `vX.Y.Z` tag.
 
 ## Overview
 
@@ -20,12 +21,13 @@ download links.
   Armada does **not** keep the version in `package.json` or `build.gradle`. CI
   derives it from the tag and stamps it into the Android build at build time:
   - `VERSION_NAME` ← the tag minus the leading `v` (`v0.2.0` → `0.2.0`)
-  - `VERSION_CODE` ← `CI_PIPELINE_IID`
+  - `VERSION_CODE` ← `git rev-list --count HEAD` on ngit-ci (the GitLab mirror
+    still uses `$CI_PIPELINE_IID`; both are monotonic)
   - The Electron `package.json` `version` is likewise stamped from the tag.
   So you never hand-edit a version field; you just choose the tag.
 - **Changelog**: `CHANGELOG.md` in the repo root, [Keep a Changelog](https://keepachangelog.com/)
   format. (Created on first release if absent.) It feeds the GitLab Release
-  description.
+  description (on the mirror).
 - **Version bumping**:
   - **Patch (Z)**: Most releases. Bug fixes, tweaks, internal improvements, CI
     changes — anything a user wouldn't specifically seek out.
@@ -167,6 +169,10 @@ Tag format is `v` + the version, no suffix (e.g. `v0.2.0`, `v0.2.1`).
 
 ### Step 8: Push
 
+Once the repo has been published to Nostr with `ngit init`, `origin` is the
+`nostr://` remote and `git push` fans out to the configured git servers (and
+announces the new state to the relays). Push the branch and the tag:
+
 ```bash
 git push origin main vX.Y.Z
 ```
@@ -174,26 +180,51 @@ git push origin main vX.Y.Z
 **CRITICAL**: Push only the specific tag being released. NEVER use `--tags` —
 that pushes ALL local tags, including stale or deleted ones.
 
-This triggers the GitLab CI pipeline (see below).
+This triggers ngit-ci (`release.yml` + `desktop.yml`). If a GitLab mirror
+remote is also configured, push there too so the mirror pipeline builds the
+macOS `.dmg` and the GitLab Release links:
+
+```bash
+git push gitlab main vX.Y.Z   # only if a `gitlab` mirror remote exists
+```
 
 ### Step 9: Confirm
 
 After pushing, tell the user:
 - The new version number
 - A brief summary of what was released
-- That CI will build and publish the artifacts, and where to find them (GitLab
-  Release page + the project's Packages registry)
-- That the **macOS** desktop build is a manual job and only runs if a
-  `macos`-tagged runner is available (see the `mac-runner` skill if one exists)
+- That CI will build and publish the artifacts: ngit-ci results and artifacts
+  appear on gitworkshop.dev against the tagged commit, and the Android APK is
+  published to Zapstore
+- That the **macOS** `.dmg` and the GitLab Release/package links come from the
+  GitLab mirror pipeline (macOS is a manual job needing a `macos`-tagged runner)
 
-## CI Pipeline
+## CI Pipelines
 
-`.gitlab-ci.yml` runs on tags matching `/^v\d+\.\d+\.\d+$/`:
+### ngit-ci (primary) — `.ngit/act/workflows/`
+
+Runs on the `vX.Y.Z` tag via `act` (GitHub Actions syntax), one Linux container
+per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
+
+1. **release.yml → build** — signed Android APK + AAB. `setup-node`/`setup-java`/
+   `setup-android`, decode the JKS from `ANDROID_KEYSTORE_BASE64`, migrate to
+   PKCS12, `versionCode = git rev-list --count HEAD`, build web assets,
+   `cap sync android`, then `assembleRelease bundleRelease`; uploads the signed
+   APK/AAB as artifacts (Blossom, when the operator enables it).
+2. **release.yml → publish-zapstore** — signs with the NIP-46 bunker and uploads
+   the APK to Zapstore (`needs: build`).
+3. **desktop.yml → linux** — Electron AppImage + deb.
+4. **desktop.yml → windows** — Electron NSIS Setup + portable `.exe`, cross-built
+   from Linux (installs wine in-job).
+
+macOS is not built on ngit-ci (act runs Linux containers only).
+
+### GitLab mirror — `.gitlab-ci.yml`
+
+Kept during the migration. Also runs on tags matching `/^v\d+\.\d+\.\d+$/`:
 
 1. **build-apk** — signed Android APK + AAB (`eclipse-temurin:21-jdk` + Android
-   SDK). Decodes the JKS keystore from `ANDROID_KEYSTORE_BASE64`, migrates it to
-   PKCS12, builds web assets, `cap sync android`, then `assembleRelease
-   bundleRelease`. Uploads to the generic package registry.
+   SDK). Uploads to the generic package registry.
 2. **build-desktop-linux** — Electron AppImage + deb (`electronuserland/builder`).
 3. **build-desktop-windows** — Electron NSIS installer + portable `.exe`
    (`electronuserland/builder:wine`, cross-built from Linux).
@@ -202,10 +233,17 @@ After pushing, tell the user:
 5. **release** — creates the GitLab Release with download links for the APK,
    AAB, and the Linux/Windows desktop installers.
 
-### Required CI/CD variables (Android signing)
+### Required secrets (Android signing + Zapstore)
 
-Set in GitLab → Settings → CI/CD → Variables (Masked; Protected if tags are
-protected). Generate with `keytool` (alias `upload`, JKS); see the project
+The same secret values feed both CI systems, provisioned in two places:
+
+- **ngit-ci**: the coordinator operator (currently Soapbox) provisions per-repo
+  secrets keyed to this repo's `#ALIAS`. They inject only on maintainer-authored
+  triggers; there is no `GITHUB_TOKEN` and nothing is injected by default.
+- **GitLab mirror**: GitLab → Settings → CI/CD → Variables (Masked; Protected if
+  tags are protected).
+
+Generate the keystore with `keytool` (alias `upload`, JKS); see the project
 secrets notes.
 
 | Variable | What |
@@ -213,12 +251,22 @@ secrets notes.
 | `ANDROID_KEYSTORE_BASE64` | base64 of the JKS upload keystore (single line) |
 | `KEYSTORE_PASSWORD` | keystore store password |
 | `KEY_PASSWORD` | key password (**must equal** the store password — CI migrates JKS→PKCS12, which uses one password) |
+| `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer for Zapstore |
+| `ZAPSTORE_CLIENT_KEY` | persistent zsp NIP-46 client key (hex) for that bunker |
 
-Optional:
+Optional (web deploy on push to `main`, ngit-ci `deploy-web.yml`):
 
 | Variable | What |
 |----------|------|
-| `ARMADA_APP_URL` | Origin the desktop shell loads (defaults to the public deploy). |
+| `DEPLOY_SSH_KEY_BASE64` | base64 (one line) of the rrsync-jailed deploy user's private key |
+| `DEPLOY_SSH_CONFIG_BASE64` | (optional) base64 of an ssh_config written to `~/.ssh/config` |
+| `DEPLOY_TARGET` | (optional) rsync destination; defaults to `web` |
+| `VITE_PLATFORM_RELAYS` | `wss://armada.buzz` — pins the platform relay in the HOSTED build only |
+
+Optional (GitLab mirror / macOS):
+
+| Variable | What |
+|----------|------|
 | `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | macOS code signing / notarization (only for a Gatekeeper-friendly `.dmg`). |
 
 Never commit the keystore, passwords, or any secret material. `.gitignore`

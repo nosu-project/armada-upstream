@@ -1,0 +1,82 @@
+name: Deploy web
+
+# Builds the hosted web client (armada.buzz) and rsyncs it over SSH to the
+# rrsync-jailed deploy user, mirroring the GitLab `deploy-web` job. Runs on
+# pushes to the default branch (main).
+#
+# ── Secrets (provisioned by the ngit-ci operator for this repo's alias) ──────
+# ngit-ci injects ${{ secrets.* }} ONLY on maintainer-authored triggers — a
+# push to a watched repo always qualifies — and ONLY for secrets the operator
+# has provisioned for this repo (there is no GITHUB_TOKEN, nothing is injected
+# by default). Ask the operator to set, keyed to this repo's #ALIAS:
+#   DEPLOY_SSH_KEY_BASE64     base64 (one line) of the deploy user's private key
+#   DEPLOY_SSH_CONFIG_BASE64  (optional) base64 of an ssh_config -> ~/.ssh/config
+#   DEPLOY_TARGET             (optional) rsync destination; defaults to "web"
+#   VITE_PLATFORM_RELAYS      wss://armada.buzz — pins the platform relay in the
+#                             HOSTED build only (tag builds keep it empty)
+# If DEPLOY_SSH_KEY_BASE64 is empty (not provisioned, or a non-maintainer PR),
+# the job builds and then skips the deploy instead of failing.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Vite inlines VITE_* at build time. Pull the hosted relay pin from the
+      # provisioned secret; empty is a safe default (unpinned build).
+      VITE_PLATFORM_RELAYS: ${{ secrets.VITE_PLATFORM_RELAYS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Build the SPA (npm build also copies dist/index.html -> dist/404.html).
+      - run: npm run build
+
+      - name: Deploy over SSH
+        env:
+          DEPLOY_SSH_KEY_BASE64: ${{ secrets.DEPLOY_SSH_KEY_BASE64 }}
+          DEPLOY_SSH_CONFIG_BASE64: ${{ secrets.DEPLOY_SSH_CONFIG_BASE64 }}
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+        run: |
+          set -eu
+
+          # No key provisioned (or non-maintainer trigger): build only, skip deploy.
+          if [ -z "${DEPLOY_SSH_KEY_BASE64:-}" ]; then
+            echo "DEPLOY_SSH_KEY_BASE64 not set; skipping web deploy (build verified)."
+            exit 0
+          fi
+
+          # Install rsync + ssh client (act images are minimal).
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rsync openssh-client >/dev/null
+
+          # Materialize the SSH environment. Key/config arrive base64 (single
+          # line) to fit masking rules; ssh reads ~/.ssh/config automatically.
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "$DEPLOY_SSH_KEY_BASE64" | base64 -d > ~/.ssh/id_ed25519
+          if [ -n "${DEPLOY_SSH_CONFIG_BASE64:-}" ]; then
+            printf '%s' "$DEPLOY_SSH_CONFIG_BASE64" | base64 -d > ~/.ssh/config
+          fi
+          # A CLI -o StrictHostKeyChecking is NOT inherited by the ProxyJump
+          # child connection, so put host defaults in the config so every hop
+          # (including a bastion) picks them up.
+          printf 'Host *\n\tIdentityFile ~/.ssh/id_ed25519\n\tBatchMode yes\n\tStrictHostKeyChecking accept-new\n' >> ~/.ssh/config
+
+          TARGET="${DEPLOY_TARGET:-web}"
+
+          # Two-phase rsync: hashed assets first, then index.html + sw.js last,
+          # so the site never serves an index.html pointing at assets that
+          # haven't finished uploading. ":/" is the rrsync jail root.
+          rsync -av --exclude=/sw.js --exclude=/index.html -e ssh dist/ "${TARGET}:/"
+          rsync -av -e ssh dist/index.html dist/sw.js "${TARGET}:/"
