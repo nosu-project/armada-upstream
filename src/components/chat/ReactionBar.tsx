@@ -10,6 +10,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { isRenderableReactionKey } from "@/lib/customEmoji";
 import { cn } from "@/lib/utils";
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
@@ -33,21 +34,28 @@ interface ReactionBarProps {
 
 /** Renders the visual content of a reaction key (custom image or emoji glyph). */
 function ReactionGlyph({ tally, className }: { tally: ReactionTally; className?: string }) {
-  const isCustom = tally.url && tally.key.startsWith(":") && tally.key.endsWith(":");
-  if (isCustom) {
+  // What to show when there's no (working) image: the key if it's a short,
+  // renderable glyph or a `:shortcode:`, otherwise a neutral placeholder so a
+  // junk key (e.g. a raw URL pasted as the reaction content) never renders as a
+  // long line of text.
+  const shortcode = tally.key.startsWith(":") && tally.key.endsWith(":");
+  const label = isRenderableReactionKey(tally.key) || shortcode ? tally.key : "❓";
+  const glyphText = (
+    <span className={cn("inline-flex items-center justify-center leading-none -translate-y-px", className ?? "text-base")}>
+      {label}
+    </span>
+  );
+  if (tally.url) {
     return (
       <CustomEmojiImg
-        name={tally.key.slice(1, -1)}
-        url={tally.url!}
+        name={shortcode ? tally.key.slice(1, -1) : tally.key}
+        url={tally.url}
         className={cn("inline object-contain", className ?? "h-5 w-5")}
+        fallback={glyphText}
       />
     );
   }
-  return (
-    <span className={cn("inline-flex items-center justify-center leading-none -translate-y-px", className ?? "text-base")}>
-      {tally.key}
-    </span>
-  );
+  return glyphText;
 }
 
 /** A single reactor row (avatar + display name) inside the detail popover. */

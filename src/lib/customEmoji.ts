@@ -8,6 +8,24 @@ export function isCustomEmoji(content: string): boolean {
 }
 
 /**
+ * Whether a reaction key is renderable as a pill glyph. Guards against junk
+ * reactions such as a raw URL pasted as the content (which have no `:shortcode:`
+ * form and no `emoji` image tag) rendering as a long line of text. A key is
+ * renderable when it's either a NIP-30 custom emoji shortcode with a resolved
+ * image URL, or a short unicode glyph (no whitespace, no URL, and only a couple
+ * of code points long).
+ */
+export function isRenderableReactionKey(key: string, url?: string): boolean {
+  if (isCustomEmoji(key)) return Boolean(url);
+  if (!key) return false;
+  // Reject anything that looks like a URL or contains whitespace/newlines.
+  if (/\s/.test(key) || /^\w+:\/\//.test(key) || /^(www\.|https?:)/i.test(key)) return false;
+  // A genuine emoji is at most a few code points (e.g. flags, ZWJ sequences);
+  // anything longer is almost certainly junk text.
+  return [...key].length <= 8;
+}
+
+/**
  * Extracts the custom emoji URL from an event's tags for a given shortcode.
  * The shortcode should include the colons (e.g., `:soapbox:`).
  */

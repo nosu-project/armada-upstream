@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAddrEvent, useEvent, type AddrCoords } from "@/hooks/useEvent";
 import { useAuthor } from "@/hooks/useAuthor";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { getCustomEmojiUrl, isCustomEmoji } from "@/lib/customEmoji";
+import { getCustomEmojiUrl, isCustomEmoji, isRenderableReactionKey } from "@/lib/customEmoji";
 import { dittoEventUrl } from "@/lib/dittoUrl";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -175,10 +175,10 @@ function GenericEventCard({ event, className }: { event: NostrEvent; className?:
               ? (() => {
                 const url = getCustomEmojiUrl(reactionEmoji, event.tags);
                 return url
-                  ? <CustomEmojiImg name={reactionEmoji.slice(1, -1)} url={url} className="inline h-7 w-7 object-contain" />
-                  : null;
+                  ? <CustomEmojiImg name={reactionEmoji.slice(1, -1)} url={url} className="inline h-7 w-7 object-contain" fallback={reactionEmoji} />
+                  : reactionEmoji;
               })()
-              : reactionEmoji}
+              : isRenderableReactionKey(reactionEmoji) ? reactionEmoji : "❓"}
           </div>
         ) : (
           <div className="min-w-0 max-h-64 overflow-hidden">

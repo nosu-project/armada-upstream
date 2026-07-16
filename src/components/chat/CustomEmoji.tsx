@@ -13,6 +13,11 @@ interface CustomEmojiImgProps {
   url: string;
   /** CSS class name for the img element. */
   className?: string;
+  /**
+   * Rendered in place of the image when it fails to load. Defaults to nothing
+   * (the emoji simply disappears rather than showing a broken-image icon).
+   */
+  fallback?: React.ReactNode;
 }
 
 /**
@@ -25,8 +30,10 @@ export function CustomEmojiImg({
   name,
   url,
   className = "inline h-[1.2em] w-[1.2em] object-contain align-text-bottom",
+  fallback = null,
 }: CustomEmojiImgProps) {
   const [pixelated, setPixelated] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   const handleLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
@@ -34,6 +41,10 @@ export function CustomEmojiImg({
       setPixelated(true);
     }
   }, []);
+
+  // A custom emoji whose image URL doesn't resolve shows its fallback (or
+  // nothing) rather than a broken-image icon or the raw shortcode/URL text.
+  if (failed) return <>{fallback}</>;
 
   return (
     <img
@@ -45,6 +56,7 @@ export function CustomEmojiImg({
       loading="lazy"
       decoding="async"
       onLoad={handleLoad}
+      onError={() => setFailed(true)}
     />
   );
 }
