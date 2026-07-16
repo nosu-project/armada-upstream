@@ -4,6 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.30.0] - 2026-07-16
+
+Bot commands come to Armada. Communities and DMs can now surface bot commands
+through a `/` picker in the composer, with guided argument entry — including
+pickers that rank suggestions by recent channel activity. Voice calls are also
+friendlier: you now join muted and opt in with the mic button, so you're never
+broadcasting the instant you connect. Plus, the app now recovers automatically
+from the blank-screen crash that could happen right after a new version was
+deployed.
+
+### Added
+- Bot commands: type `/` in a community channel or direct message to discover
+  and run a bot's commands, with guided prompts for each argument
+
+### Changed
+- Voice calls now start muted; tap the mic button to speak
+
+### Fixed
+- Automatically recover from a blank-screen crash that could occur the first
+  time you loaded the app after a new version was deployed
+
 ## [0.29.0] - 2026-07-16
 
 New admin tools for Concord communities. Community admins get an audit log of
