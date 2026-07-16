@@ -9,6 +9,7 @@ import {
   mergeCommunityLists,
   refreshChannels,
   refreshCurrent,
+  refreshRelays,
   rehydrateCommunity,
   removeFromList,
   toJoinMaterial,
@@ -153,6 +154,34 @@ describe("refreshChannels (channel-scope rekey adoption/exclusion, CORD-06 §2)"
   it("an unknown community is a no-op", () => {
     const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(makeJoinMaterial()));
     expect(refreshChannels(list, "ff".repeat(32), [])).toEqual(list);
+  });
+});
+
+describe("refreshRelays (follow the fold's relay list, CORD-02 §6)", () => {
+  it("replaces current's relays WITHOUT bumping added_at (a relay move is not re-inclusion proof)", () => {
+    const jm = makeJoinMaterial({ relays: ["wss://old.example"] });
+    const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(jm, 1234));
+
+    const next = refreshRelays(list, jm.community_id, ["wss://new.example", "wss://old.example"]);
+
+    expect(next.entries[0].current.relays).toEqual(["wss://new.example", "wss://old.example"]);
+    expect(next.entries[0].added_at).toBe(1234);
+    expect(next.entries[0].seed.relays).toEqual(["wss://old.example"]); // seed only ever moves backward
+  });
+
+  it("preserves the rest of the join material (keys, epoch, unknown fields)", () => {
+    const jm = makeJoinMaterial({ vendor_ext: "keep-me" } as Partial<JoinMaterial>);
+    const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(jm));
+
+    const next = refreshRelays(list, jm.community_id, ["wss://new.example"]);
+    expect(next.entries[0].current.community_root).toBe(jm.community_root);
+    expect(next.entries[0].current.root_epoch).toBe(jm.root_epoch);
+    expect(next.entries[0].current.vendor_ext).toBe("keep-me");
+  });
+
+  it("an unknown community is a no-op", () => {
+    const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(makeJoinMaterial()));
+    expect(refreshRelays(list, "ff".repeat(32), ["wss://x.example"])).toEqual(list);
   });
 });
 

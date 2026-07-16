@@ -292,6 +292,23 @@ export function refreshChannels(
 }
 
 /**
+ * Replace a membership's relay set inside `current` — following a Metadata
+ * fold whose relay list changed (CORD-02 §6: "clients follow the fold"). The
+ * list's copy is bootstrap material for a fresh device; the fold stays the
+ * authority, so every device re-derives and re-applies this from its own fold.
+ * Like {@link refreshChannels}, NEVER bumps `added_at` (a relay change says
+ * nothing about membership) and shares the same same-root-epoch merge caveat:
+ * a stale sibling can win the canonical-bytes tiebreak until the watcher
+ * re-adopts. `seed` is untouched — it only ever moves backward. Pure.
+ */
+export function refreshRelays(list: CommunityList, communityId: string, relays: string[]): CommunityList {
+  const idx = list.entries.findIndex((e) => e.community_id === communityId);
+  if (idx === -1) return list;
+  const entries = list.entries.map((e, i) => (i === idx ? { ...e, current: { ...e.current, relays } } : e));
+  return { ...list, entries };
+}
+
+/**
  * Enforce the membership cap: the count bounds the common case, the NIP-44
  * byte cap is the law — the caller must ALSO verify the serialized list fits
  * before publishing (CORD-02 §8).

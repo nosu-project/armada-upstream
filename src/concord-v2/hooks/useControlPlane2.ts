@@ -221,17 +221,24 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
 
 // ── Publishing ───────────────────────────────────────────────────────────────
 
-/** Sign (plaintext seal) + wrap + broadcast one edition to the community relays. */
+/**
+ * Sign (plaintext seal) + wrap + broadcast one edition to the community relays.
+ * `opts.relays` overrides the fan-out set — a relay-list edition must reach
+ * BOTH the old and the new relays (the fold that announces a move lives on the
+ * relays being moved away from).
+ */
 export async function publishEdition2(
   nostr: ReturnType<typeof useNostr>["nostr"],
   community: CommunityV2,
   signer: StreamSigner,
   rumor: Rumor,
+  opts?: { relays?: string[] },
 ): Promise<void> {
   const control = currentControlGroup(community);
   const wrap = await sealEdition(rumor, control, signer);
+  const urls = opts?.relays ?? community.relays;
   const results = await Promise.allSettled(
-    community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+    urls.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
   );
   if (!results.some((r) => r.status === "fulfilled")) {
     throw new Error("No relay accepted the change.");

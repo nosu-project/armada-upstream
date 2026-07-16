@@ -62,6 +62,10 @@ export async function refreshInviteBundlesFor(
   user: NUser,
   rotated: Pick<CommunityV2, "id" | "idHex" | "owner" | "ownerSalt" | "root" | "rootEpoch" | "privateChannels" | "relays" | "name">,
   metadata: Pick<CommunityMetadata, "name" | "icon"> | undefined,
+  // Fan-out override for a relay-list change: the refreshed bundle (which
+  // VENDS `rotated.relays`) must also overwrite the copy on the OLD relays —
+  // that's where existing links' fragment hints send fetchers.
+  publishRelays?: string[],
 ): Promise<void> {
   if (!user.signer.nip44) return;
   const { list } = await fetchInviteList(nostr, user);
@@ -86,9 +90,10 @@ export async function refreshInviteBundlesFor(
     creator_npub: user.pubkey,
   };
 
+  const targets = publishRelays ?? rotated.relays;
   for (const bundleEvent of buildRefreshedBundleEvents(bundle, live)) {
     await Promise.allSettled(
-      rotated.relays.map((url) => nostr.relay(url).event(bundleEvent, { signal: AbortSignal.timeout(8000) })),
+      targets.map((url) => nostr.relay(url).event(bundleEvent, { signal: AbortSignal.timeout(8000) })),
     );
   }
 }
@@ -371,13 +376,16 @@ export function useLinkRefreshWatch2(community: CommunityV2 | undefined): void {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { data: folded } = useControlFold2(community);
-  // At most one refresh per (community, epoch) per session — a later adoption
-  // re-renders with a higher epoch, which re-arms this naturally.
+  // At most one refresh per (community, epoch, relay set) per session — a later
+  // adoption re-renders with a higher epoch, and a relay-list change (followed
+  // via useRelayFollow2) changes the set, either of which re-arms this
+  // naturally. Relays are in the key because the bundle VENDS them: a link
+  // fetched after a relay move must hand joiners the new set.
   const refreshed = useRef(new Set<string>());
 
   useEffect(() => {
     if (!community || !user?.signer.nip44 || !folded) return;
-    const key = `${community.idHex}:${community.rootEpoch}`;
+    const key = `${community.idHex}:${community.rootEpoch}:${community.relays.join(",")}`;
     if (refreshed.current.has(key)) return;
 
     let cancelled = false;
@@ -410,7 +418,7 @@ export function useLinkRefreshWatch2(community: CommunityV2 | undefined): void {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [community?.idHex, community?.rootEpoch, user?.pubkey, folded]);
+  }, [community?.idHex, community?.rootEpoch, community?.relays.join(","), user?.pubkey, folded]);
 }
 
 /**

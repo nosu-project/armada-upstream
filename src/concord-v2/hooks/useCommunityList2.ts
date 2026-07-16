@@ -15,6 +15,7 @@ import {
   mergeCommunityLists,
   refreshChannels,
   refreshCurrent,
+  refreshRelays,
   rehydrateCommunity,
   removeFromList,
   type CommunityList,
@@ -182,7 +183,8 @@ export type CommunityListAction =
   | { type: "remove"; communityId: string; removedAt?: number }
   | { type: "exclude"; communityId: string; epoch: number }
   | { type: "refresh-current"; current: JoinMaterial }
-  | { type: "refresh-channels"; communityId: string; channels: JoinMaterial["channels"] };
+  | { type: "refresh-channels"; communityId: string; channels: JoinMaterial["channels"] }
+  | { type: "refresh-relays"; communityId: string; relays: string[] };
 
 function applyAction(list: CommunityList, action: CommunityListAction): CommunityList {
   switch (action.type) {
@@ -196,6 +198,8 @@ function applyAction(list: CommunityList, action: CommunityListAction): Communit
       return refreshCurrent(list, action.current);
     case "refresh-channels":
       return refreshChannels(list, action.communityId, action.channels);
+    case "refresh-relays":
+      return refreshRelays(list, action.communityId, action.relays);
   }
 }
 

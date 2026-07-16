@@ -19,21 +19,27 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useNostr } from "@nostrify/react";
+
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
+import { refreshInviteBundlesFor } from "@/concord-v2/hooks/useRekey2";
 import { useMetadataActions2 } from "@/concord-v2/hooks/useRoles2";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { encryptImageBlob } from "@/concord-v2/lib/image";
-import type {
-  ChannelV2,
-  CommunityMetadata,
-  CommunityV2,
-  ImagePointer,
+import { mirrorHistoryToRelays, type MirrorProgress } from "@/concord-v2/lib/relayMirror";
+import {
+  MAX_COMMUNITY_RELAYS,
+  type ChannelV2,
+  type CommunityMetadata,
+  type CommunityV2,
+  type ImagePointer,
 } from "@/concord-v2/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -324,20 +330,12 @@ function InfoBody({
 
         <ChannelsSection community={community} canManage={canManageChannels} />
 
-        {relays.length > 0 && (
-          <div className="space-y-1.5">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Relays
-            </span>
-            <ul className="space-y-1">
-              {relays.map((r) => (
-                <li key={r} className="truncate rounded-md bg-secondary/40 px-2 py-1 text-xs font-mono">
-                  {r}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <RelaysSection
+          community={community}
+          metadata={metadata}
+          relays={relays}
+          canManage={canManageMetadata}
+        />
       </div>
 
       <input
@@ -668,6 +666,269 @@ function ChannelRow({
             </Button>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+/** Canonical relay URL: default to wss://, require a websocket scheme, and
+ *  drop a bare origin's trailing slash so equality checks are byte-stable. */
+function normalizeRelayUrl(input: string): string | null {
+  let raw = input.trim();
+  if (!raw) return null;
+  if (!/^[a-z]+:\/\//i.test(raw)) raw = `wss://${raw}`;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "wss:" && u.protocol !== "ws:") return null;
+    const s = u.toString();
+    return u.pathname === "/" && s.endsWith("/") ? s.slice(0, -1) : s;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The community's relay set. Read-only for everyone; editable for viewers with
+ * MANAGE_METADATA. The list lives in the Metadata entity so it can evolve
+ * (CORD-02 §6): saving publishes an edition to old ∪ new relays, and adding
+ * relays first MIRRORS the community's control/guestbook/rekey history onto
+ * them so a fresh joiner reading only the new set folds a complete community.
+ * Hard-capped at 5: every member's fold truncates past that (capRelays), so a
+ * sixth entry would be silently dropped network-wide.
+ */
+function RelaysSection({
+  community,
+  metadata,
+  relays,
+  canManage,
+}: {
+  community: CommunityV2;
+  metadata: CommunityMetadata | undefined;
+  relays: string[];
+  canManage: boolean;
+}) {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const { updateMetadata } = useMetadataActions2(community);
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string[]>([]);
+  const [addValue, setAddValue] = useState("");
+  const [busy, setBusy] = useState<MirrorProgress | { phase: "edition" } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (relays.length === 0 && !canManage) return null;
+
+  const startEditing = () => {
+    setDraft(relays);
+    setAddValue("");
+    setError(null);
+    setEditing(true);
+  };
+
+  const addRelay = () => {
+    setError(null);
+    const url = normalizeRelayUrl(addValue);
+    if (!url) {
+      setError("Enter a relay websocket URL, like wss://relay.example.com");
+      return;
+    }
+    if (draft.includes(url)) {
+      setAddValue("");
+      return;
+    }
+    if (draft.length >= MAX_COMMUNITY_RELAYS) return;
+    setDraft([...draft, url]);
+    setAddValue("");
+  };
+
+  const handleSave = async () => {
+    setError(null);
+    if (draft.length === 0) {
+      setError("A community needs at least one relay.");
+      return;
+    }
+    if (draft.length === relays.length && draft.every((r, i) => r === relays[i])) {
+      setEditing(false);
+      return;
+    }
+    // Diff against the OPERATIVE set: those relays hold the history to copy.
+    const added = draft.filter((r) => !community.relays.includes(r));
+    if (!draft.some((r) => relays.includes(r))) {
+      const ok = confirm(
+        "This replaces every current relay at once. Members offline during the switch may lose track of the community, and previously shared invite links will keep pointing at the old relays. Keeping at least one current relay through a transition is safer. Continue?",
+      );
+      if (!ok) return;
+    }
+    try {
+      let rejectedNote: string | undefined;
+      if (added.length > 0) {
+        setBusy({ phase: "fetch", relay: "", done: 0, total: 0 });
+        const report = await mirrorHistoryToRelays(nostr, community, added, {
+          onProgress: (p) => setBusy(p),
+        });
+        const rejected = [...report.perRelay.entries()].filter(([, r]) => r.rejected > 0);
+        if (rejected.length > 0) {
+          rejectedNote = rejected
+            .map(([url, r]) => `${url.replace(/^wss?:\/\//, "")} refused ${r.rejected} of ${report.found} events`)
+            .join("; ");
+        }
+      }
+      setBusy({ phase: "edition" });
+      await updateMetadata({ relays: draft });
+      // My own live invite links should vend the new set right away; other
+      // creators' links heal via useLinkRefreshWatch2 when they next fold.
+      // Fan the refreshed bundle out to old ∪ new: existing links' fragment
+      // hints point at the OLD relays, so the stale copy there must be
+      // overwritten too.
+      if (user?.signer.nip44) {
+        const bundleFanout = [...new Set([...community.relays, ...draft])];
+        refreshInviteBundlesFor(nostr, user, { ...community, relays: draft }, metadata, bundleFanout).catch(
+          () => undefined,
+        );
+      }
+      toast({
+        title: "Relays updated",
+        ...(rejectedNote ? { description: rejectedNote, variant: "destructive" as const } : {}),
+      });
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't update relays.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const busyLabel =
+    busy === null
+      ? null
+      : busy.phase === "edition"
+        ? "Publishing the new relay list…"
+        : busy.phase === "fetch"
+          ? `Gathering community history… ${busy.done} events`
+          : `Copying history to ${busy.relay.replace(/^wss?:\/\//, "")}… ${busy.done}/${busy.total}`;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Relays
+        </span>
+        {canManage && !editing && (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-6 shrink-0 text-muted-foreground"
+            aria-label="Edit relays"
+            onClick={startEditing}
+          >
+            <Pencil className="size-3" />
+          </Button>
+        )}
+      </div>
+
+      {!editing ? (
+        <ul className="space-y-1">
+          {relays.map((r) => (
+            <li key={r} className="truncate rounded-md bg-secondary/40 px-2 py-1 text-xs font-mono">
+              {r}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="space-y-1.5">
+          <ul className="space-y-1">
+            {draft.map((r) => (
+              <li
+                key={r}
+                className="flex items-center gap-1 rounded-md bg-secondary/40 py-0.5 pl-2 pr-0.5 text-xs font-mono"
+              >
+                <span className="min-w-0 flex-1 truncate">{r}</span>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="size-6 shrink-0 text-muted-foreground hover:text-destructive"
+                  aria-label={`Remove ${r}`}
+                  disabled={busy !== null || draft.length === 1}
+                  onClick={() => setDraft(draft.filter((x) => x !== r))}
+                >
+                  <Trash2 className="size-3" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+
+          {draft.length < MAX_COMMUNITY_RELAYS ? (
+            <form
+              className="flex items-center gap-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                addRelay();
+              }}
+            >
+              <Input
+                value={addValue}
+                onChange={(e) => setAddValue(e.target.value)}
+                placeholder="wss://relay.example.com"
+                disabled={busy !== null}
+                className="h-7 flex-1 font-mono text-xs"
+              />
+              <Button
+                type="submit"
+                size="icon"
+                variant="ghost"
+                className="size-7 shrink-0"
+                disabled={busy !== null || !addValue.trim()}
+                aria-label="Add relay"
+              >
+                <Plus className="size-3.5" />
+              </Button>
+            </form>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              Up to {MAX_COMMUNITY_RELAYS} relays; past that, clients trim the list.
+            </p>
+          )}
+
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {busyLabel && (
+            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" /> {busyLabel}
+            </p>
+          )}
+
+          <div className="flex justify-end gap-1">
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="size-7 shrink-0"
+              aria-label="Save relays"
+              disabled={busy !== null || draft.length === 0}
+              onClick={handleSave}
+            >
+              {busy !== null ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+            </Button>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="size-7 shrink-0 text-muted-foreground"
+              aria-label="Cancel"
+              disabled={busy !== null}
+              onClick={() => setEditing(false)}
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   );

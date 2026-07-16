@@ -36,6 +36,11 @@ export function useMetadataActions2(community: CommunityV2 | undefined) {
       if (patch.banner !== undefined) next.banner = patch.banner ?? undefined;
       if (patch.relays !== undefined) next.relays = patch.relays;
 
+      // A relay-list change fans out to old ∪ new: members still folding from
+      // the old relays must see the edition that moves them.
+      const publishRelays =
+        patch.relays !== undefined ? [...new Set([...community.relays, ...patch.relays])] : undefined;
+
       const head = folded?.heads.get(community.idHex);
       await publishEdition2(
         nostr,
@@ -47,6 +52,7 @@ export function useMetadataActions2(community: CommunityV2 | undefined) {
           prevHash: head?.hash,
           authority: citationFor(community, folded, user.pubkey),
         }),
+        publishRelays ? { relays: publishRelays } : undefined,
       );
       invalidateControl2(queryClient, community.idHex);
     },
