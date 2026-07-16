@@ -3,6 +3,7 @@ import { useCallback, useMemo, useRef } from "react";
 import { toChatMsg } from "@/components/chat/transport";
 import { KIND_DM, useDirectMessages } from "@/hooks/useDirectMessages";
 import { useDm17Thread } from "@/hooks/useDm17";
+import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { KIND_DM_CHAT } from "@/lib/nip17/protocol";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -59,7 +60,10 @@ export function useDmTransport(peer: string): {
   encryptedIds: Set<string>;
   /** Ids of NIP-17 rumors (unsigned; the page passes the `rumor` menu prop). */
   dm17Ids: Set<string>;
-  /** Whether sends go over NIP-17 (we have somewhere to publish the wrap). */
+  /**
+   * Whether sends go over NIP-17. True when the private plane is usable and
+   * the per-conversation preference isn't pinned to legacy NIP-04.
+   */
   dm17Enabled: boolean;
   /**
    * Whether private (NIP-17) delivery is GUARANTEED-reachable: the peer
@@ -79,6 +83,12 @@ export function useDmTransport(peer: string): {
   hasEncrypted: boolean;
   /** Whether the peer can receive private NIP-17 DMs (published a kind-10050 inbox). */
   canDm17: boolean;
+  /**
+   * Whether this conversation is deliberately pinned to legacy NIP-04 (the
+   * per-conversation preference). Sends go over kind-4 without the
+   * LegacyFallbackRequired opt-in, and the page skips the downgrade notice.
+   */
+  legacyPinned: boolean;
   /**
    * Sign + optimistically send a DM; resolves once rendered (relay in bg).
    * Routes NIP-17 when the peer is reachable; otherwise throws
@@ -104,6 +114,7 @@ export function useDmTransport(peer: string): {
 
   const dm17 = useDm17Thread(peer);
   const self = user?.pubkey;
+  const { pref } = useDmProtocolPref(peer);
 
   // Adapt DecryptedDM → ChatMsg, preserving object identity for unchanged
   // messages so React.memo on the rows holds (a fresh array lands on every
@@ -300,10 +311,21 @@ export function useDmTransport(peer: string): {
   const isLoadingOlder = isLoadingOlderKind4 || dm17.isLoadingOlder;
 
   const dm17Send = dm17.send;
-  const dm17Enabled = dm17.canSend;
+  // NIP-17 is the plane whenever the private path is usable AND the peer isn't
+  // pinned to legacy NIP-04 for this conversation. When pinned to legacy we
+  // treat NIP-17 as disabled so the UI (composer vs notice, reactions, etc.)
+  // reflects the kind-4 plane the user chose.
+  const dm17Usable = dm17.canSend;
+  const dm17Enabled = dm17Usable && pref !== "nip04";
   const sendText = useCallback(
     async (text: string, tags?: string[][], opts?: { allowLegacy?: boolean }) => {
-      if (dm17Enabled) {
+      // Explicit per-conversation pin to legacy NIP-04: a deliberate, persisted
+      // choice, so route kind-4 directly (no LegacyFallbackRequired dance).
+      if (pref === "nip04") {
+        await sendKind4(text);
+        return;
+      }
+      if (dm17Usable) {
         // Drop group-scoping tags the composer builds for relay chats; keep
         // content tags (imeta/q/emoji) inside the sealed rumor.
         const extraTags = (tags ?? []).filter(([name]) => name !== "h" && name !== "p");
@@ -316,7 +338,7 @@ export function useDmTransport(peer: string): {
         throw new LegacyFallbackRequired();
       }
     },
-    [dm17Enabled, dm17Send, sendKind4],
+    [pref, dm17Usable, dm17Send, sendKind4],
   );
 
   const isLoadingMerged = isLoading || dm17.isLoading;
@@ -351,6 +373,7 @@ export function useDmTransport(peer: string): {
     decryptDeclined,
     hasEncrypted,
     canDm17: dm17Enabled,
+    legacyPinned: pref === "nip04",
     send: sendText,
   };
 }

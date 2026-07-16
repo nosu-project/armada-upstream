@@ -68,6 +68,7 @@ export const AppConfigSchema = z.object({
   mutedCommunities: z.array(z.string()).catch([]),
   mutedChannels: z.array(z.string()).catch([]),
   notifLevels: z.record(z.string(), z.enum(["all", "mentions", "nothing"])).catch({}),
+  dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).catch({}),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
 });
@@ -113,6 +114,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   mutedChannels: z.array(z.string()).optional(),
   /** Per-conversation notification level (all/mentions/nothing) — see AppConfig. */
   notifLevels: z.record(z.string(), z.enum(["all", "mentions", "nothing"])).optional(),
+  /** Per-conversation DM encryption preference (auto/nip17/nip04) — see AppConfig. */
+  dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).optional(),
   /**
    * Per-conversation last-read timestamps (unix seconds), keyed by a stable
    * conversation id (e.g. `${relayUrl}::${groupId}` for channels, `dm:${pubkey}`

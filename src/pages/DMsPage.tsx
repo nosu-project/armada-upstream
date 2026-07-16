@@ -1,4 +1,4 @@
-import { AtSign, Bell, BellOff, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Plus, Search, UserCheck, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Plus, Search, ShieldCheck, Sparkles, UserCheck, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -56,6 +56,7 @@ import {
 } from "@/hooks/useDirectMessages";
 import { useDm17Conversations, useDm17Support, useEnsureDmInbox } from "@/hooks/useDm17";
 import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
+import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
@@ -396,7 +397,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const name = getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
-  const { transport, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+  const { transport, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(peer);
   const { messages } = transport;
   const { markRead } = useReadState();
@@ -406,6 +407,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { config } = useAppContext();
   const { activeCall, joinDmCall, voiceRoomPubkeys } = useCall();
   const muteUser = useMuteUser();
+  const { pref: dmProtocol, setPref: setDmProtocol } = useDmProtocolPref(peer);
 
   // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no
   // in-band convention, so the control is hidden on legacy threads).
@@ -433,7 +435,9 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   // Block sending only once we KNOW the peer has no NIP-17 inbox. While the
   // thread (and the peer's kind-10050 lookup) is still loading, assume the
   // private path so we don't flash a legacy notice for a reachable peer.
-  const legacyBlocked = !dm17Enabled && !transport.isLoading && !legacyAllowed;
+  // A conversation pinned to legacy NIP-04 sends kind-4 directly, so it's
+  // never "blocked" — the composer is shown as-is.
+  const legacyBlocked = !legacyPinned && !dm17Enabled && !transport.isLoading && !legacyAllowed;
 
   // Jump-to-quoted-message support (the reply context line is clickable).
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
@@ -740,6 +744,50 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="nothing">
                     <BellOff className="mr-2 size-4" /> Nothing
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="px-3 py-2">
+                {dmProtocol === "nip04" ? (
+                  <Lock className="mr-2 size-4" />
+                ) : (
+                  <ShieldCheck className="mr-2 size-4" />
+                )}
+                Encryption
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-64">
+                <DropdownMenuRadioGroup
+                  value={dmProtocol}
+                  onValueChange={(v) => setDmProtocol(v as "auto" | "nip17" | "nip04")}
+                >
+                  <DropdownMenuRadioItem value="auto" className="items-start">
+                    <Sparkles className="mr-2 mt-0.5 size-4 shrink-0" />
+                    <div className="min-w-0">
+                      <div>Automatic</div>
+                      <p className="text-xs text-muted-foreground">
+                        Private when possible, legacy only if you allow it.
+                      </p>
+                    </div>
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="nip17" className="items-start">
+                    <ShieldCheck className="mr-2 mt-0.5 size-4 shrink-0" />
+                    <div className="min-w-0">
+                      <div>Private (NIP-17)</div>
+                      <p className="text-xs text-muted-foreground">
+                        Always fully private; hides that you're talking.
+                      </p>
+                    </div>
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="nip04" className="items-start">
+                    <Lock className="mr-2 mt-0.5 size-4 shrink-0" />
+                    <div className="min-w-0">
+                      <div>Legacy (NIP-04)</div>
+                      <p className="text-xs text-muted-foreground">
+                        Older encryption; leaks who's talking and when.
+                      </p>
+                    </div>
                   </DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>

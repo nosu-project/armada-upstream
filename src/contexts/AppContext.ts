@@ -157,6 +157,21 @@ export interface AppConfig {
    */
   notifLevels: Record<string, "all" | "mentions" | "nothing">;
   /**
+   * Per-conversation DM encryption preference, keyed by `dm:${pubkey}` (the
+   * same scope key as `notifLevels`). Lets the user override the automatic
+   * transport choice for a specific peer:
+   *   - `auto`  — the default: prefer private NIP-17 (gift-wrapped kind 14),
+   *               falling back to legacy NIP-04 only on explicit opt-in.
+   *   - `nip17` — always send private (NIP-17). If the peer hasn't published a
+   *               kind-10050 inbox the wrap is still delivered best-effort to
+   *               shared relays (fully encrypted, no metadata leak).
+   *   - `nip04` — always send legacy kind-4. A privacy downgrade (leaks who's
+   *               talking and when), chosen deliberately (e.g. for a peer whose
+   *               client only reads NIP-04).
+   * A peer with no entry is `auto`. Synced across devices.
+   */
+  dmProtocol: Record<string, "auto" | "nip17" | "nip04">;
+  /**
    * Bluetooth-mesh incognito mode. When on (the default), this device announces
    * a derived `anon<peerid>` nickname over the mesh rather than the user's
    * Armada display name — matching bitchat's anonymous-by-default behavior.
@@ -214,6 +229,7 @@ export const SYNCED_CONFIG_KEYS = [
   "mutedCommunities",
   "mutedChannels",
   "notifLevels",
+  "dmProtocol",
   "defaultZapAmount",
   "zapsEnabled",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
@@ -237,6 +253,7 @@ export const defaultConfig: AppConfig = {
   mutedCommunities: [],
   mutedChannels: [],
   notifLevels: {},
+  dmProtocol: {},
   meshIncognito: true,
   meshEnabled: false,
   defaultZapAmount: 100,
