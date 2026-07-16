@@ -111,3 +111,5 @@ the new cert fingerprint to the array.
 - Always commit after finishing a set of changes (don't wait to be asked); do
   not push unless asked. Verify the client builds (`npm run test`) before
   committing.
+- **Never push to the `gitlab` remote.** When pushing (or releasing), push only
+  to `origin`. The `gitlab` mirror is maintainer-managed manually.

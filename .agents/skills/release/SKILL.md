@@ -180,13 +180,12 @@ git push origin main vX.Y.Z
 **CRITICAL**: Push only the specific tag being released. NEVER use `--tags` —
 that pushes ALL local tags, including stale or deleted ones.
 
-This triggers ngit-ci (`release.yml` + `desktop.yml`). If a GitLab mirror
-remote is also configured, push there too so the mirror pipeline builds the
-macOS `.dmg` and the GitLab Release links:
+This triggers ngit-ci (`release.yml` + `desktop.yml`).
 
-```bash
-git push gitlab main vX.Y.Z   # only if a `gitlab` mirror remote exists
-```
+**NEVER push to the `gitlab` remote.** Push only to `origin`. Even though a
+`gitlab` mirror remote exists and its pipeline would build the macOS `.dmg` and
+the GitLab Release links, do not push there — the maintainer pushes GitLab
+manually, if at all.
 
 ### Step 9: Confirm
 
@@ -196,8 +195,9 @@ After pushing, tell the user:
 - That CI will build and publish the artifacts: ngit-ci results and artifacts
   appear on gitworkshop.dev against the tagged commit, and the Android APK is
   published to Zapstore
-- That the **macOS** `.dmg` and the GitLab Release/package links come from the
-  GitLab mirror pipeline (macOS is a manual job needing a `macos`-tagged runner)
+- That the **macOS** `.dmg` and the GitLab Release/package links would come from
+  the GitLab mirror pipeline, but we do NOT push to GitLab — the maintainer
+  handles GitLab manually, if at all
 
 ## CI Pipelines
 
