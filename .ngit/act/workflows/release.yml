@@ -194,8 +194,11 @@ jobs:
             exit 1
           }
 
-          go install github.com/zapstore/zsp@latest
+          # Pin zsp rather than @latest so a bad upstream release can't break a
+          # tagged build, and so the version is reproducible from the logs.
+          go install github.com/zapstore/zsp@v0.4.12
           export PATH="$(go env GOPATH)/bin:$PATH"
+          zsp --version || true
 
           # Restore the persistent NIP-46 client key so the bunker recognizes
           # this workflow as the same application across runs. zsp stores keys
@@ -212,4 +215,17 @@ jobs:
           cp zapstore.yaml "$release_config"
           sed -i "2i release_source: $apk_path" "$release_config"
           sed -i "2i version: $VERSION_NAME" "$release_config"
-          zsp publish --quiet --skip-metadata --skip-preview "$release_config"
+          cat "$release_config"
+
+          # --json is non-interactive (no prompts, no spinners) AND writes the
+          # real error to stderr as {"error":"..."} — unlike --quiet, which
+          # swallowed the failure on the first attempts. --skip-certificate-
+          # linking: the ngit-ci Android upload key was rotated, so the new
+          # signing cert isn't yet linked to the publishing identity; without
+          # this zsp aborts a first publish under a new cert.
+          zsp publish \
+            --json \
+            --skip-metadata \
+            --skip-preview \
+            --skip-certificate-linking \
+            "$release_config"
