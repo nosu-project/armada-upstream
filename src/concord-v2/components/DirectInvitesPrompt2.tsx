@@ -64,27 +64,44 @@ export function DirectInvitesPrompt2() {
   };
 
   const handleDecline = async () => {
-    try {
-      await decline({ communityId: current.communityId });
-    } catch {
-      // Best-effort; dismiss locally regardless.
+    // A CATCH-UP is a key update for a community I'm already in — declining must
+    // NOT tombstone (that would leave the community). Just dismiss it locally;
+    // the sender can re-send, and re-following a refreshed link still heals.
+    if (!current.catchUp) {
+      try {
+        await decline({ communityId: current.communityId });
+      } catch {
+        // Best-effort; dismiss locally regardless.
+      }
     }
     setDismissed((prev) => new Set(prev).add(current.wrapId));
   };
 
+  const isCatchUp = Boolean(current.catchUp);
+
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleDecline()}>
-      <ChromeDialogContent title="Encrypted community invite">
+      <ChromeDialogContent title={isCatchUp ? "Updated community keys" : "Encrypted community invite"}>
         <div className="flex flex-col items-center gap-6">
           <div className="flex flex-col items-center gap-3 text-center">
             <ArmadaCrest size={72} />
             <div className="space-y-1">
               <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-                encrypted community invite
+                {isCatchUp ? "updated community keys" : "encrypted community invite"}
               </h2>
               <p className="text-sm text-muted-foreground">
-                You've been handed the keys to an end-to-end-encrypted community. Accepting lets you
-                read and post; no host can see its messages.
+                {isCatchUp ? (
+                  <>
+                    An admin sent you the current keys for a community you're already in. Its keys
+                    were rotated and yours were out of date. Accept to catch up and keep reading
+                    new messages.
+                  </>
+                ) : (
+                  <>
+                    You've been handed the keys to an end-to-end-encrypted community. Accepting lets
+                    you read and post; no host can see its messages.
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -106,13 +123,15 @@ export function DirectInvitesPrompt2() {
 
           <div className="flex w-full justify-end gap-2">
             <Button variant="ghost" className="clip-corner-lg" onClick={handleDecline} disabled={busy}>
-              Decline
+              {isCatchUp ? "Not now" : "Decline"}
             </Button>
             <Button className="clip-corner-lg" onClick={handleAccept} disabled={busy}>
               {accepting ? (
                 <>
-                  <Loader2 className="size-4 mr-2 animate-spin" /> Joining…
+                  <Loader2 className="size-4 mr-2 animate-spin" /> {isCatchUp ? "Updating…" : "Joining…"}
                 </>
+              ) : isCatchUp ? (
+                "Update keys"
               ) : (
                 "Accept"
               )}

@@ -8,6 +8,7 @@ import {
   liveEntries,
   mergeCommunityLists,
   refreshChannels,
+  refreshCurrent,
   rehydrateCommunity,
   removeFromList,
   toJoinMaterial,
@@ -99,6 +100,26 @@ describe("community list merge (CORD-02 §8)", () => {
     const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(jm));
     const merged = mergeCommunityLists(list, EMPTY_COMMUNITY_LIST);
     expect((merged.entries[0].current as Record<string, unknown>).vector_custom).toEqual({ theme: "dark" });
+  });
+
+  it("entry-level invite_ref survives merges and current refreshes (stranded self-heal anchor)", () => {
+    const jm = makeJoinMaterial({ root_epoch: 1 });
+    const ref = "naddr1example#BAACAwSramExdyfria50iKwvzRpK";
+    const withRef: CommunityListEntry = { ...entryOf(jm, 1000), invite_ref: ref };
+
+    // A device copy that predates the field must not strip it on merge.
+    const merged = mergeCommunityLists(
+      addToList(EMPTY_COMMUNITY_LIST, withRef),
+      addToList(EMPTY_COMMUNITY_LIST, entryOf(jm, 900)),
+    );
+    expect(merged.entries[0].invite_ref).toBe(ref);
+
+    // Adopting a fresh epoch (refresh-current) keeps the ref: the link is a
+    // durable recovery anchor, not epoch-scoped state.
+    const jm2: JoinMaterial = { ...jm, root_epoch: 2, community_root: bytesToHex(random32()) };
+    const refreshed = refreshCurrent(merged, jm2);
+    expect(refreshed.entries[0].invite_ref).toBe(ref);
+    expect(refreshed.entries[0].current.root_epoch).toBe(2);
   });
 });
 

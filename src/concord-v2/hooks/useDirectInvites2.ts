@@ -35,6 +35,13 @@ export interface ParkedInvite2 {
   bundle: InviteBundle;
   communityId: string;
   name: string;
+  /**
+   * True when this invite is for a community I'm ALREADY in, but carries a
+   * higher `root_epoch` than I currently hold — an admin healing me forward
+   * after I was stranded on an old epoch (CORD-05/06). The accept path merges
+   * it forward only; a lower/equal epoch never parks as a catch-up.
+   */
+  catchUp?: boolean;
 }
 
 /**
@@ -123,6 +130,16 @@ export function useDirectInvites2() {
         }
       }
 
+      // The epoch each already-joined community currently holds, so a fresher
+      // bundle (an admin healing a stranded member: CORD-05 §6 re-handoff) is
+      // recognised as a CATCH-UP rather than skipped as "already a member".
+      const heldEpoch = new Map<string, number>();
+      if (list) {
+        for (const e of liveEntries(list.list)) {
+          heldEpoch.set(e.community_id, e.current.root_epoch);
+        }
+      }
+
       // Read the parked set back from the store (no re-decrypt), then apply
       // the consent filters against the current membership list.
       const parked = new Map<string, ParkedInvite2>();
@@ -133,14 +150,21 @@ export function useDirectInvites2() {
         if (!bundle) continue;
         // A dead handoff isn't worth a prompt: expired invites never park.
         if (directInviteExpired(bundle)) continue;
-        // Consent gate: skip communities we've already joined or left/declined.
-        if (known.has(bundle.community_id) || tombstoned.has(bundle.community_id)) continue;
+        // A left/declined community stays suppressed.
+        if (tombstoned.has(bundle.community_id)) continue;
+        const held = heldEpoch.get(bundle.community_id);
+        const catchUp = held !== undefined && bundle.root_epoch > held;
+        // Skip an already-joined community UNLESS the bundle is strictly fresher
+        // (higher epoch) — that's a key catch-up for a stranded member, and the
+        // accept path merges it forward (never backward).
+        if (known.has(bundle.community_id) && !catchUp) continue;
         parked.set(record.wrapId, {
           wrapId: record.wrapId,
           sender: record.sender,
           bundle,
           communityId: bundle.community_id,
           name: bundle.name,
+          catchUp,
         });
       }
       return [...parked.values()];
@@ -153,6 +177,16 @@ export function useDirectInvites2() {
  * Community List vault — then announce with a self-signed Guestbook Join
  * echoing the invite's attribution (CORD-05 §6 accepts exactly like a §1
  * link acceptance).
+ *
+ * A CATCH-UP invite (`invite.catchUp`) is for a community I'm already in that
+ * arrived on a HIGHER epoch than I hold — an admin healing me forward after I
+ * was stranded on a stale epoch. It routes through the same `add`, whose
+ * deterministic list merge (`mergeEntry`/`freshest`) is epoch-monotonic: the
+ * higher-epoch bundle becomes `current` while `seed` keeps my earliest root, so
+ * the merge only ever moves me FORWARD — a lower/equal epoch could never reach
+ * here (the scan only parks a strictly-fresher catch-up) and could not lower
+ * `current` even if it did. No Guestbook Join is re-sent for a catch-up (I'm
+ * already a member); only a fresh join announces.
  */
 export function useAcceptDirectInvite2() {
   const { nostr } = useNostr();
@@ -167,20 +201,27 @@ export function useAcceptDirectInvite2() {
       if (directInviteExpired(bundle)) throw new Error("This invite has expired.");
 
       const entry = bundleToEntry(bundle);
+      // `add` → mergeCommunityLists → mergeEntry → freshest: epoch-monotonic, so
+      // this both onboards a new member and heals an existing one FORWARD, never
+      // backward (a stale bundle can't lower `current.root_epoch`).
       await updateList({ type: "add", entry });
 
-      // Best-effort Join, attributed to the inviter (the seal-verified sender
-      // beats an unverified creator_npub claim) — coalesce self-heals if it
-      // never lands.
-      void (async () => {
-        const community = rehydrateCommunity(entry);
-        if (!community) return;
-        const rumor = buildJoinRumor(user.pubkey, Date.now(), { creator: invite.sender, label: bundle.label });
-        const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer);
-        await Promise.allSettled(
-          community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-        );
-      })().catch(() => undefined);
+      // A catch-up is not a new membership: I'm already announced. Re-sending a
+      // Guestbook Join would be noise. Only a genuine first join announces.
+      if (!invite.catchUp) {
+        // Best-effort Join, attributed to the inviter (the seal-verified sender
+        // beats an unverified creator_npub claim) — coalesce self-heals if it
+        // never lands.
+        void (async () => {
+          const community = rehydrateCommunity(entry);
+          if (!community) return;
+          const rumor = buildJoinRumor(user.pubkey, Date.now(), { creator: invite.sender, label: bundle.label });
+          const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer);
+          await Promise.allSettled(
+            community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+          );
+        })().catch(() => undefined);
+      }
 
       return { communityId: bundle.community_id, name: bundle.name };
     },

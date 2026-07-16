@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
@@ -38,6 +38,7 @@ import { queryByStreams, readStreamCursor, updateStreamCursor, writeOpened } fro
 import { openWrap, rewrapSeal, sealRumor, wrapSeal, type OpenedEvent } from "@/concord-v2/lib/stream";
 import { buildRefreshedBundleEvents, type InviteBundle } from "@/concord-v2/lib/invite";
 import { fetchInviteList } from "@/concord-v2/hooks/useInvites2";
+import { toast } from "@/hooks/useToast";
 import type { CommunityMetadata, CommunityV2, HeldRoot, PrivateChannelKey } from "@/concord-v2/lib/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -107,7 +108,7 @@ export async function refreshInviteBundlesFor(
  *     never part of (a stale public invite drops me ONTO a past Refounding),
  *     so its lack of a blob for me means nothing.
  */
-export function useRekeyWatch2(community: CommunityV2 | undefined) {
+export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: boolean } {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { data: folded } = useControlFold2(community);
@@ -118,6 +119,23 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
   // One adoption/removal per (community, epoch) per session — the list update
   // re-renders with the new epoch, which re-arms the watcher naturally.
   const handled = useRef(new Set<string>());
+  // STRANDED: a fresh joiner sitting on an epoch the community has already
+  // rotated past, whose rotation predates the join and carries no blob for them
+  // — a stale public invite dropped them onto a superseded epoch. They can read
+  // history but not the current epoch, and (unlike an adoption) have no forward
+  // path from the wire: only a REFRESHED link or a Direct Invite heals them.
+  // Surfaced so the UI can tell them the link is out of date (CORD-05 §2).
+  const [stranded, setStranded] = useState(false);
+
+  // A successful catch-up (useStrandedRecovery2 merging a refreshed bundle, or
+  // any adoption) advances the held epoch — reset so the flag never outlives
+  // the strand it described. The main effect re-derives it at the new epoch if
+  // the member is somehow STILL behind (e.g. the refreshed bundle itself lags).
+  const heldEpoch = community?.rootEpoch;
+  const heldId = community?.idHex;
+  useEffect(() => {
+    setStranded(false);
+  }, [heldId, heldEpoch]);
 
   const nextEpoch = community ? community.rootEpoch + 1n : 0n;
   const query = useQuery<OpenedEvent[]>({
@@ -233,6 +251,9 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
       // A complete rotation counts toward removal only if it could have carried
       // a blob for me — i.e. it was published at/after I joined.
       let sawExcludingRotation = false;
+      // A complete rotation PAST my epoch that predates my join and holds no
+      // blob for me: I was dropped onto a superseded epoch by a stale invite.
+      let sawStrandingRotation = false;
       for (const set of rotations) {
         if (!set.complete) continue;
         // A member who joined via a stale public invite (bundle epoch N) lands
@@ -246,6 +267,9 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
         const blob = findBlob(set, locator);
         if (!blob) {
           if (couldCarryMyBlob) sawExcludingRotation = true;
+          // Predates my join AND advances past the epoch I hold → I'm stranded
+          // on a stale invite's dead epoch, with no wire path forward.
+          else if (set.newEpoch > community.rootEpoch) sawStrandingRotation = true;
           continue;
         }
         try {
@@ -264,6 +288,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
 
       if (adopted) {
         handled.current.add(key);
+        setStranded(false);
         const heldRoots: HeldRoot[] = [
           { epoch: nextEpoch, key: adopted.key },
           ...community.heldRoots,
@@ -307,15 +332,85 @@ export function useRekeyWatch2(community: CommunityV2 | undefined) {
       // A complete rotation that PREDATES my join and carries no blob for me
       // is community history I was never part of (a stale public invite
       // dropped me onto a past Refounding): neither an adoption nor an
-      // exclusion. The recovery is the user re-following the same live link —
-      // the refreshed bundle (CORD-05 §2) vends the current keys and a
-      // re-join merges the higher epoch in.
+      // exclusion. There is no forward path on the wire — the rekey for the
+      // epoch I hold was minted before my pubkey existed, so it can't carry my
+      // blob. The recovery is a REFRESHED link (CORD-05 §2) or a Direct Invite
+      // from an online member; surface `stranded` so the UI can say so instead
+      // of silently leaving them unable to read the current epoch.
+      setStranded(sawStrandingRotation);
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [community?.idHex, community?.rootEpoch, user?.pubkey, folded, dissolved, query.data, entry?.added_at]);
+
+  return { stranded };
+}
+
+/**
+ * Keep this creator's OWN live invite links vending the CURRENT epoch (CORD-05
+ * §2: "the creator re-posting under it refreshes the bundle … so a link shared
+ * once survives every rotation").
+ *
+ * The gap this closes: a link's bundle only ever advanced when the creator's
+ * client happened to (a) be the Refounder, or (b) adopt someone else's rotation
+ * via {@link useRekeyWatch2}. A creator who rotated on another device, or whose
+ * community was Refounded by a different admin while they were offline, left
+ * their links vending the DEAD pre-rotation epoch indefinitely — stranding
+ * every fresh joiner on a superseded epoch with no wire path forward. Only the
+ * creator holds each link's `signer_sk`, so no one else can heal it.
+ *
+ * On every open of a community the creator holds live links for, reconcile:
+ * re-mint every live link at the current epoch. `refreshInviteBundlesFor` is
+ * idempotent (re-posting an already-fresh bundle is a harmless same-epoch
+ * rewrite), and this runs at most once per (community, epoch) per session, so a
+ * fresh community costs one Invite-List fetch and nothing more.
+ */
+export function useLinkRefreshWatch2(community: CommunityV2 | undefined): void {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const { data: folded } = useControlFold2(community);
+  // At most one refresh per (community, epoch) per session — a later adoption
+  // re-renders with a higher epoch, which re-arms this naturally.
+  const refreshed = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!community || !user?.signer.nip44 || !folded) return;
+    const key = `${community.idHex}:${community.rootEpoch}`;
+    if (refreshed.current.has(key)) return;
+
+    let cancelled = false;
+    void (async () => {
+      // Do I hold any live links for THIS community? (fetchInviteList already
+      // drops tombstoned/revoked entries.) If not, there is nothing to refresh.
+      let hasLinks = false;
+      try {
+        const { list } = await fetchInviteList(nostr, user);
+        hasLinks = list.entries.some((e) => e.community_id === community.idHex);
+      } catch {
+        // Transient fetch failure — leave the key unmarked so a later open (or
+        // the useRekeyWatch2/refound refresh paths) retries.
+        return;
+      }
+      if (cancelled || !hasLinks) return;
+      // Mark BEFORE the refresh so a re-render mid-flight doesn't double-fire;
+      // a genuine failure re-arms via the epoch changing or an app restart.
+      refreshed.current.add(key);
+      // Idempotent and best-effort: an unrefreshed link only delays a joiner's
+      // catch-up, and useRekeyWatch2 / useRefound2 also drive this on their own
+      // triggers. Mints from the current community snapshot (the open community
+      // is already on its adopted epoch).
+      await refreshInviteBundlesFor(nostr, user, community, folded.metadata).catch(() => {
+        // Persistent failure: unmark so the next open retries.
+        refreshed.current.delete(key);
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [community?.idHex, community?.rootEpoch, user?.pubkey, folded]);
 }
 
 /**
@@ -672,18 +767,38 @@ export function useRefound2(community: CommunityV2 | undefined) {
       // creators' links refresh when they adopt this rotation (useRekeyWatch2).
       // Revoked links are tombstoned there and skipped, so a Public→Private
       // conversion (which retires the last link) never resurrects one.
-      // Best-effort: a Refounding succeeds even if the refresh can't reach a
-      // relay. Carries the POST-rotation channel keys (step 2b), never the
-      // severed ones.
-      try {
-        await refreshInviteBundlesFor(nostr, user, {
+      // Carries the POST-rotation channel keys (step 2b), never the severed ones.
+      //
+      // DURABLE (mirrors Vector): idempotent, so retry a transient failure —
+      // a stranded link lands every new joiner on the DEAD pre-rotation epoch,
+      // and there is no other trigger to heal it before the next Refounding. A
+      // persistent failure warns the refounder (the rotation itself already
+      // succeeded) so they can reopen the community to retry.
+      {
+        const fresh = {
           ...community,
           root: newRoot,
           rootEpoch: newEpoch,
           privateChannels: rotatedChannels,
-        }, folded.metadata);
-      } catch {
-        // Non-gating: an unrefreshed link only delays a joiner's catch-up.
+        };
+        let refreshed = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            await refreshInviteBundlesFor(nostr, user, fresh, folded.metadata);
+            refreshed = true;
+            break;
+          } catch {
+            // transient — retry
+          }
+        }
+        if (!refreshed) {
+          toast({
+            title: "Live invite links may serve the old keys",
+            description:
+              "Key rotation succeeded, but refreshing your invite links failed. Reopen the community to retry, or new joiners on those links could land on the previous epoch.",
+            variant: "destructive",
+          });
+        }
       }
 
       // 4. Follow our own rotation forward.

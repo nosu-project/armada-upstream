@@ -64,6 +64,17 @@ export interface CommunityListEntry {
    * Only the user's own Leave or the owner's Dissolve ever removes an icon.
    */
   excluded_at_epoch?: number;
+  /**
+   * Armada extension: the invite link this membership was joined through, in
+   * the domain-agnostic bare form `<naddr>#<fragment>` (CORD-05 §2/§3). The
+   * link's coordinate is stable and its bundle refreshes in place, so a member
+   * STRANDED on a superseded epoch (a stale bundle dropped them onto history —
+   * see useRekeyWatch2) can re-resolve this same link and merge the refreshed,
+   * higher-epoch bundle forward. Self-encrypted like the rest of the list, so
+   * carrying the secret fragment here leaks nothing new (the list already
+   * holds `community_root`). Absent for direct-invite and creator entries.
+   */
+  invite_ref?: string;
   [k: string]: unknown;
 }
 

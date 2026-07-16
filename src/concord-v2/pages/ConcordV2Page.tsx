@@ -1,4 +1,4 @@
-import { AtSign, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
+import { AtSign, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, ScrollText, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -17,6 +17,9 @@ import { CommunityInfoDialog2 } from "@/concord-v2/components/CommunityInfoDialo
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
 import { RolesDialog2 } from "@/concord-v2/components/RolesDialog2";
+import { AuditLogView } from "@/concord-v2/components/AuditLogView2";
+import { InvitesView } from "@/concord-v2/components/InvitesView2";
+import { DebugHealView } from "@/concord-v2/components/DebugHealView2";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
@@ -49,12 +52,12 @@ import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
 import { useCommunity2, useIsExcluded2 } from "@/concord-v2/hooks/useCommunityList2";
-import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
+import { useCommunityManagement2, useStrandedRecovery2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useGuestbook2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useModeration2 } from "@/concord-v2/hooks/useModeration2";
-import { useChannelRekeyWatch2, useRekeyWatch2 } from "@/concord-v2/hooks/useRekey2";
+import { useChannelRekeyWatch2, useLinkRefreshWatch2, useRekeyWatch2 } from "@/concord-v2/hooks/useRekey2";
 import { useRoles2 } from "@/concord-v2/hooks/useRoles2";
 import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
@@ -699,10 +702,18 @@ export function ConcordV2Page() {
   useRegisterChannelStreamKeys2(communityId);
 
   // React to base-rekey rotations (adopt the new epoch, or discover removal).
-  useRekeyWatch2(baseCommunity);
+  // `stranded`: a stale invite dropped us onto a superseded epoch with no wire
+  // path forward — the link is out of date and only a refresh/Direct Invite heals.
+  const { stranded } = useRekeyWatch2(baseCommunity);
   // And per-held-private-channel rotations (CORD-06 §2): adopt fresh channel
   // keys or drop a channel we've been removed from. No-op without any.
   useChannelRekeyWatch2(baseCommunity);
+  // Keep our OWN live invite links vending the current epoch (CORD-05 §2), so a
+  // rotation on another device / by another admin doesn't leave them stale.
+  useLinkRefreshWatch2(baseCommunity);
+  // Stranded self-heal: while stranded, quietly re-resolve the link we joined
+  // through; once its creator refreshes the bundle, merge the fresh epoch in.
+  const { canRecover, checking: recoveryChecking, checkNow: recoveryCheckNow } = useStrandedRecovery2(baseCommunity, stranded);
 
   // Kicked/banned: the community stays on the rail but goes read-only (the
   // composer is swapped for a banner). Cleared automatically if re-included.
@@ -715,7 +726,7 @@ export function ConcordV2Page() {
   // Which pane the main area shows: the selected channel's chat, the
   // community-wide "@ Mentions" list, or the "Threads" list. Selecting a
   // channel returns to chat.
-  const [view, setView] = useState<"channel" | "mentions" | "threads">("channel");
+  const [view, setView] = useState<"channel" | "mentions" | "threads" | "audit" | "invites" | "health">("channel");
   useEffect(() => {
     if (routeChannelId) setView("channel");
   }, [routeChannelId]);
@@ -857,14 +868,21 @@ export function ConcordV2Page() {
   const canManageRoles = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_ROLES));
   const canManageMetadata = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_METADATA));
   const canManageChannels = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS));
+  const canCreateInvite = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.CREATE_INVITE));
   const canKickAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.KICK));
   const canBanAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.BAN));
   const canModerateMessages = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_MESSAGES));
   // A dissolved community is terminal: the owner has torn it down, so no key
   // rotation or new messages will ever land. Keep it fully readable (members
   // asked to still see the history), but freeze every write path.
+  //
+  // `excluded` (a moderator rotated the keys without us) and `stranded` (a stale
+  // invite dropped us onto a superseded epoch) are equally write-dead: our new
+  // messages would be encrypted to keys nobody keeps. All three replace the main
+  // composer with a notice; folding them into `canWrite` freezes the same write
+  // paths everywhere else too — timeline reply/edit and the thread composer.
   const { data: dissolved } = useDissolved2(community);
-  const canWrite = Boolean(user && channel && !dissolved);
+  const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
 
   const { transport: baseTransport, reactionsFor, allMessages } = useTransport2(community, channel, canWrite, canModerateMessages);
   const { mutateAsync: send } = useSendMessage2(community, channel);
@@ -1313,6 +1331,24 @@ export function ConcordV2Page() {
                   },
                   {
                     show: true,
+                    icon: <ScrollText className="size-4" />,
+                    label: "Audit log",
+                    onClick: () => setView("audit"),
+                  },
+                  {
+                    show: true,
+                    icon: <LinkIcon className="size-4" />,
+                    label: "Invite links",
+                    onClick: () => setView("invites"),
+                  },
+                  {
+                    show: canManageRoles || canKickAny || canBanAny || canCreateInvite,
+                    icon: <HeartPulse className="size-4" />,
+                    label: "Member health",
+                    onClick: () => setView("health"),
+                  },
+                  {
+                    show: true,
                     icon: communityMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />,
                     label: communityMuted ? "Unmute community" : "Mute community",
                     onClick: () => toggleCommunityMute(`c2:${community.idHex}`),
@@ -1540,6 +1576,21 @@ export function ConcordV2Page() {
                   <AtSign className="size-5 text-muted-foreground shrink-0" />
                   <h1 className="font-semibold truncate leading-tight">Mentions</h1>
                 </>
+              ) : view === "audit" ? (
+                <>
+                  <ScrollText className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Audit log</h1>
+                </>
+              ) : view === "invites" ? (
+                <>
+                  <LinkIcon className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Invite links</h1>
+                </>
+              ) : view === "health" ? (
+                <>
+                  <HeartPulse className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Member health</h1>
+                </>
               ) : view === "threads" ? (
                 <>
                   <MessagesSquare className="size-5 text-muted-foreground shrink-0" />
@@ -1573,6 +1624,21 @@ export function ConcordV2Page() {
                     <>
                       <AtSign className="size-3 shrink-0" />
                       Mentions
+                    </>
+                  ) : view === "audit" ? (
+                    <>
+                      <ScrollText className="size-3 shrink-0" />
+                      Audit log
+                    </>
+                  ) : view === "invites" ? (
+                    <>
+                      <LinkIcon className="size-3 shrink-0" />
+                      Invite links
+                    </>
+                  ) : view === "health" ? (
+                    <>
+                      <HeartPulse className="size-3 shrink-0" />
+                      Member health
                     </>
                   ) : view === "threads" ? (
                     <>
@@ -1693,6 +1759,23 @@ export function ConcordV2Page() {
                     onJump={jumpToMention}
                   />
                 </div>
+              ) : view === "audit" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
+                  {community && <AuditLogView community={community} />}
+                </div>
+              ) : view === "invites" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
+                  {community && <InvitesView community={community} />}
+                </div>
+              ) : view === "health" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
+                  {community && (
+                    <DebugHealView
+                      community={community}
+                      canHeal={canManageRoles || canKickAny || canBanAny || canCreateInvite}
+                    />
+                  )}
+                </div>
               ) : view === "threads" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
                   <ThreadsView
@@ -1753,7 +1836,7 @@ export function ConcordV2Page() {
 
                   {typingPubkeys.length > 0 && <TypingIndicator pubkeys={typingPubkeys} />}
                   {dissolved ? (
-                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-destructive/10 border border-destructive/30 flex items-center gap-3">
+                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-destructive/10 flex items-center gap-3">
                       <Trash2 className="size-5 shrink-0 text-destructive" />
                       <div className="min-w-0 flex-1 text-sm">
                         <p className="font-medium text-destructive">This community was dissolved by its owner.</p>
@@ -1772,7 +1855,7 @@ export function ConcordV2Page() {
                       </Button>
                     </div>
                   ) : excluded ? (
-                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 border border-border flex items-center gap-3">
+                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 flex items-center gap-3">
                       <Lock className="size-5 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1 text-sm">
                         <p className="font-medium">You no longer have access to this community.</p>
@@ -1782,7 +1865,7 @@ export function ConcordV2Page() {
                         </p>
                       </div>
                       <Button
-                        variant="outline"
+                        variant="secondary"
                         size="sm"
                         className="shrink-0 clip-corner-lg"
                         disabled={isLeaving}
@@ -1790,6 +1873,31 @@ export function ConcordV2Page() {
                       >
                         {isLeaving ? <Loader2 className="size-4 animate-spin" /> : "Leave"}
                       </Button>
+                    </div>
+                  ) : stranded ? (
+                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 flex items-center gap-3">
+                      <Lock className="size-5 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1 text-sm">
+                        <p className="font-medium">This invite link is out of date.</p>
+                        <p className="text-muted-foreground">
+                          The community rotated its keys after this link was made, so you're on an
+                          older version and can't read new messages.
+                          {canRecover
+                            ? " This checks for updated keys automatically; you can also ask whoever invited you for a fresh invite, or ask a moderator to send you the current keys."
+                            : " Ask whoever invited you for a fresh invite, or ask a moderator to send you the current keys."}
+                        </p>
+                      </div>
+                      {canRecover && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="shrink-0 clip-corner-lg"
+                          disabled={recoveryChecking}
+                          onClick={() => void recoveryCheckNow()}
+                        >
+                          {recoveryChecking ? <Loader2 className="size-4 animate-spin" /> : "Check again"}
+                        </Button>
+                      )}
                     </div>
                   ) : (
                     channel && (

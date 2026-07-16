@@ -1,5 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } from "@/concord-v2/hooks/useControlPlane2";
@@ -18,7 +19,13 @@ import {
   sealDissolved,
 } from "@/concord-v2/lib/control";
 import { bytesToHex, hex32, random32 } from "@/concord-v2/lib/derive";
-import { parseBundleEvent, type InviteBundle, type ParsedInviteLink } from "@/concord-v2/lib/invite";
+import {
+  encodeFragment,
+  parseBundleEvent,
+  parseInviteLink,
+  type InviteBundle,
+  type ParsedInviteLink,
+} from "@/concord-v2/lib/invite";
 import { KIND_INVITE_BUNDLE } from "@/concord-v2/lib/kinds";
 import { capRelays, type CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -34,7 +41,7 @@ export interface InvitePreview2 {
 }
 
 /** Fetch + verify a V2 invite bundle from its bootstrap relays. */
-async function resolveBundle(
+export async function resolveBundle(
   nostr: ReturnType<typeof useNostr>["nostr"],
   invite: ParsedInviteLink,
   fallbackRelays: string[],
@@ -59,7 +66,7 @@ async function resolveBundle(
 }
 
 /** Turn a verified bundle into the membership-list join material + entry. */
-export function bundleToEntry(bundle: InviteBundle): CommunityListEntry {
+export function bundleToEntry(bundle: InviteBundle, opts?: { inviteRef?: string }): CommunityListEntry {
   const jm: JoinMaterial = {
     community_id: bundle.community_id,
     owner: bundle.owner,
@@ -72,7 +79,21 @@ export function bundleToEntry(bundle: InviteBundle): CommunityListEntry {
     relays: capRelays(bundle.relays),
     name: bundle.name,
   };
-  return { community_id: jm.community_id, seed: jm, current: jm, added_at: Date.now() };
+  return {
+    community_id: jm.community_id,
+    seed: jm,
+    current: jm,
+    added_at: Date.now(),
+    // Remember the link joined through (bare `naddr#fragment`), so a member
+    // stranded on a superseded epoch can re-resolve the SAME link once its
+    // creator refreshes the bundle (CORD-05 §2) — see useStrandedRecovery2.
+    ...(opts?.inviteRef ? { invite_ref: opts.inviteRef } : {}),
+  };
+}
+
+/** The domain-agnostic bare form of a parsed invite link: `<naddr>#<fragment>`. */
+export function inviteRefOf(invite: ParsedInviteLink): string {
+  return `${invite.naddr}#${encodeFragment(invite.token, invite.bootstrapRelays)}`;
 }
 
 /**
@@ -184,7 +205,7 @@ export function useCommunityActions2() {
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new Error(unusable);
-      const entry = bundleToEntry(bundle);
+      const entry = bundleToEntry(bundle, { inviteRef: inviteRefOf(invite) });
       await updateList({ type: "add", entry });
       queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });
 
@@ -339,4 +360,92 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     deleteChannel: deleteChannel.mutateAsync,
     entry,
   };
+}
+
+/**
+ * Self-heal for a STRANDED member (a stale invite dropped them onto an epoch a
+ * pre-join Refounding already superseded — see useRekeyWatch2): re-resolve the
+ * SAME link they joined through (`entry.invite_ref`), and when its creator has
+ * refreshed the bundle to a higher epoch (CORD-05 §2, now guaranteed on the
+ * creator's next community open by useLinkRefreshWatch2), merge it forward.
+ *
+ * The merge rides the ordinary `add` (epoch-monotonic: `freshest` keeps the
+ * higher epoch, `seed` keeps the earliest root), so a still-stale bundle is a
+ * no-op and nothing can move backward. After a successful catch-up, a fresh
+ * Join is announced on the NEW epoch's Guestbook — the stranded Join landed on
+ * the superseded epoch's plane, invisible to current members, and re-following
+ * a link announces exactly like a first join (CORD-05 §1).
+ *
+ * Polls at a relaxed cadence while stranded (the banner also exposes a manual
+ * "Check again"). Inert unless `stranded` and the entry carries a link ref.
+ */
+export function useStrandedRecovery2(
+  community: CommunityV2 | undefined,
+  stranded: boolean,
+): { canRecover: boolean; checking: boolean; checkNow: () => Promise<boolean> } {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const { config } = useAppContext();
+  const { mutateAsync: updateList } = useUpdateCommunityList2();
+  const entry = useCommunityEntry2(community?.idHex);
+  const queryClient = useQueryClient();
+  const [checking, setChecking] = useState(false);
+  const inFlight = useRef(false);
+
+  const inviteRef = typeof entry?.invite_ref === "string" ? entry.invite_ref : undefined;
+  const canRecover = Boolean(stranded && inviteRef && user && community);
+  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : APP_RELAYS;
+
+  /** One recovery attempt. Resolves true when a fresher epoch was merged in. */
+  const checkNow = useCallback(async (): Promise<boolean> => {
+    if (!community || !user || !inviteRef || inFlight.current) return false;
+    const invite = parseInviteLink(inviteRef);
+    if (!invite) return false;
+    inFlight.current = true;
+    setChecking(true);
+    try {
+      const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
+      // Still vending the epoch we hold (or older): the creator hasn't
+      // refreshed yet. Nothing to do — the next poll re-asks.
+      if (BigInt(bundle.root_epoch) <= community.rootEpoch) return false;
+
+      const fresh = bundleToEntry(bundle, { inviteRef });
+      await updateList({ type: "add", entry: fresh });
+      queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });
+
+      // Announce on the epoch we can now read: the stranded Join went to the
+      // superseded epoch's Guestbook, which current members never watch.
+      void (async () => {
+        const rehydrated = rehydrateCommunity(fresh);
+        if (!rehydrated) return;
+        const attribution = bundle.creator_npub
+          ? { creator: bundle.creator_npub, label: bundle.label }
+          : undefined;
+        const rumor = buildJoinRumor(user.pubkey, Date.now(), attribution);
+        const wrap = await sealGuestbook(rumor, currentGuestbookGroup(rehydrated), user.signer);
+        await Promise.allSettled(
+          rehydrated.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+        );
+      })().catch(() => undefined);
+      return true;
+    } catch {
+      // Unreachable relays / revoked / expired: leave the banner up — a revoked
+      // link can never heal this member, only a fresh invite can.
+      return false;
+    } finally {
+      inFlight.current = false;
+      setChecking(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [community?.idHex, community?.rootEpoch, user?.pubkey, inviteRef]);
+
+  // Relaxed poll while stranded: the heal depends on the link's creator coming
+  // online, which can happen any time — but never poll a closed banner.
+  useEffect(() => {
+    if (!canRecover) return;
+    const timer = setInterval(() => void checkNow(), 60_000);
+    return () => clearInterval(timer);
+  }, [canRecover, checkNow]);
+
+  return { canRecover, checking, checkNow };
 }

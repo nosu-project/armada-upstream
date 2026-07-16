@@ -57,7 +57,7 @@ import { openWrap, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { CommunityListEntry, JoinMaterial } from "@/concord-v2/lib/communityList";
 import type { CommunityV2, PrivateChannelKey } from "@/concord-v2/lib/types";
 
-import { useChannelRekeyWatch2, useRefound2, useRekeyWatch2 } from "./useRekey2";
+import { useChannelRekeyWatch2, useLinkRefreshWatch2, useRefound2, useRekeyWatch2 } from "./useRekey2";
 
 import type { NUser } from "@nostrify/react/login";
 
@@ -345,6 +345,102 @@ describe("useRekeyWatch2 (CORD-05 §2 / CORD-06 §2)", () => {
       // it live — a stale device can never resurrect a revoked link.
       await new Promise((r) => setTimeout(r, 150));
       expect(relay.published.some((e) => e.pubkey === linkB.pk)).toBe(false);
+    },
+  );
+});
+
+// ── useRekeyWatch2: stranded-joiner detection (CORD-05 §2 / CORD-06 §2) ──────
+
+describe("useRekeyWatch2 stranded detection", () => {
+  it(
+    "a rotation PAST my epoch that predates my join and holds no blob for me marks me stranded",
+    { timeout: 30_000 },
+    async () => {
+      const owner = member();
+      const me = member();
+      const { community } = mintCommunity("Fleet", owner.pubkey, [RELAY]);
+      // A complete `0→1` rotation carrying a blob ONLY for the owner, published
+      // LONG before I joined — I landed on epoch 0 via a stale link. It advances
+      // past the epoch I hold (0), so I'm stranded, not excluded.
+      const staleMs = Date.now() - 60 * 60_000;
+      const wraps = await rotationWraps(owner, community, random32(), [owner.pubkey], staleMs);
+
+      const relay = new FakeRelay();
+      relay.events = [...wraps];
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(me);
+      h.folded = foldedFor(owner.pubkey);
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      // I joined AFTER the rotation was published (stale-invite drop).
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: Date.now() } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(() => useRekeyWatch2(community), { wrapper });
+
+      await waitFor(() => expect(result.current.stranded).toBe(true), { timeout: 10_000 });
+      // Stranding is NOT exclusion: the entry is never marked excluded/removed.
+      expect(h.updateList).not.toHaveBeenCalledWith(expect.objectContaining({ type: "exclude" }));
+    },
+  );
+});
+
+// ── useLinkRefreshWatch2: creator-side stale-link roll-forward (CORD-05 §2) ──
+
+describe("useLinkRefreshWatch2", () => {
+  it(
+    "a creator opening a community re-posts their live links at the current epoch",
+    { timeout: 30_000 },
+    async () => {
+      const owner = member();
+      const me = member(); // holds a live link, opened the community on a fresh device
+      // The community is ALREADY on epoch 2 locally (e.g. rotated on another
+      // device): the bundle the link vends must catch up to it.
+      const { community: base } = mintCommunity("Fleet", owner.pubkey, [RELAY]);
+      const rotatedRoot = random32();
+      const community: CommunityV2 = { ...base, root: rotatedRoot, rootEpoch: 2n };
+
+      const link = mintLinkSigner();
+      const token = mintToken();
+      const listEvent = finalizeEvent(
+        {
+          kind: KIND_INVITE_LIST,
+          content: nip44Encrypt(
+            JSON.stringify({
+              entries: [
+                { token: bytesToHex(token), signer_sk: bytesToHex(link.sk), community_id: community.idHex, url: "", created_at: 1 },
+              ],
+              tombstones: [],
+            }),
+            getConversationKey(me.sk, me.pubkey),
+          ),
+          tags: [],
+          created_at: nowSecs() - 10,
+        },
+        me.sk,
+      );
+
+      const relay = new FakeRelay();
+      h.pool = {
+        relay: () => relay,
+        query: async (filters: Filter[]) =>
+          filters.some((f) => f.kinds?.includes(KIND_INVITE_LIST)) ? [listEvent] : [],
+      };
+      h.user = asNUser(me);
+      h.folded = foldedFor(owner.pubkey);
+
+      const { wrapper } = makeWrapper();
+      renderHook(() => useLinkRefreshWatch2(community), { wrapper });
+
+      await waitFor(() => expect(relay.published.some((e) => e.pubkey === link.pk)).toBe(true), {
+        timeout: 10_000,
+      });
+      const refreshed = relay.published.find((e) => e.pubkey === link.pk)!;
+      const vended = parseBundleEvent(refreshed, link.pk, token, Date.now());
+      // The link now vends the CURRENT epoch (2) and the rotated root — not the
+      // dead epoch it was minted at.
+      expect(vended.root_epoch).toBe(2);
+      expect(vended.community_root).toBe(bytesToHex(rotatedRoot));
     },
   );
 });

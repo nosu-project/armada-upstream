@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { KIND_DM_RELAYS, parseDmRelays } from "@/hooks/useDmRelayList";
 import { buildRegistryEdition } from "@/concord-v2/lib/control";
@@ -182,24 +183,43 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   const { data: folded } = useControlFold2(community);
   const inviteList = useInviteList2();
   const { mutateAsync: updateInviteList } = useUpdateInviteList2();
+  // The freshest membership snapshot from the live Community List vault. The
+  // `community` prop is a memoized snapshot that can lag a just-adopted rekey
+  // (staleTime/poll/render windows), and a bundle minted from a stale snapshot
+  // would embed an OLD epoch — the exact defect that strands a fresh joiner on
+  // a dead epoch (CORD-05 §2 requires the CURRENT keys). Reconcile against this.
+  const fresh = useCommunity2(community?.idHex);
+
+  /**
+   * The community to mint a bundle from: whichever of the caller's snapshot and
+   * the live-list entry holds the HIGHER epoch. Monotonic — never mints below
+   * what either source knows, so a lagging snapshot can't emit a stale bundle.
+   */
+  const bundleSource = (): CommunityV2 | undefined => {
+    if (!community) return fresh;
+    if (!fresh) return community;
+    return fresh.rootEpoch > community.rootEpoch ? fresh : community;
+  };
 
   /** The §1 CommunityInvite bundle: everything membership is (link + direct alike). */
   const buildBundle = (opts?: { expiresAtMs?: number; label?: string }): InviteBundle => {
-    if (!user || !community) throw new Error("Not ready.");
+    if (!user) throw new Error("Not ready.");
+    const src = bundleSource();
+    if (!src) throw new Error("Not ready.");
     return {
-      community_id: community.idHex,
-      owner: community.owner,
-      owner_salt: bytesToHex(community.ownerSalt),
-      community_root: bytesToHex(community.root),
-      root_epoch: Number(community.rootEpoch),
-      channels: community.privateChannels.map((ch) => ({
+      community_id: src.idHex,
+      owner: src.owner,
+      owner_salt: bytesToHex(src.ownerSalt),
+      community_root: bytesToHex(src.root),
+      root_epoch: Number(src.rootEpoch),
+      channels: src.privateChannels.map((ch) => ({
         id: bytesToHex(ch.id),
         key: bytesToHex(ch.key),
         epoch: Number(ch.epoch),
         name: ch.name,
       })),
-      relays: community.relays,
-      name: folded?.metadata?.name ?? community.name,
+      relays: src.relays,
+      name: folded?.metadata?.name ?? src.name,
       ...(folded?.metadata?.icon ? { icon: folded.metadata.icon } : {}),
       ...(opts?.expiresAtMs ? { expires_at: opts.expiresAtMs } : {}),
       creator_npub: user.pubkey,
