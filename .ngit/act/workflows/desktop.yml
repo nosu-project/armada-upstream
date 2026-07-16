@@ -41,7 +41,11 @@ jobs:
         run: |
           set -eu
           npm ci
-          npx vite build -l error
+          # No `-l error`: act's log capture drops suppressed output, so a
+          # failing/empty build looked like a silent success and only surfaced
+          # later as "cp: cannot stat 'dist/index.html'". Keep vite's own output.
+          npx vite build
+          test -f dist/index.html || { echo "vite build produced no dist/index.html" >&2; ls -la dist || true; exit 1; }
           cp dist/index.html dist/404.html
           # Copy the built bundle INTO electron/dist by content. `electron/dist`
           # may already exist (e.g. a work-dir path act keeps around), so a
@@ -97,7 +101,8 @@ jobs:
         run: |
           set -eu
           npm ci
-          npx vite build -l error
+          npx vite build
+          test -f dist/index.html || { echo "vite build produced no dist/index.html" >&2; ls -la dist || true; exit 1; }
           cp dist/index.html dist/404.html
           # See the linux job: copy by content, don't rm+cp the directory.
           mkdir -p electron/dist

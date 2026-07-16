@@ -125,7 +125,8 @@ jobs:
         run: |
           set -eu
           npm ci
-          npx vite build -l error
+          npx vite build
+          test -f dist/index.html || { echo "vite build produced no dist/index.html" >&2; ls -la dist || true; exit 1; }
           cp dist/index.html dist/404.html
           npx cap sync android
 
@@ -218,14 +219,22 @@ jobs:
           cat "$release_config"
 
           # --json is non-interactive (no prompts, no spinners) AND writes the
-          # real error to stderr as {"error":"..."} — unlike --quiet, which
-          # swallowed the failure on the first attempts. --skip-certificate-
-          # linking: the ngit-ci Android upload key was rotated, so the new
-          # signing cert isn't yet linked to the publishing identity; without
-          # this zsp aborts a first publish under a new cert.
+          # real error to stderr as {"error":"..."}. act's step-log capture has
+          # been dropping stderr, so tee both streams to a file and re-echo it,
+          # then exit on zsp's real status — otherwise the failure is invisible.
+          # --skip-certificate-linking: the ngit-ci Android upload key was
+          # rotated, so the new signing cert isn't yet linked to the publishing
+          # identity; without this zsp aborts a first publish under a new cert.
+          set +e
           zsp publish \
             --json \
             --skip-metadata \
             --skip-preview \
             --skip-certificate-linking \
-            "$release_config"
+            "$release_config" >zsp.out 2>zsp.err
+          zsp_rc=$?
+          set -e
+          echo "=== zsp stdout ==="; cat zsp.out || true
+          echo "=== zsp stderr ==="; cat zsp.err || true
+          echo "=== zsp exit: $zsp_rc ==="
+          exit "$zsp_rc"
