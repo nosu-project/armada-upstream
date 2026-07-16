@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.31.0] - 2026-07-16
+
+Community admins can now edit which relays a community lives on. Change the
+relay list from the community info dialog and every member follows the move
+automatically — their apps re-point without anyone lifting a finger. When you
+add a relay, the community's history is copied to it first, so newly added
+relays come online already carrying the backlog. Guardrails keep the switch
+safe: relay addresses are normalized and de-duplicated, at least one relay is
+always kept, and a swap that shares no relays with the current list asks for
+confirmation before it can strand offline members.
+
+### Added
+- Community admins can edit a community's relay list; members' apps follow the
+  change automatically, and a newly added relay is seeded with the community's
+  history so it comes online with the full backlog
+
 ## [0.30.1] - 2026-07-16
 
 Polish for community admins and a quieter sync experience. Invite-link
