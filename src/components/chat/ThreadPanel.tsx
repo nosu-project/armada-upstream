@@ -274,6 +274,10 @@ interface ThreadPanelProps {
    * use these (they pass placeholder values).
    */
   relayUrl: string;
+  /** Whether this conversation may offer bot commands (see ChatComposer). */
+  botCommands?: boolean;
+  /** Relays this conversation uses, for bot-manifest discovery (see ChatComposer). */
+  conversationRelays?: string[];
   groupId: string;
   /** Whether the current user can post replies. */
   canWrite: boolean;
@@ -296,7 +300,7 @@ interface ThreadPanelProps {
  * via the {@link ChatTransport} (`threadRepliesFor`/`sendThreadReply`), so
  * replies never appear in the main timeline (they're nested here instead).
  */
-export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, autoFocus = false, onClose }: ThreadPanelProps) {
+export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, onClose }: ThreadPanelProps) {
   const replies = transport.threadRepliesFor?.(root.id) ?? [];
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   const { config } = useAppContext();
@@ -369,6 +373,8 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
       {canWrite ? (
         <ChatComposer
           relayUrl={relayUrl}
+          botCommands={botCommands}
+          conversationRelays={conversationRelays}
           groupId={groupId}
           messages={[]}
           mentionPubkeys={mentionPubkeys}

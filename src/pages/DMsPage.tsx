@@ -54,6 +54,7 @@ import {
   useDMConversations,
   useDMSupport,
 } from "@/hooks/useDirectMessages";
+import { useBotManifests } from "@/hooks/useBotManifests";
 import { useDm17Conversations, useDm17Support, useEnsureDmInbox } from "@/hooks/useDm17";
 import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
@@ -400,6 +401,17 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { transport, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(peer);
   const { messages } = transport;
+
+  // When the counterparty is a bot, its declared command set lets the timeline
+  // render an untagged `/cmd args` invocation as an action line — a DM sends
+  // invocations untagged (the recipient IS the bot), so there's no tag to key
+  // off. Non-bot peers yield an empty set and nothing is ever promoted.
+  const botRoster = useMemo(() => [peer], [peer]);
+  const { entries: botCommandEntries } = useBotManifests(botRoster);
+  const knownCommands = useMemo(
+    () => new Set(botCommandEntries.map((e) => e.command.name)),
+    [botCommandEntries],
+  );
   const { markRead } = useReadState();
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { toast } = useToast();
@@ -964,6 +976,8 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 // NIP-17 rumors are unsigned — the context menu offers "View
                 // event JSON" instead of relay-addressable off-ramps.
                 rumor={dm17Ids.has(msg.id) ? msg : undefined}
+                // Render this peer-bot's untagged invocations as action lines.
+                knownCommands={knownCommands}
                 continuation={continuation}
                 active={activeId === msg.id}
                 onToggleActive={toggleActive}
@@ -980,6 +994,10 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           relayUrl="dm"
           groupId={peer}
           messages={[]}
+          // If this peer is a bot, offer its `/` commands. A DM's recipient IS
+          // the bot, so the invocation sends untagged (no routing leak, and it
+          // rides inside NIP-17's sealed rumor like any other DM content).
+          botDmPeer={peer}
           placeholder={`Message ${name}…`}
           // Quote-replies use the NIP-C7 `q` marker (rich context, shared with
           // Concord's renderer); handleSubmit adds the NIP-17 `e` parent tag.
