@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
+import { resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { KIND_DM_RELAYS, parseDmRelays } from "@/hooks/useDmRelayList";
 import { buildRegistryEdition } from "@/concord-v2/lib/control";
@@ -101,6 +102,44 @@ export function useInviteList2() {
     queryFn: async ({ signal }) => {
       const { list } = await fetchInviteList(nostr, user!, AbortSignal.any([signal, AbortSignal.timeout(8000)]));
       return list;
+    },
+  });
+}
+
+/**
+ * The epoch each of my live links CURRENTLY vends, keyed by token (CORD-05 §2).
+ * A link's coordinate is re-posted on rekey, so its bundle's `root_epoch` may
+ * lag the community while the creator hasn't refreshed it (offline during a
+ * rotation, a non-NIP-44 signer, etc.) — comparing this against the community's
+ * live `rootEpoch` is how the UI flags a link a fresh joiner would land behind.
+ * Best-effort per link: an unresolvable link (revoked/expired/offline relay) is
+ * simply absent from the map rather than failing the whole query.
+ */
+export function useMyLinkEpochs2(community: CommunityV2 | undefined) {
+  const { nostr } = useNostr();
+  const inviteList = useInviteList2();
+
+  const links = (inviteList.data?.entries ?? []).filter((e) => e.community_id === community?.idHex);
+
+  return useQuery<Record<string, number>>({
+    queryKey: ["concord2", "invite-epochs", community?.idHex, links.map((e) => e.token).sort()],
+    enabled: Boolean(community && links.length > 0),
+    staleTime: 60_000,
+    queryFn: async () => {
+      const out: Record<string, number> = {};
+      await Promise.all(
+        links.map(async (e) => {
+          const parsed = parseInviteLink(e.url);
+          if (!parsed) return;
+          try {
+            const bundle = await resolveBundle(nostr, parsed, community!.relays);
+            if (typeof bundle.root_epoch === "number") out[e.token] = bundle.root_epoch;
+          } catch {
+            // Revoked/expired/offline: leave it absent (no notice, not "behind").
+          }
+        }),
+      );
+      return out;
     },
   });
 }

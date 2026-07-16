@@ -1,13 +1,20 @@
-import { Check, Copy, Globe, Link as LinkIcon, Loader2, Lock } from "lucide-react";
+import { Braces, Check, Copy, Globe, Link as LinkIcon, Loader2, Lock, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
-import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
-import { parseInviteLink } from "@/concord-v2/lib/invite";
+import { useInviteActions2, useMyLinkEpochs2 } from "@/concord-v2/hooks/useInvites2";
+import { parseInviteLink, type InviteListEntry } from "@/concord-v2/lib/invite";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -34,8 +41,14 @@ import { writeClipboardText } from "@/lib/clipboard";
 export function InvitesView({ community }: { community: CommunityV2 }) {
   const { data: folded } = useControlFold2(community);
   const { myLinks, revokeLink, isRevoking, isPublic } = useInviteActions2(community);
+  const { data: linkEpochs } = useMyLinkEpochs2(community);
   const [copied, setCopied] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  // The link whose raw details we're inspecting (null = dialog closed). Live
+  // links always carry the CURRENT keys (re-posted on rekey, CORD-05 §2), so
+  // the epoch a link serves is the community's current `rootEpoch`.
+  const [inspecting, setInspecting] = useState<InviteListEntry | null>(null);
+  const epoch = Number(community.rootEpoch);
 
   // The link-signer pubkeys of MY live links, so I can mark them in the
   // registry ("this one's mine") and avoid implying I can't see my own URL.
@@ -126,7 +139,12 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
           </p>
         ) : (
           <ul className="space-y-1.5">
-            {myLinks.map((e) => (
+            {myLinks.map((e) => {
+              // The epoch this link currently vends, once resolved. Undefined
+              // while loading or if it couldn't be fetched — treat as up to date.
+              const servedEpoch = linkEpochs?.[e.token];
+              const behind = servedEpoch !== undefined && servedEpoch < epoch;
+              return (
               <li key={e.token} className="space-y-1 rounded-md bg-foreground/5 px-3 py-2">
                 <div className="flex items-center gap-2">
                   <Input
@@ -135,6 +153,16 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
                     className="min-w-0 font-mono text-[0.65rem]"
                     onFocus={(ev) => ev.currentTarget.select()}
                   />
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="outline"
+                    className="shrink-0"
+                    aria-label="View link details"
+                    onClick={() => setInspecting(e)}
+                  >
+                    <Braces className="size-3.5" />
+                  </Button>
                   <Button
                     type="button"
                     size="icon"
@@ -160,7 +188,13 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
                     {revoking === e.url ? <Loader2 className="size-3.5 animate-spin" /> : "Revoke"}
                   </Button>
                 </div>
-                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                  <span
+                    className="tabular-nums"
+                    title="The community epoch this link's keys belong to. It advances each time the community rekeys."
+                  >
+                    Epoch {servedEpoch ?? epoch}
+                  </span>
                   {e.label && <span>Label: {e.label}</span>}
                   <span>Created {new Date(e.created_at * 1000).toLocaleDateString()}</span>
                   {e.expires_at ? (
@@ -172,8 +206,20 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
                     <span>Never expires</span>
                   )}
                 </div>
+                {behind && (
+                  <div className="flex items-start gap-1.5 rounded bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+                    <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+                    <span>
+                      This link is on epoch {servedEpoch} — the community has since moved to epoch{" "}
+                      {epoch}. Someone joining now could land on the old keys. It refreshes
+                      automatically when you reopen this community from a device that holds it;
+                      if it lingers, revoke and mint a fresh link.
+                    </span>
+                  </div>
+                )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </section>
@@ -203,7 +249,75 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
           </ul>
         )}
       </section>
+
+      <LinkDetailsDialog
+        entry={inspecting}
+        servedEpoch={inspecting ? linkEpochs?.[inspecting.token] : undefined}
+        currentEpoch={epoch}
+        onClose={() => setInspecting(null)}
+      />
     </div>
+  );
+}
+
+/**
+ * A read-only JSON view of a link's stored details. The Invite List entry holds
+ * the link's `token` (unlock secret + merge key) and `signer_sk` (the signing
+ * secret) — anyone who reads them can mint/refresh/impersonate the link, so
+ * they are REDACTED here: the whole point of the community registry is that a
+ * link's secrets never leave its creator, and a "view details" affordance must
+ * not casually leak them onto a screen-share or screenshot.
+ */
+function LinkDetailsDialog({
+  entry,
+  servedEpoch,
+  currentEpoch,
+  onClose,
+}: {
+  entry: InviteListEntry | null;
+  servedEpoch: number | undefined;
+  currentEpoch: number;
+  onClose: () => void;
+}) {
+  const json = useMemo(() => {
+    if (!entry) return "";
+    const { token: _token, signer_sk: _sk, ...safe } = entry;
+    return JSON.stringify(
+      {
+        ...safe,
+        token: "<redacted>",
+        signer_sk: "<redacted>",
+        served_epoch: servedEpoch ?? currentEpoch,
+        current_epoch: currentEpoch,
+      },
+      null,
+      2,
+    );
+  }, [entry, servedEpoch, currentEpoch]);
+
+  return (
+    <Dialog open={entry !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Invite link details</DialogTitle>
+          <DialogDescription>
+            The stored record for this link. Secrets are redacted.
+          </DialogDescription>
+        </DialogHeader>
+        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
+          {json}
+        </pre>
+        <div className="flex justify-end">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => writeClipboardText(json).catch(() => undefined)}
+          >
+            <Copy className="mr-2 size-4" /> Copy JSON
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
