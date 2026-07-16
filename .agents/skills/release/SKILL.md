@@ -206,15 +206,18 @@ After pushing, tell the user:
 Runs on the `vX.Y.Z` tag via `act` (GitHub Actions syntax), one Linux container
 per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 
-1. **release.yml → build** — signed Android APK + AAB. `setup-node`/`setup-java`/
-   `setup-android`, decode the JKS from `ANDROID_KEYSTORE_BASE64`, migrate to
-   PKCS12, `versionCode = 10000 + git rev-list --count HEAD`, build web assets,
-   `cap sync android`, then `assembleRelease bundleRelease`; uploads the signed
-   APK/AAB as artifacts (Blossom, when the operator enables it).
-2. **release.yml → publish-zapstore** — signs with the NIP-46 bunker and uploads
-   the APK to Zapstore (`needs: build`).
-3. **desktop.yml → linux** — Electron AppImage + deb.
-4. **desktop.yml → windows** — Electron NSIS Setup + portable `.exe`, cross-built
+1. **release.yml → build** — signed Android APK + AAB, then Zapstore publish,
+   all in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
+   from `ANDROID_KEYSTORE_BASE64`, migrate to PKCS12,
+   `versionCode = 10000 + git rev-list --count HEAD`, build web assets,
+   `cap sync android`, then `assembleRelease bundleRelease`; the signed APK/AAB
+   are uploaded to Blossom, then (same job, no cross-job artifact hand-off)
+   `setup-go` + `zsp` sign with the NIP-46 bunker and upload the APK to
+   Zapstore. Build and publish share one job on purpose: act's local artifact
+   server round-trips a multi-file wildcard upload back as a 3-byte stub, so a
+   separate `publish-zapstore` job used to receive an empty APK and fail.
+2. **desktop.yml → linux** — Electron AppImage + deb.
+3. **desktop.yml → windows** — Electron NSIS Setup + portable `.exe`, cross-built
    from Linux (installs wine in-job).
 
 macOS is not built on ngit-ci (act runs Linux containers only).
