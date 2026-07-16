@@ -1336,19 +1336,30 @@ export function ConcordV2Page() {
                     show: true,
                     icon: <ScrollText className="size-4" />,
                     label: "Audit log",
-                    onClick: () => setView("audit"),
+                    // Also close the mobile channel drawer so the view slides
+                    // into the <main> overlay (inert on desktop).
+                    onClick: () => {
+                      setView("audit");
+                      setChannelsOpen(false);
+                    },
                   },
                   {
                     show: true,
                     icon: <LinkIcon className="size-4" />,
                     label: "Invite links",
-                    onClick: () => setView("invites"),
+                    onClick: () => {
+                      setView("invites");
+                      setChannelsOpen(false);
+                    },
                   },
                   {
                     show: canManageRoles || canKickAny || canBanAny || canCreateInvite,
                     icon: <HeartPulse className="size-4" />,
                     label: "Member health",
-                    onClick: () => setView("health"),
+                    onClick: () => {
+                      setView("health");
+                      setChannelsOpen(false);
+                    },
                   },
                   {
                     show: true,
