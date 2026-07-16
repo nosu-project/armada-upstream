@@ -26,6 +26,18 @@
 const BUILD = "__BUILD_STAMP__";
 const CACHE = "armada-shell-" + BUILD;
 
+// The stamp plugin only runs at build time, so a surviving placeholder means
+// the Vite DEV server is serving this file. A caching SW is poison in dev:
+// module URLs aren't immutable (`?v=`/`?t=` generations), so cache-first mixes
+// pre-bundle generations across reloads (two React copies → "Cannot read
+// properties of null (reading 'useState')"), and the offline shell fallback
+// silently boots a stale app when the dev server is down instead of failing
+// visibly. Dev therefore keeps ONLY the push handlers: no precache, no fetch
+// interception, and activation takes over open tabs immediately and purges
+// every shell cache, so a previously poisoned dev install heals itself on the
+// next reload.
+const DEV = BUILD === "__BUILD_STAMP__";
+
 // App-shell assets to warm on install. Vite hashes JS/CSS so they stay
 // cache-first once cached; index.html is the SPA entry point.
 const PRECACHE = ["/", "/index.html", "/theme.js", "/favicon.svg", "/favicon.png", "/apple-touch-icon.png", "/logo-192.png", "/logo-512.png", "/maskable-192.png", "/maskable-512.png", "/manifest.json"];
@@ -35,6 +47,13 @@ const PRECACHE = ["/", "/index.html", "/theme.js", "/favicon.svg", "/favicon.png
 // ---------------------------------------------------------------------------
 
 self.addEventListener("install", (event) => {
+  // Dev: nothing to precache, and the no-skipWaiting rationale below is about
+  // keeping a page on one consistent BUILD — meaningless under the dev server,
+  // where immediate takeover is what lets a poisoned install heal.
+  if (DEV) {
+    self.skipWaiting();
+    return;
+  }
   // Install the new shell into a fresh, version-scoped cache. Deliberately do
   // NOT skipWaiting(): a new SW hijacking an already-loaded tab (which has
   // parsed the OLD index.html and is dynamically importing OLD chunk hashes)
@@ -50,6 +69,22 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
+  // Dev: purge EVERY shell cache (including this worker's own name — dev never
+  // caches) and claim open tabs now, so the very next reload fetches everything
+  // from the live dev server.
+  if (DEV) {
+    event.waitUntil(
+      Promise.all([
+        caches
+          .keys()
+          .then((keys) =>
+            Promise.all(keys.filter((k) => k.startsWith("armada-shell-")).map((k) => caches.delete(k))),
+          ),
+        self.clients.claim(),
+      ]),
+    );
+    return;
+  }
   // This SW only activates once no client is controlled by the previous one, so
   // its assets are no longer needed and can be dropped. Do NOT claim() existing
   // clients — they finish their session on the build they loaded with.
@@ -67,6 +102,9 @@ self.addEventListener("activate", (event) => {
 // ---------------------------------------------------------------------------
 
 self.addEventListener("fetch", (event) => {
+  // Dev: fully transparent — the dev server (or its absence) is the truth.
+  if (DEV) return;
+
   const { request } = event;
   const url = new URL(request.url);
 
