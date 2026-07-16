@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.28.3] - 2026-07-16
+
+A direct-message and community-security release. Each DM conversation now has an
+Encryption option so you can choose automatic, always-private, or legacy
+encryption for that person. Behind the scenes, community key rotation is more
+robust: invite links stay valid after a rotation instead of stranding new
+joiners, revoked links can't come back from a stale device, and members removed
+during a rotation properly lose access to private channels.
+
+### Added
+- Per-conversation DM encryption picker: choose Automatic, Private, or Legacy
+  encryption for each person you message
+
+### Fixed
+- Invite links keep working after a community key rotation instead of leaving
+  new members unable to join
+- A revoked invite link can no longer be resurrected by an out-of-date device
+- Members removed during a key rotation now correctly lose access to private
+  channels
+
 ## [0.28.2] - 2026-07-15
 
 A direct-message polish release. You can now react to and quote DMs on mobile by
