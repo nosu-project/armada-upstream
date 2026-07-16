@@ -234,9 +234,14 @@ jobs:
 
             # --json is a GLOBAL flag and MUST precede `publish`; after it, it is
             # silently ignored and zsp exits 1 with no message.
+            # --quiet auto-confirms the "Ready to Publish" prompt — without it
+            # zsp tries to open /dev/tty for a yes/no and dies in the headless
+            # container ("could not open a new TTY"). zsp's own CI/CD example is
+            # exactly `zsp --json publish --quiet ...`.
             # --skip-certificate-linking: the ngit-ci upload key was rotated, so
             # its cert isn't linked to the publishing identity yet.
             zsp --json publish \
+              --quiet \
               --skip-metadata \
               --skip-preview \
               --skip-certificate-linking \
