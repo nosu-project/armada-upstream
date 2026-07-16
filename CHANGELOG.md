@@ -4,6 +4,24 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.29.0] - 2026-07-16
+
+New admin tools for Concord communities. Community admins get an audit log of
+control-plane changes, an invite-links view for managing shared links, and a
+member-health view. Members whose keys fell behind after a key rotation are now
+detected and healed automatically instead of being silently locked out, and
+custom emoji reactions render cleanly even when their image can't load.
+
+### Added
+- Community admin views for Concord: a control-plane audit log, an invite-links
+  manager, and a member-health overview
+
+### Fixed
+- Members left behind by a community key rotation are now detected and recover
+  automatically instead of being stranded without access
+- Custom emoji reactions always show a safe glyph and count instead of a long
+  raw URL when the emoji image fails to load
+
 ## [0.28.4] - 2026-07-16
 
 A small fix for menus on narrow screens. Submenus opened from a message or
