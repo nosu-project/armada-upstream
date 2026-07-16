@@ -58,6 +58,7 @@ import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useGuestbook2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useModeration2 } from "@/concord-v2/hooks/useModeration2";
 import { useChannelRekeyWatch2, useLinkRefreshWatch2, useRekeyWatch2 } from "@/concord-v2/hooks/useRekey2";
+import { useRelayFollow2 } from "@/concord-v2/hooks/useRelayFollow2";
 import { useRoles2 } from "@/concord-v2/hooks/useRoles2";
 import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
@@ -711,6 +712,10 @@ export function ConcordV2Page() {
   // Keep our OWN live invite links vending the current epoch (CORD-05 §2), so a
   // rotation on another device / by another admin doesn't leave them stale.
   useLinkRefreshWatch2(baseCommunity);
+  // Follow the fold's relay list (CORD-02 §6): a Metadata edition that moves
+  // the community's relays re-points this member (and, via the 13302
+  // write-back, their other devices) at the new set.
+  useRelayFollow2(baseCommunity);
   // Stranded self-heal: while stranded, quietly re-resolve the link we joined
   // through; once its creator refreshes the bundle, merge the fresh epoch in.
   const { canRecover, checking: recoveryChecking, checkNow: recoveryCheckNow } = useStrandedRecovery2(baseCommunity, stranded);
