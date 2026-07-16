@@ -218,23 +218,34 @@ jobs:
           sed -i "2i version: $VERSION_NAME" "$release_config"
           cat "$release_config"
 
-          # --json is non-interactive (no prompts, no spinners) AND writes the
-          # real error to stderr as {"error":"..."}. act's step-log capture has
-          # been dropping stderr, so tee both streams to a file and re-echo it,
-          # then exit on zsp's real status — otherwise the failure is invisible.
+          # --json is a GLOBAL flag and MUST precede the `publish` subcommand:
+          # `zsp --json publish ...`. Placed after `publish` it is silently
+          # ignored and zsp exits 1 with no message — exactly the opaque failure
+          # we chased. It makes zsp non-interactive and writes the real error to
+          # stderr as {"error":"..."}. act truncates the failing step's console
+          # log, so also capture to a file a later step uploads as an artifact.
           # --skip-certificate-linking: the ngit-ci Android upload key was
           # rotated, so the new signing cert isn't yet linked to the publishing
           # identity; without this zsp aborts a first publish under a new cert.
+          out="$RUNNER_TEMP/zsp-output.txt"
           set +e
-          zsp publish \
-            --json \
+          zsp --json publish \
             --skip-metadata \
             --skip-preview \
             --skip-certificate-linking \
-            "$release_config" >zsp.out 2>zsp.err
+            "$release_config" >"$out" 2>&1
           zsp_rc=$?
           set -e
-          echo "=== zsp stdout ==="; cat zsp.out || true
-          echo "=== zsp stderr ==="; cat zsp.err || true
-          echo "=== zsp exit: $zsp_rc ==="
+          echo "=== zsp output (rc=$zsp_rc) ==="
+          cat "$out" || true
           exit "$zsp_rc"
+
+      # act truncates the failing step's console log, so surface zsp's captured
+      # output through the reliable artifact channel whenever publish fails.
+      - name: Upload zsp output on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zsp-output-${{ steps.version.outputs.name }}
+          path: ${{ runner.temp }}/zsp-output.txt
+          if-no-files-found: warn
