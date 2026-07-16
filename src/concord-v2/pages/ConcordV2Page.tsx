@@ -23,7 +23,7 @@ import { DebugHealView } from "@/concord-v2/components/DebugHealView2";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
-import { SyncStatusBar } from "@/components/SyncStatusBar";
+import { SyncStatusIndicator } from "@/components/SyncStatusIndicator";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
@@ -1141,15 +1141,15 @@ export function ConcordV2Page() {
   // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
   const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
-  // Background catch-up visibility. `channelSyncing` = a sync task scoped to
-  // the channel on screen (its backfill/gap-bridge round is running). The bar
-  // shows only while it's relevant: hidden once the focused channel is synced
-  // and live on the wire's standing subscription — background work on OTHER
-  // rooms shouldn't nag over an up-to-date conversation.
+  // Background catch-up. `channelSyncing` = a sync task scoped to the channel
+  // on screen (its backfill/gap-bridge round is running); the timeline uses it
+  // for its own quiet catching-up affordance. The passive corner indicator on
+  // the header icon surfaces whatever is in flight (self-gated so a
+  // sub-second sync never paints), so it needn't hide once the focused channel
+  // is live — it simply goes away when there's no work left.
   const syncTasks = useSyncTasks();
   const channelScope = channel ? `c2:${channel.idHex}` : undefined;
   const channelSyncing = Boolean(channelScope && syncTasks.some((t) => t.scope === channelScope));
-  const showSyncBar = view !== "channel" || !channel || transport.isLoading || channelSyncing;
 
   const onOpenThreadCb = useMemo(
     () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),
@@ -1584,7 +1584,13 @@ export function ConcordV2Page() {
             </Button>
 
             {/* Desktop / wide: "# channel-name" (or "@ Mentions" / "Threads"). */}
-            <div className="hidden sidebar:flex items-center gap-1.5 min-w-0">
+            <div className="relative hidden sidebar:flex items-center gap-1.5 min-w-0">
+              {/* Passive background-sync indicator, pinned to the corner of the
+                  leading title icon (replaces the old full-width sync bar). */}
+              <SyncStatusIndicator
+                priorityScope={channelScope}
+                className="absolute -bottom-0.5 left-2 z-10"
+              />
               {view === "mentions" ? (
                 <>
                   <AtSign className="size-5 text-muted-foreground shrink-0" />
@@ -1623,13 +1629,20 @@ export function ConcordV2Page() {
             </div>
 
             {/* Mobile: community avatar + name large, channel muted below */}
-            <button
-              type="button"
-              className="flex sidebar:hidden items-center gap-2.5 min-w-0 text-left"
-              onClick={() => community && setInfoOpen(true)}
-              disabled={!community}
-              aria-label="Community info"
-            >
+            <div className="relative flex sidebar:hidden items-center min-w-0">
+              {/* Passive background-sync indicator, pinned to the avatar corner
+                  (can't live inside the info button — nested buttons). */}
+              <SyncStatusIndicator
+                priorityScope={channelScope}
+                className="absolute bottom-0 left-5 z-10"
+              />
+              <button
+                type="button"
+                className="flex items-center gap-2.5 min-w-0 text-left"
+                onClick={() => community && setInfoOpen(true)}
+                disabled={!community}
+                aria-label="Community info"
+              >
               <TitleAvatar2 icon={folded?.metadata?.icon} name={community?.name} />
               <div className="min-w-0 flex flex-col">
                 <span className="font-semibold text-base leading-tight truncate">{community?.name ?? "…"}</span>
@@ -1672,6 +1685,7 @@ export function ConcordV2Page() {
                 </span>
               </div>
             </button>
+            </div>
             <div className="ml-auto flex items-center gap-0.5">
               {user && view === "channel" && channel && !dissolved && (
                 <Tooltip>
@@ -1746,16 +1760,6 @@ export function ConcordV2Page() {
               )}
             </div>
           </header>
-
-          {/* Background catch-up status, right under the top bar (Signal-style
-              quiet inline indicator): names what's syncing with a live count.
-              Hidden while the focused channel is synced and live. */}
-          {showSyncBar && (
-            <SyncStatusBar
-              priorityScope={channelScope}
-              className="mx-2 mt-1.5 shrink-0 clip-corner-lg bg-chrome"
-            />
-          )}
 
           {/* Top-of-chat call stage portal target (active when this channel is
               the one in encrypted voice). */}
