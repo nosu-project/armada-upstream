@@ -43,8 +43,14 @@ jobs:
           npm ci
           npx vite build -l error
           cp dist/index.html dist/404.html
-          rm -rf electron/dist
-          cp -r dist electron/dist
+          # Copy the built bundle INTO electron/dist by content. `electron/dist`
+          # may already exist (e.g. a work-dir path act keeps around), so a
+          # `rm -rf` + `cp -r` races "cannot create directory: File exists".
+          # `cp -rT` copies dist's contents into the (created) target dir
+          # regardless of whether it pre-exists.
+          mkdir -p electron/dist
+          find electron/dist -mindepth 1 -delete
+          cp -rT dist electron/dist
 
       - name: Build Linux installers
         env:
@@ -93,8 +99,10 @@ jobs:
           npm ci
           npx vite build -l error
           cp dist/index.html dist/404.html
-          rm -rf electron/dist
-          cp -r dist electron/dist
+          # See the linux job: copy by content, don't rm+cp the directory.
+          mkdir -p electron/dist
+          find electron/dist -mindepth 1 -delete
+          cp -rT dist electron/dist
 
       # electron-builder needs wine to produce Windows installers on Linux.
       # The act runner image is not the electronuserland/builder:wine image the
