@@ -21,8 +21,8 @@ the GitLab Release/package links. Both fire on the same `vX.Y.Z` tag.
   Armada does **not** keep the version in `package.json` or `build.gradle`. CI
   derives it from the tag and stamps it into the Android build at build time:
   - `VERSION_NAME` ← the tag minus the leading `v` (`v0.2.0` → `0.2.0`)
-  - `VERSION_CODE` ← `git rev-list --count HEAD` on ngit-ci (the GitLab mirror
-    still uses `$CI_PIPELINE_IID`; both are monotonic)
+  - `VERSION_CODE` ← `10000 + git rev-list --count HEAD` on ngit-ci (the offset
+    keeps codes above the GitLab-era `$CI_PIPELINE_IID` ceiling; both monotonic)
   - The Electron `package.json` `version` is likewise stamped from the tag.
   So you never hand-edit a version field; you just choose the tag.
 - **Changelog**: `CHANGELOG.md` in the repo root, [Keep a Changelog](https://keepachangelog.com/)
@@ -208,7 +208,7 @@ per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 
 1. **release.yml → build** — signed Android APK + AAB. `setup-node`/`setup-java`/
    `setup-android`, decode the JKS from `ANDROID_KEYSTORE_BASE64`, migrate to
-   PKCS12, `versionCode = git rev-list --count HEAD`, build web assets,
+   PKCS12, `versionCode = 10000 + git rev-list --count HEAD`, build web assets,
    `cap sync android`, then `assembleRelease bundleRelease`; uploads the signed
    APK/AAB as artifacts (Blossom, when the operator enables it).
 2. **release.yml → publish-zapstore** — signs with the NIP-46 bunker and uploads

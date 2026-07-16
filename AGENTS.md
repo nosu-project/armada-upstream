@@ -47,8 +47,11 @@ commit/PR.
 
 Notes specific to ngit-ci (vs the old GitLab pipeline):
 
-- **No pipeline counter.** Android `versionCode` is `git rev-list --count HEAD`
-  (GitLab used `$CI_PIPELINE_IID`). `versionName` is still the tag minus `v`.
+- **No pipeline counter.** Android `versionCode` is `10000 + git rev-list
+  --count HEAD` (GitLab used `$CI_PIPELINE_IID`; last GitLab release v0.30.1 was
+  code 402). The `+10000` offset keeps ngit-ci codes permanently above the
+  GitLab-era ceiling and monotonic across the switch — never lower it.
+  `versionName` is still the tag minus `v`.
 - **Secrets are operator-provisioned and maintainer-gated.** `${{ secrets.* }}`
   is populated only for secrets the ngit-ci operator has provisioned for this
   repo's `#ALIAS`, and only on maintainer-authored triggers (a maintainer's
