@@ -1332,6 +1332,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   };
 
   const charCount = content.length;
+  const placeholderText = mode === "poll" ? "Ask a question…" : (placeholder ?? "Message this channel…");
 
   return (
     <div
@@ -1603,6 +1604,22 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
               {/* Borderless, self-growing textarea */}
               <div className="relative flex-1 min-w-0">
+                {/* Placeholder as a truncating overlay, NOT the textarea's
+                    `placeholder` attribute: a native placeholder wraps to a
+                    second line when it's long (a long channel/display name on
+                    a narrow phone), and the wrapped placeholder counts toward
+                    scrollHeight — the auto-resize then inflates the EMPTY
+                    composer to two lines and the wrapped remnant clips. The
+                    overlay always renders one line, ellipsized to fit. */}
+                {!content && (
+                  <div
+                    aria-hidden
+                    dir="auto"
+                    className="pointer-events-none select-none absolute inset-x-0 top-0 truncate px-1.5 py-2 touch:py-3 leading-5 text-base md:text-sm text-muted-foreground"
+                  >
+                    {placeholderText}
+                  </div>
+                )}
                 <textarea
                   ref={textareaRef}
                   dir="auto"
@@ -1613,10 +1630,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   }}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
-                  placeholder={mode === "poll" ? "Ask a question…" : (placeholder ?? "Message this channel…")}
+                  aria-label={placeholderText}
                   rows={1}
                   maxLength={MAX_CHARS}
-                  className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto align-middle"
+                  className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 touch:py-3 leading-5 text-base md:text-sm disabled:opacity-50 max-h-40 overflow-y-auto align-middle"
                 />
                 {mentionsEnabled && (
                   <MentionAutocomplete
