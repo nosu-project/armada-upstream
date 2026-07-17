@@ -4,6 +4,13 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.31.2] - 2026-07-17
+
+Re-publishes the v0.31.1 update to Zapstore. The previous release built and
+uploaded correctly but never appeared in the listing because every ngit-ci
+build was stamping the same Android version code, so the store treated it as
+a duplicate. This release fixes the version-code derivation and re-publishes.
+
 ## [0.31.1] - 2026-07-17
 
 A quiet round of mobile ergonomics and reliability fixes. Touch targets
