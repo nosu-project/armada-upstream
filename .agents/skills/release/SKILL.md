@@ -21,8 +21,10 @@ the GitLab Release/package links. Both fire on the same `vX.Y.Z` tag.
   Armada does **not** keep the version in `package.json` or `build.gradle`. CI
   derives it from the tag and stamps it into the Android build at build time:
   - `VERSION_NAME` ← the tag minus the leading `v` (`v0.2.0` → `0.2.0`)
-  - `VERSION_CODE` ← `10000 + git rev-list --count HEAD` on ngit-ci (the offset
-    keeps codes above the GitLab-era `$CI_PIPELINE_IID` ceiling; both monotonic)
+  - `VERSION_CODE` ← `major*1_000_000 + minor*1_000 + patch`, derived from the
+    tag (`v0.31.1` → `31001`). Deterministic and monotonic with semver;
+    independent of checkout depth (ngit-ci shallow-fetches only the tagged
+    commit, so `git rev-list --count HEAD` is always 1 and can't be used).
   - The Electron `package.json` `version` is likewise stamped from the tag.
   So you never hand-edit a version field; you just choose the tag.
 - **Changelog**: `CHANGELOG.md` in the repo root, [Keep a Changelog](https://keepachangelog.com/)
@@ -209,7 +211,7 @@ per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 1. **release.yml → build** — signed Android APK + AAB, then Zapstore publish,
    all in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
    from `ANDROID_KEYSTORE_BASE64`, migrate to PKCS12,
-   `versionCode = 10000 + git rev-list --count HEAD`, build web assets,
+   `versionCode = major*1_000_000 + minor*1_000 + patch` (from the tag), build web assets,
    `cap sync android`, then `assembleRelease bundleRelease`; the signed APK/AAB
    are uploaded to Blossom, then (same job, no cross-job artifact hand-off)
    `setup-go` + `zsp` sign with the NIP-46 bunker and upload the APK to

@@ -1,4 +1,4 @@
-repository: https://gitlab.com/soapbox-pub/armada
+repository: https://nostrhub.io/chad@chadwick.site/armada
 
 name: Armada
 
@@ -36,9 +36,6 @@ website: https://armada.buzz
 icon: ./public/logo-512.png
 
 release_notes: ./CHANGELOG.md
-
-metadata_sources:
-  - gitlab
 
 supported_nips:
   - "01"  # Basic protocol: events, filters, subscriptions
