@@ -23,6 +23,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { addServerTombstone } from "@/lib/serverTombstone";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shareOrigin } from "@/lib/shareOrigin";
 
@@ -68,6 +69,10 @@ export function ServerPage() {
       ),
     }));
     if (user && relayUrl) {
+      // Tombstone the removal so a stale relay echoing the pre-removal 10009
+      // list can't re-add this server via NostrSync's hydration before the
+      // update propagates. Cleared once a read confirms it's gone.
+      addServerTombstone(user.pubkey, relayUrl);
       updateList({ type: "remove-server", url: relayUrl }).catch((err) =>
         console.warn("Failed to sync server removal to group list:", err));
     }

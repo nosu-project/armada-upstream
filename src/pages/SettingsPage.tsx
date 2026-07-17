@@ -46,6 +46,7 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { APP_RELAYS, PINNED_RAIL_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { addServerTombstone, clearServerTombstone } from "@/lib/serverTombstone";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -148,12 +149,21 @@ export function SettingsPage() {
     if (!user) return;
     for (const url of relays) {
       if (!prev.includes(url)) {
+        // Re-adding a server the user had removed: drop its tombstone so the
+        // sync hydration is allowed to keep it again.
+        clearServerTombstone(user.pubkey, url);
         updateList({ type: "add-server", url }).catch((err) =>
           console.warn("Failed to add server to group list:", err));
       }
     }
     for (const url of prev) {
       if (!relays.includes(url)) {
+        // Tombstone the removal locally. The 10009 removal is published below,
+        // but a slow relay can echo the STALE pre-removal list and re-add the
+        // server via NostrSync's hydration before the update propagates. The
+        // tombstone lets the hydration filter it out until the removal is
+        // confirmed on the network.
+        addServerTombstone(user.pubkey, url);
         updateList({ type: "remove-server", url }).catch((err) =>
           console.warn("Failed to remove server from group list:", err));
       }
