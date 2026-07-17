@@ -212,19 +212,32 @@ export async function ingestWireEvents(
   }
 
   // Plaintext planes → the shared event store (NIP-09 applied by the store).
+  // All writes are submitted BEFORE awaiting: NIndexedDB batches a burst of
+  // event() calls into ONE idle-scheduled transaction, but only if none of
+  // them is awaited first — a serial `await store.event(ev)` loop resolves
+  // each call with that event's own flush, turning an N-event backfill into N
+  // idle-window waits (starving up to the 1s rIC timeout each, on a busy
+  // main thread) and N single-event transactions, and delaying the bus
+  // emission below until the last one. See wire/ingestBatching.test.ts.
   if (plain.length > 0) {
     const store = await sinks.eventStore;
+    const writes = plain.map((ev) =>
+      Promise.resolve()
+        .then(() => store.event(ev))
+        .catch(() => {
+          // Duplicate or rejected — either way the store's state is authoritative.
+        })
+    );
     for (const ev of plain) {
-      try {
-        await store.event(ev);
-      } catch {
-        // Duplicate or rejected — either way the store's state is authoritative.
-      }
       const scope = scopeOf(ev, spec);
       if (scope) scopes.add(scope);
       const cand = plaintextCandidate(ev, spec, self);
       if (cand) candidates.push(cand);
     }
+    // Await the shared flush so the bus only rings once the events are
+    // durably readable — a doorbell before the commit would send hooks
+    // re-reading a store that can't see these events yet.
+    await Promise.all(writes);
   }
 
   if (scopes.size > 0) emitWireScopes(scopes);
