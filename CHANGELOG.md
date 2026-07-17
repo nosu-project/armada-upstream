@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.31.1] - 2026-07-17
+
+A quiet round of mobile ergonomics and reliability fixes. Touch targets
+across the chat are bigger and easier to hit on phones, the composer no longer
+shows a stray wrapped line when the placeholder is long, and removed servers
+stay removed instead of sneaking back in via relay sync. Push notifications on
+Android also now keep their sender-profile cache across restarts, so
+notification content stays accurate.
+
+### Changed
+- Enlarged touch targets across the chat UI for better mobile ergonomics
+
+### Fixed
+- Removed servers no longer reappear after they are deleted, fixing a regression
+  caused by relay-based server-list sync
+- The composer no longer shows a stray wrapped line or misaligned placeholder on
+  mobile
+- Android push notifications keep their sender-profile cache across restarts, so
+  notification content stays accurate
+
 ## [0.31.0] - 2026-07-16
 
 Community admins can now edit which relays a community lives on. Change the
