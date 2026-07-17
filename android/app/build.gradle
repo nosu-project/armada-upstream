@@ -78,6 +78,9 @@ dependencies {
     implementation "com.google.code.gson:gson:2.13.1"
     implementation "androidx.lifecycle:lifecycle-process:2.8.7"
     testImplementation "junit:junit:$junitVersion"
+    // org.json on the JVM, for unit-testing pure-Java classes (ProfileStore)
+    // that use the Android-bundled org.json at runtime.
+    testImplementation "org.json:json:20240303"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

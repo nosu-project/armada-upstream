@@ -205,9 +205,15 @@ public class NotificationRelayService extends Service {
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
 
-    // pubkey → resolved profile (kind 0). Cached for the service lifetime so we
-    // don't re-fetch the same author's name/avatar on every notification.
-    private final Map<String, Profile> profileCache = new HashMap<>();
+    // pubkey → resolved profile (kind 0), DURABLE: persisted to its own
+    // SharedPreferences file so a service restart (Doze, OEM kills, reboots,
+    // START_STICKY relaunches) doesn't re-broadcast a one-shot kind-0 REQ to
+    // every relay for every author. Also holds NEGATIVE entries (fetched,
+    // nothing found) so a profile-less author doesn't re-broadcast on every
+    // message. Loaded in onCreate; writes are debounced (markProfilesDirty).
+    private ProfileStore profileStore = new ProfileStore();
+    // Whether a debounced profile-store persist is already scheduled.
+    private boolean profilePersistScheduled = false;
     // pubkey → waiters for an in-flight kind-0 fetch, so concurrent events for
     // the same author share a single REQ.
     private final Map<String, List<ProfileCallback>> pendingProfiles = new HashMap<>();
@@ -226,6 +232,17 @@ public class NotificationRelayService extends Service {
     private static final int AVATAR_PX = 128;
     // How long to wait for a kind-0 profile before firing a name-less fallback.
     private static final long PROFILE_TIMEOUT_MS = 4_000;
+    // How long a NEGATIVE profile entry suppresses re-broadcasts (24h).
+    private static final long PROFILE_MISS_TTL_MS = 24L * 60 * 60 * 1000;
+    // How long a cached profile is served without a background refresh (7d).
+    private static final long PROFILE_STALE_MS = 7L * 24 * 60 * 60 * 1000;
+    // Cap on persisted profiles; least-recently-fetched evicted on persist.
+    private static final int PROFILE_STORE_MAX = 1000;
+    // Debounce for writing the profile store to SharedPreferences.
+    private static final long PROFILE_PERSIST_DEBOUNCE_MS = 1_000;
+    // SharedPreferences file holding the serialized ProfileStore.
+    private static final String PROFILES_PREFS = "armada_notif_profiles";
+    private static final String PROFILES_KEY = "profiles";
 
     /** Minimal author profile: display name + avatar URL + nip05 (any may be null). */
     private static final class Profile {
@@ -395,6 +412,9 @@ public class NotificationRelayService extends Service {
 
         sinceSec = System.currentTimeMillis() / 1000;
         dm17FloorSec = sinceSec;
+        profileStore = ProfileStore.deserialize(
+                getSharedPreferences(PROFILES_PREFS, Context.MODE_PRIVATE)
+                        .getString(PROFILES_KEY, null));
         registerNetworkCallback();
         registerConfigListener();
     }
@@ -413,6 +433,12 @@ public class NotificationRelayService extends Service {
         unregisterNetworkCallback();
         unregisterConfigListener();
         handler.removeCallbacksAndMessages(null);
+        // Flush any debounced profile writes so the next service instance
+        // starts with the warm cache (apply() is async but safe here).
+        if (profilePersistScheduled) {
+            profilePersistScheduled = false;
+            persistProfiles();
+        }
         if (httpClient != null) {
             httpClient.dispatcher().executorService().shutdownNow();
         }
@@ -990,11 +1016,13 @@ public class NotificationRelayService extends Service {
                 String sub = msg.optString(1);
                 if (BuildConfig.DEBUG) Log.d(TAG, "EOSE from " + relayUrl + " sub=" + sub);
                 // A profile lookup that returned no kind-0: resolve waiters with
-                // null so the notification fires name-less rather than hanging.
+                // null so the notification fires name-less rather than hanging —
+                // and negative-cache it so this author isn't re-broadcast on
+                // every subsequent message.
                 String pk = profilePubkeyForSub(sub);
                 if (pk != null) {
                     closeProfileSub(relayUrl, sub);
-                    resolveProfile(pk, null);
+                    resolveProfileMiss(pk);
                     return;
                 }
                 // A group-name lookup with no kind-39000: resolve waiters null.
@@ -1116,19 +1144,45 @@ public class NotificationRelayService extends Service {
 
     /**
      * Resolve {@code pubkey} to a profile, then invoke {@code cb} (always on the
-     * main handler). Serves from cache when present, otherwise issues a kind-0
-     * REQ on EVERY open relay (a user's kind-0 usually lives on their general /
-     * outbox relays, not the NIP-29 group relay the message came from, so a
+     * main handler). Serves from the DURABLE store when present (refreshing in
+     * the background once stale), and serves a recent NEGATIVE entry without
+     * touching the network. On a genuine miss, issues a kind-0 REQ on EVERY
+     * open relay (a user's kind-0 usually lives on their general / outbox
+     * relays, not the NIP-29 group relay the message came from, so a
      * single-relay lookup misses it — that was why many senders showed no name
      * or avatar). Waits up to {@link #PROFILE_TIMEOUT_MS}, keeping the newest
      * kind-0 seen across relays.
      */
     private void resolveAuthor(String pubkey, String relayUrl, ProfileCallback cb) {
-        Profile cached = profileCache.get(pubkey);
-        if (cached != null) {
-            cb.onProfile(cached);
+        long now = System.currentTimeMillis();
+        ProfileStore.Entry held = profileStore.get(pubkey);
+        if (held != null) {
+            cb.onProfile(new Profile(held.name, held.picture, held.nip05, held.ts));
+            // Stale-while-revalidate: refresh in the background so names stay
+            // current without delaying this notification — but only when no
+            // fetch is in flight, since piggybacking would hold the
+            // notification behind the in-flight timeout for no benefit.
+            if (profileStore.isStale(pubkey, now, PROFILE_STALE_MS)
+                    && !pendingProfiles.containsKey(pubkey)) {
+                startProfileFetch(pubkey, profile -> { /* silent refresh */ });
+            }
             return;
         }
+        if (profileStore.isFreshMiss(pubkey, now, PROFILE_MISS_TTL_MS)) {
+            // A recent fetch found no kind-0 for this author — fire name-less
+            // instead of re-broadcasting to every relay on every message.
+            cb.onProfile(null);
+            return;
+        }
+        startProfileFetch(pubkey, cb);
+    }
+
+    /**
+     * Broadcast a one-shot kind-0 fetch for {@code pubkey} to every open relay
+     * (originating relay first), coalescing concurrent callers onto one in-
+     * flight fetch, with a {@link #PROFILE_TIMEOUT_MS} fallback resolution.
+     */
+    private void startProfileFetch(String pubkey, ProfileCallback cb) {
         List<ProfileCallback> waiters = pendingProfiles.get(pubkey);
         if (waiters != null) {
             waiters.add(cb); // a fetch is already in flight; piggyback on it
@@ -1148,14 +1202,19 @@ public class NotificationRelayService extends Service {
             }
         }
         if (!sentAny) {
+            // Nothing was actually asked (no connections) — NOT a genuine
+            // miss, so don't negative-cache it; just fire name-less.
             resolveProfile(pubkey, null);
             return;
         }
         // Fallback if no relay answers in time (no kind-0 / slow): resolve with
-        // the best profile gathered so far (possibly null).
+        // the best profile gathered so far. A genuine nothing-found is
+        // negative-cached so this author's next message doesn't re-broadcast.
         handler.postDelayed(() -> {
             if (pendingProfiles.containsKey(pubkey)) {
-                resolveProfile(pubkey, bestProfile.get(pubkey));
+                Profile best = bestProfile.get(pubkey);
+                if (best == null) resolveProfileMiss(pubkey);
+                else resolveProfile(pubkey, best);
             }
         }, PROFILE_TIMEOUT_MS);
     }
@@ -1163,7 +1222,9 @@ public class NotificationRelayService extends Service {
     /** Cache the result (if any) and flush all pending waiters for this pubkey. */
     private void resolveProfile(String pubkey, Profile profile) {
         if (profile != null) {
-            profileCache.put(pubkey, profile);
+            profileStore.put(pubkey, profile.name, profile.picture, profile.nip05,
+                    profile.ts, System.currentTimeMillis());
+            markProfilesDirty();
         }
         bestProfile.remove(pubkey);
         // Close any profile subs still open for this pubkey on the other relays
@@ -1178,6 +1239,35 @@ public class NotificationRelayService extends Service {
         for (ProfileCallback cb : waiters) {
             cb.onProfile(profile);
         }
+    }
+
+    /**
+     * A fetch that genuinely found no kind-0 (an empty EOSE, or the timeout
+     * with nothing gathered): negative-cache it so this author's messages
+     * don't re-broadcast to every relay for {@link #PROFILE_MISS_TTL_MS}.
+     */
+    private void resolveProfileMiss(String pubkey) {
+        profileStore.putMiss(pubkey, System.currentTimeMillis());
+        markProfilesDirty();
+        resolveProfile(pubkey, null);
+    }
+
+    /** Schedule a debounced persist of the profile store (bursts write once). */
+    private void markProfilesDirty() {
+        if (profilePersistScheduled) return;
+        profilePersistScheduled = true;
+        handler.postDelayed(() -> {
+            profilePersistScheduled = false;
+            persistProfiles();
+        }, PROFILE_PERSIST_DEBOUNCE_MS);
+    }
+
+    private void persistProfiles() {
+        profileStore.evictOldest(PROFILE_STORE_MAX);
+        getSharedPreferences(PROFILES_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(PROFILES_KEY, profileStore.serialize())
+                .apply();
     }
 
     private RelayConnection connectionFor(String relayUrl) {
