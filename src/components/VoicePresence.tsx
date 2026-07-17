@@ -133,7 +133,7 @@ function VoiceParticipantRow({
           pubkey={pubkey}
           displayName={name}
           showVolume={!isSelf}
-          className="size-6 touch:size-7 opacity-0 group-hover/voicerow:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 touch:opacity-100 transition-opacity"
+          className="size-6 touch:size-8 opacity-0 group-hover/voicerow:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 touch:opacity-100 transition-opacity"
         />
       </div>
     </VoiceUserContextMenu>

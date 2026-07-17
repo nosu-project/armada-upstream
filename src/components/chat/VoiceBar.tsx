@@ -166,7 +166,7 @@ function DeviceMenu({ className }: { className?: string }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="icon" className={cn("size-8 shrink-0", className)} aria-label="Audio settings">
+            <Button variant="outline" size="icon" className={cn("size-8 touch:size-11 shrink-0", className)} aria-label="Audio settings">
               <Settings2 className="size-3.5" />
             </Button>
           </DropdownMenuTrigger>
@@ -192,7 +192,7 @@ function DeviceMenu({ className }: { className?: string }) {
         {toggles.map(({ key, label }) => (
           <label
             key={key}
-            className="flex items-center justify-between gap-3 px-2 py-1.5 text-sm cursor-pointer"
+            className="flex items-center justify-between gap-3 px-2 py-1.5 touch:py-3 text-sm cursor-pointer"
             // Keep the menu open while toggling.
             onPointerDown={(e) => e.preventDefault()}
           >
@@ -340,7 +340,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
         onClick={toggleStage}
         aria-label={stageOpen ? "Hide call stage" : "Show call stage"}
         aria-pressed={stageOpen}
-        className="shrink-0 flex items-center gap-1.5 rounded-md bg-foreground/10 px-2 py-1 text-[11px] font-medium text-foreground hover:bg-foreground/20"
+        className="shrink-0 flex items-center gap-1.5 rounded-md bg-foreground/10 px-2 py-1 touch:px-3 touch:py-2 text-[11px] font-medium text-foreground hover:bg-foreground/20"
       >
         <Video className="size-3.5" />
         <span className="tabular-nums">{participants.length}</span>
@@ -353,7 +353,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     <Button
       variant={isMicrophoneEnabled ? "default" : "outline"}
       size="icon"
-      className="size-9 shrink-0"
+      className="size-9 touch:size-11 shrink-0"
       aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
       onClick={() => {
         const enabling = !isMicrophoneEnabled;
@@ -372,7 +372,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     <Button
       variant={isCameraEnabled ? "default" : "outline"}
       size="icon"
-      className="size-9 shrink-0"
+      className="size-9 touch:size-11 shrink-0"
       aria-label={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
       onClick={() => {
         void localParticipant
@@ -388,7 +388,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     <Button
       variant={isScreenShareEnabled ? "default" : "outline"}
       size="icon"
-      className="size-9 shrink-0"
+      className="size-9 touch:size-11 shrink-0"
       aria-label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
       onClick={() => {
         // Screenshare publishes its own track regardless of the camera; the
@@ -420,7 +420,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
       // This fires inside the user's gesture, so the AudioContext is unlocked.
       onClick={() => playLeaveSound()}
       aria-label="Leave call"
-      className="inline-flex items-center justify-center rounded-md size-9 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
+      className="inline-flex items-center justify-center rounded-md size-9 touch:size-11 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
     >
       <PhoneOff className="size-4" />
     </DisconnectButton>

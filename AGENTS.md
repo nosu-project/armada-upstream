@@ -113,3 +113,9 @@ the new cert fingerprint to the array.
   committing.
 - **Never push to the `gitlab` remote.** When pushing (or releasing), push only
   to `origin`. The `gitlab` mirror is maintainer-managed manually.
+- Touch ergonomics: interactive elements target ≥44px on touch devices via the
+  `touch:` Tailwind variant (`@media (hover: none) and (pointer: coarse)`) —
+  e.g. `size-9 touch:size-11`. Use `touch:` (real touch), not width
+  breakpoints, so narrow desktop windows keep dense hover UI. Note `touch:`
+  emits *before* `md:` in the cascade, so a class that shrinks at `md:` needs
+  the stacked variant too: `size-9 md:size-7 touch:size-11 touch:md:size-11`.

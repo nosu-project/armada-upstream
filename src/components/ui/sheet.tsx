@@ -65,14 +65,14 @@ const SheetContent = React.forwardRef<
       {children}
       <SheetPrimitive.Close
         className={cn(
-          "absolute opacity-70 transition-opacity hover:opacity-100 focus:outline-none disabled:pointer-events-none",
+          "absolute p-2 -m-2 touch:p-3 touch:-m-3 opacity-70 transition-opacity hover:opacity-100 focus:outline-none disabled:pointer-events-none",
           side === "left"
             ? "left-full ml-3 top-4"
             : "right-4 top-4 rounded-sm ring-offset-background focus:ring-2 focus:ring-ring focus:ring-offset-2 data-[state=open]:bg-secondary"
         )}
         style={{ top: `calc(var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) + 0.85rem)` }}
       >
-        <X className={side === "left" ? "h-5 w-5 text-white" : "h-4 w-4"} strokeWidth={side === "left" ? 2.5 : 2} />
+        <X className={side === "left" ? "h-5 w-5 text-white" : "h-4 w-4 touch:h-5 touch:w-5"} strokeWidth={side === "left" ? 2.5 : 2} />
         <span className="sr-only">Close</span>
       </SheetPrimitive.Close>
     </SheetPrimitive.Content>

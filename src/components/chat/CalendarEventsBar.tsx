@@ -41,7 +41,7 @@ function EventRow({
       <Button
         variant="ghost"
         size="sm"
-        className="h-6 shrink-0 px-2 text-[11px] text-muted-foreground hover:text-primary"
+        className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-[11px] text-muted-foreground hover:text-primary"
         onClick={() => onOpen(event)}
       >
         RSVP
@@ -53,7 +53,7 @@ function EventRow({
               variant="ghost"
               size="icon"
               aria-label="Delete event"
-              className="size-6 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/event:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
+              className="size-6 touch:size-9 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/event:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
               onClick={() => onDelete(event)}
             >
               <Trash2 className="size-3.5" />
@@ -122,7 +122,7 @@ export function CalendarEventsBar({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-primary"
+                  className="h-6 touch:h-9 gap-1 px-2 touch:px-3 text-[11px] text-muted-foreground hover:text-primary"
                   onClick={onCreate}
                 >
                   <Plus className="size-3.5" />
@@ -133,7 +133,7 @@ export function CalendarEventsBar({
                 variant="ghost"
                 size="icon"
                 aria-label="Close events"
-                className="size-6 text-muted-foreground"
+                className="size-6 touch:size-9 text-muted-foreground"
                 onClick={onClose}
               >
                 <X className="size-3.5" />

@@ -669,7 +669,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           variant="ghost"
           size="icon"
           aria-label="Back to conversations"
-          className="size-9 shrink-0 sidebar:hidden"
+          className="size-9 touch:size-11 shrink-0 sidebar:hidden"
           onClick={onBack}
         >
           <ChevronLeft className="size-5" />
@@ -701,7 +701,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 variant="ghost"
                 size="icon"
                 aria-label="Start voice call"
-                className="relative size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-success"
+                className="relative size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-success"
                 onClick={() => joinDmCall(voiceRelay!, roomId!, peer)}
               >
                 <Phone className="size-4" />
@@ -724,7 +724,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
               variant="ghost"
               size="icon"
               aria-label="More options"
-              className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
+              className="size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
             >
               <MoreVertical className="size-4" />
             </Button>
@@ -848,13 +848,13 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             }}
             placeholder="Search messages…"
             aria-label="Search messages"
-            className="h-8 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+            className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
           />
           <Button
             variant="ghost"
             size="icon"
             aria-label="Close search"
-            className="size-8 shrink-0 text-muted-foreground"
+            className="size-8 touch:size-10 shrink-0 text-muted-foreground"
             onClick={closeSearch}
           >
             <X className="size-4" />
@@ -1180,7 +1180,7 @@ function NewDMPane({
           variant="ghost"
           size="icon"
           aria-label="Back to conversations"
-          className="size-9 shrink-0 sidebar:hidden"
+          className="size-9 touch:size-11 shrink-0 sidebar:hidden"
           onClick={onCancel}
         >
           <ChevronLeft className="size-5" />
@@ -1383,7 +1383,7 @@ function ConversationList({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
+                    className="size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
                     aria-label="Search conversations"
                     aria-pressed={searchOpen}
                     onClick={() => setSearchOpen(true)}
@@ -1398,7 +1398,7 @@ function ConversationList({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
+                    className="size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
                     aria-label="New message"
                     onClick={onCompose}
                   >

@@ -16,10 +16,13 @@ export const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-9 rounded-md px-3",
+        // Touch targets: on coarse-pointer devices everything grows to the
+        // 44px Apple HIG / ~48dp Material minimum (explicit `size-*`/`h-*`
+        // overrides in className still win over these).
+        default: "h-10 px-4 py-2 touch:h-11",
+        sm: "h-9 rounded-md px-3 touch:h-10",
         lg: "h-11 rounded-md px-8",
-        icon: "h-10 w-10",
+        icon: "h-10 w-10 touch:h-11 touch:w-11",
       },
     },
     defaultVariants: {

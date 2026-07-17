@@ -18,7 +18,7 @@ export function ZapButton({ disabled, onOpen }: { disabled: boolean; onOpen: () 
           size="icon"
           aria-label="Zap message"
           disabled={disabled}
-          className="size-9 md:size-7 text-muted-foreground hover:text-amber-500 disabled:opacity-40"
+          className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-amber-500 disabled:opacity-40"
           onClick={onOpen}
         >
           <Zap className="size-[18px] md:size-3.5" />

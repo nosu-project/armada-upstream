@@ -106,7 +106,7 @@ export function NotifLevelDropdown(props: {
           aria-label={ariaLabel}
           className={
             className ??
-            "size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
+            "size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
           }
         >
           {level === "nothing" ? (

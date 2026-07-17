@@ -300,7 +300,7 @@ function MemberRow({
             variant="ghost"
             size="icon"
             aria-label={`Manage ${displayName}`}
-            className="size-6 touch:size-9 opacity-0 group-hover:opacity-100 touch:opacity-100 data-[state=open]:opacity-100 text-muted-foreground hover:text-foreground"
+            className="size-6 touch:size-10 opacity-0 group-hover:opacity-100 touch:opacity-100 data-[state=open]:opacity-100 text-muted-foreground hover:text-foreground"
           >
             <MoreVertical className="size-3.5" />
           </Button>
@@ -398,7 +398,7 @@ export function MemberList({
       {onClose && (
         <div className="flex items-center justify-between px-2 py-1 shrink-0 sidebar:hidden">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Members</h3>
-          <Button variant="ghost" size="icon" aria-label="Close members" className="size-6" onClick={onClose}>
+          <Button variant="ghost" size="icon" aria-label="Close members" className="size-6 touch:size-10" onClick={onClose}>
             <X className="size-4" />
           </Button>
         </div>

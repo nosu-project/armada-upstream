@@ -88,7 +88,7 @@ function ChannelLink({
             // Slack-style selection: the active channel sits on a filled
             // primary rectangle with the house cut-corner chamfer. Inactive
             // rows are transparent with a subtle hover wash.
-            "flex items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors",
+            "flex items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors",
             !isActive && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
             // Unread (but not selected) channels read brighter + bold, matching
             // Slack. This is now visually distinct from the active rectangle.

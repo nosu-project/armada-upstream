@@ -173,7 +173,10 @@ function ThreadMessage({
             )}
           </div>
           {(canReact && reactions) || canZap ? (
-            <div className="absolute right-1.5 top-1 flex items-center opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity">
+            // Hover-revealed on desktop. On touch there's no hover, so the
+            // buttons sit statically at the row's end instead — the long-press
+            // menu alone would leave reacting undiscoverable.
+            <div className="absolute right-1.5 top-1 flex items-center opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity touch:static touch:opacity-100 touch:shrink-0">
               {canReact && reactions && <ReactionPicker onReact={reactions.react} />}
               {canZap && <ZapButton disabled={zapDisabled} onOpen={() => setZapOpen(true)} />}
             </div>
@@ -324,7 +327,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
             Thread{replies.length > 0 ? ` · ${replies.length}` : ""}
           </h3>
         </div>
-        <Button variant="ghost" size="icon" aria-label="Close thread" className="size-6" onClick={onClose}>
+        <Button variant="ghost" size="icon" aria-label="Close thread" className="size-6 touch:size-10" onClick={onClose}>
           <X className="size-4" />
         </Button>
       </div>

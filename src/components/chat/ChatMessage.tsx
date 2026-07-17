@@ -224,7 +224,7 @@ function ThreadBadge({
     <button
       type="button"
       onClick={onClick}
-      className="mt-1 inline-flex max-w-full items-center gap-2 rounded-lg border border-transparent bg-primary/[0.07] py-1 pl-1 pr-2.5 text-left transition-colors hover:border-primary/30 hover:bg-primary/[0.12]"
+      className="mt-1 inline-flex max-w-full items-center gap-2 rounded-lg border border-transparent bg-primary/[0.07] py-1 pl-1 pr-2.5 touch:py-2 touch:pr-3.5 text-left transition-colors hover:border-primary/30 hover:bg-primary/[0.12]"
     >
       <span className="flex shrink-0 -space-x-1.5">
         {shown.map((pk) => (
@@ -513,7 +513,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
               variant="ghost"
               size="icon"
               aria-label="Reply"
-              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
+              className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
               onClick={() => onOpenThread(event)}
             >
               <Reply className="size-[18px] md:size-3.5" />
@@ -529,7 +529,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
               variant="ghost"
               size="icon"
               aria-label="Quote"
-              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
+              className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
               onClick={() => onReply(event)}
             >
               <MessagesSquare className="size-[18px] md:size-3.5" />
@@ -545,7 +545,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
               variant="ghost"
               size="icon"
               aria-label="Edit message"
-              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
+              className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
               onClick={() => onEdit?.(event)}
             >
               <Pencil className="size-[18px] md:size-3.5" />
@@ -563,7 +563,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
               aria-label={isPinned ? "Unpin message" : "Pin message"}
               aria-pressed={isPinned}
               className={cn(
-                "size-9 md:size-7",
+                "size-9 md:size-7 touch:size-11 touch:md:size-11",
                 isPinned
                   ? "text-primary hover:text-primary"
                   : "text-muted-foreground hover:text-primary",
@@ -585,7 +585,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
               aria-label={deleteArmed ? "Confirm delete message" : "Delete message"}
               aria-pressed={deleteArmed}
               className={cn(
-                "size-9 md:size-7 transition-colors",
+                "size-9 md:size-7 touch:size-11 touch:md:size-11 transition-colors",
                 deleteArmed
                   ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   : "text-muted-foreground hover:text-destructive",
@@ -621,15 +621,15 @@ const ChatMessageInner = memo(function ChatMessageInner({
             rows={Math.min(6, Math.max(1, editText.split("\n").length))}
             className="w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
-          <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-muted-foreground">
             <button
               type="button"
-              className="font-semibold text-primary hover:underline"
+              className="font-semibold text-primary hover:underline touch:py-2"
               onClick={() => onEditSubmit?.(event, editText)}
             >
               Save
             </button>
-            <button type="button" className="hover:text-foreground" onClick={() => onEditCancel?.()}>
+            <button type="button" className="hover:text-foreground touch:py-2" onClick={() => onEditCancel?.()}>
               Cancel
             </button>
             <span className="opacity-70">escape to cancel · enter to save</span>
@@ -717,16 +717,16 @@ const ChatMessageInner = memo(function ChatMessageInner({
         />
       )}
       {isFailed && (
-        <div className="flex items-center gap-2 mt-1 text-[11px] text-destructive">
+        <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-destructive">
           <AlertCircle className="size-3.5 shrink-0" />
           <span>Failed to send.</span>
           {onRetry && (
-            <button type="button" className="font-semibold underline hover:no-underline" onClick={onRetry}>
+            <button type="button" className="font-semibold underline hover:no-underline touch:py-2" onClick={onRetry}>
               Retry
             </button>
           )}
           {onDiscard && (
-            <button type="button" className="text-muted-foreground hover:text-foreground" onClick={onDiscard}>
+            <button type="button" className="text-muted-foreground hover:text-foreground touch:py-2" onClick={onDiscard}>
               Discard
             </button>
           )}
