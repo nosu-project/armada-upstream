@@ -16,7 +16,8 @@ import { useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseBlossomServerList } from "@/lib/blossom";
 import { KIND_BLOSSOM_SERVERS } from "@/hooks/useBlossomServerList";
-import { PINNED_RAIL_RELAYS } from "@/lib/platform";
+import { normalizeRelayUrl, PINNED_RAIL_RELAYS } from "@/lib/platform";
+import { reconcileServerTombstones } from "@/lib/serverTombstone";
 import { type EncryptedSettings } from "@/lib/schemas";
 import {
   KIND_APP_SPECIFIC,
@@ -327,8 +328,14 @@ export function NostrSync() {
   // 10009 event (slow relay, signer not ready) would overwrite `addedRelays`
   // with [] and the whole server rail would vanish. A union only ever ADDS
   // servers the list knows about; explicit removals update `addedRelays`
-  // directly at the call site (ServerPage), so we don't need the list to drive
-  // removals here.
+  // directly at the call site (ServerPage / SettingsPage), so we don't need the
+  // list to drive removals here.
+  //
+  // Removal race guard: because we only MERGE, a stale relay handing back the
+  // pre-removal 10009 event would re-add a just-removed server. SettingsPage
+  // tombstones removals locally; we filter tombstoned servers out of the merge
+  // here and clear each tombstone once a read confirms the server is gone from
+  // the list (propagation complete). See `serverTombstone.ts`.
   //
   // Re-runs on EVERY list change (not once per account): the standing
   // self-state REQ (layer A) invalidates the 10009 query when another device
@@ -342,11 +349,20 @@ export function NostrSync() {
     // failed to decrypt (servers would read empty). Wait for a real list.
     if (!groupList.event || groupList.decryptFailed) return;
 
+    // Reconcile tombstones against this read: any removed server the list no
+    // longer contains has propagated, so its tombstone is cleared. The returned
+    // set is the still-pending removals (servers the — possibly stale — list
+    // still carries) that we must keep filtering out of the merge.
+    const tombstoned = reconcileServerTombstones(user.pubkey, groupList.servers);
+
     // Opt-in auto-pinned relays (`PINNED_RAIL_RELAYS`, empty by default) are
     // always in the rail regardless of the list, so they needn't be cached;
-    // everything else the list knows about is merged in.
+    // everything else the list knows about (minus tombstoned removals) is
+    // merged in.
     const pinned = new Set(PINNED_RAIL_RELAYS);
-    const fromList = groupList.servers.filter((url) => !pinned.has(url));
+    const fromList = groupList.servers.filter(
+      (url) => !pinned.has(url) && !tombstoned.has(normalizeRelayUrl(url) ?? url),
+    );
     if (fromList.length === 0) return;
 
     updateConfig((current) => {
