@@ -47,11 +47,14 @@ commit/PR.
 
 Notes specific to ngit-ci (vs the old GitLab pipeline):
 
-- **No pipeline counter.** Android `versionCode` is `10000 + git rev-list
-  --count HEAD` (GitLab used `$CI_PIPELINE_IID`; last GitLab release v0.30.1 was
-  code 402). The `+10000` offset keeps ngit-ci codes permanently above the
-  GitLab-era ceiling and monotonic across the switch — never lower it.
-  `versionName` is still the tag minus `v`.
+- **No pipeline counter.** Android `versionCode` is derived from the semver tag
+  as `major*1_000_000 + minor*1_000 + patch` (e.g. `v0.31.1` → `31001`).
+  GitLab used `$CI_PIPELINE_IID` (last GitLab release v0.30.1 was code 402); the
+  first ngit-ci releases used `10000 + git rev-list --count HEAD`, but ngit-ci's
+  runner shallow-fetches only the tagged commit so the count was always 1 —
+  every release got the same code and Zapstore silently dropped duplicates. The
+  tag-derived scheme is deterministic, monotonic with semver, and independent of
+  checkout depth. `versionName` is still the tag minus `v`.
 - **Secrets are operator-provisioned and maintainer-gated.** `${{ secrets.* }}`
   is populated only for secrets the ngit-ci operator has provisioned for this
   repo's `#ALIAS`, and only on maintainer-authored triggers (a maintainer's

@@ -11,9 +11,10 @@ name: Android release
 # ── Version ──────────────────────────────────────────────────────────────────
 # The version is carried by the git tag (vX.Y.Z), never a committed field:
 #   VERSION_NAME = tag minus leading "v"   (v2.1.0 -> 2.1.0)
-#   VERSION_CODE = git commit count         (was $CI_PIPELINE_IID on GitLab;
-#                  ngit-ci has no pipeline counter, so use the monotonic
-#                  `git rev-list --count HEAD`)
+#   VERSION_CODE = major*1_000_000 + minor*1_000 + patch, derived from the tag
+#                  (was $CI_PIPELINE_IID on GitLab, then git rev-list --count on
+#                  ngit-ci — but ngit-ci shallow-fetches only the tagged commit,
+#                  so the count was always 1 and every release got the same code)
 #
 # ── Secrets (provisioned by the ngit-ci operator for this repo's alias) ──────
 # Injected ONLY on maintainer-authored triggers (a tag push by a maintainer
@@ -39,9 +40,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Full history so `git rev-list --count HEAD` is stable/monotonic.
-          fetch-depth: 0
+        # ngit-ci shallow-fetches the tagged commit regardless of fetch-depth;
+        # version_code is derived from the tag, so depth doesn't matter here.
 
       - uses: actions/setup-node@v4
         with:
@@ -62,18 +62,22 @@ jobs:
           set -eu
           TAG="${GITHUB_REF_NAME}"
           VERSION_NAME="${TAG#v}"
-          # versionCode = git commit count + a fixed offset. The offset keeps
-          # ngit-ci-built codes permanently above the GitLab-era ceiling: GitLab
-          # used $CI_PIPELINE_IID (last release v0.30.1 = 402; counter reached
-          # ~406). Commit count alone (647+) already clears that, but the offset
-          # removes any ambiguity and guarantees monotonic, non-regressing codes
-          # across the migration. Never lower VERSION_CODE_OFFSET.
-          VERSION_CODE_OFFSET=10000
-          COMMIT_COUNT="$(git rev-list --count HEAD)"
-          VERSION_CODE="$((VERSION_CODE_OFFSET + COMMIT_COUNT))"
+          # versionCode is derived from the semver tag, NOT git rev-list --count
+          # HEAD: ngit-ci's embedded-act runner shallow-fetches only the tagged
+          # commit (git fetch --depth=1 origin <oid>), so the commit count is
+          # always 1 and every release would get the same code. Deriving from the
+          # tag makes the code deterministic, monotonic with semver, and
+          # independent of checkout depth.
+          #
+          # Scheme: major*1_000_000 + minor*1_000 + patch.
+          # At 0.31.x this yields 31_000+, already above the GitLab-era ceiling
+          # (last release v0.30.1 = 402) and above the first ngit-ci release
+          # (v0.31.0 = 10_001). minor/patch each support up to 999.
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_NAME"
+          VERSION_CODE="$(( MAJOR * 1000000 + MINOR * 1000 + PATCH ))"
           echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
-          echo "Building $VERSION_NAME (code $VERSION_CODE = $VERSION_CODE_OFFSET + $COMMIT_COUNT commits) from tag $TAG"
+          echo "Building $VERSION_NAME (code $VERSION_CODE) from tag $TAG"
 
       - name: Stamp version into android/app/build.gradle
         env:
