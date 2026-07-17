@@ -102,7 +102,7 @@ function ReactionPill({
         <button
           type="button"
           className={cn(
-            "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-sm leading-none transition-colors",
+            "flex items-center gap-1.5 rounded-full border px-2.5 py-1 touch:px-3.5 touch:py-2.5 text-sm leading-none transition-colors",
             tally.mine
               ? "border-primary bg-primary/15 text-primary"
               : "border-border/60 bg-secondary/40 text-foreground hover:border-foreground/40 hover:bg-secondary/70",
@@ -134,7 +134,7 @@ function ReactionPill({
             <Button
               size="sm"
               variant={tally.mine ? "secondary" : "default"}
-              className="w-full h-7 rounded-lg text-xs"
+              className="w-full h-7 touch:h-10 rounded-lg text-xs"
               onClick={() => {
                 toggle();
                 setOpen(false);
@@ -158,7 +158,7 @@ export function ReactionBar({ tallies, canReact, onReact, leading }: ReactionBar
   if (tallies.length === 0 && !leading) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+    <div className="flex flex-wrap items-center gap-1.5 touch:gap-2 mt-1.5">
       {leading}
       {tallies.map((tally) => (
         <ReactionPill key={tally.key} tally={tally} canReact={canReact} onReact={onReact} />
@@ -189,7 +189,7 @@ export function ReactionPicker({ onReact }: ReactionPickerProps) {
               variant="ghost"
               size="icon"
               aria-label="Add reaction"
-              className="size-9 md:size-7 text-muted-foreground hover:text-primary"
+              className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
             >
               <SmilePlus className="size-[18px] md:size-3.5" />
             </Button>

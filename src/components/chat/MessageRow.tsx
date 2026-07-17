@@ -250,7 +250,7 @@ export const MessageRow = memo(function MessageRow({
           // guard is keyed to `touch:` (real touch), NOT a width breakpoint — a
           // narrow desktop window still hovers and must stay clickable.
           <div className={cn(
-            "absolute right-2.5 z-20 flex items-center gap-0.5 touch:gap-1 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity touch:pointer-events-none touch:group-data-[active]:pointer-events-auto",
+            "absolute right-2.5 z-20 flex items-center gap-0.5 touch:gap-1.5 rounded-md border bg-background/95 px-1 py-0.5 touch:px-1.5 touch:py-1 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity touch:pointer-events-none touch:group-data-[active]:pointer-events-auto",
             // Sit just above the row's top-right edge, overlapping it so it stays
             // inside the row's hover region (a fully-detached panel vanishes when
             // the pointer leaves the row to reach it). Continuation rows are

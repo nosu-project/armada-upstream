@@ -1373,7 +1373,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               <button
                 type="button"
                 aria-label="Remove embed"
-                className="absolute top-1.5 right-1.5 p-1 rounded-full bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
+                className="absolute top-1.5 right-1.5 p-1 touch:p-2 rounded-full bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
                 onClick={() => setRemovedEmbeds((prev) => new Set(prev).add(embed.value))}
               >
                 <X className="size-3.5" />
@@ -1405,9 +1405,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 type="button"
                 aria-label="Remove attachment"
                 onClick={() => removeAttachment(att.url)}
-                className="absolute top-1 right-1 p-0.5 rounded-full bg-background/80 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                className="absolute top-1 right-1 p-0.5 touch:p-1.5 rounded-full bg-background/80 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
               >
-                <X className="size-3.5" />
+                <X className="size-3.5 touch:size-4" />
               </button>
             </div>
           ))}
@@ -1453,7 +1453,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   type="button"
                   onClick={voiceRecorder.cancelRecording}
                   disabled={isPublishingVoice}
-                  className="p-2 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40"
+                  className="p-2 touch:p-3.5 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40"
                 >
                   <X className="size-[18px]" />
                 </button>
@@ -1504,7 +1504,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               />
             ) : (
             /* ── Input pill: + | textarea | emoji | mic/send ──── */
-            <div className="flex items-end gap-0.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
+            <div className="flex items-end gap-0.5 touch:gap-1.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
               {/* Plus menu: attach + poll (Discord-style) */}
               <Popover open={plusOpen} onOpenChange={setPlusOpen}>
                 <PopoverTrigger asChild>
@@ -1513,7 +1513,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     aria-label="More options"
                     disabled={pendingUploads > 0}
                     className={cn(
-                      "p-2 shrink-0 rounded-full transition-colors disabled:opacity-40 flex items-center justify-center size-9",
+                      "p-2 shrink-0 rounded-full transition-colors disabled:opacity-40 flex items-center justify-center size-9 touch:size-11",
                       plusOpen || mode === "poll"
                         ? "text-primary bg-primary/10"
                         : "text-muted-foreground hover:text-foreground hover:bg-secondary",
@@ -1541,7 +1541,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                         fileInputRef.current?.click();
                         setPlusOpen(false);
                       }}
-                      className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+                      className="flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
                     >
                       <Paperclip className="size-4" />
                       <span className="font-medium">Attach file</span>
@@ -1555,7 +1555,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                         onClick={openCommandMenu}
                         disabled={hasContent}
                         className={cn(
-                          "flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm transition-colors",
+                          "flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm transition-colors",
                           hasContent
                             ? "text-muted-foreground/40 cursor-not-allowed"
                             : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
@@ -1572,7 +1572,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                           launchApp(appScope, { type: "youtube" });
                           setPlusOpen(false);
                         }}
-                        className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+                        className="flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
                       >
                         <MonitorPlay className="size-4" />
                         <span className="font-medium">Watch together</span>
@@ -1587,7 +1587,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       }}
                       hidden={Boolean(sendOverride)}
                       className={cn(
-                        "flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm transition-colors",
+                        "flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm transition-colors",
                         sendOverride && "hidden",
                         mode === "poll"
                           ? "text-primary bg-primary/10"
@@ -1655,7 +1655,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     onClick={() => setPickerOpen((v) => !v)}
                     aria-label="Emoji / GIF / Stickers"
                     className={cn(
-                      "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9",
+                      "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9 touch:size-11",
                       pickerOpen
                         ? "text-primary bg-primary/10"
                         : "text-muted-foreground hover:text-foreground hover:bg-secondary",
@@ -1677,7 +1677,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       type="button"
                       onClick={handleStartRecording}
                       aria-label="Voice message"
-                      className="p-2 shrink-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center justify-center size-9"
+                      className="p-2 shrink-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center justify-center size-9 touch:size-11"
                     >
                       <Mic className="size-5" />
                     </button>
@@ -1690,7 +1690,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   onClick={mode === "poll" ? handlePollSubmit : handleSend}
                   disabled={mode === "poll" ? !isPollValid || isSending : !hasContent}
                   aria-label={mode === "poll" ? "Publish poll" : "Send message"}
-                  className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9"
+                  className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9 touch:size-11"
                 >
                   {mode === "poll" && isSending
                     ? <Loader2 className="size-4 animate-spin" />
@@ -1747,7 +1747,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                           }
                         }}
                         disabled={pollOptions.length <= 2}
-                        className="p-1 rounded-full text-muted-foreground hover:text-destructive transition-colors disabled:opacity-20"
+                        className="p-1 touch:p-2.5 rounded-full text-muted-foreground hover:text-destructive transition-colors disabled:opacity-20"
                       >
                         <X className="size-3.5" />
                       </button>
@@ -1758,7 +1758,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     <button
                       type="button"
                       onClick={() => setPollOptions((prev) => [...prev, { id: pollOptionId(), label: "" }])}
-                      className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors pt-0.5"
+                      className="flex items-center gap-1.5 text-xs touch:text-sm text-primary hover:text-primary/80 transition-colors pt-0.5 touch:py-2"
                     >
                       <Plus className="size-3" />
                       Add option
@@ -1774,7 +1774,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       type="button"
                       onClick={() => setPollType(t)}
                       className={cn(
-                        "text-xs px-2.5 py-1 rounded-full border transition-colors",
+                        "text-xs px-2.5 py-1 touch:px-3.5 touch:py-2 rounded-full border transition-colors",
                         pollType === t
                           ? "border-primary bg-primary/10 text-primary font-medium"
                           : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30",
@@ -1790,7 +1790,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       type="button"
                       onClick={() => setPollDuration(d)}
                       className={cn(
-                        "text-xs px-2.5 py-1 rounded-full border transition-colors",
+                        "text-xs px-2.5 py-1 touch:px-3.5 touch:py-2 rounded-full border transition-colors",
                         pollDuration === d
                           ? "border-primary bg-primary/10 text-primary font-medium"
                           : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30",
@@ -1825,7 +1825,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               type="button"
               onClick={() => setPickerTab("emoji")}
               className={cn(
-                "flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-medium transition-colors",
+                "flex items-center justify-center gap-1.5 px-4 py-1.5 touch:py-2.5 rounded-full text-sm font-medium transition-colors",
                 pickerTab === "emoji"
                   ? "bg-primary/15 text-primary"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -1838,7 +1838,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               type="button"
               onClick={() => setPickerTab("gif")}
               className={cn(
-                "flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-medium transition-colors",
+                "flex items-center justify-center gap-1.5 px-4 py-1.5 touch:py-2.5 rounded-full text-sm font-medium transition-colors",
                 pickerTab === "gif"
                   ? "bg-primary/15 text-primary"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -1855,7 +1855,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 type="button"
                 onClick={() => setPickerTab("stickers")}
                 className={cn(
-                  "flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-medium transition-colors",
+                  "flex items-center justify-center gap-1.5 px-4 py-1.5 touch:py-2.5 rounded-full text-sm font-medium transition-colors",
                   pickerTab === "stickers"
                     ? "bg-primary/15 text-primary"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -1935,9 +1935,9 @@ function ReplyBanner({ event, onCancel }: { event: NostrEvent; onCancel?: () => 
         type="button"
         aria-label="Cancel reply"
         onClick={onCancel}
-        className="p-1 rounded-full text-muted-foreground hover:text-foreground transition-colors shrink-0"
+        className="p-1.5 touch:p-3 rounded-full text-muted-foreground hover:text-foreground transition-colors shrink-0"
       >
-        <X className="size-3.5" />
+        <X className="size-3.5 touch:size-4" />
       </button>
     </div>
   );

@@ -247,7 +247,7 @@ function ConcordChannelRow({
           className={cn(
             // Slack-style selection: the active channel sits on a filled primary
             // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
-            "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
+            "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors text-left",
             !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
             // Unread (but not selected) channels read brighter + bold (Slack).
             // Muted channels never bold — their unread is deliberately silent.
@@ -909,7 +909,7 @@ export function ConcordPage() {
             variant="ghost"
             size="icon"
             aria-label="Back to channels"
-            className="size-9 shrink-0 sidebar:hidden"
+            className="size-9 touch:size-11 shrink-0 sidebar:hidden"
             onClick={() => setChannelsOpen(true)}
           >
             <ChevronLeft className="size-5" />
@@ -921,7 +921,7 @@ export function ConcordPage() {
             {user && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="size-8 touch:size-10" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
+                  <Button variant="ghost" size="icon" className="size-8 touch:size-11" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
                     <UserPlus className="size-4" />
                   </Button>
                 </TooltipTrigger>
@@ -934,7 +934,7 @@ export function ConcordPage() {
               size="icon"
               aria-label="Members"
               aria-pressed={membersOpen}
-              className="size-8 touch:size-10 sidebar:hidden"
+              className="size-8 touch:size-11 sidebar:hidden"
               onClick={() => setMembersOpen((v) => !v)}
             >
               <Users className="size-4" />
@@ -964,7 +964,7 @@ export function ConcordPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-8 touch:size-10"
+                    className="size-8 touch:size-11"
                     disabled={!currentChannelIdHex}
                     aria-label={channelMuted ? "Unmute channel" : "Mute channel"}
                     onClick={() => {

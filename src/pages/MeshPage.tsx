@@ -577,7 +577,7 @@ function ChatHeader({
         variant="ghost"
         size="icon"
         aria-label="Back to mesh"
-        className="size-9 shrink-0 sidebar:hidden"
+        className="size-9 touch:size-11 shrink-0 sidebar:hidden"
         onClick={onBack}
       >
         <ChevronLeft className="size-5" />
@@ -608,7 +608,7 @@ function ChatHeader({
               aria-label={membersShown ? "Hide nearby" : "Show nearby"}
               aria-pressed={membersShown}
               className={cn(
-                "size-8 shrink-0",
+                "size-8 touch:size-11 shrink-0",
                 membersShown ? "text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
               onClick={onToggleMembers}
@@ -629,7 +629,7 @@ function ChatHeader({
             aria-label={incognito ? "Incognito on — showing an anonymous name" : "Incognito off — showing your name"}
             aria-pressed={incognito}
             className={cn(
-              "size-8 shrink-0",
+              "size-8 touch:size-11 shrink-0",
               incognito ? "text-primary" : "text-muted-foreground hover:text-foreground",
             )}
             onClick={onToggleIncognito}
@@ -702,7 +702,7 @@ function MeshMemberPanel({
           {/* Mobile-only header with a close button. */}
           <div className="flex items-center justify-between px-4 h-12 shrink-0 sidebar:hidden">
             <span className="text-sm font-semibold">Nearby</span>
-            <Button variant="ghost" size="icon" aria-label="Close nearby" className="size-8" onClick={onClose}>
+            <Button variant="ghost" size="icon" aria-label="Close nearby" className="size-8 touch:size-11" onClick={onClose}>
               <X className="size-4" />
             </Button>
           </div>

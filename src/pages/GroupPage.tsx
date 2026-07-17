@@ -384,7 +384,7 @@ export function GroupPage() {
             variant="ghost"
             size="icon"
             aria-label="Back to channels"
-            className="size-9 shrink-0 sidebar:hidden"
+            className="size-9 touch:size-11 shrink-0 sidebar:hidden"
             onClick={() => setChannelsOpen(true)}
           >
             <ChevronLeft className="size-5" />
@@ -419,7 +419,7 @@ export function GroupPage() {
                   variant="ghost"
                   size="icon"
                   aria-label="Join voice"
-                  className="size-8 touch:size-10 text-muted-foreground hover:text-success"
+                  className="size-8 touch:size-11 text-muted-foreground hover:text-success"
                   onClick={() => joinCall(relayUrl, groupId)}
                 >
                   <Phone className="size-4" />
@@ -438,7 +438,7 @@ export function GroupPage() {
                   size="icon"
                   aria-label="Pinned messages"
                   aria-pressed={pinsOpen}
-                  className={cn("size-8 touch:size-10 text-muted-foreground", pinsOpen && "text-foreground")}
+                  className={cn("size-8 touch:size-11 text-muted-foreground", pinsOpen && "text-foreground")}
                   onClick={() => setPinsOpen((v) => !v)}
                 >
                   <Pin className="size-4" />
@@ -457,7 +457,7 @@ export function GroupPage() {
                   size="icon"
                   aria-label="Events"
                   aria-pressed={eventsOpen}
-                  className={cn("size-8 touch:size-10 text-muted-foreground", eventsOpen && "text-foreground")}
+                  className={cn("size-8 touch:size-11 text-muted-foreground", eventsOpen && "text-foreground")}
                   onClick={() => setEventsOpen((v) => !v)}
                 >
                   <CalendarClock className="size-4" />
@@ -474,7 +474,7 @@ export function GroupPage() {
                 size="icon"
                 aria-label="Search messages"
                 aria-pressed={searchOpen}
-                className={cn("size-8 touch:size-10 text-muted-foreground", searchOpen && "text-foreground")}
+                className={cn("size-8 touch:size-11 text-muted-foreground", searchOpen && "text-foreground")}
                 onClick={() => setSearchOpen(true)}
               >
                 <Search className="size-4" />
@@ -488,7 +488,7 @@ export function GroupPage() {
             size="icon"
             aria-label="Members"
             aria-pressed={membersOpen}
-            className="size-8 touch:size-10 sidebar:hidden"
+            className="size-8 touch:size-11 sidebar:hidden"
             onClick={() => setMembersOpen((v) => !v)}
           >
             <Users className="size-4" />
@@ -519,7 +519,7 @@ export function GroupPage() {
                   variant="ghost"
                   size="icon"
                   aria-label="More options"
-                  className="size-8 touch:size-10 text-muted-foreground"
+                  className="size-8 touch:size-11 text-muted-foreground"
                 >
                   <MoreVertical className="size-4" />
                 </Button>
@@ -644,13 +644,13 @@ export function GroupPage() {
                 if (e.key === "Escape") closeSearch();
               }}
               placeholder="Search this channel…"
-              className="h-8 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
             />
             <Button
               variant="ghost"
               size="icon"
               aria-label="Close search"
-              className="size-8 shrink-0 text-muted-foreground"
+              className="size-8 touch:size-10 shrink-0 text-muted-foreground"
               onClick={closeSearch}
             >
               <X className="size-4" />

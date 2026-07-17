@@ -85,7 +85,7 @@ export function ChannelSidebarView({
     <Button
       variant="ghost"
       size="icon"
-      className="size-5"
+      className="size-5 touch:size-8"
       aria-label={addLabel ?? "Add channel"}
       aria-expanded={addChannelOpen}
       onClick={onAddChannel}
