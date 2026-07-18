@@ -4,13 +4,34 @@ import { Fragment, useCallback, useEffect, useImperativeHandle, useRef, useState
 import { Skeleton } from "@/components/ui/skeleton";
 
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
-import type { ReactNode, RefObject } from "react";
+import type { CSSProperties, ReactNode, RefObject } from "react";
 
 /**
  * Largest gap (seconds) between two same-author messages for the later one to
  * render as a compact continuation (no repeated avatar/name/timestamp).
  */
 const CONTINUATION_WINDOW_SECONDS = 5 * 60;
+
+/**
+ * Per-row `content-visibility: auto` + `contain-intrinsic-size` lets the
+ * browser skip layout/paint (and the decode/GPU cost of offscreen `<img>` /
+ * `<video>`) for rows outside the viewport while keeping every row in the DOM.
+ * This is the memory/CPU relief that matters on iOS Safari (low per-tab ceiling,
+ * kills tabs under paint/memory pressure) without disturbing the timeline's
+ * hand-tuned scroll mechanics: `scrollToMessage`'s `[data-event-id]` lookup, the
+ * `ResizeObserver` re-pin, backfill position restore, and the injected day / NEW
+ * dividers all keep working because nothing is unmounted.
+ *
+ * The intrinsic-size is a rough per-row height estimate the browser uses as a
+ * placeholder for un-rendered rows so the scrollbar and backfill math stay
+ * stable; once a row is measured the real height is remembered. `auto` (rather
+ * than a fixed size) means a measured row keeps its last real size while
+ * offscreen, so scrolling back to it doesn't jump.
+ */
+const ROW_CONTAINMENT: CSSProperties = {
+  contentVisibility: "auto",
+  containIntrinsicSize: "auto 4rem",
+};
 
 /** Whether two unix-second timestamps fall on the same local calendar day. */
 function isSameDay(a: number, b: number): boolean {
@@ -298,7 +319,9 @@ export function MessageTimeline({
               <Fragment key={msg.id}>
                 {newDay && <DateSeparator ts={msg.created_at} />}
                 {newDividerId === msg.id && <NewMessagesDivider />}
-                {renderMessage(msg, continuation)}
+                {/* content-visibility wrapper: skips offscreen render/paint of
+                    this row (and its media) while keeping it in the DOM. */}
+                <div style={ROW_CONTAINMENT}>{renderMessage(msg, continuation)}</div>
               </Fragment>
             );
           })}

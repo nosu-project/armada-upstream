@@ -1,7 +1,14 @@
 import type { SqlDriver, SqlParam } from "./driver";
 
-/** How long the worker gets to initialize before we give up on it. */
-const INIT_TIMEOUT_MS = 20_000;
+/**
+ * How long the worker gets to initialize before we give up and fall back to
+ * the IndexedDB store. The OPFS SyncAccessHandle pool VFS is single-connection
+ * (exclusive per-origin locks), so a second tab / PWA-plus-tab on Safari can
+ * block here on lock contention. Keep this short: a fast fall-back to the
+ * persistent IndexedDB store beats a long "first channel open" freeze while a
+ * lock the other context holds never frees.
+ */
+const INIT_TIMEOUT_MS = 4_000;
 
 export interface WasmSqlDriver extends SqlDriver {
   /**
