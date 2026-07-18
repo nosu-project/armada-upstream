@@ -512,14 +512,14 @@ const ChatMessageInner = memo(function ChatMessageInner({
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Reply"
+              aria-label="Thread"
               className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
               onClick={() => onOpenThread(event)}
             >
-              <Reply className="size-[18px] md:size-3.5" />
+              <MessagesSquare className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Reply</TooltipContent>
+          <TooltipContent>Thread</TooltipContent>
         </Tooltip>
       )}
       {canWrite && !isEditing && onReply && (
@@ -528,14 +528,14 @@ const ChatMessageInner = memo(function ChatMessageInner({
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Quote"
+              aria-label="Reply"
               className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
               onClick={() => onReply(event)}
             >
-              <MessagesSquare className="size-[18px] md:size-3.5" />
+              <Reply className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Quote</TooltipContent>
+          <TooltipContent>Reply</TooltipContent>
         </Tooltip>
       )}
       {canEdit && !isEditing && (
