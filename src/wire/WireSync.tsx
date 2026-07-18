@@ -403,6 +403,19 @@ export function WireSync() {
     const bumps = new Map<string, () => void>();
     const offReopen = onRelayReopened((url) => bumps.get(url)?.());
 
+    // A backgrounded browser tab has its timers throttled and its sockets
+    // idled by the engine, so the watchdog's re-REQ (30s/90s) stretches to
+    // minutes and a silently-dead subscription isn't noticed until long after
+    // the user returns. Kick every relay's round the instant the tab becomes
+    // visible again: an immediate re-REQ from the cursor is lossless and
+    // drains anything the throttled round missed, so refocus is prompt instead
+    // of waiting out a throttled watchdog tick.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      for (const bump of bumps.values()) bump();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     for (const { relay, filters } of spec.subs) {
       void (async () => {
         // Resubscribe with backoff for the effect's lifetime. NRelay1 keeps
@@ -521,6 +534,7 @@ export function WireSync() {
       })();
     }
     return () => {
+      document.removeEventListener("visibilitychange", onVisible);
       offReopen();
       controller.abort();
     };

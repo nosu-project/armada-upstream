@@ -165,6 +165,11 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: true,
+      // Keep the renderer (and its live relay subscriptions / notification
+      // wire) pumping while the window is hidden to tray. Without this,
+      // Chromium throttles background timers and idles sockets, so
+      // notifications stall for minutes until the window is refocused.
+      backgroundThrottling: false,
     },
   });
 
