@@ -126,6 +126,13 @@ jobs:
           # voice falls back to the public instance via platform.ts. NEVER pin
           # ws://localhost here — it's meaningless on a phone.
           VITE_PLATFORM_RELAYS: ""
+          # Analytics is OFF in the published sovereign APK by default: baking
+          # armada.buzz telemetry into every self-hoster's install would betray
+          # "your keys, your fleet". Left configurable so an operator building
+          # their OWN branded APK can opt in by provisioning the secret; empty
+          # (the default) leaves the tracker uninitialized.
+          VITE_PLAUSIBLE_DOMAIN: ${{ secrets.VITE_PLAUSIBLE_DOMAIN }}
+          VITE_PLAUSIBLE_ENDPOINT: ${{ secrets.VITE_PLAUSIBLE_ENDPOINT }}
         run: |
           set -eu
           npm ci

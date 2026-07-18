@@ -231,3 +231,24 @@ export const DEFAULT_RNNOISE: boolean = envBool(import.meta.env.VITE_DEFAULT_RNN
  * provides this; operators may self-host an equivalent and override here.
  */
 export const SANDBOX_DOMAIN: string = import.meta.env.VITE_SANDBOX_DOMAIN || "iframe.diy";
+
+/**
+ * Privacy-friendly analytics (Plausible), configured at build time.
+ *
+ * OFF by default: like `VITE_PLATFORM_RELAYS`, analytics is deployment
+ * infrastructure, not something baked into every build. `VITE_PLAUSIBLE_DOMAIN`
+ * is set only by a *hosted* deployment (the operator names the site they
+ * registered in Plausible, e.g. `armada.buzz`). Every other build — the Android
+ * APK, the Electron desktop app, and local `npm run dev` — leaves it empty, so
+ * `PlausibleProvider` never loads the tracker and no telemetry is sent. This is
+ * why it lives here (build-time infra) rather than in the user-synced
+ * `AppConfig`: it must not be togglable, editable, or synced across devices.
+ *
+ * Plausible is cookieless and does not track individual users or collect
+ * personal data (see the Privacy Policy). `VITE_PLAUSIBLE_ENDPOINT` optionally
+ * points at a self-hosted instance or a same-origin proxy
+ * (https://plausible.io/docs/proxy/introduction); unset uses Plausible Cloud's
+ * default API endpoint.
+ */
+export const PLAUSIBLE_DOMAIN: string = (import.meta.env.VITE_PLAUSIBLE_DOMAIN ?? "").trim();
+export const PLAUSIBLE_ENDPOINT: string = (import.meta.env.VITE_PLAUSIBLE_ENDPOINT ?? "").trim();
