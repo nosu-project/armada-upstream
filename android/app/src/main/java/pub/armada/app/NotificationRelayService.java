@@ -36,8 +36,13 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -46,6 +51,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
+import okhttp3.Cache;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.OkHttpClient;
@@ -221,8 +227,18 @@ public class NotificationRelayService extends Service {
     // all relays it was broadcast to. A profile from one relay can be staler
     // than another's, so we keep the highest created_at rather than first-wins.
     private final Map<String, Profile> bestProfile = new HashMap<>();
-    // avatar URL → circle-cropped bitmap, decoded once and reused.
+    // avatar URL → circle-cropped bitmap, decoded once and reused. Backed by a
+    // persistent disk cache (avatarDir) so a warm avatar survives service
+    // restarts and lands in the FIRST, alerting post instead of a later silent
+    // re-post.
     private final Map<String, Bitmap> avatarCache = new HashMap<>();
+    // Decoded, circle-cropped avatars persisted across restarts (getCacheDir()).
+    private File avatarDir;
+    // Avatar/image HTTP client: derived from httpClient (shares the dispatcher +
+    // connection pool) but with its OWN read/call timeouts and a disk cache.
+    // Kept SEPARATE from httpClient because httpClient drives the long-lived
+    // relay WebSockets — a callTimeout there would tear the sockets down.
+    private OkHttpClient avatarClient;
     // groupId → resolved group name (kind 39000). Cached for the service lifetime
     // so the room name in a notification doesn't re-fetch on every event.
     private final Map<String, String> groupNameCache = new HashMap<>();
@@ -230,6 +246,10 @@ public class NotificationRelayService extends Service {
     private final Map<String, List<GroupNameCallback>> pendingGroupNames = new HashMap<>();
     // Largest dimension (px) we keep for an avatar large-icon.
     private static final int AVATAR_PX = 128;
+    // Max decoded avatars kept on disk; least-recently-used pruned on save.
+    private static final int AVATAR_DISK_MAX = 500;
+    // On-disk HTTP cache for avatar byte fetches (shared with re-downloads).
+    private static final long AVATAR_HTTP_CACHE_BYTES = 8L * 1024 * 1024;
     // How long to wait for a kind-0 profile before firing a name-less fallback.
     private static final long PROFILE_TIMEOUT_MS = 4_000;
     // How long a NEGATIVE profile entry suppresses re-broadcasts (24h).
@@ -341,6 +361,10 @@ public class NotificationRelayService extends Service {
         boolean isGroupConversation; // true for rooms (group title), false for 1:1 DMs
         final List<NotificationCompat.MessagingStyle.Message> messages = new ArrayList<>();
         long lastTimestampMs;
+        // Most recent sender avatar seen for this room, used as the collapsed
+        // notification's large icon (MessagingStyle Person icons only render in
+        // the expanded view on many devices — the large icon is the fallback).
+        Bitmap lastAvatar;
 
         RoomNotif(String roomKey, int notifId) {
             this.roomKey = roomKey;
@@ -410,6 +434,18 @@ public class NotificationRelayService extends Service {
                 .pingInterval(30, TimeUnit.SECONDS) // keep the socket alive + detect drops
                 .build();
 
+        // Avatar/image fetches: bounded timeouts (so a slow host can't stall the
+        // silent re-post forever) + a disk HTTP cache. Derived from httpClient so
+        // it reuses the same dispatcher/connection pool, but its callTimeout must
+        // NOT leak onto the WebSocket client above.
+        avatarDir = new File(getCacheDir(), "avatars");
+        avatarClient = httpClient.newBuilder()
+                .readTimeout(15, TimeUnit.SECONDS)
+                .callTimeout(30, TimeUnit.SECONDS)
+                .pingInterval(0, TimeUnit.SECONDS) // no pings on one-shot image GETs
+                .cache(new Cache(new File(getCacheDir(), "avatar-http"), AVATAR_HTTP_CACHE_BYTES))
+                .build();
+
         sinceSec = System.currentTimeMillis() / 1000;
         dm17FloorSec = sinceSec;
         profileStore = ProfileStore.deserialize(
@@ -439,7 +475,16 @@ public class NotificationRelayService extends Service {
             profilePersistScheduled = false;
             persistProfiles();
         }
+        if (avatarClient != null && avatarClient.cache() != null) {
+            try {
+                avatarClient.cache().close(); // flush the HTTP disk cache
+            } catch (Exception ignored) {
+                // Best-effort flush; the process is going away regardless.
+            }
+        }
         if (httpClient != null) {
+            // avatarClient shares this dispatcher (derived via newBuilder), so
+            // one shutdown drains both clients' worker threads.
             httpClient.dispatcher().executorService().shutdownNow();
         }
     }
@@ -2112,7 +2157,11 @@ public class NotificationRelayService extends Service {
         Person.Builder pb = new Person.Builder()
                 .setName(senderName != null ? senderName : "Someone")
                 .setKey(senderPubkey != null ? senderPubkey : roomKey);
-        if (avatar != null) pb.setIcon(IconCompat.createWithBitmap(avatar));
+        if (avatar != null) {
+            pb.setIcon(IconCompat.createWithBitmap(avatar));
+            // Remember it for the collapsed-view large icon fallback.
+            room.lastAvatar = avatar;
+        }
         Person sender = pb.build();
 
         NotificationCompat.MessagingStyle.Message msg =
@@ -2199,6 +2248,11 @@ public class NotificationRelayService extends Service {
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, MSG_CHANNEL_ID)
                 .setStyle(style)
                 .setSmallIcon(R.drawable.ic_stat_armada)
+                // The sender avatar as the collapsed-view large icon. MessagingStyle
+                // Person icons only paint in the expanded view on many devices, so
+                // without this the avatar is invisible half the time (whenever the
+                // notification isn't expanded).
+                .setLargeIcon(room.lastAvatar)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setContentIntent(roomPendingIntent(room))
                 .setGroup(GROUP_KEY)
@@ -2285,35 +2339,127 @@ public class NotificationRelayService extends Service {
      * Results are cached by URL for the service lifetime.
      */
     private void fetchAvatar(String url, BitmapCallback cb) {
-        Request request = new Request.Builder().url(url).build();
-        httpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Call call, IOException e) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "avatar fetch failed: " + e.getMessage());
-                handler.post(() -> cb.onBitmap(null));
-            }
-
-            @Override
-            public void onResponse(Call call, Response response) {
-                Bitmap circle = null;
-                try {
-                    if (response.isSuccessful() && response.body() != null) {
-                        byte[] bytes = response.body().bytes();
-                        Bitmap raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-                        circle = circleCrop(raw);
-                    }
-                } catch (Exception e) {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "avatar decode failed: " + e.getMessage());
-                } finally {
-                    response.close();
-                }
-                final Bitmap result = circle;
+        // Disk read + decode off the main thread (the dispatcher is shared with
+        // httpClient; a quick task here is fine). A warm disk hit skips both the
+        // network AND the decode, so the "same user messages again" case resolves
+        // instantly — the whole point of persisting across restarts.
+        avatarClient.dispatcher().executorService().execute(() -> {
+            Bitmap disk = loadAvatarFromDisk(url);
+            if (disk != null) {
                 handler.post(() -> {
-                    if (result != null) avatarCache.put(url, result);
-                    cb.onBitmap(result);
+                    avatarCache.put(url, disk);
+                    cb.onBitmap(disk);
                 });
+                return;
             }
+            Request request = new Request.Builder().url(url).build();
+            avatarClient.newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(Call call, IOException e) {
+                    if (BuildConfig.DEBUG) Log.d(TAG, "avatar fetch failed: " + e.getMessage());
+                    handler.post(() -> cb.onBitmap(null));
+                }
+
+                @Override
+                public void onResponse(Call call, Response response) {
+                    Bitmap circle = null;
+                    try {
+                        if (response.isSuccessful() && response.body() != null) {
+                            byte[] bytes = response.body().bytes();
+                            Bitmap raw = decodeSampled(bytes);
+                            circle = circleCrop(raw);
+                        }
+                    } catch (Exception e) {
+                        if (BuildConfig.DEBUG) Log.d(TAG, "avatar decode failed: " + e.getMessage());
+                    } finally {
+                        response.close();
+                    }
+                    final Bitmap result = circle;
+                    if (result != null) saveAvatarToDisk(url, result); // persist (bg thread)
+                    handler.post(() -> {
+                        if (result != null) avatarCache.put(url, result);
+                        cb.onBitmap(result);
+                    });
+                }
+            });
         });
+    }
+
+    /**
+     * Decode image bytes downsampled to roughly {@link #AVATAR_PX}. A two-pass
+     * decode (bounds first) keeps a large source image from OOM-ing the decode —
+     * a silent OOM previously returned null and dropped the avatar.
+     */
+    private static Bitmap decodeSampled(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return null;
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
+        int sample = 1;
+        int halfW = opts.outWidth / 2;
+        int halfH = opts.outHeight / 2;
+        while (halfW / sample >= AVATAR_PX && halfH / sample >= AVATAR_PX) {
+            sample *= 2;
+        }
+        opts.inSampleSize = sample;
+        opts.inJustDecodeBounds = false;
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
+    }
+
+    /** The on-disk file for an avatar URL (SHA-256 of the URL, PNG). */
+    private File avatarFile(String url) {
+        return new File(avatarDir, sha256Hex(url) + ".png");
+    }
+
+    /** Load a previously-decoded avatar from disk (and LRU-touch it), or null. */
+    private Bitmap loadAvatarFromDisk(String url) {
+        try {
+            File f = avatarFile(url);
+            if (!f.exists()) return null;
+            Bitmap bmp = BitmapFactory.decodeFile(f.getAbsolutePath());
+            if (bmp != null) f.setLastModified(System.currentTimeMillis());
+            return bmp;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Persist a decoded, circle-cropped avatar; prune the dir if oversized. */
+    private void saveAvatarToDisk(String url, Bitmap bmp) {
+        try {
+            if (!avatarDir.exists() && !avatarDir.mkdirs()) return;
+            try (FileOutputStream fos = new FileOutputStream(avatarFile(url))) {
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, fos);
+            }
+            pruneAvatarDir();
+        } catch (Exception e) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "avatar disk save failed: " + e.getMessage());
+        }
+    }
+
+    /** Keep the avatar dir under {@link #AVATAR_DISK_MAX}, evicting oldest. */
+    private void pruneAvatarDir() {
+        File[] files = avatarDir.listFiles();
+        if (files == null || files.length <= AVATAR_DISK_MAX) return;
+        Arrays.sort(files, (a, c) -> Long.compare(a.lastModified(), c.lastModified()));
+        for (int i = 0; i < files.length - AVATAR_DISK_MAX; i++) {
+            files[i].delete();
+        }
+    }
+
+    private static String sha256Hex(String s) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] d = md.digest(s.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(d.length * 2);
+            for (byte b : d) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+                sb.append(Character.forDigit(b & 0xF, 16));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(s.hashCode());
+        }
     }
 
     /** Center-crop a bitmap to a square, scale to AVATAR_PX, and mask to a circle. */
