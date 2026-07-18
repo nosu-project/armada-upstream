@@ -584,6 +584,46 @@ export function foldControlState(
   return result;
 }
 
+/**
+ * The community's Public/Private mode, derived (CORD-05 §5): a non-empty
+ * aggregate live-link set means Public. Behavior hangs off this — a ban in a
+ * Public community is the Banlist alone (a rotation can't sever someone who
+ * can re-fetch the refreshed bundle, and it strands every stale link's future
+ * joiners on a dead epoch); only a Private ban Refounds (CORD-06 §3).
+ *
+ * `excludingCreator` evaluates the mode as if that member's registry were
+ * already dropped: the target of an in-flight ban loses their links with
+ * their authority, so banning the sole link creator still severs.
+ */
+export function isCommunityPublic(folded: FoldedControl, excludingCreator?: string): boolean {
+  for (const [creator, signers] of folded.registriesByCreator) {
+    if (creator === excludingCreator) continue;
+    if (signers.length > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether any live link belongs to someone OTHER than `viewer` — the links a
+ * rotation by `viewer` would strand. The rotation gate, refined: a rotator
+ * refreshes their OWN bundles atomically with the rotation (they hold every
+ * signer_sk), so their links survive any rotation; only a foreign creator's
+ * link goes stale, because nobody else can re-post its bundle. So a client
+ * must not rotate while a foreign live link exists, and may rotate freely
+ * when every live link is its own — even though the community still reads
+ * Public (the CORD-05 §5 flag is unchanged by this).
+ *
+ * `excludingCreator` drops one more registry from the view — the target of an
+ * in-flight ban, whose links die with their authority.
+ */
+export function hasForeignLiveLinks(folded: FoldedControl, viewer: string, excludingCreator?: string): boolean {
+  for (const [creator, signers] of folded.registriesByCreator) {
+    if (creator === viewer || creator === excludingCreator) continue;
+    if (signers.length > 0) return true;
+  }
+  return false;
+}
+
 function foldOnce(
   editions: ParsedEdition[],
   communityId: Uint8Array,
