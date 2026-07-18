@@ -121,6 +121,15 @@ export default defineConfig({
     port: 8080,
   },
   plugins: [react(), buildStamp(), serveChangelog()],
+  optimizeDeps: {
+    // Pre-bundling would break the package's `new URL('sqlite3.wasm', …)`
+    // asset resolution in dev; the worker imports it directly instead.
+    exclude: ["@sqlite.org/sqlite-wasm"],
+  },
+  worker: {
+    // The sqlite worker is an ES module (it imports the wasm loader).
+    format: "es",
+  },
   define: {
     "import.meta.env.VERSION": JSON.stringify(getVersion()),
     "import.meta.env.BUILD_DATE": JSON.stringify(new Date().toISOString()),

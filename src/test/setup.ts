@@ -20,26 +20,31 @@ Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
 });
 
-// Mock window.matchMedia
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: vi.fn().mockImplementation((query) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(), // deprecated
-    removeListener: vi.fn(), // deprecated
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
-});
+// The DOM mocks below only apply in jsdom suites — a few pure-logic suites
+// (e.g. the SQLite store against node:sqlite) run with
+// `@vitest-environment node`, where there is no `window`.
+if (typeof window !== 'undefined') {
+  // Mock window.matchMedia
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(), // deprecated
+      removeListener: vi.fn(), // deprecated
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
 
-// Mock window.scrollTo
-Object.defineProperty(window, 'scrollTo', {
-  writable: true,
-  value: vi.fn(),
-});
+  // Mock window.scrollTo
+  Object.defineProperty(window, 'scrollTo', {
+    writable: true,
+    value: vi.fn(),
+  });
+}
 
 // Mock IntersectionObserver
 global.IntersectionObserver = vi.fn().mockImplementation((_callback) => ({
