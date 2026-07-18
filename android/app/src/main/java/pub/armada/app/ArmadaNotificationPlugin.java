@@ -83,15 +83,10 @@ public class ArmadaNotificationPlugin extends Plugin {
         return true;
     }
 
-    /**
-     * Raw outer events the background service received but the WebView may not
-     * have yet (it was backgrounded / its socket was down). Buffered while the
-     * bridge is dead so a freshly-opened app can drain them straight into its
-     * event store — no relay round-trip, so a tapped notification's message is
-     * already on screen. Capped to avoid unbounded growth.
-     */
-    private static final java.util.ArrayDeque<String> eventBuffer = new java.util.ArrayDeque<>();
-    private static final int EVENT_BUFFER_MAX = 200;
+    /** SharedPreferences file holding the WebView's drain cursor. */
+    static final String DRAIN_PREFS = "armada_drain";
+    /** Max rows per drainEvents page (the JS side loops until empty). */
+    private static final int DRAIN_PAGE = 500;
 
     /**
      * Rolling per-room cache of raw outer events, keyed by room
@@ -128,11 +123,13 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     /**
      * Hand a raw outer event (the wire JSON the service received) to the WebView.
-     * Emits live if the bridge is up; otherwise buffers for the next drain. Also
-     * recorded in the per-room rolling cache regardless of bridge state.
-     * Same event for NIP-29 (kind 9/1068/…), DMs (kind 4, ciphertext) and
-     * Concord (sealed kind 3300) — the WebView writes it into its IndexedDB
-     * store and its read path decodes it.
+     * Emits live when the bridge is up; durability is the shared database (the
+     * service already wrote the event before calling this — see
+     * NotificationRelayService.handleEvent), which the WebView drains by cursor
+     * on open/resume. Also recorded in the per-room rolling cache regardless of
+     * bridge state. Same event for NIP-29 (kind 9/1068/…), DMs (kind 4,
+     * ciphertext) and Concord (sealed kind 3300 / wrapped kind 1059) — the
+     * WebView routes it through wire ingest and its read path decodes it.
      *
      * @param roomKey per-room cache key ("h:<groupId>" / "z:<z>" / "dm"), or
      *                null to skip the room cache.
@@ -145,11 +142,6 @@ public class ArmadaNotificationPlugin extends Plugin {
             JSObject data = new JSObject();
             data.put("event", eventJson);
             p.notifyListeners("relayEvent", data);
-            return;
-        }
-        synchronized (eventBuffer) {
-            if (eventBuffer.size() >= EVENT_BUFFER_MAX) eventBuffer.pollFirst();
-            eventBuffer.addLast(eventJson);
         }
     }
 
@@ -162,6 +154,7 @@ public class ArmadaNotificationPlugin extends Plugin {
      * signature, and fold it in WITHOUT re-decrypting or hitting the relay.
      */
     private static final java.util.ArrayDeque<String[]> concordBuffer = new java.util.ArrayDeque<>();
+    private static final int CONCORD_BUFFER_MAX = 200;
 
     /**
      * Hand a decrypted Concord inner event to the WebView. The WebView still
@@ -181,28 +174,87 @@ public class ArmadaNotificationPlugin extends Plugin {
             return;
         }
         synchronized (concordBuffer) {
-            if (concordBuffer.size() >= EVENT_BUFFER_MAX) concordBuffer.pollFirst();
+            if (concordBuffer.size() >= CONCORD_BUFFER_MAX) concordBuffer.pollFirst();
             concordBuffer.addLast(new String[] { innerJson, z, outerId });
         }
     }
 
     /**
-     * Drain buffered raw outer events (received while the WebView was down).
-     * Returns { events: [json, …] }; the JS layer writes them to its store.
-     * (Concord decrypted inners are a SEPARATE buffer — see drainConcord — so
-     * the two consumers, useNativeEventFeed and useConcordChannel, don't race to
-     * empty a shared queue.)
+     * Drain a page of service-received events from the shared database (rows
+     * after the persisted cursor). Returns { events: [json, …], cursor }; the
+     * JS layer routes them through wire ingest and then calls {@link #ackDrain}
+     * with the cursor — peek+ack, so a WebView crash mid-page replays instead
+     * of losing events, and a service restart loses nothing (the rows are
+     * durable). Concord decrypted inners are a SEPARATE buffer — see
+     * drainConcord.
      */
     @PluginMethod
     public void drainEvents(PluginCall call) {
+        SharedPreferences dp = getContext().getSharedPreferences(DRAIN_PREFS, Context.MODE_PRIVATE);
+        long cursor = dp.getLong("cursor", 0L);
         JSArray arr = new JSArray();
-        synchronized (eventBuffer) {
-            String e;
-            while ((e = eventBuffer.pollFirst()) != null) arr.put(e);
+        long last = cursor;
+        try {
+            for (SharedEventDb.DrainRow row : SharedEventDb.get(getContext()).drainSince(cursor, DRAIN_PAGE)) {
+                arr.put(row.raw);
+                last = row.seq;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "drainEvents failed", e);
         }
         JSObject ret = new JSObject();
         ret.put("events", arr);
+        ret.put("cursor", last);
         call.resolve(ret);
+    }
+
+    /** Advance the persisted drain cursor after a drained page was ingested. */
+    @PluginMethod
+    public void ackDrain(PluginCall call) {
+        Double cursor = call.getDouble("cursor");
+        if (cursor != null) {
+            getContext().getSharedPreferences(DRAIN_PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putLong("cursor", cursor.longValue())
+                    .apply();
+        }
+        call.resolve();
+    }
+
+    /**
+     * Execute the WebView event store's statements atomically against the
+     * shared database (the SqlDriver transport — see nativeDriver.ts).
+     */
+    @PluginMethod
+    public void dbRun(PluginCall call) {
+        JSArray statements = call.getArray("statements");
+        if (statements == null) {
+            call.resolve();
+            return;
+        }
+        try {
+            SharedEventDb.get(getContext()).runBatch(statements);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("dbRun failed: " + e.getMessage());
+        }
+    }
+
+    /** Run one SELECT for the WebView store; rows are positional arrays. */
+    @PluginMethod
+    public void dbQuery(PluginCall call) {
+        String sql = call.getString("sql");
+        if (sql == null) {
+            call.reject("dbQuery: sql required");
+            return;
+        }
+        try {
+            JSObject ret = new JSObject();
+            ret.put("rows", SharedEventDb.get(getContext()).queryRows(sql, call.getArray("params")));
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("dbQuery failed: " + e.getMessage());
+        }
     }
 
     /**

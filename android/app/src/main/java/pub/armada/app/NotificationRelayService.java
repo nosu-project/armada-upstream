@@ -1094,6 +1094,14 @@ public class NotificationRelayService extends Service {
             String pk = profilePubkeyForSub(sub);
             if (pk != null) {
                 closeProfileSub(relayUrl, sub);
+                // Store the raw kind-0 in the SHARED database too (supersession
+                // keeps the newest), so the WebView's useAuthor reads it from
+                // the cache instead of re-fetching what we just fetched.
+                try {
+                    SharedEventDb.get(this).insertEvent(event, SharedEventDb.SRC_SERVICE);
+                } catch (Exception e) {
+                    Log.w(TAG, "profile db write failed", e);
+                }
                 Profile parsed = parseProfile(event);
                 Profile prev = bestProfile.get(pk);
                 if (prev == null || parsed.ts >= prev.ts) {
@@ -1167,6 +1175,24 @@ public class NotificationRelayService extends Service {
                 startProfileFetch(pubkey, profile -> { /* silent refresh */ });
             }
             return;
+        }
+        // The SHARED database next: the WebView may already hold this author's
+        // kind-0 (its own fetches land in the same store). Checked BEFORE the
+        // negative cache so a profile the webview fetched after our miss still
+        // resolves. A hit seeds the profile store, so subsequent lookups (and
+        // stale-while-revalidate bookkeeping) work as usual.
+        try {
+            String raw = SharedEventDb.get(this).getProfileRaw(pubkey);
+            if (raw != null) {
+                Profile fromDb = parseProfile(new JSONObject(raw));
+                profileStore.put(pubkey, fromDb.name, fromDb.picture, fromDb.nip05,
+                        fromDb.ts, now);
+                markProfilesDirty();
+                cb.onProfile(fromDb);
+                return;
+            }
+        } catch (Exception e) {
+            // Unreadable row — fall through to the network path.
         }
         if (profileStore.isFreshMiss(pubkey, now, PROFILE_MISS_TTL_MS)) {
             // A recent fetch found no kind-0 for this author — fire name-less
@@ -1574,18 +1600,24 @@ public class NotificationRelayService extends Service {
 
         int kind = event.optInt("kind");
 
-        // Feed the raw outer event to the WebView (live if it's up, buffered
-        // otherwise) so a message the service already received is in the app's
-        // store the instant it opens — no relay round-trip, no "wait for the
-        // chat to catch up". Covers the timeline kinds the WebView renders:
-        // NIP-29 chat/polls/reactions/replies/deletes, Concord V1 sealed outers
-        // (kind 3300) and V2 wraps (kind 1059, both decrypted in the WebView)
-        // and DMs (kind 4 — ciphertext; the WebView holds the NIP-04 keys).
-        // Each is also recorded in the plugin's per-room rolling cache (see
-        // getRoomEvents) so opening a room can pull its natively-received
-        // history directly.
+        // Write the raw outer event into the SHARED database (durable, src
+        // 'svc' so the WebView's cursor drain replays it on open/resume) and
+        // feed it live over the bridge when the WebView is up — so a message
+        // the service already received is in the app's store the instant it
+        // opens, no relay round-trip, no "wait for the chat to catch up".
+        // Covers the timeline kinds the WebView renders: NIP-29 chat/polls/
+        // reactions/replies/deletes, Concord V1 sealed outers (kind 3300) and
+        // V2 wraps (kind 1059, both decrypted in the WebView) and DMs (kind 4
+        // — ciphertext; the WebView holds the NIP-04 keys). Each is also
+        // recorded in the plugin's per-room rolling cache (see getRoomEvents)
+        // so opening a room can pull its natively-received history directly.
         switch (kind) {
             case 9: case 1068: case 7: case 1111: case 5: case 3300: case 1059: case 4:
+                try {
+                    SharedEventDb.get(this).insertEvent(event, SharedEventDb.SRC_SERVICE);
+                } catch (Exception e) {
+                    Log.w(TAG, "event db write failed", e);
+                }
                 ArmadaNotificationPlugin.feedRelayEvent(roomKeyFor(event, kind), event.toString());
                 break;
             default:
