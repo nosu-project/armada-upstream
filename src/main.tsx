@@ -3,10 +3,14 @@ import { createRoot } from "react-dom/client";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clearChunkReloadGuard } from "@/lib/chunkReload";
+import { installExternalSchemeProbe } from "@/lib/debugSchemeLaunch";
 import { signalWebReady } from "@/lib/webReady";
 
 import App from "./App.tsx";
 import "./index.css";
+
+// TEMPORARY: trace external-app (custom-scheme) launches to the console.
+installExternalSchemeProbe();
 
 // Mark the native (Capacitor APK) runtime on <html> so CSS can switch off
 // web-isms (text selection, tap highlight, document overscroll/bounce) that

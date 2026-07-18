@@ -10,6 +10,8 @@
 import { Capacitor } from "@capacitor/core";
 import { Share } from "@capacitor/share";
 
+import { logSchemeLaunch } from "@/lib/debugSchemeLaunch";
+
 const native = Capacitor.isNativePlatform();
 
 /** True when the native share sheet / Web Share API can be used. */
@@ -58,6 +60,7 @@ export async function share(opts: {
  * open in a new tab.
  */
 export async function openUrl(url: string): Promise<void> {
+  logSchemeLaunch(url, "share.openUrl");
   if (native) {
     await Share.share({ url });
   } else {
