@@ -16,6 +16,7 @@ import { MeshProvider } from "@/components/MeshProvider";
 import { NativeNotifications } from "@/components/NativeNotifications";
 import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
+import { PlausibleProvider } from "@/components/PlausibleProvider";
 import { PublishOutbox } from "@/components/PublishOutbox";
 import { ReadStateProvider } from "@/components/ReadStateProvider";
 import { ScreenSharePicker } from "@/components/ScreenSharePicker";
@@ -55,33 +56,35 @@ if (Capacitor.isNativePlatform()) {
 export function App() {
   return (
     <AppProvider storageKey="armada:app-config">
-      <QueryClientProvider client={queryClient}>
-        <NostrLoginProvider storageKey="armada:login">
-          <NostrProvider>
-            <WalletProvider>
-              <TooltipProvider>
-                <ReadStateProvider>
-                  <WireSync />
-                  <NostrSync />
-                  <PublishOutbox />
-                  <SyncGate />
-                  <DeepLinkWarmup />
-                  <DesktopBadge />
-                  <NativeNotifications />
-                  <WebPushNotifications />
-                  <ControlPlaneSync />
-                  <ScreenSharePicker />
-                  <Toaster />
-                  <DecryptConsentDialog />
-                  <MeshProvider>
-                    <AppRouter />
-                  </MeshProvider>
-                </ReadStateProvider>
-              </TooltipProvider>
-            </WalletProvider>
-          </NostrProvider>
-        </NostrLoginProvider>
-      </QueryClientProvider>
+      <PlausibleProvider>
+        <QueryClientProvider client={queryClient}>
+          <NostrLoginProvider storageKey="armada:login">
+            <NostrProvider>
+              <WalletProvider>
+                <TooltipProvider>
+                  <ReadStateProvider>
+                    <WireSync />
+                    <NostrSync />
+                    <PublishOutbox />
+                    <SyncGate />
+                    <DeepLinkWarmup />
+                    <DesktopBadge />
+                    <NativeNotifications />
+                    <WebPushNotifications />
+                    <ControlPlaneSync />
+                    <ScreenSharePicker />
+                    <Toaster />
+                    <DecryptConsentDialog />
+                    <MeshProvider>
+                      <AppRouter />
+                    </MeshProvider>
+                  </ReadStateProvider>
+                </TooltipProvider>
+              </WalletProvider>
+            </NostrProvider>
+          </NostrLoginProvider>
+        </QueryClientProvider>
+      </PlausibleProvider>
     </AppProvider>
   );
 }

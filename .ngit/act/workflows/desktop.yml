@@ -38,6 +38,11 @@ jobs:
       - name: Build standalone web bundle
         env:
           VITE_PLATFORM_RELAYS: ""
+          # OFF in the published sovereign desktop build by default (see the
+          # Android release workflow). Configurable for own-branded builds via
+          # the provisioned secret; empty = tracker never initialized.
+          VITE_PLAUSIBLE_DOMAIN: ${{ secrets.VITE_PLAUSIBLE_DOMAIN }}
+          VITE_PLAUSIBLE_ENDPOINT: ${{ secrets.VITE_PLAUSIBLE_ENDPOINT }}
         run: |
           set -eu
           npm ci
@@ -98,6 +103,9 @@ jobs:
       - name: Build standalone web bundle
         env:
           VITE_PLATFORM_RELAYS: ""
+          # See the linux job: analytics off by default, opt-in via secret.
+          VITE_PLAUSIBLE_DOMAIN: ${{ secrets.VITE_PLAUSIBLE_DOMAIN }}
+          VITE_PLAUSIBLE_ENDPOINT: ${{ secrets.VITE_PLAUSIBLE_ENDPOINT }}
         run: |
           set -eu
           npm ci

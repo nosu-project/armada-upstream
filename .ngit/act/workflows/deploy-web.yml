@@ -14,6 +14,10 @@ name: Deploy web
 #   DEPLOY_TARGET             (optional) rsync destination; defaults to "web"
 #   VITE_PLATFORM_RELAYS      wss://armada.buzz — pins the platform relay in the
 #                             HOSTED build only (tag builds keep it empty)
+#   VITE_PLAUSIBLE_DOMAIN     (optional) Plausible site domain (e.g. armada.buzz)
+#                             enabling privacy-friendly analytics in the HOSTED
+#                             build only; empty/unprovisioned = analytics off
+#   VITE_PLAUSIBLE_ENDPOINT   (optional) self-hosted/proxied Plausible API URL
 # If DEPLOY_SSH_KEY_BASE64 is empty (not provisioned, or a non-maintainer PR),
 # the job builds and then skips the deploy instead of failing.
 
@@ -29,6 +33,10 @@ jobs:
       # Vite inlines VITE_* at build time. Pull the hosted relay pin from the
       # provisioned secret; empty is a safe default (unpinned build).
       VITE_PLATFORM_RELAYS: ${{ secrets.VITE_PLATFORM_RELAYS }}
+      # Privacy-friendly analytics, hosted build only. Empty (secret not
+      # provisioned) leaves the tracker uninitialized — no telemetry.
+      VITE_PLAUSIBLE_DOMAIN: ${{ secrets.VITE_PLAUSIBLE_DOMAIN }}
+      VITE_PLAUSIBLE_ENDPOINT: ${{ secrets.VITE_PLAUSIBLE_ENDPOINT }}
     steps:
       - uses: actions/checkout@v4
 

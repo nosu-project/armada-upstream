@@ -2,7 +2,7 @@ import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { APP_NAME } from "@/lib/platform";
+import { APP_NAME, PLAUSIBLE_DOMAIN } from "@/lib/platform";
 
 export function PrivacyPolicyPage() {
   const navigate = useNavigate();
@@ -98,10 +98,19 @@ export function PrivacyPolicyPage() {
 
           <section className="space-y-2">
             <h2 className="text-base font-bold text-foreground">Analytics</h2>
-            <p>
-              {APP_NAME} does not collect analytics. No tracking cookies, no telemetry, no third-party
-              analytics SDKs are included in the client.
-            </p>
+            {PLAUSIBLE_DOMAIN ? (
+              <p>
+                This deployment of {APP_NAME} uses privacy-friendly analytics (Plausible) to understand general
+                usage patterns. These analytics are cookieless, do not track individual users, and do not collect
+                personal information. The official {APP_NAME} apps (Android and desktop) ship with analytics
+                disabled entirely.
+              </p>
+            ) : (
+              <p>
+                This build of {APP_NAME} does not collect analytics. No tracking cookies, no telemetry, and no
+                third-party analytics are active in the client.
+              </p>
+            )}
           </section>
 
           <section className="space-y-2">

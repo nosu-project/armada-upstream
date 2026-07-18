@@ -14,6 +14,10 @@ interface ImportMetaEnv {
   readonly VITE_DEFAULT_AUTO_GAIN_CONTROL?: string;
   readonly VITE_DEFAULT_RNNOISE?: string;
   readonly VITE_SANDBOX_DOMAIN?: string;
+  /** Plausible site domain (e.g. "armada.buzz"). Empty/unset = analytics disabled. */
+  readonly VITE_PLAUSIBLE_DOMAIN?: string;
+  /** Plausible API endpoint (self-hosted instance or proxy). Empty/unset = Plausible Cloud default. */
+  readonly VITE_PLAUSIBLE_ENDPOINT?: string;
   /** Semver version from package.json (e.g., "0.25.4"). */
   readonly VERSION: string;
   /** ISO 8601 timestamp of when the app was built. */
