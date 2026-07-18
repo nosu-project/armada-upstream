@@ -326,8 +326,14 @@ export function MessageTimeline({
                     row's top edge (MessageRow's negative `top`). `pt-12 -mt-12`
                     extends the paint box up by 3rem (> the largest lift, touch
                     `-top-10`) and cancels it with an equal negative margin, so
-                    the toolbar stays unclipped and spacing stays net-zero. */}
-                <div className="pt-12 -mt-12" style={ROW_CONTAINMENT}>{renderMessage(msg, continuation)}</div>
+                    the toolbar stays unclipped and spacing stays net-zero.
+                    That transparent 3rem band overlaps the row above, so it's
+                    `pointer-events-none` (taps fall through to that row); the
+                    inner wrapper re-enables events for the row's own content,
+                    including its toolbar. */}
+                <div className="pt-12 -mt-12 pointer-events-none" style={ROW_CONTAINMENT}>
+                  <div className="pointer-events-auto">{renderMessage(msg, continuation)}</div>
+                </div>
               </Fragment>
             );
           })}
