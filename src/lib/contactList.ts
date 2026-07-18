@@ -2,7 +2,7 @@ import type { NostrEvent, NostrFilter, NPool } from "@nostrify/nostrify";
 
 import { isNostrId } from "@/lib/nostrId";
 
-import type { NIndexedDB } from "@nostrify/indexeddb";
+import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
 
 // ============================================================================
 // Centralized kind 3 (contact list) fetch + cache logic (ported from Ditto).
@@ -30,7 +30,7 @@ const DEFAULT_TIMEOUT = 8000;
  */
 export async function fetchContactList(
   nostr: NPool,
-  store: NIndexedDB,
+  store: ArmadaEventStore,
   pubkey: string,
   opts: { signal?: AbortSignal; timeout?: number } = {},
 ): Promise<NostrEvent | null> {
@@ -59,7 +59,7 @@ export async function fetchContactList(
  * store, without touching the network. Returns `null` when nothing is cached.
  */
 export async function readCachedContactList(
-  store: NIndexedDB,
+  store: ArmadaEventStore,
   pubkey: string,
 ): Promise<NostrEvent | null> {
   const [cached] = await store.query([{ kinds: [3], authors: [pubkey] }]);

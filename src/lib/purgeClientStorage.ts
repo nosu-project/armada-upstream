@@ -1,6 +1,7 @@
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { DECRYPT_CACHE_DB_NAME } from "@/lib/AppSigner";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
+import { purgeEventStore } from "@/lib/sqlite/eventStore";
 
 /**
  * localStorage keys that must survive a purge. `armada:login` is the nostrify
@@ -85,5 +86,5 @@ export async function purgeClientStorage(): Promise<void> {
   clearRenderedPlaintext();
   resetDecryptConsent();
   purgeLocalStorage();
-  await Promise.all([purgeIndexedDB(), purgeCacheStorage()]);
+  await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeEventStore()]);
 }

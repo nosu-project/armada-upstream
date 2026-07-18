@@ -533,7 +533,7 @@ export function WireSync() {
     if (!isNativeRuntime()) return;
     let cancelled = false;
 
-    const ingest = (raw: string[], live: boolean) => {
+    const ingest = (raw: string[], live: boolean): Promise<void> => {
       const events: NostrEvent[] = [];
       for (const json of raw) {
         try {
@@ -543,22 +543,40 @@ export function WireSync() {
         }
       }
       if (events.length > 0 && !cancelled) {
-        void ingestWireEvents(sinksRef.current, events, { live });
+        return ingestWireEvents(sinksRef.current, events, { live });
       }
+      return Promise.resolve();
     };
 
-    // Drain anything buffered while the WebView was down (open / resume).
-    // NOT live: the native service already notified for these as they arrived.
-    const drain = () => {
-      ArmadaNotification.drainEvents()
-        .then(({ events }) => ingest(events, false))
-        .catch(() => undefined);
+    // Drain what the service received while the WebView was down (open /
+    // resume). The service writes events durably into the shared native
+    // database; drainEvents pages rows after the persisted cursor, and the
+    // cursor is acked only AFTER ingest completes (parked wraps persisted,
+    // store writes flushed) so a webview crash mid-page replays instead of
+    // losing events. NOT live: the service already notified for these.
+    let draining = false;
+    const drain = async () => {
+      if (draining) return; // resume + mount can overlap; pages are sequential
+      draining = true;
+      try {
+        while (!cancelled) {
+          const { events, cursor } = await ArmadaNotification.drainEvents();
+          if (events.length === 0) break;
+          await ingest(events, false);
+          if (cancelled) break;
+          await ArmadaNotification.ackDrain({ cursor });
+        }
+      } catch {
+        // Bridge unavailable / mid-drain failure — the unacked page replays.
+      } finally {
+        draining = false;
+      }
     };
-    drain();
+    void drain();
 
     let resumeHandle: { remove: () => void } | undefined;
     CapacitorApp.addListener("appStateChange", ({ isActive }) => {
-      if (isActive) drain();
+      if (isActive) void drain();
     })
       .then((h) => {
         if (cancelled) h.remove();
@@ -568,7 +586,7 @@ export function WireSync() {
 
     let liveHandle: { remove: () => void } | undefined;
     ArmadaNotification.addListener("relayEvent", ({ event }) => {
-      ingest([event], true);
+      void ingest([event], true);
     })
       .then((h) => {
         if (cancelled) h.remove();

@@ -5,10 +5,9 @@ import { NostrContext } from "@nostrify/react";
 import { NUser, useNostrLogin } from "@nostrify/react/login";
 import type { NostrSigner } from "@nostrify/types";
 
-import { NIndexedDB } from "@nostrify/indexeddb";
-
-import { EventStoreContext } from "@/contexts/EventStoreContext";
+import { EventStoreContext, type EventStoreContextType } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
+import { appEventStore } from "@/lib/sqlite/eventStore";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
@@ -100,22 +99,19 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
 
   const pool = useRef<NPool | undefined>(undefined);
 
-  // Shared IndexedDB event cache (batcher writes results into it). Backed by
-  // @nostrify/indexeddb (the strfry-port NStore). Its constructor is synchronous
-  // — it opens the DB in the background and every method awaits the connection —
-  // but the EventStoreContext contract is a Promise, so wrap it. Use a fresh DB
-  // name ("armada-events") rather than the legacy "ditto-events": the package
-  // installs schema version 1, and pointing it at the old v2 database would make
-  // IndexedDB reject the open as a downgrade (→ silent no-op cache).
-  const eventStore = useRef<Promise<NIndexedDB> | undefined>(undefined);
+  // Shared event cache (batcher writes results into it): the app-wide SQLite
+  // store — on Android the native database file the notification service also
+  // writes, on web/Electron SQLite-WASM over OPFS, degrading to NIndexedDB
+  // where neither is available. See src/lib/sqlite/eventStore.ts.
+  const eventStore = useRef<EventStoreContextType | undefined>(undefined);
   if (eventStore.current === undefined) {
-    const db = new NIndexedDB("armada-events");
-    // Warm up the IndexedDB connection immediately. The FIRST query after launch
-    // pays a one-time cold-connection penalty (~2.5s on Android WebView) before
-    // the LevelDB backing is hot; doing a throwaway query now means the first
-    // channel open reads a warm store (<100ms) instead of eating that stall.
-    void db.query([{ kinds: [0], limit: 1 }]).catch(() => undefined);
-    eventStore.current = Promise.resolve(db);
+    const store = appEventStore();
+    // Warm up the connection immediately: the first query after launch pays
+    // the backend's one-time cold-open penalty (worker + wasm init, or the
+    // ~2.5s Android IndexedDB stall on the fallback); a throwaway query now
+    // means the first channel open reads a warm store instead.
+    void store.then((s) => s.query([{ kinds: [0], limit: 1 }])).catch(() => undefined);
+    eventStore.current = store;
     // Warm the Concord V2 rumor cache's IndexedDB connection too, so the first
     // channel open reads a hot store instead of paying the cold-open penalty.
     warmRumorStore();

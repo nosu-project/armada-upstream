@@ -61,6 +61,7 @@
     "@sapphi-red/web-noise-suppressor": "^0.3.5",
     "@scure/base": "^2.2.0",
     "@scure/btc-signer": "^2.2.0",
+    "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "@tanstack/react-query": "^5.56.2",
     "@webxdc/types": "^2.2.0",
     "blurhash": "^2.0.5",
