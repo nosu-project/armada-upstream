@@ -40,7 +40,7 @@ import { writeClipboardText } from "@/lib/clipboard";
  */
 export function InvitesView({ community }: { community: CommunityV2 }) {
   const { data: folded } = useControlFold2(community);
-  const { myLinks, revokeLink, isRevoking, isPublic } = useInviteActions2(community);
+  const { myLinks, revokeLink, isRevoking, isPublic, revokeWouldPrivatize } = useInviteActions2(community);
   const { data: linkEpochs } = useMyLinkEpochs2(community);
   const [copied, setCopied] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -85,10 +85,24 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
   };
 
   const handleRevoke = async (url: string) => {
+    const privatizes = revokeWouldPrivatize(url);
+    if (
+      privatizes &&
+      !confirm(
+        "This is the last live invite link. Revoking it makes the community private: new members can then only be added by direct invite, and banning a member will rotate the community keys.",
+      )
+    ) {
+      return;
+    }
     setRevoking(url);
     try {
       await revokeLink({ url });
-      toast({ title: "Invite link revoked", description: "It can no longer be used to join." });
+      toast({
+        title: "Invite link revoked",
+        description: privatizes
+          ? "It can no longer be used to join. This community is now private."
+          : "It can no longer be used to join.",
+      });
     } catch (e) {
       toast({
         title: "Couldn't revoke the link",

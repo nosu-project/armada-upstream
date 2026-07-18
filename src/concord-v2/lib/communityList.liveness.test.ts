@@ -139,6 +139,29 @@ describe("exclusion (kick/ban) never removes the icon — read-only, not gone", 
     expect(isLive(list, cid)).toBe(true);
   });
 
+  it("an invite vending EXACTLY the excluded epoch is re-inclusion (unban + re-invite)", () => {
+    const seed = jm({ root_epoch: 0 });
+    const cid = seed.community_id;
+    let list = addToList(EMPTY_COMMUNITY_LIST, entryOf(seed, 1000));
+    list = markExcluded(list, cid, 1); // the 0→1 Refounding carried no key for me
+    expect(isExcluded(list.entries[0])).toBe(true);
+
+    // Unbanned + directly re-invited: the bundle hands me epoch 1 itself —
+    // holding the marked epoch's own root IS re-inclusion, no later Refounding
+    // required.
+    const epoch1 = jm({ ...seed, root_epoch: 1, community_root: bytesToHex(random32()) });
+    list = refreshCurrent(list, epoch1);
+    expect(list.entries[0].current.root_epoch).toBe(1);
+    expect(isExcluded(list.entries[0])).toBe(false);
+    expect(list.entries[0].excluded_at_epoch).toBeUndefined(); // spent marker dropped
+
+    // The merge path agrees: a stale device copy still carrying the marker
+    // can't resurrect the exclusion.
+    const stale = markExcluded(addToList(EMPTY_COMMUNITY_LIST, entryOf(seed, 1000)), cid, 1);
+    const merged = mergeCommunityLists(list, stale);
+    expect(isExcluded(merged.entries[0])).toBe(false);
+  });
+
   it("the exclusion marker merges deterministically and stays cleared once superseded", () => {
     const seed = jm({ root_epoch: 0 });
     const cid = seed.community_id;

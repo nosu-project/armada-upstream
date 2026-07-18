@@ -128,9 +128,10 @@ function earliest(a: JoinMaterial, b: JoinMaterial): JoinMaterial {
 
 function mergeEntry(x: CommunityListEntry, y: CommunityListEntry): CommunityListEntry {
   const current = freshest(x.current, y.current);
-  // The higher exclusion epoch wins the merge, but an exclusion is only
-  // meaningful while it still bites the current epoch: once `current` advances
-  // past it (a later Refounding re-included me), it's stale and dropped.
+  // The higher exclusion epoch wins the merge, but an exclusion only bites
+  // while it names an epoch BEYOND what `current` holds: holding the marked
+  // epoch's own root is re-inclusion (a later Refounding or a fresh invite
+  // for exactly that epoch), so a spent marker is dropped.
   const excludedAt = maxDefined(x.excluded_at_epoch, y.excluded_at_epoch);
   const merged: CommunityListEntry = {
     ...x,
@@ -141,7 +142,7 @@ function mergeEntry(x: CommunityListEntry, y: CommunityListEntry): CommunityList
     // The newest add wins liveness races against a tombstone, so keep the max.
     added_at: Math.max(x.added_at, y.added_at),
   };
-  if (excludedAt !== undefined && excludedAt >= current.root_epoch) {
+  if (excludedAt !== undefined && excludedAt > current.root_epoch) {
     merged.excluded_at_epoch = excludedAt;
   } else {
     delete merged.excluded_at_epoch;
@@ -198,13 +199,18 @@ export function liveEntries(list: CommunityList): CommunityListEntry[] {
  * Whether the member has been EXCLUDED at their current epoch — a kick/ban
  * Refounding they got no key for. The community stays live and on the rail
  * (only Leave/Dissolve remove an icon), but it renders read-only: the member
- * can't decrypt this epoch. A later Refounding that re-includes them advances
- * `current.root_epoch` past the marker, clearing it (see {@link mergeEntry}).
+ * can't decrypt this epoch.
+ *
+ * The marker names the epoch minted WITHOUT them, so exclusion holds only
+ * while that epoch is beyond what they hold — strictly greater. Holding the
+ * marked epoch's own root IS re-inclusion, however it arrived: a later
+ * Refounding that re-included them, or a fresh invite handing them exactly
+ * the epoch they were cut from (an unban + re-invite lands there).
  */
 export function isExcluded(entry: CommunityListEntry): boolean {
   return (
     typeof entry.excluded_at_epoch === "number" &&
-    entry.excluded_at_epoch >= entry.current.root_epoch
+    entry.excluded_at_epoch > entry.current.root_epoch
   );
 }
 
@@ -257,8 +263,9 @@ export function refreshCurrent(list: CommunityList, current: JoinMaterial, added
   const entries = list.entries.map((e, i) => {
     if (i !== idx) return e;
     const next: CommunityListEntry = { ...e, current, added_at: Math.max(e.added_at, addedAt) };
-    // Adopting a fresh epoch is re-inclusion: drop a now-stale exclusion marker.
-    if (typeof next.excluded_at_epoch === "number" && next.excluded_at_epoch < current.root_epoch) {
+    // Adopting the marked epoch's key (or any later one) is re-inclusion:
+    // drop the spent exclusion marker.
+    if (typeof next.excluded_at_epoch === "number" && next.excluded_at_epoch <= current.root_epoch) {
       delete next.excluded_at_epoch;
     }
     return next;

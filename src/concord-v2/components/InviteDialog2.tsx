@@ -45,7 +45,7 @@ export function InviteDialog2({
 }
 
 function InviteBody({ community }: { community: CommunityV2 | undefined }) {
-  const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite } =
+  const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
     useInviteActions2(community);
   const [link, setLink] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -76,6 +76,17 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
 
   const handleGenerate = async () => {
     setError(null);
+    // The first live link flips the derived mode Public (CORD-05 §5). Whether
+    // bans still rotate is per-banner (foreign links gate rotations, own links
+    // don't) — the ban dialog's step list tells that truth case by case.
+    if (
+      !isPublic &&
+      !confirm(
+        "Creating an invite link makes this community public: anyone with the link can join. Revoking every link makes it private again.",
+      )
+    ) {
+      return;
+    }
     try {
       const expiresAtMs = expiryDays > 0 ? Date.now() + expiryDays * 86400_000 : undefined;
       setLink(await createLink({ expiresAtMs, label: label.trim() || undefined }));
@@ -86,11 +97,25 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
 
   const handleRevoke = async (url: string) => {
     setError(null);
+    const privatizes = revokeWouldPrivatize(url);
+    if (
+      privatizes &&
+      !confirm(
+        "This is the last live invite link. Revoking it makes the community private: new members can then only be added by direct invite, and banning a member will rotate the community keys.",
+      )
+    ) {
+      return;
+    }
     setRevoking(url);
     try {
       await revokeLink({ url });
       if (link === url) setLink(null);
-      toast({ title: "Invite link revoked", description: "It can no longer be used to join." });
+      toast({
+        title: "Invite link revoked",
+        description: privatizes
+          ? "It can no longer be used to join. This community is now private."
+          : "It can no longer be used to join.",
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't revoke the link.");
     } finally {

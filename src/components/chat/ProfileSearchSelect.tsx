@@ -6,9 +6,24 @@ import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
+import { useAuthor } from "@/hooks/useAuthor";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { cn } from "@/lib/utils";
+
+/** Resolve a typed npub/nprofile/hex string to a hex pubkey, or undefined. */
+function resolvePubkey(input: string): string | undefined {
+  const value = input.trim();
+  if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
+  try {
+    const decoded = nip19.decode(value);
+    if (decoded.type === "npub") return decoded.data;
+    if (decoded.type === "nprofile") return decoded.data.pubkey;
+  } catch {
+    // not bech32
+  }
+  return undefined;
+}
 
 /**
  * A name/nip05 user picker built on the NIP-50 profile search (routed to the
@@ -20,7 +35,7 @@ import { cn } from "@/lib/utils";
 export function ProfileSearchSelect({
   onSelect,
   busyPubkey,
-  placeholder = "Search people by name…",
+  placeholder = "Search a name or paste an npub…",
   autoFocus,
 }: {
   onSelect: (profile: SearchProfile) => void;
@@ -33,6 +48,10 @@ export function ProfileSearchSelect({
   const { data: profiles, isFetching, followedPubkeys } = useSearchProfiles(query);
 
   const trimmed = query.trim();
+  // A pasted npub/nprofile/hex names the person directly — the NIP-50 search
+  // only covers profiles the search relays know by text, which is useless for
+  // an exact key handoff (the Private community's whole growth path).
+  const pastedPubkey = resolvePubkey(trimmed);
   const results = trimmed.length >= 1 ? profiles ?? [] : [];
 
   return (
@@ -58,9 +77,16 @@ export function ProfileSearchSelect({
 
       {trimmed.length >= 1 && (
         <div className="max-h-60 overflow-y-auto rounded-lg bg-secondary/40 p-1">
-          {results.length === 0 ? (
+          {pastedPubkey ? (
+            <PastedPubkeyRow
+              pubkey={pastedPubkey}
+              isFollowed={followedPubkeys.has(pastedPubkey)}
+              isBusy={busyPubkey === pastedPubkey}
+              onSelect={onSelect}
+            />
+          ) : results.length === 0 ? (
             <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-              {isFetching ? "Searching…" : "No one found. Try a different name."}
+              {isFetching ? "Searching…" : "No one found. Try a different name, or paste an npub."}
             </div>
           ) : (
             results.map((profile) => (
@@ -76,6 +102,36 @@ export function ProfileSearchSelect({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The row for an exact pasted key: fetch that author's profile for display and
+ * hand the caller the same SearchProfile shape a search hit would carry. A
+ * pubkey with no published kind-0 still gets a row (stub event) — the key is
+ * the invitation, not the profile.
+ */
+function PastedPubkeyRow({
+  pubkey,
+  isFollowed,
+  isBusy,
+  onSelect,
+}: {
+  pubkey: string;
+  isFollowed: boolean;
+  isBusy: boolean;
+  onSelect: (profile: SearchProfile) => void;
+}) {
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata ?? {};
+  const event = author.data?.event ?? { id: "", kind: 0, pubkey, content: "", created_at: 0, sig: "", tags: [] };
+  return (
+    <ProfileRow
+      profile={{ pubkey, metadata, event }}
+      isFollowed={isFollowed}
+      isBusy={isBusy}
+      onClick={() => onSelect({ pubkey, metadata, event })}
+    />
   );
 }
 
