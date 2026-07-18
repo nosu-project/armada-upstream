@@ -4,6 +4,13 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.32.2] - 2026-07-18
+
+Adds optional Plausible Analytics support for hosted deployments. Analytics is disabled in the Android APK, Electron desktop app, and local dev builds — it only activates when a hosting operator sets `VITE_PLAUSIBLE_DOMAIN` at build time.
+
+### Added
+- Optional Plausible Analytics for hosted deployments (cookieless, off by default in APK/desktop/dev builds)
+
 ## [0.32.1] - 2026-07-18
 
 Polishes the chat message action menu. The react/zap/reply/thread toolbar no
