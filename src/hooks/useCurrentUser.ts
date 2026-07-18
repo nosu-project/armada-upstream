@@ -11,6 +11,7 @@ import {
 } from "@/lib/bitcoin-signers";
 import { Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
+import { signerWithNudge } from "@/lib/signerWithNudge";
 import { logSync } from "@/lib/syncLog";
 
 import { useAuthor } from "./useAuthor.ts";
@@ -36,11 +37,17 @@ export function useCurrentUser() {
 
   // Wrap the user-facing signer in an AppSigner so `nip04`/`nip44` `decrypt` is
   // served from the persistent content-addressed cache (huge win for
-  // remote/extension signers). Wraps ONLY this signer — never the NIP-46
-  // transport key below, nor the NIP-42 AUTH signer in NostrProvider.
+  // remote/extension signers), then in signerWithNudge so a slow remote sign
+  // surfaces a "check your signer" toast with an approve deep-link instead of
+  // spinning silently. Wraps ONLY this signer — never the NIP-46 transport
+  // key below, nor the NIP-42 AUTH signer in NostrProvider.
   const cached = useCallback(
-    (user: NUser): NUser =>
-      new NUser(user.method, user.pubkey, new AppSigner(user.signer, user.pubkey)),
+    (user: NUser, isBunkerConnected?: () => boolean): NUser =>
+      new NUser(
+        user.method,
+        user.pubkey,
+        signerWithNudge(new AppSigner(user.signer, user.pubkey), isBunkerConnected),
+      ),
     [],
   );
 
@@ -84,6 +91,9 @@ export function useCurrentUser() {
                 clientSigner,
               }),
             ),
+            // Lets the nudge toast say "signer relay unreachable" instead of
+            // "approve in your signer" when every bunker socket is down.
+            () => transport.isConnected(),
           );
         }
         case "extension":

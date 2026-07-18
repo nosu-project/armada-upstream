@@ -39,6 +39,7 @@ const MeshPage = lazy(lazyWithReload(() => import("@/pages/MeshPage")));
 const ChangelogPage = lazy(lazyWithReload(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage }))));
 const NotFound = lazy(lazyWithReload(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound }))));
 const PrivacyPolicyPage = lazy(lazyWithReload(() => import("@/pages/PrivacyPolicyPage").then((m) => ({ default: m.PrivacyPolicyPage }))));
+const RemoteLoginSuccessPage = lazy(lazyWithReload(() => import("@/pages/RemoteLoginSuccessPage").then((m) => ({ default: m.RemoteLoginSuccessPage }))));
 const ServerPage = lazy(lazyWithReload(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage }))));
 const SettingsPage = lazy(lazyWithReload(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage }))));
 const SharePage = lazy(lazyWithReload(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage }))));
@@ -260,6 +261,9 @@ export function AppRouter() {
             <Route path="/privacy" element={<PrivacyPolicyPage />} />
             <Route path="/terms" element={<TermsPage />} />
             <Route path="/share" element={<SharePage />} />
+            {/* Callback target baked into nostrconnect:// URIs — remote
+                signers redirect here after the user approves pairing. */}
+            <Route path="/remoteloginsuccess" element={<RemoteLoginSuccessPage />} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
             <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
             <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />

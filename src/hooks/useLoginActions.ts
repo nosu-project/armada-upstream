@@ -12,7 +12,7 @@ import { generateSecretKey, nip19 } from "nostr-tools";
 import { useAppContext } from "@/hooks/useAppContext";
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { Nip46Signer } from "@/lib/nip46Signer";
-import { Nip46Transport, getNip46Transport, removeNip46Transport } from "@/lib/nip46Transport";
+import { Nip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { purgeClientStorage } from "@/lib/purgeClientStorage";
 import { clearWalletStorage } from "@/lib/walletStorage";
@@ -21,6 +21,69 @@ import { logSync } from "@/lib/syncLog";
 
 export type { NostrConnectParams, NostrConnectStatus };
 export { generateNostrConnectParams, generateNostrConnectURI } from "@nostrify/react/login";
+
+/** Cap on the frozen bunker relay set — pairing URIs plus the bunker's own. */
+const MAX_BUNKER_RELAYS = 8;
+
+/**
+ * Whether a relay URL can serve as a NIP-46 rendezvous for THIS client.
+ * Loopback is only reachable from this machine, never from a remote signer
+ * (a stale ws://localhost:5577 pairing had Amber retry it on every sign for
+ * weeks). On a native build (secure WebView origin) non-wss relays are
+ * unusable on OUR side (mixed content), so they'd be rendezvous points only
+ * the signer could reach — dead weight at best. Non-loopback ws:// LAN
+ * relays stay on the web build: an air-gapped LAN deployment with a LAN
+ * signer is a supported setup.
+ */
+function usableRendezvousRelay(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    const loopback =
+      host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".localhost");
+    if (loopback) return false;
+  } catch {
+    return false;
+  }
+  if (Capacitor.isNativePlatform()) return /^wss:\/\//i.test(url);
+  return true;
+}
+
+/**
+ * Ask a freshly-paired bunker for ITS relay list (the NIP-46 `get_relays`
+ * RPC) and merge it into the pairing set. The pairing relays are frozen into
+ * the login and are the session's only path to the signer (#48); a shared
+ * weeks-old bunker:// URI often carries a partial or stale subset, after
+ * which a dead pairing relay means a dead signer forever — even though the
+ * signer has long moved to other relays. The bunker's own list is the
+ * freshest statement of where it actually listens. Best-effort with a short
+ * budget: any failure keeps the pairing relays. Pairing relays stay FIRST
+ * (they're proven to reach the signer — it just answered on them).
+ */
+async function adoptBunkerRelays(signer: Nip46Signer, pairingRelays: string[]): Promise<string[]> {
+  let reported: string[];
+  try {
+    const relays = await Promise.race([
+      signer.getRelays(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("get_relays probe timed out")), 10_000),
+      ),
+    ]);
+    reported = Object.entries(relays)
+      .filter(([, perm]) => perm?.read || perm?.write)
+      .map(([url]) => url);
+  } catch {
+    return pairingRelays;
+  }
+  const merged = [...pairingRelays];
+  for (const url of reported) {
+    const normalized = normalizeRelayUrl(url);
+    if (!normalized || !usableRendezvousRelay(normalized) || merged.includes(normalized)) continue;
+    merged.push(normalized);
+    if (merged.length >= MAX_BUNKER_RELAYS) break;
+  }
+  logSync("nip46", `session relay set: ${merged.length} relay(s) (${reported.length} reported by bunker)`);
+  return merged;
+}
 
 export function useLoginActions() {
   const { logins, addLogin, setLogin, removeLogin } = useNostrLogin();
@@ -40,38 +103,37 @@ export function useLoginActions() {
     },
     // Login with a NIP-46 "bunker://" URI.
     //
-    // The pairing handshake rides the SAME dedicated plain-WebSocket
-    // transport the session signer will use — never the relay pool, whose
-    // socket machinery repeatedly wedged NIP-46 traffic on Android (see
-    // nip46Transport.ts). Pairing over the pool was the first NIP-46 thing a
-    // user did and the first thing that failed.
+    // The pairing handshake rides a throwaway Nip46Transport (dedicated plain
+    // WebSockets — never the relay pool, whose socket machinery repeatedly
+    // wedged NIP-46 traffic on Android; see nip46Transport.ts). Once paired,
+    // the bunker's OWN relay list is adopted into the login (see
+    // adoptBunkerRelays) and the session signer (useCurrentUser) builds the
+    // keyed app-wide transport over the merged set.
     async bunker(uri: string): Promise<void> {
       const { pubkey: bunkerPubkey, secret, relays } = new BunkerURI(uri);
       if (!relays.length) {
         throw new Error("No relay provided");
       }
       const clientSk = generateSecretKey();
-      const transport = getNip46Transport(bunkerPubkey, relays);
-      const signer = new Nip46Signer({
-        transport,
-        bunkerPubkey,
-        clientSigner: new NSecSigner(clientSk),
-      });
+      const transport = new Nip46Transport(relays);
       try {
+        const signer = new Nip46Signer({
+          transport,
+          bunkerPubkey,
+          clientSigner: new NSecSigner(clientSk),
+        });
         await signer.connect(secret);
         const pubkey = await signer.getPublicKey();
+        const sessionRelays = await adoptBunkerRelays(signer, relays);
         addAndActivate(
           new NLogin("bunker", pubkey, {
             bunkerPubkey,
             clientNsec: nip19.nsecEncode(clientSk),
-            relays,
+            relays: sessionRelays,
           }),
         );
-      } catch (error) {
-        // Pairing failed — don't leave the rejected attempt's sockets
-        // reconnecting for the rest of the page's lifetime.
-        removeNip46Transport(bunkerPubkey, relays);
-        throw error;
+      } finally {
+        transport.close();
       }
     },
     // Login with a NIP-07 browser extension
@@ -119,11 +181,12 @@ export function useLoginActions() {
             clientSigner,
           });
           const userPubkey = await signer.getPublicKey();
+          const sessionRelays = await adoptBunkerRelays(signer, params.relays);
           addAndActivate(
             new NLogin("bunker", userPubkey, {
               bunkerPubkey: event.pubkey,
               clientNsec: nip19.nsecEncode(params.clientSecretKey),
-              relays: params.relays,
+              relays: sessionRelays,
             }),
           );
           return;
@@ -145,15 +208,8 @@ export function useLoginActions() {
     // then the internal platform/user servers as fallback rendezvous points.
     //
     // The list is FROZEN into the signer pairing for the lifetime of the
-    // session (#48), so relays the signer can never reach must not enter it:
-    //   - loopback relays are only reachable from THIS machine, never from a
-    //     remote signer (a stale ws://localhost:5577 pairing had Amber retry
-    //     it on every sign for weeks);
-    //   - on a native build (secure WebView origin) non-wss relays are also
-    //     unusable on OUR side (mixed content), so they'd be rendezvous
-    //     points only the signer could reach — dead weight at best.
-    // Non-loopback ws:// LAN relays stay on the web build: an air-gapped LAN
-    // deployment with a LAN signer is a supported setup.
+    // session (#48), so relays the signer can never reach must not enter it
+    // (see usableRendezvousRelay).
     getRelayUrls(): string[] {
       const appRelays = config.appRelays
         .map(normalizeRelayUrl)
@@ -162,18 +218,7 @@ export function useLoginActions() {
         .map(normalizeRelayUrl)
         .filter((url): url is string => Boolean(url));
       const all = [...new Set([...appRelays, ...PLATFORM_RELAYS, ...added])];
-      const usable = all.filter((url) => {
-        try {
-          const host = new URL(url).hostname;
-          const loopback =
-            host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".localhost");
-          if (loopback) return false;
-        } catch {
-          return false;
-        }
-        if (Capacitor.isNativePlatform()) return /^wss:\/\//i.test(url);
-        return true;
-      });
+      const usable = all.filter(usableRendezvousRelay);
       // Never hand back an empty list: a loopback-only dev config still needs
       // SOME rendezvous attempt (and the QR shows the user what's wrong).
       return usable.length > 0 ? usable : all;
