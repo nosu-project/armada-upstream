@@ -31,7 +31,6 @@ import { useWallet } from "@/hooks/useWallet";
 import { useZap } from "@/hooks/useZap";
 import { canZap } from "@/lib/canZap";
 import { writeClipboardText } from "@/lib/clipboard";
-import { logSchemeLaunch } from "@/lib/debugSchemeLaunch";
 import {
   fetchBtcPrice,
 } from "@/lib/bitcoinMoney";
@@ -201,10 +200,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
   };
 
   const openInWallet = () => {
-    if (invoice) {
-      logSchemeLaunch(`lightning:${invoice}`, "ZapDialogImpl.openInWallet");
-      window.location.href = `lightning:${invoice}`;
-    }
+    if (invoice) window.location.href = `lightning:${invoice}`;
   };
 
   return (
