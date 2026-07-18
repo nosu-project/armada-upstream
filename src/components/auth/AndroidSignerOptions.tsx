@@ -76,16 +76,16 @@ export function AndroidSignerOptions({ onLogin }: AndroidSignerOptionsProps) {
               type="button"
               onClick={() => handleConnect(app)}
               disabled={connectingPkg !== null}
-              className="w-full flex items-center gap-3 clip-corner-lg border border-input bg-background/40 px-4 py-3 text-left transition-colors hover:bg-muted disabled:opacity-60 disabled:cursor-not-allowed"
+              className="w-full flex items-center gap-3 clip-corner-lg bg-background/40 px-4 py-3 text-left transition-colors hover:bg-muted disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {app.iconUrl ? (
                 <img
                   src={app.iconUrl}
                   alt=""
-                  className="w-8 h-8 clip-corner-lg flex-shrink-0"
+                  className="w-8 h-8 flex-shrink-0"
                 />
               ) : (
-                <div className="w-8 h-8 clip-corner-lg bg-muted flex-shrink-0" />
+                <div className="w-8 h-8 bg-muted flex-shrink-0" />
               )}
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-sm truncate">
