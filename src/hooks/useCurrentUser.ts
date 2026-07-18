@@ -4,6 +4,7 @@ import { type NLoginType, NUser, useNostrLogin } from "@nostrify/react/login";
 import { nip19 } from "nostr-tools";
 import { useCallback, useMemo } from "react";
 
+import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
 import { AppSigner } from "@/lib/AppSigner";
 import {
   NSecSignerBtc,
@@ -100,6 +101,16 @@ export function useCurrentUser() {
           return cached(
             new NUser(login.type, login.pubkey, new NBrowserSignerBtc()),
           );
+        case "x-android-signer": {
+          // Native Android signer app (Amber, etc.) via NIP-55. Seed the known
+          // pubkey so the signer isn't re-prompted on boot. Wrapped in
+          // AppSigner (via `cached`) so `decrypt` is served from the persistent
+          // cache instead of an intent round-trip per ciphertext.
+          const { packageName } = login.data as { packageName: string };
+          return cached(
+            new NUser(login.type, login.pubkey, new AndroidNativeSigner(packageName, login.pubkey)),
+          );
+        }
         default:
           throw new Error(`Unsupported login type: ${login.type}`);
       }
