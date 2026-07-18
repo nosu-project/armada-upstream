@@ -39,6 +39,10 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
           loading="lazy"
           className="rounded-xl border-0"
+          // Sandbox (no allow-top-navigation) blocks the embed from launching the
+          // Spotify desktop app via a `spotify:` scheme, which Chrome surfaces as
+          // an "open other apps and services on this device" prompt on load.
+          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
         />
       </div>
     );
