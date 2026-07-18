@@ -1,5 +1,4 @@
 import { NSecSigner } from "@nostrify/nostrify";
-import type { NConnectSignerOpts } from "@nostrify/nostrify";
 import { useNostr } from "@nostrify/react";
 import { type NLoginType, NUser, useNostrLogin } from "@nostrify/react/login";
 import { nip19 } from "nostr-tools";
@@ -7,10 +6,10 @@ import { useCallback, useMemo } from "react";
 
 import { AppSigner } from "@/lib/AppSigner";
 import {
-  NConnectSignerBtc,
   NSecSignerBtc,
   NBrowserSignerBtc,
 } from "@/lib/bitcoin-signers";
+import { Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
 import { logSync } from "@/lib/syncLog";
 
@@ -69,7 +68,9 @@ export function useCurrentUser() {
           // not the relay pool. The pool stack (NRelay1/websocket-ts/NPool)
           // repeatedly wedged on Android into a state where new REQs/EVENTs
           // silently went nowhere, hanging every remote sign; plain sockets
-          // with reconnect+resub never did (see nip46Transport.ts).
+          // with reconnect+resub never did (see nip46Transport.ts). The
+          // signer keeps ONE persistent response subscription for the whole
+          // session (see nip46Signer.ts) instead of churning a sub per RPC.
           const transport = getNip46Transport(login.data.bunkerPubkey, bunkerRelays);
           logSync("nip46", `building the app-wide bunker signer (login ${login.id.slice(0, 8)})`);
 
@@ -77,11 +78,10 @@ export function useCurrentUser() {
             new NUser(
               login.type,
               login.pubkey,
-              new NConnectSignerBtc({
-                relay: transport as unknown as NConnectSignerOpts["relay"],
-                pubkey: login.data.bunkerPubkey,
-                signer: clientSigner,
-                timeout: 60_000,
+              new Nip46Signer({
+                transport,
+                bunkerPubkey: login.data.bunkerPubkey,
+                clientSigner,
               }),
             ),
           );

@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef } from "react";
-import { NConnectSigner, NostrEvent, NostrFilter, NPool, NRelay1, NSecSigner } from "@nostrify/nostrify";
-import type { NConnectSignerOpts } from "@nostrify/nostrify";
+import { NostrEvent, NostrFilter, NPool, NRelay1, NSecSigner } from "@nostrify/nostrify";
 import { nip19, verifyEvent } from "nostr-tools";
 import { NostrContext } from "@nostrify/react";
 import { NUser, useNostrLogin } from "@nostrify/react/login";
@@ -11,6 +10,7 @@ import { NIndexedDB } from "@nostrify/indexeddb";
 import { EventStoreContext } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { NostrBatcher } from "@/lib/NostrBatcher";
+import { Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
@@ -479,18 +479,18 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         case "nsec":
           return NUser.fromNsecLogin(currentLogin).signer;
         case "bunker": {
-          // Same DEDICATED plain-WebSocket NIP-46 transport as the user-facing
-          // signer (useCurrentUser) — never the relay pool, whose socket
-          // machinery wedged remote signs on Android (see nip46Transport.ts).
+          // Same DEDICATED plain-WebSocket NIP-46 transport + persistent-sub
+          // signer as the user-facing signer (useCurrentUser) — never the
+          // relay pool, whose socket machinery wedged remote signs on
+          // Android (see nip46Transport.ts / nip46Signer.ts).
           const clientSk = nip19.decode(currentLogin.data.clientNsec) as { type: "nsec"; data: Uint8Array };
-          return new NConnectSigner({
-            relay: getNip46Transport(
+          return new Nip46Signer({
+            transport: getNip46Transport(
               currentLogin.data.bunkerPubkey,
               currentLogin.data.relays ?? [],
-            ) as unknown as NConnectSignerOpts["relay"],
-            pubkey: currentLogin.data.bunkerPubkey,
-            signer: new NSecSigner(clientSk.data),
-            timeout: 60_000,
+            ),
+            bunkerPubkey: currentLogin.data.bunkerPubkey,
+            clientSigner: new NSecSigner(clientSk.data),
           });
         }
         case "extension":
