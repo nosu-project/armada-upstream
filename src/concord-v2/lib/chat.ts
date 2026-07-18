@@ -70,8 +70,9 @@ function openOne(wrap: NostrEvent, channel: ChannelV2): OpenedChat | null {
  *  Time-based (not a fixed wrap count) so a slow phone yields sooner than a
  *  fast desktop instead of both blocking for a fixed number of Schnorr verifies
  *  — long synchronous tasks are what trip WebKit/Gecko "page unresponsive"
- *  kills and jank. */
-const DECODE_SLICE_MS = 16;
+ *  kills and jank. Keep well below 16ms so Android WebView's input pipeline
+ *  (swipe-type composition events) has room to run between slices. */
+const DECODE_SLICE_MS = 5;
 
 /**
  * Open a batch of sealed wraps for one channel, memoized and time-sliced off
