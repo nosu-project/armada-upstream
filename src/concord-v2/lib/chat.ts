@@ -66,13 +66,20 @@ function openOne(wrap: NostrEvent, channel: ChannelV2): OpenedChat | null {
   return opened;
 }
 
-/** How many wraps to decode per main-thread slice. */
-const DECODE_CHUNK = 25;
+/** Max unbroken main-thread time (ms) to spend decoding before yielding.
+ *  Time-based (not a fixed wrap count) so a slow phone yields sooner than a
+ *  fast desktop instead of both blocking for a fixed number of Schnorr verifies
+ *  — long synchronous tasks are what trip WebKit/Gecko "page unresponsive"
+ *  kills and jank. */
+const DECODE_SLICE_MS = 16;
 
 /**
- * Open a batch of sealed wraps for one channel, memoized and chunked off the
- * main thread so a large first decode never freezes the UI. Skips (foreign
- * epochs, malformed, spliced) are silent, as in Vector's read path.
+ * Open a batch of sealed wraps for one channel, memoized and time-sliced off
+ * the main thread so a large first decode never freezes the UI. Each wrap costs
+ * two synchronous NIP-44 decrypts + a Schnorr verify (nostr-tools `@noble`,
+ * main-thread), so we yield whenever a slice has run longer than
+ * {@link DECODE_SLICE_MS}. Skips (foreign epochs, malformed, spliced) are
+ * silent, as in Vector's read path.
  */
 export async function openChatBatch(
   wraps: NostrEvent[],
@@ -80,15 +87,16 @@ export async function openChatBatch(
   opts?: { signal?: AbortSignal },
 ): Promise<OpenedChat[]> {
   const out: OpenedChat[] = [];
-  for (let i = 0; i < wraps.length; i += DECODE_CHUNK) {
+  let sliceStart = performance.now();
+  for (let i = 0; i < wraps.length; i++) {
     if (opts?.signal?.aborted) break;
-    for (const wrap of wraps.slice(i, i + DECODE_CHUNK)) {
-      const opened = openOne(wrap, channel);
-      if (opened) out.push(opened);
-    }
-    // Yield between chunks (only when more work remains).
-    if (i + DECODE_CHUNK < wraps.length) {
+    const opened = openOne(wraps[i], channel);
+    if (opened) out.push(opened);
+    // Yield once this slice has run long enough (and more work remains), so the
+    // main thread stays responsive during a large backfill decode.
+    if (i + 1 < wraps.length && performance.now() - sliceStart >= DECODE_SLICE_MS) {
       await new Promise((resolve) => setTimeout(resolve, 0));
+      sliceStart = performance.now();
     }
   }
   return out;
