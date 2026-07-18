@@ -624,59 +624,66 @@ export function WireSync() {
   useEffect(() => {
     if (spec.v2ByPk.size === 0 && spec.v2CtlByPk.size === 0) return;
     let cancelled = false;
-    void (async () => {
-      try {
-        const parked = await peekPendingWraps([...spec.v2ByPk.keys(), ...spec.v2CtlByPk.keys()]);
-        if (parked.length === 0 || cancelled) return;
-        const scopes = new Set<string>();
-        const acked: string[] = [];
+    // Debounce: spec.sig fires 4-6 times during startup as queries resolve
+    // (groupList, followData, concordData, concord2, concord2Control). Without
+    // a delay each firing kicks off IDB reads + openChatBatch + IDB writes
+    // concurrently, monopolising the main thread before the UI is interactive.
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const parked = await peekPendingWraps([...spec.v2ByPk.keys(), ...spec.v2CtlByPk.keys()]);
+          if (parked.length === 0 || cancelled) return;
+          const scopes = new Set<string>();
+          const acked: string[] = [];
 
-        // Chat wraps → rumor store, grouped per owning channel.
-        const byChannel = new Map<ChannelV2, NostrEvent[]>();
-        // Control wraps → opened-event store, grouped per owning community.
-        const ctlByCommunity = new Map<string, { groups: GroupKey[]; wraps: NostrEvent[] }>();
-        for (const wrap of parked) {
-          const channel = spec.v2ByPk.get(wrap.pubkey);
-          if (channel) {
-            const list = byChannel.get(channel);
-            if (list) list.push(wrap);
-            else byChannel.set(channel, [wrap]);
-            continue;
+          // Chat wraps → rumor store, grouped per owning channel.
+          const byChannel = new Map<ChannelV2, NostrEvent[]>();
+          // Control wraps → opened-event store, grouped per owning community.
+          const ctlByCommunity = new Map<string, { groups: GroupKey[]; wraps: NostrEvent[] }>();
+          for (const wrap of parked) {
+            const channel = spec.v2ByPk.get(wrap.pubkey);
+            if (channel) {
+              const list = byChannel.get(channel);
+              if (list) list.push(wrap);
+              else byChannel.set(channel, [wrap]);
+              continue;
+            }
+            const ctl = spec.v2CtlByPk.get(wrap.pubkey);
+            if (ctl) {
+              const bucket = ctlByCommunity.get(ctl.idHex);
+              if (bucket) bucket.wraps.push(wrap);
+              else ctlByCommunity.set(ctl.idHex, { groups: ctl.groups, wraps: [wrap] });
+            }
           }
-          const ctl = spec.v2CtlByPk.get(wrap.pubkey);
-          if (ctl) {
-            const bucket = ctlByCommunity.get(ctl.idHex);
-            if (bucket) bucket.wraps.push(wrap);
-            else ctlByCommunity.set(ctl.idHex, { groups: ctl.groups, wraps: [wrap] });
+
+          for (const [channel, wraps] of byChannel) {
+            const opened = await openChatBatch(wraps, channel);
+            if (opened.length === 0) continue;
+            writeRumors(opened);
+            scopes.add(`c2:${channel.idHex}`);
+            const openedWrapIds = new Set(opened.map((o) => o.wrapId));
+            acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
           }
-        }
 
-        for (const [channel, wraps] of byChannel) {
-          const opened = await openChatBatch(wraps, channel);
-          if (opened.length === 0) continue;
-          writeRumors(opened);
-          scopes.add(`c2:${channel.idHex}`);
-          const openedWrapIds = new Set(opened.map((o) => o.wrapId));
-          acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
-        }
+          for (const [idHex, { groups, wraps }] of ctlByCommunity) {
+            const opened = openPlaneWraps(wraps, groups);
+            if (opened.length === 0) continue;
+            await writeOpened(opened);
+            scopes.add(`c2ctl:${idHex}`);
+            const openedWrapIds = new Set(opened.map((o) => o.wrapId));
+            acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
+          }
 
-        for (const [idHex, { groups, wraps }] of ctlByCommunity) {
-          const opened = openPlaneWraps(wraps, groups);
-          if (opened.length === 0) continue;
-          await writeOpened(opened);
-          scopes.add(`c2ctl:${idHex}`);
-          const openedWrapIds = new Set(opened.map((o) => o.wrapId));
-          acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
+          ackPendingWraps(acked);
+          if (scopes.size > 0) emitWireScopes(scopes);
+        } catch {
+          // Best-effort — wraps stay parked for the next pass.
         }
-
-        ackPendingWraps(acked);
-        if (scopes.size > 0) emitWireScopes(scopes);
-      } catch {
-        // Best-effort — wraps stay parked for the next pass.
-      }
-    })();
+      })();
+    }, 300);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec.sig]);

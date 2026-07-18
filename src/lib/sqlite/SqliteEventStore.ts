@@ -65,7 +65,7 @@ export class SqliteEventStore {
     this.flushScheduled = true;
     const run = () => void this.flushWrites();
     if (typeof requestIdleCallback === "function") {
-      requestIdleCallback(run, { timeout: 1000 });
+      requestIdleCallback(run, { timeout: 50 });
     } else {
       setTimeout(run, 0);
     }
