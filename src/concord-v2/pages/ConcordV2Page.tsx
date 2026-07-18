@@ -1774,7 +1774,7 @@ export function ConcordV2Page() {
             <ComposerBoundsProvider value={composerBoundsRef}>
             <div className="flex-1 min-w-0 flex flex-col">
               {view === "mentions" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   <MentionsView
                     channels={channels}
                     mentions={mentions}
@@ -1783,15 +1783,15 @@ export function ConcordV2Page() {
                   />
                 </div>
               ) : view === "audit" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   {community && <AuditLogView community={community} />}
                 </div>
               ) : view === "invites" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   {community && <InvitesView community={community} />}
                 </div>
               ) : view === "health" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   {community && (
                     <DebugHealView
                       community={community}
@@ -1800,7 +1800,7 @@ export function ConcordV2Page() {
                   )}
                 </div>
               ) : view === "threads" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   <ThreadsView
                     channels={channels}
                     threads={displayedThreads}
@@ -1815,7 +1815,7 @@ export function ConcordV2Page() {
                     transport={transport}
                     handleRef={timelineRef}
                     syncing={channelSyncing}
-                    className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
+                    className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4"
                     emptyState={
                       <p className="px-2 py-8 text-center text-sm text-muted-foreground">
                         No messages yet. Say something — only members can read it.
