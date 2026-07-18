@@ -109,6 +109,10 @@ the new cert fingerprint to the array.
 ## Conventions
 
 - Commit messages: concise, imperative, sentence case (see `git log`).
+  Describe the technical change only — what was changed. Don't embed a
+  confident problem diagnosis, root-cause narrative, or prescribed "this fixes
+  X" claim; state the behavioral effect plainly if needed, without asserting it
+  as the definitive cause.
 - Don't commit secrets, Android signing material (`*.jks`, `*.keystore`,
   `key.properties`), or `scratch/` (may hold invite secrets).
 - Always commit after finishing a set of changes (don't wait to be asked); do
