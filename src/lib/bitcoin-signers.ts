@@ -1,8 +1,5 @@
 import type { NostrSigner } from '@nostrify/types';
-import { NSecSigner, NBrowserSigner, NConnectSigner } from '@nostrify/nostrify';
-import type { NConnectSignerOpts } from '@nostrify/nostrify';
-
-import { logSync } from '@/lib/syncLog';
+import { NSecSigner, NBrowserSigner } from '@nostrify/nostrify';
 
 // ---------------------------------------------------------------------------
 // BtcSigner interface
@@ -93,107 +90,12 @@ export class NBrowserSignerBtc extends NBrowserSigner implements BtcSigner {
 }
 
 // ---------------------------------------------------------------------------
-// NConnectSignerBtc — NIP-46 remote signer
+// NIP-46 remote signing
 // ---------------------------------------------------------------------------
-
-/**
- * Heuristics for detecting whether a NIP-46 `sign_psbt` error reflects a
- * missing-capability rejection (e.g. "method not supported", "unknown
- * command") versus a transient operational failure (network, user rejection,
- * malformed input). We have to match on strings because NIP-46 errors are
- * plain strings without structured codes.
- */
-const CAPABILITY_ERROR_PATTERNS = [
-  /unknown\s+(method|command)/i,
-  /not\s+(implemented|supported|found)/i,
-  /unsupported\s+method/i,
-  /method\s+not\s+found/i,
-  /invalid\s+method/i,
-  /no\s+such\s+method/i,
-];
-
-function looksLikeCapabilityError(msg: string): boolean {
-  return CAPABILITY_ERROR_PATTERNS.some((re) => re.test(msg));
-}
-
-/**
- * Extends `NConnectSigner` with NIP-46 `sign_psbt` RPC support.
- *
- * Sends a `sign_psbt` command over the NIP-46 relay channel. The remote
- * signer handles the TapTweak and Schnorr signing internally.
- *
- * NIP-46 returns unstructured string errors, so we use pattern matching to
- * distinguish capability failures (the signer doesn't know the method) from
- * operational failures (network, user rejection, bad input). Only capability
- * failures are re-wrapped with the "doesn't support sending Bitcoin" message
- * that flips the UI into the unsupported state; everything else propagates
- * unchanged so the caller can surface the real error.
- */
-/**
- * Per-attempt budget for one NIP-46 RPC round-trip. A healthy bunker answers
- * in well under a second; a response swallowed by a transport hiccup would
- * otherwise hang the RPC FOREVER (NConnectSigner's response promise never
- * settles when its REQ iterator ends without a matching event), so each
- * attempt is fenced and retried once with a fresh REQ + republished request.
- */
-const NIP46_ATTEMPT_TIMEOUT_MS = 15_000;
-const NIP46_ATTEMPTS = 2;
-
-export class NConnectSignerBtc extends NConnectSigner implements BtcSigner {
-  constructor(opts: NConnectSignerOpts) {
-    super(opts);
-    // Wrap every NIP-46 RPC (`cmd` is TypeScript-private, JS-public) with a
-    // trace + a per-attempt timeout + one retry. The remote-signer round-trip
-    // is the least observable link in the app: a request published into a dead
-    // socket, or a response arriving after its subscription died, is silent.
-    // The fence turns "hangs forever" into "retries in 15s, fails in 30s", and
-    // the trace (debugSync sync log) shows which attempt/link failed.
-    const self = this as unknown as { cmd(method: string, params: string[]): Promise<string> };
-    const orig = self.cmd.bind(this);
-    self.cmd = async (method: string, params: string[]): Promise<string> => {
-      let lastErr: unknown;
-      for (let attempt = 1; attempt <= NIP46_ATTEMPTS; attempt++) {
-        const t0 = Date.now();
-        logSync("nip46", `→ ${method}${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
-        try {
-          const result = await Promise.race([
-            orig(method, params),
-            new Promise<never>((_, reject) =>
-              setTimeout(
-                () => reject(new Error(`NIP-46 ${method} attempt timed out after ${NIP46_ATTEMPT_TIMEOUT_MS}ms`)),
-                NIP46_ATTEMPT_TIMEOUT_MS,
-              ),
-            ),
-          ]);
-          logSync("nip46", `← ${method} ok in ${Date.now() - t0}ms${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
-          return result;
-        } catch (err) {
-          lastErr = err;
-          logSync(
-            "nip46",
-            `✗ ${method} attempt ${attempt}/${NIP46_ATTEMPTS} failed in ${Date.now() - t0}ms: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-      throw lastErr;
-    };
-  }
-
-  async signPsbt(psbtHex: string): Promise<string> {
-    // `cmd` is TypeScript-private but JavaScript-public at runtime.
-    const cmd = (this as unknown as { cmd(method: string, params: string[]): Promise<string> }).cmd;
-    try {
-      return await cmd.call(this, 'sign_psbt', [psbtHex]);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (looksLikeCapabilityError(msg)) {
-        throw new Error(
-          `Your remote signer doesn't support sending Bitcoin. Update your signer, or log in with your secret key. (${msg})`,
-        );
-      }
-      // Not a capability failure — propagate the original error so the user
-      // sees the actual reason (timeout, rejection, malformed PSBT, etc.).
-      throw error;
-    }
-  }
-}
+//
+// The NIP-46 bunker signer is `Nip46Signer` in `@/lib/nip46Signer.ts` (a
+// `BtcSigner`): a persistent-subscription, fenced-retry signer built on the
+// dedicated plain-WebSocket transport. It replaced the old
+// `NConnectSigner`-based wrapper, whose per-RPC subscriptions, unsettled
+// response promises, and blind retries made remote signing unreliable (see
+// nip46Signer.ts for the full rationale).

@@ -75,10 +75,15 @@ class RelayConn {
     ws.onopen = () => {
       this.attempt = 0;
       logSync("nip46", `transport socket open: ${this.url}`);
+      // Re-issue active REQs BEFORE flushing queued frames. Kind-24133
+      // traffic is ephemeral — a response only reaches subscriptions that are
+      // live when it's published — so a queued request EVENT must never jump
+      // ahead of the response REQ it depends on. (Queued REQ dups for still-
+      // active subs are harmless: a relay just replaces the subscription.)
+      this.onOpen(this.url);
       const queued = this.queue;
       this.queue = [];
       for (const frame of queued) ws.send(frame);
-      this.onOpen(this.url);
     };
     ws.onmessage = (e) => {
       if (typeof e.data === "string") this.onMessage(this.url, e.data);
@@ -139,6 +144,7 @@ export class Nip46Transport {
   private subs = new Map<string, ActiveSub>();
   private pendingOks = new Map<string, PendingOk>();
   private backgroundedAt: number | undefined;
+  private appStateHandle?: { remove: () => Promise<void> };
 
   constructor(relays: string[]) {
     this.conns = relays.map(
@@ -155,6 +161,8 @@ export class Nip46Transport {
         if (away < RESUME_RECYCLE_MS) return;
         logSync("nip46", `resumed after ${Math.round(away / 1000)}s — recycling transport sockets`);
         for (const c of this.conns) c.recycle();
+      }).then((handle) => {
+        this.appStateHandle = handle;
       });
     }
   }
@@ -205,9 +213,10 @@ export class Nip46Transport {
 
   /** Re-issue every active REQ on a (re)opened socket. */
   private resubscribe(url: string): void {
+    const conn = this.conns.find((c) => c.url === url);
+    if (!conn) return;
     for (const [subId, sub] of this.subs) {
-      const conn = this.conns.find((c) => c.url === url);
-      conn?.send(JSON.stringify(["REQ", subId, ...sub.filters]));
+      conn.send(JSON.stringify(["REQ", subId, ...sub.filters]));
     }
   }
 
@@ -289,6 +298,18 @@ export class Nip46Transport {
       },
     };
   }
+
+  /**
+   * Tear the transport down: stop every socket (no reconnects) and drop the
+   * app-state listener. Used by the nostrconnect:// pairing handshake, which
+   * runs on a throwaway transport before the session transport exists. Any
+   * pending publish/req settles via its own abort path.
+   */
+  close(): void {
+    for (const c of this.conns) c.stop();
+    void this.appStateHandle?.remove();
+    this.appStateHandle = undefined;
+  }
 }
 
 /** One transport per bunker identity, shared by every signer that needs it. */
@@ -308,4 +329,18 @@ export function getNip46Transport(bunkerPubkey: string, relays: string[]): Nip46
     transports.set(key, t);
   }
   return t;
+}
+
+/**
+ * Close and forget the transport for a bunker identity. Used when a pairing
+ * attempt fails — without it the rejected attempt's sockets would keep
+ * reconnecting for the rest of the page's lifetime.
+ */
+export function removeNip46Transport(bunkerPubkey: string, relays: string[]): void {
+  const key = `${bunkerPubkey}|${[...relays].sort().join(",")}`;
+  const t = transports.get(key);
+  if (t) {
+    transports.delete(key);
+    t.close();
+  }
 }
