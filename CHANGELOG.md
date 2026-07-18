@@ -4,6 +4,38 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.32.0] - 2026-07-18
+
+Android users can now log in with a native signer app (Amber or any NIP-55
+compatible signer) directly from the login screen — no relay round-trip
+required. Remote signing over NIP-46 has been fully reworked for better
+reliability and a smoother pairing flow, and users without a signer get a
+gentle nudge to set one up. Under the hood, the event cache has moved from
+IndexedDB to SQLite, which is now shared with the Android notification service
+so notification content stays accurate without redundant fetches. Notifications
+also persist sender avatars to disk, stay active when the app is backgrounded,
+and show a large-icon fallback. Several Android polish fixes land too: startup
+keyboard lag is reduced, the back button correctly minimizes the app from the
+root screen, and link embeds are sandboxed.
+
+### Added
+- Log in with a native Android signer app (Amber or any NIP-55 compatible signer) directly from the login screen
+- Signer nudge prompts users without a proper signer configured to set one up
+
+### Changed
+- Remote signing (NIP-46) has been reworked for improved reliability and a smoother pairing UX
+- Replaced the IndexedDB event cache with a SQLite store shared with the Android notification service
+- Android push notifications persist sender avatars to disk and show a large-icon fallback when no avatar is cached
+- Push notifications stay active when the app is backgrounded (Electron tray keep-alive and browser tab refocus)
+- Encrypted media object URLs are revoked after use and the in-memory cache is bounded to prevent unbounded growth
+- Link embeds (Spotify etc.) run in a sandboxed iframe
+
+### Fixed
+- Reduced startup keyboard lag on Android
+- The back button now correctly minimizes the app when pressed at the root screen on Android
+- Custom emoji images fetched from loopback or private-network addresses are blocked
+- Removed servers no longer reappear after deletion due to relay-based server-list sync
+
 ## [0.31.2] - 2026-07-17
 
 Re-publishes the v0.31.1 update to Zapstore. The previous release built and
