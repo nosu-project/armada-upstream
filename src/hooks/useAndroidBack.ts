@@ -46,6 +46,10 @@ function handleBack() {
   }
 }
 
+export function ensureAndroidBackListener() {
+  ensureListener();
+}
+
 function ensureListener() {
   if (listenerInstalled || !Capacitor.isNativePlatform()) return;
   listenerInstalled = true;

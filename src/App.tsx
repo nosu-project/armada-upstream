@@ -6,6 +6,7 @@ import { Capacitor } from "@capacitor/core";
 import { NostrLoginProvider } from "@nostrify/react/login";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+import { ensureAndroidBackListener } from "@/hooks/useAndroidBack";
 import { AppProvider } from "@/components/AppProvider";
 import { ControlPlaneSync } from "@/components/ControlPlaneSync";
 import { DecryptConsentDialog } from "@/components/DecryptConsentDialog";
@@ -49,6 +50,7 @@ if (Capacitor.isNativePlatform()) {
   void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
     focusManager.setFocused(isActive);
   });
+  ensureAndroidBackListener();
 }
 
 export function App() {
