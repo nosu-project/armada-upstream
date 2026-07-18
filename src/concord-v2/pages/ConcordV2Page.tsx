@@ -1,4 +1,4 @@
-import { AtSign, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, ScrollText, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
+import { AtSign, Ban, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, ScrollText, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -18,6 +18,9 @@ import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
 import { RolesDialog2 } from "@/concord-v2/components/RolesDialog2";
 import { AuditLogView } from "@/concord-v2/components/AuditLogView2";
+import { BannedView } from "@/concord-v2/components/BannedView2";
+import { useBanSelfRemove2 } from "@/concord-v2/hooks/useBanSelfRemove2";
+import { useLinkAuthorityWatch2 } from "@/concord-v2/hooks/useInvites2";
 import { InvitesView } from "@/concord-v2/components/InvitesView2";
 import { DebugHealView } from "@/concord-v2/components/DebugHealView2";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
@@ -54,9 +57,12 @@ import { toast } from "@/hooks/useToast";
 import { useCommunity2, useIsExcluded2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCommunityManagement2, useStrandedRecovery2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
+import { BanMemberDialog } from "@/concord-v2/components/BanMemberDialog2";
+import type { BanPhase } from "@/concord-v2/hooks/useModeration2";
+import { hasForeignLiveLinks } from "@/concord-v2/lib/control";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useGuestbook2 } from "@/concord-v2/hooks/useGuestbook2";
-import { useModeration2 } from "@/concord-v2/hooks/useModeration2";
+import { useModeration2, useReadCutRetry2 } from "@/concord-v2/hooks/useModeration2";
 import { useChannelRekeyWatch2, useLinkRefreshWatch2, useRekeyWatch2 } from "@/concord-v2/hooks/useRekey2";
 import { useRelayFollow2 } from "@/concord-v2/hooks/useRelayFollow2";
 import { useRoles2 } from "@/concord-v2/hooks/useRoles2";
@@ -716,6 +722,12 @@ export function ConcordV2Page() {
   // the community's relays re-points this member (and, via the 13302
   // write-back, their other devices) at the new set.
   useRelayFollow2(baseCommunity);
+  // Honest-client compliance: a stripped CREATE_INVITE means my own live
+  // links must die — only my signer_sk can tombstone their bundles.
+  useLinkAuthorityWatch2(baseCommunity);
+  // Durable read-cut: finish a rotating ban's rotation that a relay outage
+  // dropped, from the keep-list persisted at ban time. Mounted ONCE here.
+  useReadCutRetry2(baseCommunity);
   // Stranded self-heal: while stranded, quietly re-resolve the link we joined
   // through; once its creator refreshes the bundle, merge the fresh epoch in.
   const { canRecover, checking: recoveryChecking, checkNow: recoveryCheckNow } = useStrandedRecovery2(baseCommunity, stranded);
@@ -731,7 +743,7 @@ export function ConcordV2Page() {
   // Which pane the main area shows: the selected channel's chat, the
   // community-wide "@ Mentions" list, or the "Threads" list. Selecting a
   // channel returns to chat.
-  const [view, setView] = useState<"channel" | "mentions" | "threads" | "audit" | "invites" | "health">("channel");
+  const [view, setView] = useState<"channel" | "mentions" | "threads" | "audit" | "invites" | "banned" | "health">("channel");
   useEffect(() => {
     if (routeChannelId) setView("channel");
   }, [routeChannelId]);
@@ -964,6 +976,9 @@ export function ConcordV2Page() {
   );
 
   const navigateTo = useNavigate();
+  // Compliant self-removal: if the folded Banlist names ME, silently tear
+  // down the local copy and route home (CORD-04 §4).
+  useBanSelfRemove2(baseCommunity, useCallback(() => navigateTo("/"), [navigateTo]));
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState("");
 
@@ -977,6 +992,7 @@ export function ConcordV2Page() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
+  const [banTarget, setBanTarget] = useState<string | null>(null);
   // The community-name header menu (Discord-style): expands inline below the
   // header, pushing the channel list down with a height animation.
   const [communityMenuOpen, setCommunityMenuOpen] = useState(false);
@@ -1270,16 +1286,19 @@ export function ConcordV2Page() {
     }
   };
 
-  const handleBan = async (pubkey: string) => {
-    try {
-      const { rekeyed } = await moderation.ban({ target: pubkey });
-      if (rekeyed) {
-        toast({ title: "Member banned", description: "Keys rotated; they can no longer read new messages." });
-      } else {
-        toast({ title: "Member banned", description: "Added to the banlist; key rotation didn't complete (you can retry)." });
-      }
-    } catch (e) {
-      toast({ title: "Couldn't ban", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+  // A ban rotates keys unless someone ELSE holds a live link (a rotation
+  // would strand it; my own links refresh with the rotation). Judged as-of
+  // after this ban: the target's links die with their authority.
+  const banWillRotate =
+    banTarget !== null && !!folded && !!user && !hasForeignLiveLinks(folded, user.pubkey, banTarget) &&
+    moderation.canRekey;
+
+  const runBan = async (target: string, onPhase: (phase: BanPhase) => void) => {
+    const { rekeyed, publicBan } = await moderation.ban({ target, onPhase });
+    if (rekeyed || publicBan) {
+      toast({ title: "Member banned", description: "They are silenced for everyone in this community." });
+    } else {
+      toast({ title: "Member banned", description: "Added to the banlist; key rotation didn't complete (you can retry)." });
     }
   };
 
@@ -1354,6 +1373,15 @@ export function ConcordV2Page() {
                     label: "Invite links",
                     onClick: () => {
                       setView("invites");
+                      setChannelsOpen(false);
+                    },
+                  },
+                  {
+                    show: canBanAny,
+                    icon: <Ban className="size-4" />,
+                    label: "Banned members",
+                    onClick: () => {
+                      setView("banned");
                       setChannelsOpen(false);
                     },
                   },
@@ -1611,6 +1639,11 @@ export function ConcordV2Page() {
                   <LinkIcon className="size-5 text-muted-foreground shrink-0" />
                   <h1 className="font-semibold truncate leading-tight">Invite links</h1>
                 </>
+              ) : view === "banned" ? (
+                <>
+                  <Ban className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Banned members</h1>
+                </>
               ) : view === "health" ? (
                 <>
                   <HeartPulse className="size-5 text-muted-foreground shrink-0" />
@@ -1666,6 +1699,11 @@ export function ConcordV2Page() {
                     <>
                       <LinkIcon className="size-3 shrink-0" />
                       Invite links
+                    </>
+                  ) : view === "banned" ? (
+                    <>
+                      <Ban className="size-3 shrink-0" />
+                      Banned members
                     </>
                   ) : view === "health" ? (
                     <>
@@ -1789,6 +1827,10 @@ export function ConcordV2Page() {
               ) : view === "invites" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
                   {community && <InvitesView community={community} />}
+                </div>
+              ) : view === "banned" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
+                  {community && <BannedView community={community} />}
                 </div>
               ) : view === "health" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
@@ -2017,7 +2059,12 @@ export function ConcordV2Page() {
                   currentUserPubkey={user?.pubkey}
                   onSetRole={canManageRoles ? handleSetRole : undefined}
                   onKick={canKickAny ? (pk) => moderation.kick({ target: pk }).catch(() => {}) : undefined}
-                  onBan={canBanAny ? handleBan : undefined}
+                  onBan={canBanAny ? setBanTarget : undefined}
+                  banLabel={(pk) =>
+                    folded && user && moderation.canRekey && !hasForeignLiveLinks(folded, user.pubkey, pk)
+                      ? "Ban & lock out"
+                      : "Ban"
+                  }
                   onUnban={canBanAny ? (pk) => moderation.unban({ target: pk }).catch(() => {}) : undefined}
                   bannedPubkeys={moderation.banned}
                   onClose={() => setMembersOpen(false)}
@@ -2029,6 +2076,12 @@ export function ConcordV2Page() {
       </SwipeReveal>
 
       <InviteDialog2 community={community} open={inviteOpen} onOpenChange={setInviteOpen} />
+      <BanMemberDialog
+        target={banTarget}
+        willRotate={banWillRotate}
+        onClose={() => setBanTarget(null)}
+        onConfirm={runBan}
+      />
       <CommunityInfoDialog2
         community={community}
         metadata={folded?.metadata}
