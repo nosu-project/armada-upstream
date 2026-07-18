@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { bundleToEntry } from "@/concord-v2/hooks/useCommunityActions2";
+import { assertNotBanned, bundleToEntry } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCommunityList2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
@@ -211,6 +211,13 @@ export function useAcceptDirectInvite2() {
       if (directInviteExpired(bundle)) throw new Error("This invite has expired.");
 
       const entry = bundleToEntry(bundle);
+      // A banned npub must not accept an invite either (CORD-04 §4) — a catch-up
+      // (already a member, healing forward) skips the check, since a still-valid
+      // member folding a fresher bundle isn't "joining".
+      if (!invite.catchUp) {
+        const community = rehydrateCommunity(entry);
+        if (community) await assertNotBanned(nostr, community, user.pubkey);
+      }
       // `add` → mergeCommunityLists → mergeEntry → freshest: epoch-monotonic, so
       // this both onboards a new member and heals an existing one FORWARD, never
       // backward (a stale bundle can't lower `current.root_epoch`).

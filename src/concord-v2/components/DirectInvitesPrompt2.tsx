@@ -15,6 +15,7 @@ import {
   useDirectInvites2,
   type ParkedInvite2,
 } from "@/concord-v2/hooks/useDirectInvites2";
+import { BannedFromCommunityError } from "@/concord-v2/hooks/useCommunityActions2";
 import { toast } from "@/hooks/useToast";
 
 /** The seal-verified sender, rendered without any network reaction (npub). */
@@ -55,6 +56,13 @@ export function DirectInvitesPrompt2() {
       toast({ title: "Joined encrypted community", description: name });
       navigate(`/c/${encodeURIComponent(communityId)}`);
     } catch (e) {
+      if (e instanceof BannedFromCommunityError) {
+        // A ban is terminal: stop re-nagging with this invite (the time-aware
+        // tombstone still lets a post-unban re-invite through later).
+        toast({ title: "You're banned", description: "You can't join this community.", variant: "destructive" });
+        await handleDecline();
+        return;
+      }
       toast({
         title: "Couldn't join",
         description: e instanceof Error ? e.message : "Unknown error",
