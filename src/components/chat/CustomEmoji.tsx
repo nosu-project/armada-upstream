@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 
 import { emojify } from "@/components/chat/emojify";
 import { buildEmojiMap } from "@/lib/customEmoji";
+import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
 
 /** Threshold at or below which we apply nearest-neighbor scaling. */
 const PIXEL_ART_MAX = 16;
@@ -44,7 +45,13 @@ export function CustomEmojiImg({
 
   // A custom emoji whose image URL doesn't resolve shows its fallback (or
   // nothing) rather than a broken-image icon or the raw shortcode/URL text.
-  if (failed) return <>{fallback}</>;
+  //
+  // A URL pointing at a loopback/private address (a leaked dev-instance emoji,
+  // e.g. http://localhost:8080/…) is never rendered: pointing an <img> at it
+  // makes armada.buzz request a local address, which trips Chrome's Local
+  // Network Access prompt ("… wants to access other apps and services on this
+  // device") for everyone who views the message.
+  if (failed || isLocalNetworkUrl(url)) return <>{fallback}</>;
 
   return (
     <img
