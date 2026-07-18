@@ -332,7 +332,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable space-y-1">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable space-y-1">
         {isTombstoneRoot(root) ? (
           <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground/70">
             <MessagesSquare className="size-4 shrink-0" />

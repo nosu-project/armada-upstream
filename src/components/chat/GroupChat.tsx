@@ -535,7 +535,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
         {/* Search results replace the timeline in-place when searching. */}
         {searching ? (
-          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4">
             {searchLoading ? (
               <div className="flex justify-center py-10">
                 <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -577,7 +577,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             transport={transport}
             handleRef={timelineRef}
             newDividerId={newDividerId}
-            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
+            className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4"
             emptyState={
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Hash className="size-10 text-muted-foreground/40 mb-3" />

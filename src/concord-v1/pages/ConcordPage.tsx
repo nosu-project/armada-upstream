@@ -996,7 +996,7 @@ export function ConcordPage() {
               key={channel ? bytesToHex(channel.id) : "none"}
               transport={transport}
               handleRef={timelineRef}
-              className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable px-3 py-4"
+              className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4"
               emptyState={
                 <p className="px-2 py-8 text-center text-sm text-muted-foreground">
                   No messages yet. Say something — only members can read it.
