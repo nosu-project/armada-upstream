@@ -4,6 +4,19 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.32.1] - 2026-07-18
+
+Polishes the chat message action menu. The react/zap/reply/thread toolbar no
+longer gets clipped by the message above it and now reveals reliably on tap,
+and the reply and thread icons have been swapped to match conventional
+messaging apps.
+
+### Changed
+- Swapped the reply and thread icons to match conventional messaging UX
+
+### Fixed
+- The message action menu (react, zap, reply, thread) is no longer clipped at the top by the message above it, and now appears reliably when you tap a message
+
 ## [0.32.0] - 2026-07-18
 
 Android users can now log in with a native signer app (Amber or any NIP-55
