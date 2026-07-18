@@ -137,6 +137,11 @@ class RelayConn {
       // already closed
     }
   }
+
+  /** Whether this connection's socket is currently OPEN. */
+  get isOpen(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
 }
 
 export class Nip46Transport {
@@ -301,14 +306,23 @@ export class Nip46Transport {
 
   /**
    * Tear the transport down: stop every socket (no reconnects) and drop the
-   * app-state listener. Used by the nostrconnect:// pairing handshake, which
-   * runs on a throwaway transport before the session transport exists. Any
-   * pending publish/req settles via its own abort path.
+   * app-state listener. Used by the pairing handshakes (bunker:// and
+   * nostrconnect://), which run on a throwaway transport before the session
+   * transport exists. Any pending publish/req settles via its own abort path.
    */
   close(): void {
     for (const c of this.conns) c.stop();
     void this.appStateHandle?.remove();
     this.appStateHandle = undefined;
+  }
+
+  /**
+   * Whether at least one relay socket is currently OPEN — i.e. the bunker is
+   * reachable in principle. The signer nudge checks this to choose between
+   * "approve in your signer app" and "signer relay unreachable".
+   */
+  isConnected(): boolean {
+    return this.conns.some((c) => c.isOpen);
   }
 }
 
@@ -329,18 +343,4 @@ export function getNip46Transport(bunkerPubkey: string, relays: string[]): Nip46
     transports.set(key, t);
   }
   return t;
-}
-
-/**
- * Close and forget the transport for a bunker identity. Used when a pairing
- * attempt fails — without it the rejected attempt's sockets would keep
- * reconnecting for the rest of the page's lifetime.
- */
-export function removeNip46Transport(bunkerPubkey: string, relays: string[]): void {
-  const key = `${bunkerPubkey}|${[...relays].sort().join(",")}`;
-  const t = transports.get(key);
-  if (t) {
-    transports.delete(key);
-    t.close();
-  }
 }
