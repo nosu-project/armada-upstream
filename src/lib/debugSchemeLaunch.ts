@@ -2,16 +2,24 @@
  * DEBUG PROBE — external-scheme (custom-protocol) launch tracer.
  *
  * Chrome shows its "open other apps & services on this device" prompt whenever
- * the page navigates to a non-http(s) scheme mapped to an installed app
- * (`lightning:`, `bitcoin:`, `spotify:`, `mailto:`, …). External-protocol
- * launches never hit the network and Chrome usually doesn't log them, so they
- * can't be seen in the Network or Console tabs on their own.
+ * the page (or a subframe / auto-inserted element) navigates to a non-http(s)
+ * scheme mapped to an installed app (`lightning:`, `bitcoin:`, `spotify:`, …).
+ * External-protocol launches never hit the network and Chrome usually doesn't
+ * log them, so they can't be seen in the Network or Console tabs on their own.
  *
- * This probe intercepts every route a launch can take — `window.open`,
- * `location.assign` / `location.replace`, an `<a>` click, or an explicit
- * {@link logSchemeLaunch} call at a known hand-off site — and prints the URI
- * plus a full `console.trace` stack, so the exact component / handler that
- * triggered the prompt is visible in the console.
+ * This probe intercepts every route a launch can take:
+ *   - `window.open`
+ *   - `location.assign` / `location.replace`
+ *   - `<a>` clicks (real + programmatic `.click()`)
+ *   - `<form>` submits
+ *   - any element inserted with a custom-scheme `src`/`href`/`data`/`action`
+ *     (a `<iframe src="bitcoin:…">` / auto-injected link), via MutationObserver
+ *   - explicit {@link logSchemeLaunch} calls at known hand-off sites
+ *
+ * It also logs the src of EVERY <iframe> that renders, so we can see exactly
+ * which embeds a page mounts (an iframe's own internal navigation to a scheme
+ * can't be intercepted from here — but knowing the iframe is present points
+ * straight at it).
  *
  * TEMPORARY: remove once the offending path is identified.
  */
@@ -29,8 +37,20 @@ function schemeOf(url: unknown): string | undefined {
 export function logSchemeLaunch(url: string, source: string): void {
   const scheme = schemeOf(url);
   if (!scheme || ALLOWED.has(scheme)) return;
-  console.warn(`[scheme-launch] via ${source} → ${scheme}: ${url.slice(0, 160)}`);
+  console.warn(`[scheme-launch] via ${source} → ${scheme}: ${url.slice(0, 200)}`);
   console.trace(`[scheme-launch] stack (${scheme} from ${source})`);
+}
+
+/** Scan an element's URL-bearing attributes for a custom scheme. */
+function scanEl(el: Element, source: string): void {
+  for (const attr of ["src", "href", "data", "action", "formaction"] as const) {
+    const v = el.getAttribute?.(attr);
+    if (v) logSchemeLaunch(v, `${source}[${el.tagName.toLowerCase()}.${attr}]`);
+  }
+  if (el.tagName === "IFRAME") {
+    const src = el.getAttribute("src") ?? "(no src)";
+    console.info(`[scheme-launch] iframe rendered: ${src.slice(0, 200)}`);
+  }
 }
 
 let installed = false;
@@ -60,7 +80,16 @@ export function installExternalSchemeProbe(): void {
     }
   }
 
-  // Anchor clicks with a custom-scheme href (capture phase, catches nested targets).
+  // Programmatic anchor .click() (detached anchors never bubble to document).
+  try {
+    const origClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+      logSchemeLaunch(this.getAttribute("href") ?? "", "anchor.click()");
+      return origClick.call(this);
+    };
+  } catch { /* */ }
+
+  // Real clicks + form submits (capture phase, catches nested targets).
   document.addEventListener(
     "click",
     (e) => {
@@ -69,6 +98,36 @@ export function installExternalSchemeProbe(): void {
     },
     true,
   );
+  document.addEventListener(
+    "submit",
+    (e) => {
+      const f = e.target as HTMLFormElement | null;
+      if (f?.getAttribute) logSchemeLaunch(f.getAttribute("action") ?? "", "form-submit");
+    },
+    true,
+  );
 
-  console.info("[scheme-launch] probe installed — watching for external-app launches");
+  // Watch the DOM for auto-inserted scheme elements + log every iframe rendered.
+  try {
+    const obs = new MutationObserver((records) => {
+      for (const rec of records) {
+        if (rec.type === "attributes" && rec.target instanceof Element) {
+          scanEl(rec.target, "mutate");
+        }
+        for (const node of rec.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          scanEl(node, "added");
+          node.querySelectorAll?.("iframe,a[href],object,embed,form[action]").forEach((el) => scanEl(el, "added-descendant"));
+        }
+      }
+    });
+    obs.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["src", "href", "data", "action", "formaction"],
+    });
+  } catch { /* */ }
+
+  console.info("[scheme-launch] probe installed (v2) — watching launches + iframes");
 }
