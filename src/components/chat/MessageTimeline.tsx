@@ -320,8 +320,14 @@ export function MessageTimeline({
                 {newDay && <DateSeparator ts={msg.created_at} />}
                 {newDividerId === msg.id && <NewMessagesDivider />}
                 {/* content-visibility wrapper: skips offscreen render/paint of
-                    this row (and its media) while keeping it in the DOM. */}
-                <div style={ROW_CONTAINMENT}>{renderMessage(msg, continuation)}</div>
+                    this row (and its media) while keeping it in the DOM.
+                    `content-visibility: auto` also forces paint containment,
+                    which would clip the hover toolbar where it floats above the
+                    row's top edge (MessageRow's negative `top`). `pt-12 -mt-12`
+                    extends the paint box up by 3rem (> the largest lift, touch
+                    `-top-10`) and cancels it with an equal negative margin, so
+                    the toolbar stays unclipped and spacing stays net-zero. */}
+                <div className="pt-12 -mt-12" style={ROW_CONTAINMENT}>{renderMessage(msg, continuation)}</div>
               </Fragment>
             );
           })}
