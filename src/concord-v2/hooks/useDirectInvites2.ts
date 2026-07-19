@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { bundleToEntry } from "@/concord-v2/hooks/useCommunityActions2";
+import { assertNotBanned, bundleToEntry } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCommunityList2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
@@ -60,7 +60,14 @@ export function useDirectInvites2() {
   const { consent } = useDecryptConsent();
 
   const known = new Set(list ? liveEntries(list.list).map((e) => e.community_id) : []);
-  const tombstoned = new Set((list?.list.tombstones ?? []).map((t) => t.community_id));
+  // Newest tombstone time (ms) per community. A tombstone suppresses only
+  // invites SENT BEFORE it — a leave/decline/ban buries the invites it knew
+  // about, never a fresh re-invite (someone chose to ask again).
+  const tombstonedAt = new Map<string, number>();
+  for (const t of list?.list.tombstones ?? []) {
+    const prev = tombstonedAt.get(t.community_id);
+    if (prev === undefined || t.removed_at > prev) tombstonedAt.set(t.community_id, t.removed_at);
+  }
 
   // Don't scan until the membership list is trustworthy: an UNDECRYPTABLE read
   // (remote/bunker signer not ready) yields an untrusted empty list — treating
@@ -76,7 +83,7 @@ export function useDirectInvites2() {
       user?.pubkey,
       consent,
       [...known].sort().join(","),
-      [...tombstoned].sort().join(","),
+      [...tombstonedAt.entries()].map(([id, at]) => `${id}@${at}`).sort().join(","),
     ],
     enabled: Boolean(user?.signer.nip44) && listReady,
     staleTime: 30_000,
@@ -150,8 +157,11 @@ export function useDirectInvites2() {
         if (!bundle) continue;
         // A dead handoff isn't worth a prompt: expired invites never park.
         if (directInviteExpired(bundle)) continue;
-        // A left/declined community stays suppressed.
-        if (tombstoned.has(bundle.community_id)) continue;
+        // A left/declined community suppresses only the invites that predate
+        // the tombstone (rumor time is the sender's word, which is fine: the
+        // gate is anti-nag, not authority).
+        const buriedAt = tombstonedAt.get(bundle.community_id);
+        if (buriedAt !== undefined && record.rumor.created_at * 1000 <= buriedAt) continue;
         const held = heldEpoch.get(bundle.community_id);
         const catchUp = held !== undefined && bundle.root_epoch > held;
         // Skip an already-joined community UNLESS the bundle is strictly fresher
@@ -201,6 +211,13 @@ export function useAcceptDirectInvite2() {
       if (directInviteExpired(bundle)) throw new Error("This invite has expired.");
 
       const entry = bundleToEntry(bundle);
+      // A banned npub must not accept an invite either (CORD-04 §4) — a catch-up
+      // (already a member, healing forward) skips the check, since a still-valid
+      // member folding a fresher bundle isn't "joining".
+      if (!invite.catchUp) {
+        const community = rehydrateCommunity(entry);
+        if (community) await assertNotBanned(nostr, community, user.pubkey);
+      }
       // `add` → mergeCommunityLists → mergeEntry → freshest: epoch-monotonic, so
       // this both onboards a new member and heals an existing one FORWARD, never
       // backward (a stale bundle can't lower `current.root_epoch`).

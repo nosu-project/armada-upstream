@@ -28,8 +28,66 @@ import {
 } from "@/concord-v2/lib/invite";
 import { KIND_INVITE_BUNDLE } from "@/concord-v2/lib/kinds";
 import { capRelays, type CommunityV2 } from "@/concord-v2/lib/types";
+import { controlGroups, foldControlState, openControlWraps } from "@/concord-v2/lib/control";
+import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
+import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+
+/** Thrown when the joiner is on the community's folded Banlist (CORD-04 §4). */
+export class BannedFromCommunityError extends Error {
+  constructor() {
+    super("You're banned from this community and can't rejoin.");
+    this.name = "BannedFromCommunityError";
+  }
+}
+
+/** Thrown when the control plane can't be read to verify access (retryable). */
+export class ControlUnreadableError extends Error {
+  constructor() {
+    super("Couldn't verify your access to this community. Please try again.");
+    this.name = "ControlUnreadableError";
+  }
+}
+
+/**
+ * Refuse to join a community whose CURRENT Banlist names me (CORD-04 §4). An
+ * honest client MUST NOT publish a Join, record the entry, or emit anything
+ * while banlisted — presence on the folded head is disqualifying regardless of
+ * edition timestamps (the self-removal watcher's timestamp guard is for the
+ * post-join replay race, NOT for entry). Fetch + fold the control plane and
+ * throw before any side effect.
+ *
+ * Fail CLOSED: a real community always carries control editions (genesis
+ * metadata + channel), so an empty read means the plane was withheld or
+ * unreachable, NOT "no ban" — refuse-and-retry rather than wave a banned user
+ * through. The read is NIP-42 authenticated (the stock relays gate stream
+ * reads), scoped to the community's control-group keys.
+ */
+export async function assertNotBanned(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  community: CommunityV2,
+  pubkey: string,
+): Promise<void> {
+  const groups = controlGroups(community);
+  // Answer the relays' NIP-42 challenge with the control-group keys, else a
+  // gated relay serves nothing and the ban goes unseen.
+  registerStreamKeys(groups, community.relays);
+  const authors = groups.map((g) => g.pk);
+  const results = await Promise.all(
+    community.relays.map((url) =>
+      nostr
+        .relay(url)
+        .query([{ kinds: [KIND_WRAP], authors }], { signal: AbortSignal.timeout(12_000) })
+        .catch(() => [] as NostrEvent[]),
+    ),
+  );
+  const seen = new Set<string>();
+  const wraps = results.flat().filter((e) => (seen.has(e.id) ? false : seen.add(e.id)));
+  if (wraps.length === 0) throw new ControlUnreadableError();
+  const folded = foldControlState(openControlWraps(wraps, groups), community.id, community.owner);
+  if (folded.banned.has(pubkey)) throw new BannedFromCommunityError();
+}
 
 /** A preview of where a V2 invite leads, resolved before joining. */
 export interface InvitePreview2 {
@@ -206,23 +264,27 @@ export function useCommunityActions2() {
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new Error(unusable);
       const entry = bundleToEntry(bundle, { inviteRef: inviteRefOf(invite) });
+      // A banned npub must not join (CORD-04 §4): check BEFORE recording the
+      // entry or publishing anything.
+      const community = rehydrateCommunity(entry);
+      if (community) await assertNotBanned(nostr, community, user.pubkey);
       await updateList({ type: "add", entry });
       queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });
 
       // Best-effort self-signed Guestbook Join, echoing the link's attribution
       // (CORD-02 §5 / CORD-05 §1) — the coalesce self-heals if it never lands.
-      void (async () => {
-        const community = rehydrateCommunity(entry);
-        if (!community) return;
-        const attribution = bundle.creator_npub
-          ? { creator: bundle.creator_npub, label: bundle.label }
-          : undefined;
-        const rumor = buildJoinRumor(user.pubkey, Date.now(), attribution);
-        const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer);
-        await Promise.allSettled(
-          community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-        );
-      })().catch(() => undefined);
+      if (community) {
+        void (async () => {
+          const attribution = bundle.creator_npub
+            ? { creator: bundle.creator_npub, label: bundle.label }
+            : undefined;
+          const rumor = buildJoinRumor(user.pubkey, Date.now(), attribution);
+          const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer);
+          await Promise.allSettled(
+            community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+          );
+        })().catch(() => undefined);
+      }
 
       return { communityId: bundle.community_id, name: bundle.name };
     },

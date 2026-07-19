@@ -1,11 +1,11 @@
-import { Loader2, ShieldCheck } from "lucide-react";
+import { Ban, Loader2, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { ServerRail } from "@/components/layout/ServerRail";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { Button } from "@/components/ui/button";
-import { useCommunityActions2 } from "@/concord-v2/hooks/useCommunityActions2";
+import { BannedFromCommunityError, useCommunityActions2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { parseInviteRoute } from "@/concord-v2/lib/invite";
@@ -24,6 +24,7 @@ export function InviteV2Page() {
   const { user } = useCurrentUser();
   const { preview, join } = useCommunityActions2();
   const [error, setError] = useState<string | null>(null);
+  const [banned, setBanned] = useState(false);
   const [previewName, setPreviewName] = useState<string | null>(null);
   const attempted = useRef(false);
 
@@ -59,6 +60,7 @@ export function InviteV2Page() {
         navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
       } catch (e) {
         attempted.current = false; // allow a retry
+        setBanned(e instanceof BannedFromCommunityError);
         setError(e instanceof Error ? e.message : "Couldn't join with that invite link.");
       }
     })();
@@ -69,10 +71,18 @@ export function InviteV2Page() {
     <>
       <ServerRail />
       <main className="flex-1 min-w-0 flex flex-col items-center justify-center gap-4 p-8 text-center">
-        <ShieldCheck className="size-12 text-success" />
+        {error ? (
+          banned ? (
+            <Ban className="size-12 text-destructive" />
+          ) : (
+            <ShieldCheck className="size-12 text-muted-foreground" />
+          )
+        ) : (
+          <ShieldCheck className="size-12 text-success" />
+        )}
         {error ? (
           <>
-            <h1 className="text-2xl font-bold">Invite link didn’t work</h1>
+            <h1 className="text-2xl font-bold">{banned ? "You’re banned" : "Invite link didn’t work"}</h1>
             <p className="max-w-md text-muted-foreground">{error}</p>
             <Button asChild>
               <Link to="/">Back to base</Link>

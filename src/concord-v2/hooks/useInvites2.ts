@@ -1,5 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 
 import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
@@ -7,7 +8,8 @@ import { resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { KIND_DM_RELAYS, parseDmRelays } from "@/hooks/useDmRelayList";
 import { buildRegistryEdition } from "@/concord-v2/lib/control";
-import { bytesToHex, hexToBytes, inviteLinksLocator, hex32 } from "@/concord-v2/lib/derive";
+import { isAuthorized, Permissions } from "@/concord-v2/lib/roles";
+import { bytesToHex, grantLocator, hexToBytes, inviteLinksLocator, hex32 } from "@/concord-v2/lib/derive";
 import {
   buildDirectInviteRumor,
   sealDirectInvite,
@@ -266,16 +268,34 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     };
   };
 
-  /** Publish this creator's registry (vsk 8) with the given live link set. */
+  /** Link-signer pubkeys of MY expired links for this community. */
+  const myExpiredSigners = (): Set<string> => {
+    const out = new Set<string>();
+    const now = Math.floor(Date.now() / 1000);
+    for (const e of inviteList.data?.entries ?? []) {
+      if (e.community_id !== community?.idHex || !e.expires_at || e.expires_at > now) continue;
+      const p = parseInviteLink(e.url);
+      if (p) out.add(p.linkSigner);
+    }
+    return out;
+  };
+
+  /**
+   * Publish this creator's registry (vsk 8) with the given live link set.
+   * Expired links are pruned first: they can't be joined, so they must not
+   * keep the community reading Public (CORD-05 §5).
+   */
   const publishRegistry = async (linkSigners: string[]) => {
     if (!user || !community) return;
+    const expired = myExpiredSigners();
+    const live = linkSigners.filter((s) => !expired.has(s));
     const eid = bytesToHex(inviteLinksLocator(community.id, hex32(user.pubkey)));
     const head = folded?.heads.get(eid);
     await publishEdition2(
       nostr,
       community,
       user.signer,
-      buildRegistryEdition(community.id, user.pubkey, linkSigners, {
+      buildRegistryEdition(community.id, user.pubkey, live, {
         actorPubkey: user.pubkey,
         version: head ? head.version + 1n : 1n,
         prevHash: head?.hash,
@@ -412,6 +432,19 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   /** This creator's live links for THIS community (from the private list). */
   const myLinks = (inviteList.data?.entries ?? []).filter((e) => e.community_id === community?.idHex);
 
+  /**
+   * Whether revoking this link would empty the aggregate live-link set,
+   * flipping the community Private (CORD-05 §2): the caller should warn
+   * before crossing that line, since bans start rotating keys past it.
+   */
+  const revokeWouldPrivatize = (url: string): boolean => {
+    const parsed = parseInviteLink(url);
+    if (!parsed || !folded || folded.liveInviteLinks.size === 0) return false;
+    const remaining = new Set(folded.liveInviteLinks);
+    remaining.delete(parsed.linkSigner);
+    return remaining.size === 0;
+  };
+
   return {
     createLink: createLink.mutateAsync,
     isCreatingLink: createLink.isPending,
@@ -422,5 +455,51 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     myLinks,
     /** Whether ANY live public link exists — the community's Public/Private flag. */
     isPublic: (folded?.liveInviteLinks.size ?? 0) > 0,
+    revokeWouldPrivatize,
   };
+}
+
+/**
+ * Honest-client compliance: revoke MY OWN live links when I no longer hold
+ * CREATE_INVITE.
+ *
+ * The Registry fold already stops honoring a stripped creator's links (the
+ * community reads Private, CORD-05 §5) — but the BUNDLE keeps vending keys at
+ * its coordinate, and only this creator's `signer_sk` can tombstone it. An
+ * owner stripping the permission flips the flag; this watcher is the only
+ * thing that can close the door. Mirrors banlist self-removal: authority
+ * decided, my client complies.
+ *
+ * The action is destructive and irreversible (a tombstone kills a shared URL),
+ * so it fires only on POSITIVE evidence of a strip, never on authority absence:
+ * a genuine strip folds a revoke edition at my grant coordinate, while a cold
+ * device or a relay gap folds nothing there. Requiring my grant HEAD present
+ * (on a settled fold) distinguishes "demoted" from "not yet synced."
+ */
+export function useLinkAuthorityWatch2(community: CommunityV2 | undefined): void {
+  const { user } = useCurrentUser();
+  const control = useControlFold2(community);
+  const folded = control.data;
+  const { myLinks, revokeLink } = useInviteActions2(community);
+  // Guards only the in-flight revoke per link; a failure retries on the next
+  // fold/list change.
+  const handled = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!user || !community || !folded || myLinks.length === 0) return;
+    if (control.isLoading || control.isFetching) return; // an in-flight fold under-authorizes
+    if (user.pubkey === folded.ownerHex) return; // the owner is always authorized
+    if (isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.CREATE_INVITE)) return;
+    // Positive-evidence gate: my grant must actually be in the fold (a strip
+    // folds a revoke edition here; a sync gap folds nothing). Without it, a
+    // partial fold's authority-absence would wrongly tombstone live links.
+    if (!folded.heads.has(bytesToHex(grantLocator(community.id, hex32(user.pubkey))))) return;
+    for (const entry of myLinks) {
+      if (handled.current.has(entry.token)) continue;
+      handled.current.add(entry.token);
+      revokeLink({ url: entry.url }).catch(() => {
+        handled.current.delete(entry.token);
+      });
+    }
+  }, [user, community, folded, control.isLoading, control.isFetching, myLinks, revokeLink]);
 }

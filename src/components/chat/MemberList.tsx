@@ -66,6 +66,8 @@ interface MemberRowProps {
   onKick?: (pubkey: string) => void;
   /** Concord: ban + read-cut (rotate keys to lock them out). */
   onBan?: (pubkey: string) => void;
+  /** Menu label for the ban action (a ban without a read-cut is just "Ban"). */
+  banLabel?: (pubkey: string) => string;
   /** Concord: unban a currently-banned member. */
   onUnban?: (pubkey: string) => void;
   /** Concord: whether this member is currently banned. */
@@ -84,6 +86,7 @@ function MemberRow({
   onSetRole,
   onKick,
   onBan,
+  banLabel,
   onUnban,
   isBanned,
   onEditProfile,
@@ -210,7 +213,7 @@ function MemberRow({
               onSelect={() => onBan(pubkey)}
             >
               <Ban className="size-4" />
-              Ban &amp; lock out
+              {banLabel?.(pubkey) ?? "Ban & lock out"}
             </Item>
           )}
           {onUnban && isBanned && (
@@ -341,6 +344,7 @@ interface MemberListProps {
   /** Concord moderation (additive; NIP-29 leaves these unset). */
   onKick?: (pubkey: string) => void;
   onBan?: (pubkey: string) => void;
+  banLabel?: (pubkey: string) => string;
   onUnban?: (pubkey: string) => void;
   /** Concord: the set of currently-banned pubkeys (hex). */
   bannedPubkeys?: Set<string>;
@@ -363,6 +367,7 @@ export function MemberList({
   onSetRole,
   onKick,
   onBan,
+  banLabel,
   onUnban,
   bannedPubkeys,
   onClose,
@@ -420,6 +425,7 @@ export function MemberList({
               onSetRole={onSetRole}
               onKick={onKick}
               onBan={onBan}
+              banLabel={banLabel}
               onUnban={onUnban}
               isBanned={bannedPubkeys?.has(admin.pubkey)}
               onEditProfile={onEditProfile}
@@ -447,6 +453,7 @@ export function MemberList({
             onSetRole={onSetRole}
             onKick={onKick}
             onBan={onBan}
+            banLabel={banLabel}
             onUnban={onUnban}
             isBanned={bannedPubkeys?.has(pubkey)}
             onEditProfile={onEditProfile}
