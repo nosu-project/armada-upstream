@@ -23,6 +23,7 @@ import {
   encodeFragment,
   parseBundleEvent,
   parseInviteLink,
+  STOCK_RELAYS,
   type InviteBundle,
   type ParsedInviteLink,
 } from "@/concord-v2/lib/invite";
@@ -169,9 +170,10 @@ export function useCommunityActions2() {
 
   // Fallback relays for resolving an invite bundle when the fragment carries no
   // bootstrap relays of its own. Prefer the user's configured app relays (so a
-  // removed relay isn't silently reused) and fall back to the build-time
-  // defaults only when the user has emptied their list.
-  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : APP_RELAYS;
+  // removed relay isn't silently reused) and fall back to the stock interop set
+  // (not the app defaults) when the user has emptied their list — a relayless
+  // link must still resolve against the relays every CORD client shares.
+  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : STOCK_RELAYS;
 
   const create = useMutation<{ communityId: string; name: string }, Error, { name: string }>({
     mutationFn: async ({ name }) => {
@@ -456,7 +458,7 @@ export function useStrandedRecovery2(
 
   const inviteRef = typeof entry?.invite_ref === "string" ? entry.invite_ref : undefined;
   const canRecover = Boolean(stranded && inviteRef && user && community);
-  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : APP_RELAYS;
+  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : STOCK_RELAYS;
 
   /** One recovery attempt. Resolves true when a fresher epoch was merged in. */
   const checkNow = useCallback(async (): Promise<boolean> => {

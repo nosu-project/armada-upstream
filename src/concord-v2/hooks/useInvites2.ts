@@ -6,7 +6,6 @@ import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } fro
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
 import { resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { KIND_DM_RELAYS, parseDmRelays } from "@/hooks/useDmRelayList";
 import { buildRegistryEdition } from "@/concord-v2/lib/control";
 import { isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import { bytesToHex, grantLocator, hexToBytes, inviteLinksLocator, hex32 } from "@/concord-v2/lib/derive";
@@ -28,10 +27,10 @@ import {
   type InviteList,
 } from "@/concord-v2/lib/invite";
 import { KIND_INVITE_LIST } from "@/concord-v2/lib/kinds";
+import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord-v2/lib/inviteRelays";
 import { toast } from "@/hooks/useToast";
 import { shareOrigin } from "@/lib/shareOrigin";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
-import { capRelays } from "@/concord-v2/lib/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
@@ -170,38 +169,6 @@ function useUpdateInviteList2() {
   });
 }
 
-/**
- * Where a Direct Invite delivers (CORD-05 §6): the recipient's giftwrap inbox —
- * the relays in their kind-10050 DM-relay list (NIP-17) when one exists, their
- * NIP-65 read relays otherwise. Returns [] when neither is published (the
- * caller then falls back to the app relays).
- */
-async function recipientInboxRelays(
-  nostr: ReturnType<typeof useNostr>["nostr"],
-  recipient: string,
-): Promise<string[]> {
-  const KIND_RELAY_LIST = 10002;
-  const events = await nostr
-    .query([{ kinds: [KIND_DM_RELAYS, KIND_RELAY_LIST], authors: [recipient], limit: 4 }], {
-      signal: AbortSignal.timeout(6000),
-    })
-    .catch(() => [] as NostrEvent[]);
-
-  const latestOf = (kind: number) =>
-    events.filter((e) => e.kind === kind).sort((a, b) => b.created_at - a.created_at)[0];
-
-  const dm = parseDmRelays(latestOf(KIND_DM_RELAYS));
-  if (dm.length > 0) return capRelays(dm);
-
-  // NIP-65 read relays: tags with no marker are read+write.
-  const nip65 = latestOf(KIND_RELAY_LIST);
-  const reads: string[] = [];
-  for (const [name, url, marker] of nip65?.tags ?? []) {
-    if (name !== "r" || marker === "write" || !url) continue;
-    reads.push(url);
-  }
-  return capRelays(reads);
-}
 
 /**
  * Invite actions for one community (CORD-05) — public links + direct handoffs:
@@ -415,14 +382,18 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       const seal = await sealDirectInvite(rumor, recipientPubkey, user.signer);
       const wrap = wrapDirectInvite(seal, recipientPubkey, { expiresAtMs });
 
-      // Deliver to the recipient's giftwrap inbox — their 10050 DM relays,
-      // else NIP-65 read relays — plus the app relays as the shared floor
-      // (every Armada client's invite scan reads them).
+      // Deliver to the recipient's giftwrap inbox (their 10050 DM relays, else
+      // NIP-65 reads), or the stock interop floor when they've published
+      // neither — the same set their own scanner resolves (CORD-05 §6).
       const inbox = await recipientInboxRelays(nostr, recipientPubkey);
-      const results = await Promise.allSettled([
-        nostr.event(wrap, { signal: AbortSignal.timeout(8000) }),
-        ...inbox.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-      ]);
+      // A FAILED inbox lookup is not "no list": falling back to stock here would
+      // silently misdeliver a list-having recipient's invite (and report
+      // success). Fail loudly so the user retries once the network settles.
+      if (inbox === null) throw new Error("Couldn't reach the network to send the invite. Please try again.");
+      const relays = inviteDeliveryRelays(inbox);
+      const results = await Promise.allSettled(
+        relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+      );
       if (!results.some((r) => r.status === "fulfilled")) {
         throw new Error("No relay accepted the invite.");
       }
