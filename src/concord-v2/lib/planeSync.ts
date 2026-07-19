@@ -12,6 +12,24 @@
  *   issue-#19 since-skip).
  * - SINGLE-FLIGHT: overlapping sweeps of the same scope join the in-flight
  *   fetch instead of re-paying the full history.
+ *
+ * Two completeness modes, chosen per plane:
+ *
+ * - COMPLETE (Control): correctness-critical and compaction-bounded, so every
+ *   sweep re-fetches the WHOLE plane — no `since`, paging past the relay's
+ *   per-filter limit. A forward cursor here silently starves the fold: the
+ *   cursor key outlives a leave/ban/rejoin and the held-epoch set it was
+ *   minted under, so any edition below the high-water mark that was never
+ *   ingested (an unban published while the client was out, a compaction
+ *   re-wrap under a newly-held epoch) stays invisible forever — the client
+ *   then folds a STALE banlist/roster and mis-renders membership. Repeat
+ *   sweeps stay cheap: a session-scoped seen-wrap memo skips the re-decrypt,
+ *   and `onFresh` fires only for wraps new to this session.
+ * - FORWARD (Guestbook): append-mostly and unbounded, so it keeps the
+ *   persisted `since` cursor — but the cursor scope is keyed by the newest
+ *   held epoch, so an epoch advance (rejoin, rekey adoption) re-baselines
+ *   with one full backfill instead of trusting a cursor minted under a
+ *   different read scope.
  */
 
 import { controlGroups } from "@/concord-v2/lib/control";
@@ -81,30 +99,60 @@ export async function whenAuthSettled(url: string, groupsOf: () => GroupKey[]): 
 
 /** One community-plane on one relay: a filter + its persisted cursor. */
 export interface PlaneScope {
-  /** The persisted cursor scope key (shared by hooks and the global sweep). */
+  /** The scope key: single-flight identity, and (forward mode) the persisted cursor key. */
   scope: string;
   /** The stream keys whose addresses this plane's wraps are authored by. */
   groups: GroupKey[];
+  /**
+   * COMPLETE mode (see the module docstring): every sweep re-fetches the whole
+   * plane instead of trusting a forward cursor. Reserved for planes that are
+   * both correctness-critical and compaction-bounded (Control).
+   */
+  complete?: boolean;
   /** Called with this scope's decrypted events once they're committed. */
   onFresh?: (fresh: OpenedEvent[]) => void;
+  /**
+   * COMPLETE mode only: fired when the pager hit its budget and left older
+   * events unfetched this round. A Refounding must abort on this — compacting
+   * a truncated plane drops the unfetched entities from the new epoch.
+   */
+  onTruncated?: () => void;
 }
 
-/** One community's Control Plane on one relay. */
+/**
+ * One community's Control Plane on one relay. COMPLETE: the fold that hangs
+ * off this plane (roster, banlist, channels, registries) must never run on a
+ * silently-truncated edition set — see the module docstring.
+ */
 export function controlScope(
   community: CommunityV2,
   relayUrl: string,
   onFresh?: (fresh: OpenedEvent[]) => void,
 ): PlaneScope {
-  return { scope: `control:${community.idHex}|${relayUrl}`, groups: controlGroups(community), onFresh };
+  return {
+    scope: `control:${community.idHex}|${relayUrl}`,
+    groups: controlGroups(community),
+    complete: true,
+    onFresh,
+  };
 }
 
-/** One community's Guestbook Plane on one relay. */
+/**
+ * One community's Guestbook Plane on one relay. FORWARD-cursored, but the
+ * cursor scope is keyed by the newest held epoch: a rejoin or rekey adoption
+ * changes what the member can read, so the first sweep at the new epoch is a
+ * full backfill — a cursor minted under the old read scope must never gate it.
+ */
 export function guestbookScope(
   community: CommunityV2,
   relayUrl: string,
   onFresh?: (fresh: OpenedEvent[]) => void,
 ): PlaneScope {
-  return { scope: `guestbook:${community.idHex}|${relayUrl}`, groups: guestbookGroups(community), onFresh };
+  return {
+    scope: `guestbook:${community.idHex}@${community.rootEpoch}|${relayUrl}`,
+    groups: guestbookGroups(community),
+    onFresh,
+  };
 }
 
 /** Merge opened-event sets by rumor id (a partial round must not drop editions). */
@@ -130,21 +178,111 @@ export function openPlaneWraps(wraps: NostrEvent[], groups: GroupKey[]): OpenedE
   return out;
 }
 
+/** Paging knobs (test seam via {@link _configureSweepPagingForTests}). */
+const paging = {
+  /** Per-filter page size, shared by the batch REQ and the complete-mode pager. */
+  pageLimit: 500,
+  /** Complete-mode paging cap — far beyond any real (compacted) control plane. */
+  maxPages: 8,
+};
+
+/** Test seam: shrink the page size so the pager is exercisable with few events. */
+export function _configureSweepPagingForTests(cfg: Partial<typeof paging>): void {
+  Object.assign(paging, cfg);
+}
+
 /**
- * Run one relay's batch: one cursor-gated filter per scope, ONE query,
- * demuxed by wrap author. Retries once on failure (cursors stay put so the
- * next sweep re-asks). Not abortable by callers — the REQ is shared.
+ * Wrap ids a COMPLETE scope has already processed this session (decrypted or
+ * judged garbage). Full-plane sweeps re-receive the same wraps every round —
+ * the memo keeps repeat sweeps decrypt-free and `onFresh` quiet. Ids are
+ * global (a wrap id is content-addressed), so the same wrap arriving from a
+ * second relay is also deduped. Insertion-ordered, half-evicted at the cap.
+ */
+const seenCompleteWraps = new Set<string>();
+const SEEN_WRAPS_CAP = 16_384;
+
+function noteSeenWraps(ids: string[]): void {
+  for (const id of ids) seenCompleteWraps.add(id);
+  if (seenCompleteWraps.size > SEEN_WRAPS_CAP) {
+    let toDrop = seenCompleteWraps.size - SEEN_WRAPS_CAP / 2;
+    for (const id of seenCompleteWraps) {
+      if (toDrop-- <= 0) break;
+      seenCompleteWraps.delete(id);
+    }
+  }
+}
+
+/** Test seam: forget which wraps this session already processed. */
+export function _resetPlaneSweepMemoForTests(): void {
+  seenCompleteWraps.clear();
+}
+
+/**
+ * Scope keys whose most recent COMPLETE sweep left events behind (pager cap).
+ * Kept module-level so a caller that JOINED an in-flight sweep can still read
+ * the verdict after awaiting it — the joiner's own callbacks never fire.
+ */
+const truncatedScopes = new Set<string>();
+
+/** Whether any relay's last control sweep for this community was truncated. */
+export function controlSweepTruncated(community: CommunityV2): boolean {
+  return community.relays.some((url) => truncatedScopes.has(`control:${community.idHex}|${url}`));
+}
+
+/**
+ * Page a COMPLETE scope past the relay's per-filter limit: `until` the oldest
+ * wrap seen so far, until a short page says the relay is exhausted. `until` is
+ * inclusive, so pages overlap by design (dedupe by id) — the overlap is what
+ * steps over a same-second boundary instead of skipping it.
+ */
+async function fetchCompleteScope(
+  nostr: NostrLike,
+  url: string,
+  filter: NostrFilter,
+  first: NostrEvent[],
+  onTruncated?: () => void,
+): Promise<NostrEvent[]> {
+  const byId = new Map(first.map((e) => [e.id, e] as const));
+  let lastBatch = first;
+  for (let hops = 0; lastBatch.length >= paging.pageLimit; hops++) {
+    if (hops >= paging.maxPages) {
+      // No silent caps: a plane this deep exceeds the pager's budget.
+      logSync("sweep", `complete-scope pager hit ${paging.maxPages} pages on ${url} — older events left behind this round`);
+      onTruncated?.();
+      break;
+    }
+    const until = Math.min(...[...byId.values()].map((e) => e.created_at));
+    const older = await nostr.relay(url).query([{ ...filter, until }], {
+      signal: AbortSignal.timeout(15_000),
+    });
+    const fresh = older.filter((e) => !byId.has(e.id));
+    for (const e of fresh) byId.set(e.id, e);
+    // A full page of pure overlap is a same-second wall thicker than the
+    // limit — no `until` can get past it, so stop rather than spin.
+    if (fresh.length === 0) break;
+    lastBatch = older;
+  }
+  return [...byId.values()];
+}
+
+/**
+ * Run one relay's batch: one filter per scope (cursor-gated for forward
+ * scopes, whole-plane for complete ones), ONE query, demuxed by wrap author.
+ * Retries once on failure (cursors stay put so the next sweep re-asks). Not
+ * abortable by callers — the REQ is shared.
  */
 async function runScopes(
   nostr: NostrLike,
   url: string,
   scopes: PlaneScope[],
 ): Promise<Map<string, OpenedEvent[]>> {
-  const cursors = await Promise.all(scopes.map((s) => readStreamCursor(s.scope)));
+  const cursors = await Promise.all(
+    scopes.map((s) => (s.complete ? undefined : readStreamCursor(s.scope))),
+  );
   const filters: NostrFilter[] = scopes.map((s, i) => ({
     kinds: [KIND_WRAP],
     authors: s.groups.map((g) => g.pk),
-    limit: 500,
+    limit: paging.pageLimit,
     ...(cursors[i]?.newest ? { since: cursors[i]!.newest } : {}),
   }));
   const out = new Map<string, OpenedEvent[]>(scopes.map((s) => [s.scope, []]));
@@ -165,8 +303,28 @@ async function runScopes(
         if (i !== undefined) perScope[i].push(ev);
       }
 
-      // Decrypt everything, then ONE store write and parallel cursor advances.
-      const freshPerScope = scopes.map((s, i) => openPlaneWraps(perScope[i], s.groups));
+      // A complete scope whose first page filled up may have older history
+      // behind the limit — page it in before deciding what's fresh.
+      for (const [i, s] of scopes.entries()) {
+        if (!s.complete) continue;
+        truncatedScopes.delete(s.scope);
+        if (perScope[i].length >= paging.pageLimit) {
+          perScope[i] = await fetchCompleteScope(nostr, url, filters[i], perScope[i], () => {
+            truncatedScopes.add(s.scope);
+            s.onTruncated?.();
+          });
+        }
+      }
+
+      // Decrypt everything new, then ONE store write and parallel cursor
+      // advances. A complete scope narrows to wraps unseen this session; a
+      // forward scope's `since` already did that narrowing.
+      const freshPerScope = scopes.map((s, i) =>
+        openPlaneWraps(
+          s.complete ? perScope[i].filter((w) => !seenCompleteWraps.has(w.id)) : perScope[i],
+          s.groups,
+        ),
+      );
       const allFresh = freshPerScope.flat();
       if (allFresh.length > 0) await writeOpened(allFresh);
       await Promise.all(
@@ -174,8 +332,14 @@ async function runScopes(
           const mine = perScope[i];
           logSync(
             "sweep",
-            `${s.scope} → ${mine.length} event(s) in ${sinceMs(started)} (since=${cursors[i]?.newest ?? "∅"}, authors×${s.groups.length})`,
+            `${s.scope} → ${mine.length} event(s), ${freshPerScope[i].length} new in ${sinceMs(started)} (${s.complete ? "full" : `since=${cursors[i]?.newest ?? "∅"}`}, authors×${s.groups.length})`,
           );
+          if (s.complete) {
+            // Only the memo advances — every sweep re-asks for the whole
+            // plane, so nothing received can ever become unreachable.
+            noteSeenWraps(mine.map((w) => w.id));
+            return undefined;
+          }
           if (mine.length === 0) return undefined;
           return updateStreamCursor(s.scope, { newest: Math.max(...mine.map((e) => e.created_at)) });
         }),

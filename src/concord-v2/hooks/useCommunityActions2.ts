@@ -63,12 +63,22 @@ export class ControlUnreadableError extends Error {
  * unreachable, NOT "no ban" — refuse-and-retry rather than wave a banned user
  * through. The read is NIP-42 authenticated (the stock relays gate stream
  * reads), scoped to the community's control-group keys.
+ *
+ * ORDERING INVARIANT: this must fold the FRESH bundle entry, before any merge
+ * with a previously-held list entry. The fresh entry spans only the invite's
+ * epoch, so the fold is single-epoch and needs no snapshot attribution; a
+ * merged rejoin entry restores older roots and would need the full
+ * cross-epoch fold semantics (see headCandidates' `snapshot`).
  */
 export async function assertNotBanned(
   nostr: ReturnType<typeof useNostr>["nostr"],
   community: CommunityV2,
   pubkey: string,
 ): Promise<void> {
+  // Enforce the single-epoch invariant in code, not just prose: this fold omits
+  // snapshot attribution, so a merged multi-epoch entry could anchor on a stale
+  // old-epoch fragment and wave a banned rejoiner through. Fail closed.
+  if (community.heldRoots.length !== 1) throw new ControlUnreadableError();
   const groups = controlGroups(community);
   // Answer the relays' NIP-42 challenge with the control-group keys, else a
   // gated relay serves nothing and the ban goes unseen.

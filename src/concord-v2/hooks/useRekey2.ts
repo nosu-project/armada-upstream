@@ -6,6 +6,8 @@ import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/
 import { useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toJoinMaterial } from "@/concord-v2/lib/communityList";
+import { controlGroups, currentControlGroup, foldControlState, openControlEditions } from "@/concord-v2/lib/control";
+import { controlSweepTruncated, sweepControl } from "@/concord-v2/lib/planeSync";
 import { channelRekeyGroupKey, controlGroupKey, guestbookGroupKey } from "@/concord-v2/lib/derive";
 import {
   baseRekeyGroupKey,
@@ -659,12 +661,35 @@ export function useRefound2(community: CommunityV2 | undefined) {
       if (dissolved) throw new Error("This community was dissolved; no epoch advance past the tombstone is honored.");
       const nip44 = user.signer.nip44;
       if (!nip44) throw new Error("This signer can't rotate keys (NIP-44 unsupported).");
-      const folded = control.data;
-      // The Refounder must reliably fold the whole Control Plane before
-      // compacting, or the Refounding is aborted (CORD-06 §3).
-      if (!folded || control.isLoading || control.isFetching) {
+      const rendered = control.data;
+      if (!rendered || control.isLoading || control.isFetching) {
         throw new Error("Still syncing the community's control plane; try again shortly.");
       }
+
+      // Fold-all-or-abort (CORD-06 §3): the Refounder must compact a COMPLETE
+      // picture — one forced whole-plane sweep, then a verification fold
+      // floored at every head this client has accepted. An entity the relays
+      // no longer serve (or serve gapped) ABORTS the Refounding; otherwise it
+      // would be silently dropped from, or compacted stale into, the new epoch
+      // — for every member, forever.
+      try {
+        await sweepControl(nostr, community);
+      } catch {
+        throw new Error("Couldn't re-fetch the community's control plane; check your connection and try again.");
+      }
+      if (controlSweepTruncated(community)) {
+        throw new Error("The community's control plane is too deep to fetch fully right now; rotation aborted so nothing is lost.");
+      }
+      const stored = await queryByStreams(controlGroups(community).map((g) => g.pk));
+      const verifySnap =
+        community.rootEpoch > 0n
+          ? new Set(stored.filter((ev) => ev.streamPk === currentControlGroup(community).pk).map((ev) => ev.rumorId))
+          : undefined;
+      const folded = foldControlState(openControlEditions(stored), community.id, community.owner, rendered.heads, verifySnap);
+      if (folded.incomplete.length > 0) {
+        throw new Error("Part of the community's state isn't reachable right now; rotation aborted so nothing is lost.");
+      }
+
       const authorized = user.pubkey === folded.ownerHex || hasPermission(folded.roster, user.pubkey, Permissions.BAN);
       if (!authorized) throw new Error("You don't have permission to rotate this community's keys.");
 

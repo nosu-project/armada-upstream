@@ -903,6 +903,204 @@ describe("control plane fold (CORD-04)", () => {
     );
     expect(onlyDangling.metadata?.name).not.toBe("Hijacked");
   });
+
+  it("a rejoiner holding partial old roots folds the compacted snapshot, not the stale fragment (CORD-06 §3)", async () => {
+    // The chain's middle lives in an epoch the rejoiner never held: they kept
+    // epoch 0 (member then), missed epoch 1 (banned), rejoined at epoch 2. The
+    // compaction re-wrap is the only readable carrier of the current head.
+    const { owner, communityId, root, control } = await makeCommunity();
+    const target = signer();
+
+    // e0: v1 bans target (readable — the rejoiner held this root).
+    const b1 = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 1n });
+    const w1 = await sealEdition(b1, control, owner);
+    const p1 = openControlWraps([w1], [control])[0];
+
+    // e1 (never held): v2 churn, v3 unban.
+    const control1 = controlGroupKey(root, communityId, 1);
+    const b2 = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash });
+    const p2 = openControlWraps([await sealEdition(b2, control1, owner)], [control1])[0];
+    const b3 = buildBanlistEdition(communityId, [], { actorPubkey: owner.pubkey, version: 3n, prevHash: p2.selfHash });
+    const p3 = openControlWraps([await sealEdition(b3, control1, owner)], [control1])[0];
+
+    // e2 Refounding: compaction re-wraps the head (v3) under the new epoch.
+    const control2 = controlGroupKey(root, communityId, 2);
+    const rewrapped = rewrapSeal(p3.opened.seal, control2);
+
+    // The rejoiner's readable view: e0 fragment + e2 snapshot; e1 is dark.
+    const view = [...openControlWraps([w1], [control]), ...openControlWraps([rewrapped], [control2])];
+
+    // Without attribution the walk anchors on the old fragment: stale ban.
+    const unaware = foldControlState(view, communityId, owner.pubkey);
+    expect(unaware.banned.has(target.pubkey)).toBe(true);
+
+    // With the current-epoch snapshot anchoring the fold: the unban wins.
+    const snapshotIds = new Set([bytesToHex(p3.rumorId)]);
+    const aware = foldControlState(view, communityId, owner.pubkey, undefined, snapshotIds);
+    expect(aware.banned.has(target.pubkey)).toBe(false);
+    expect(aware.heads.get(bytesToHex(p3.entityId))?.version).toBe(3n);
+
+    // A hostile keyholder re-wraps the OLD banning edition into the current
+    // epoch to poison the subset. Version anchoring defeats it: a re-wrap
+    // can't raise the version inside the signed seal, so v1 loses to v3.
+    const poison = rewrapSeal(p1.opened.seal, control2);
+    const poisonedView = [...view, ...openControlWraps([poison], [control2])];
+    const poisonedSnap = new Set([bytesToHex(p3.rumorId), bytesToHex(p1.rumorId)]);
+    const resistant = foldControlState(poisonedView, communityId, owner.pubkey, undefined, poisonedSnap);
+    expect(resistant.banned.has(target.pubkey)).toBe(false);
+    expect(resistant.heads.get(bytesToHex(p3.entityId))?.version).toBe(3n);
+  });
+
+  it("a floor minted off a stale fragment can't wedge the arriving snapshot (version-only refuse-downgrade)", async () => {
+    // The rejoiner's FIRST fold runs before the compaction re-wrap arrives:
+    // the store seed serves only the old fragment, and its head raises the
+    // floor. The snapshot must still win on version when it lands.
+    const { owner, communityId, root, control } = await makeCommunity();
+    const target = signer();
+
+    const b1 = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 1n });
+    const w1 = await sealEdition(b1, control, owner);
+    const p1 = openControlWraps([w1], [control])[0];
+    const control1 = controlGroupKey(root, communityId, 1);
+    const b2 = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash });
+    const p2 = openControlWraps([await sealEdition(b2, control1, owner)], [control1])[0];
+    const b3 = buildBanlistEdition(communityId, [], { actorPubkey: owner.pubkey, version: 3n, prevHash: p2.selfHash });
+    const p3 = openControlWraps([await sealEdition(b3, control1, owner)], [control1])[0];
+    const control2 = controlGroupKey(root, communityId, 2);
+    const rewrapped = rewrapSeal(p3.opened.seal, control2);
+
+    // Fold 1: only the old fragment is readable; no current-epoch editions yet.
+    const first = foldControlState(
+      openControlWraps([w1], [control]),
+      communityId,
+      owner.pubkey,
+      undefined,
+      new Set<string>(),
+    );
+    expect(first.banned.has(target.pubkey)).toBe(true);
+
+    // Fold 2: the snapshot lands; fold with the stale floor fed back in.
+    const view = [...openControlWraps([w1], [control]), ...openControlWraps([rewrapped], [control2])];
+    const second = foldControlState(view, communityId, owner.pubkey, first.heads, new Set([bytesToHex(p3.rumorId)]));
+    expect(second.banned.has(target.pubkey)).toBe(false);
+    expect(second.incomplete).toEqual([]);
+  });
+
+  it("a poison-only subset can't outrank a higher head held in the client's own store", async () => {
+    // Colluding relays withhold the compacted head's re-wrap and serve only a
+    // keyholder's re-wrap of an old edition. An established member's store
+    // still holds the full chain — the higher version must win the bootstrap.
+    const { owner, communityId, root, control } = await makeCommunity();
+
+    const m1 = buildMetadataEdition(communityId, { name: "One", relays: [] }, { actorPubkey: owner.pubkey, version: 1n });
+    const p1 = openControlWraps([await sealEdition(m1, control, owner)], [control])[0];
+    const m2 = buildMetadataEdition(communityId, { name: "Two", relays: [] }, { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash });
+    const w2 = await sealEdition(m2, control, owner);
+    const control1 = controlGroupKey(root, communityId, 1);
+    const poison = rewrapSeal(p1.opened.seal, control1);
+
+    // View: the store's full e0 chain + the poison; only the poison is
+    // current-epoch-attributed.
+    const view = [
+      ...openControlWraps([await sealEdition(m1, control, owner), w2], [control]),
+      ...openControlWraps([poison], [control1]),
+    ];
+    const folded = foldControlState(view, communityId, owner.pubkey, undefined, new Set([bytesToHex(p1.rumorId)]));
+    expect(folded.metadata?.name).toBe("Two");
+  });
+
+  it("the snapshot arm still fails closed when the floored head vanishes, and never downgrades below the floor", async () => {
+    const { owner, communityId, root, control } = await makeCommunity();
+
+    // e0 chain v1→v2, refounded into e1 carrying the v2 head.
+    const m1 = buildMetadataEdition(communityId, { name: "One", relays: [] }, { actorPubkey: owner.pubkey, version: 1n });
+    const p1 = openControlWraps([await sealEdition(m1, control, owner)], [control])[0];
+    const m2 = buildMetadataEdition(communityId, { name: "Two", relays: [] }, { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash });
+    const p2 = openControlWraps([await sealEdition(m2, control, owner)], [control])[0];
+    const control1 = controlGroupKey(root, communityId, 1);
+    const rewrapV2 = rewrapSeal(p2.opened.seal, control1);
+    const snapView = openControlWraps([rewrapV2], [control1]);
+    const tracked = foldControlState(snapView, communityId, owner.pubkey, undefined, new Set([bytesToHex(p2.rumorId)]));
+    expect(tracked.metadata?.name).toBe("Two");
+
+    // The relay then serves only a re-wrap of the OLD v1: nothing at/above the
+    // floor remains — the entity holds (no downgrade) and flags incomplete.
+    const rewrapV1 = rewrapSeal(p1.opened.seal, control1);
+    const starved = foldControlState(
+      openControlWraps([rewrapV1], [control1]),
+      communityId,
+      owner.pubkey,
+      tracked.heads,
+      new Set([bytesToHex(p1.rumorId)]),
+    );
+    expect(starved.metadata?.name).not.toBe("Two"); // v2 wasn't served; v1 is below the floor
+    expect(starved.incomplete).toContain(bytesToHex(communityId));
+  });
+
+  it("incomplete excludes a floored entity that was served but authority-rejected (CORD-04 §4)", async () => {
+    // The strip flow: a creator's registry legitimately vanishes from the fold
+    // when their grant is revoked. That absence is deliberate, not data loss —
+    // it must NOT read as incomplete, or the ban→refound flow false-aborts.
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const adm = adminRole(bytesToHex(random32()));
+
+    const authorityWraps = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    const grantEid = grantLocator(communityId, hex32(admin.pubkey));
+    const grantHead = foldControlState(openControlWraps(authorityWraps, [control]), communityId, owner.pubkey)
+      .heads.get(bytesToHex(grantEid))!;
+    const registryWrap = await sealEdition(
+      buildRegistryEdition(communityId, admin.pubkey, [bytesToHex(random32())], {
+        actorPubkey: admin.pubkey,
+        version: 1n,
+        authority: { entityId: grantEid, version: grantHead.version, editionHash: grantHead.hash },
+      }),
+      control,
+      admin,
+    );
+    const first = foldControlState(openControlWraps([...authorityWraps, registryWrap], [control]), communityId, owner.pubkey);
+    expect(first.registriesByCreator.has(admin.pubkey)).toBe(true);
+
+    // The owner strips the admin, then the refound-gate fold re-runs with the
+    // pre-strip heads as its floor. Everything is served; the registry is
+    // rejected on authority alone — the gate must see a complete plane.
+    const strip = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [] }, { actorPubkey: owner.pubkey, version: 2n, prevHash: grantHead.hash }),
+      control,
+      owner,
+    );
+    const folded = foldControlState(
+      openControlWraps([...authorityWraps, registryWrap, strip], [control]),
+      communityId,
+      owner.pubkey,
+      first.heads,
+    );
+    expect(folded.registriesByCreator.has(admin.pubkey)).toBe(false);
+    expect(folded.incomplete).toEqual([]);
+  });
+
+  it("incomplete flags a floored entity the served set can't settle (the refound gate)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const m1 = buildMetadataEdition(communityId, { name: "Real", relays: [] }, { actorPubkey: owner.pubkey, version: 1n });
+    const w1 = await sealEdition(m1, control, owner);
+    const first = foldControlState(openControlWraps([w1], [control]), communityId, owner.pubkey);
+    expect(first.incomplete).toEqual([]);
+
+    // The floored entity's editions vanish from the served set entirely.
+    const starved = foldControlState([], communityId, owner.pubkey, first.heads);
+    expect(starved.incomplete).toContain(bytesToHex(communityId));
+
+    // Served complete again: the flag clears.
+    const healed = foldControlState(openControlWraps([w1], [control]), communityId, owner.pubkey, first.heads);
+    expect(healed.incomplete).toEqual([]);
+  });
 });
 
 describe("dissolution (CORD-02 §9)", () => {

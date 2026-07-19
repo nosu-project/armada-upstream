@@ -140,10 +140,14 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
   // accepted for each entity, monotonic and never lowered. Feeding it back into
   // the fold makes a tracking client fail closed on a withheld-middle chain —
   // a hostile relay serving only a higher DANGLING edition can't downgrade an
-  // entity we already advanced past. Keyed per community; reset on switch.
-  const floorRef = useRef<{ idHex: string; heads: Map<string, EntityHead> }>({ idHex: "", heads: new Map() });
-  if (community && floorRef.current.idHex !== community.idHex) {
-    floorRef.current = { idHex: community.idHex, heads: new Map() };
+  // entity we already advanced past. EPOCH-primary: a floor from a superseded
+  // founding must not out-anchor the new epoch's compacted snapshot, so
+  // adopting a rekey (itself continuity-gated) re-baselines the floor — the
+  // within-epoch withholding defense is untouched.
+  const floorKey = community ? `${community.idHex}@${community.rootEpoch}` : "";
+  const floorRef = useRef<{ key: string; heads: Map<string, EntityHead> }>({ key: "", heads: new Map() });
+  if (community && floorRef.current.key !== floorKey) {
+    floorRef.current = { key: floorKey, heads: new Map() };
   }
 
   const data = useDeferredFold<FoldedControl>(
@@ -151,7 +155,16 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
     () => {
       if (!community || !events) return undefined;
       const editions = openControlEditions(events);
-      const folded = foldControlState(editions, community.id, community.owner, floorRef.current.heads);
+      // Once the community has Refounded, editions under the CURRENT epoch's
+      // control group fold by version-anchored bootstrap (the compaction
+      // snapshot outranks old-root fragments — see headCandidates). A
+      // never-rotated community keeps full chain-contiguity semantics.
+      const curPk = currentControlGroup(community).pk;
+      const snapshotIds =
+        community.rootEpoch > 0n
+          ? new Set(events.filter((ev) => ev.streamPk === curPk).map((ev) => ev.rumorId))
+          : undefined;
+      const folded = foldControlState(editions, community.id, community.owner, floorRef.current.heads, snapshotIds);
       // Raise the high-water floor from this fold's accepted heads (upward only).
       for (const [eid, head] of folded.heads) {
         const prior = floorRef.current.heads.get(eid);
