@@ -767,6 +767,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
             "data-active": active || undefined,
             "data-event-id": event.id,
           } as React.HTMLAttributes<HTMLDivElement>}
+          onSwipeReply={isTouch && onReply ? () => onReply(event) : undefined}
         >
           {body}
         </MessageRow>
