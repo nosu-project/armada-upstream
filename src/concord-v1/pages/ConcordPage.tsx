@@ -496,6 +496,7 @@ export function ConcordPage() {
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
+  const [threadExpanded, setThreadExpanded] = useState(false);
   // Close the thread panel when the channel or community changes. The scope
   // key includes `communityId` because the page is reused across concord
   // switches (no route `key`), and `currentChannelIdHex` alone can lag during
@@ -991,7 +992,11 @@ export function ConcordPage() {
         >
         <div className="relative flex flex-1 min-h-0">
           <ComposerBoundsProvider value={composerBoundsRef}>
-          <div className="flex-1 min-w-0 flex flex-col">
+          <div className={cn(
+            "flex-1 min-w-0 flex flex-col",
+            "sidebar:transition-[width,opacity] sidebar:duration-300 sidebar:ease-out",
+            threadRoot && threadExpanded && "sidebar:flex-none sidebar:w-0 sidebar:opacity-0 sidebar:overflow-hidden sidebar:pointer-events-none",
+          )}>
             <MessageTimeline
               key={channel ? bytesToHex(channel.id) : "none"}
               transport={transport}
@@ -1061,8 +1066,10 @@ export function ConcordPage() {
             className={cn(
               "overflow-hidden",
               "absolute inset-0 z-20 sidebar:static sidebar:z-auto",
-              "sidebar:shrink-0 sidebar:w-0 sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
-              threadRoot ? "sidebar:w-[23rem]" : "pointer-events-none sidebar:pointer-events-auto",
+              "sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
+              threadRoot
+                ? (threadExpanded ? "sidebar:flex-1 sidebar:w-full" : "sidebar:shrink-0 sidebar:w-[23rem]")
+                : "sidebar:shrink-0 sidebar:w-0 pointer-events-none sidebar:pointer-events-auto",
             )}
           >
             <div
@@ -1073,8 +1080,9 @@ export function ConcordPage() {
             />
             <div
               className={cn(
-                "relative h-full flex w-full sidebar:w-[23rem] transition-transform duration-200 ease-out",
+                "relative h-full flex w-full transition-transform duration-200 ease-out",
                 threadRoot ? "translate-x-0" : "translate-x-full",
+                threadExpanded ? "sidebar:w-full" : "sidebar:w-[23rem]",
               )}
             >
               {lastThreadRoot && (
@@ -1088,7 +1096,8 @@ export function ConcordPage() {
                   botCommands
                   conversationRelays={community?.relays}
                   autoFocus={threadAutoFocus}
-                  onClose={() => setThreadRoot(undefined)}
+                  onClose={() => { setThreadRoot(undefined); setThreadExpanded(false); }}
+                  onExpandChange={setThreadExpanded}
                 />
               )}
             </div>

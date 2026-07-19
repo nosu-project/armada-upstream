@@ -124,8 +124,16 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
     return list;
   }, [hasLightning, lightningTarget, genericTargets]);
 
+  // Determine the default method: user preference, unless that method is
+  // unavailable or unsupported, in which case fall back to the other.
+  const configDefault = config.defaultZapMethod;
+  const availableMethodIds = new Set(methods.map((m) => m.id));
   const defaultMethodId: DialogMethodId =
-    bitcoinUnsupported && (hasLightning || lightningTarget) ? "lightning" : "bitcoin";
+    availableMethodIds.has(configDefault as DialogMethodId) && !(configDefault === "bitcoin" && bitcoinUnsupported)
+      ? (configDefault as DialogMethodId)
+      : bitcoinUnsupported && (hasLightning || lightningTarget)
+        ? "lightning"
+        : "bitcoin";
   const [activeMethod, setActiveMethod] = useState<DialogMethodId>(defaultMethodId);
   const currentMethod = methods.find((m) => m.id === activeMethod) ?? methods[0];
 

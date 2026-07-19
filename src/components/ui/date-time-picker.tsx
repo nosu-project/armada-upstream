@@ -217,7 +217,7 @@ function PickerOverlay({
             variant="ghost"
             size="icon"
             aria-label="Back"
-            className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
+            className="size-7 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
             onClick={commitAndClose}
           >
             <ArrowLeft className="size-4" />

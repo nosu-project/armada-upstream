@@ -192,6 +192,11 @@ export interface AppConfig {
    */
   defaultZapAmount: number;
   /**
+   * Default payment method for zaps: 'lightning' or 'bitcoin'. When both are
+   * available, the zap dialog opens to this method. Synced across devices.
+   */
+  defaultZapMethod: 'lightning' | 'bitcoin';
+  /**
    * Whether zap/wallet/financial features are enabled in the UI. When off,
    * all zap buttons, the wallet dialog, and the wallet settings section are
    * hidden. Synced across devices so a deployment-wide preference propagates.
@@ -231,6 +236,7 @@ export const SYNCED_CONFIG_KEYS = [
   "notifLevels",
   "dmProtocol",
   "defaultZapAmount",
+  "defaultZapMethod",
   "zapsEnabled",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
@@ -257,6 +263,7 @@ export const defaultConfig: AppConfig = {
   meshIncognito: true,
   meshEnabled: false,
   defaultZapAmount: 100,
+  defaultZapMethod: "lightning",
   zapsEnabled: true,
 };
 

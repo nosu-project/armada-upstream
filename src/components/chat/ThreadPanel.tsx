@@ -1,6 +1,6 @@
-import { Braces, Copy, Link2, Loader2, MessagesSquare, Trash2, X, Zap } from "lucide-react";
+import { Braces, ChevronDown, Copy, Link2, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
@@ -64,6 +64,10 @@ function ThreadMessage({
   isRumor = false,
   continuation = false,
   onDelete,
+  isEditing = false,
+  onEdit,
+  onEditSubmit,
+  onEditCancel,
 }: {
   event: ChatMsg;
   reactions?: MessageReactions;
@@ -91,6 +95,14 @@ function ThreadMessage({
   continuation?: boolean;
   /** Delete this message (own always; others' require moderation). Hidden when absent. */
   onDelete?: (event: ChatMsg) => void;
+  /** Whether this message is currently in edit mode. */
+  isEditing?: boolean;
+  /** Begin editing this message (own messages only). */
+  onEdit?: (event: ChatMsg) => void;
+  /** Submit an inline edit. */
+  onEditSubmit?: (event: ChatMsg, content: string) => void;
+  /** Cancel editing. */
+  onEditCancel?: () => void;
 }) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
@@ -111,6 +123,14 @@ function ThreadMessage({
   // (mirrors ChatMessage's gating). The transport decides how.
   const isOwn = user?.pubkey === event.pubkey;
   const canDelete = Boolean(onDelete) && (isOwn || canModerate);
+  // Own messages are editable when the transport supports it. The transport
+  // only provides editMessage for kinds it can edit, so no kind check needed.
+  const canEdit = isOwn && Boolean(onEdit);
+  const [editText, setEditText] = useState(event.content);
+  // Sync edit text when entering edit mode (content may have changed).
+  useEffect(() => {
+    if (isEditing) setEditText(event.content);
+  }, [isEditing, event.content]);
   // Zap gating mirrors ChatMessage: shown on others' messages when the surface
   // supports zaps; disabled once the author's profile loads with no lightning
   // address.
@@ -154,7 +174,41 @@ function ThreadMessage({
                 </span>
               </div>
             )}
-            <ChatContent event={event} className="text-[15px]" />
+            {isEditing ? (
+              <div className="mt-0.5">
+                <textarea
+                  autoFocus
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      onEditSubmit?.(event, editText);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      onEditCancel?.();
+                    }
+                  }}
+                  rows={Math.min(6, Math.max(1, editText.split("\n").length))}
+                  className="w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+                <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-muted-foreground">
+                  <button
+                    type="button"
+                    className="font-semibold text-primary hover:underline touch:py-2"
+                    onClick={() => onEditSubmit?.(event, editText)}
+                  >
+                    Save
+                  </button>
+                  <button type="button" className="hover:text-foreground touch:py-2" onClick={() => onEditCancel?.()}>
+                    Cancel
+                  </button>
+                  <span className="opacity-70">escape to cancel · enter to save</span>
+                </div>
+              </div>
+            ) : (
+              <ChatContent event={event} className="text-[15px]" />
+            )}
             {((zaps && zaps.tally.count > 0) || (reactions && reactions.tallies.length > 0)) && (
               <ReactionBar
                 tallies={reactions?.tallies ?? []}
@@ -172,13 +226,18 @@ function ThreadMessage({
               />
             )}
           </div>
-          {(canReact && reactions) || canZap ? (
+          {(canReact && reactions && !isEditing) || (canZap && !isEditing) || (canEdit && !isEditing) ? (
             // Hover-revealed on desktop. On touch there's no hover, so the
             // buttons sit statically at the row's end instead — the long-press
             // menu alone would leave reacting undiscoverable.
             <div className="absolute right-1.5 top-1 flex items-center opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity touch:static touch:opacity-100 touch:shrink-0">
-              {canReact && reactions && <ReactionPicker onReact={reactions.react} />}
-              {canZap && <ZapButton disabled={zapDisabled} onOpen={() => setZapOpen(true)} />}
+              {canEdit && !isEditing && (
+                <button type="button" className="rounded-md p-1.5 touch:p-2.5 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors" onClick={() => onEdit?.(event)} aria-label="Edit message">
+                  <Pencil className="size-4" />
+                </button>
+              )}
+              {canReact && reactions && !isEditing && <ReactionPicker onReact={reactions.react} />}
+              {canZap && !isEditing && <ZapButton disabled={zapDisabled} onOpen={() => setZapOpen(true)} />}
             </div>
           ) : null}
         </div>
@@ -230,6 +289,14 @@ function ThreadMessage({
               onSelect={() => onDelete?.(event)}
             >
               <Trash2 className="mr-2 size-4" /> Delete message
+            </ContextMenuItem>
+          </>
+        )}
+        {canEdit && !isEditing && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={() => onEdit?.(event)}>
+              <Pencil className="mr-2 size-4" /> Edit message
             </ContextMenuItem>
           </>
         )}
@@ -293,6 +360,8 @@ interface ThreadPanelProps {
   /** Focus the reply input on open (e.g. when launched via /thread). */
   autoFocus?: boolean;
   onClose: () => void;
+  /** Called when the expand/collapse state changes. Parent uses this to resize the container. */
+  onExpandChange?: (expanded: boolean) => void;
 }
 
 /**
@@ -303,7 +372,7 @@ interface ThreadPanelProps {
  * via the {@link ChatTransport} (`threadRepliesFor`/`sendThreadReply`), so
  * replies never appear in the main timeline (they're nested here instead).
  */
-export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, onClose }: ThreadPanelProps) {
+export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, onClose, onExpandChange }: ThreadPanelProps) {
   const replies = transport.threadRepliesFor?.(root.id) ?? [];
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   const { config } = useAppContext();
@@ -315,11 +384,55 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   const isRumor = transport.isRumor ?? false;
   const canModerate = transport.canModerate;
   const onDelete = transport.deleteMessage;
+  const editMessage = transport.editMessage;
   const composerBoundsRef = useRef<HTMLElement | null>(null);
+
+  const [editingId, setEditingId] = useState<string | undefined>(undefined);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  // Notify parent when expand state changes so it can resize the container.
+  useEffect(() => {
+    onExpandChange?.(isExpanded);
+  }, [isExpanded, onExpandChange]);
+
+  const handleEditSubmit = (original: ChatMsg, content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed || trimmed === original.content.trim()) {
+      setEditingId(undefined);
+      return;
+    }
+    setEditingId(undefined);
+    void editMessage?.(original, trimmed);
+  };
+
+  // --- Auto-scroll + jump-to-latest ---
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    setShowJumpToLatest(false);
+  }, []);
+
+  // Auto-scroll to bottom when the thread opens (root changes) or replies arrive.
+  useEffect(() => {
+    scrollToBottom();
+  }, [root.id, replies.length, scrollToBottom]);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowJumpToLatest(distanceFromBottom > 120);
+  }, []);
 
   return (
     <ComposerBoundsProvider value={composerBoundsRef}>
-    <aside className="flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome">
+    <aside className={cn(
+      "flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome",
+    )}>
       <div className="flex items-center justify-between px-2 py-1 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <MessagesSquare className="size-4 text-muted-foreground shrink-0" />
@@ -327,19 +440,24 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
             Thread{replies.length > 0 ? ` · ${replies.length}` : ""}
           </h3>
         </div>
-        <Button variant="ghost" size="icon" aria-label="Close thread" className="size-6 touch:size-10" onClick={onClose}>
-          <X className="size-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" aria-label={isExpanded ? "Collapse thread" : "Expand thread"} className="size-6 touch:size-10 hidden md:inline-flex" onClick={() => setIsExpanded(v => !v)}>
+            {isExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+          </Button>
+          <Button variant="ghost" size="icon" aria-label="Close thread" className="size-6 touch:size-10" onClick={onClose}>
+            <X className="size-4" />
+          </Button>
+        </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable space-y-1">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable space-y-1 relative">
         {isTombstoneRoot(root) ? (
           <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground/70">
             <MessagesSquare className="size-4 shrink-0" />
             <span className="italic">Original message not loaded — it may be older than the channel window.</span>
           </div>
         ) : (
-          <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} />
+          <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} isEditing={editingId === root.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
         )}
         <div className="flex items-center gap-2 px-3 py-1">
           <div className="h-px flex-1 bg-border/60" />
@@ -367,9 +485,22 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
               prev.pubkey === reply.pubkey &&
               reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
             return (
-              <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} />
+              <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
             );
           })
+        )}
+        {showJumpToLatest && (
+          <div className="sticky bottom-3 z-10 h-0 flex justify-center items-end pointer-events-none">
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-secondary/90 backdrop-blur px-4 py-2 text-xs font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
+              aria-label="Jump to latest replies"
+            >
+              <ChevronDown className="size-4" />
+              Jump to latest
+            </button>
+          </div>
         )}
       </div>
 

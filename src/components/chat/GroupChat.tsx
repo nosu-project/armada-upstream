@@ -306,6 +306,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     tallyIds,
   );
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
+  const [threadExpanded, setThreadExpanded] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<NostrEvent | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
@@ -532,7 +533,11 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   return (
     <div className="relative flex flex-1 min-h-0 min-w-0">
       <ComposerBoundsProvider value={composerBoundsRef}>
-      <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
+      <div className={cn(
+        "relative flex flex-col flex-1 min-h-0 min-w-0",
+        "sidebar:transition-[width,opacity] sidebar:duration-300 sidebar:ease-out",
+        threadRoot && threadExpanded && "sidebar:flex-none sidebar:w-0 sidebar:opacity-0 sidebar:overflow-hidden sidebar:pointer-events-none",
+      )}>
         {/* Search results replace the timeline in-place when searching. */}
         {searching ? (
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4">
@@ -671,8 +676,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
         className={cn(
           "overflow-hidden",
           "absolute inset-0 z-20 sidebar:static sidebar:z-auto",
-          "sidebar:shrink-0 sidebar:w-0 sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
-          threadRoot ? "sidebar:w-[23rem]" : "pointer-events-none sidebar:pointer-events-auto",
+          "sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
+          threadRoot
+            ? (threadExpanded ? "sidebar:flex-1 sidebar:w-full" : "sidebar:shrink-0 sidebar:w-[23rem]")
+            : "sidebar:shrink-0 sidebar:w-0 pointer-events-none sidebar:pointer-events-auto",
         )}
       >
         <div
@@ -683,8 +690,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
         />
         <div
           className={cn(
-            "relative h-full flex w-full sidebar:w-[23rem] transition-transform duration-200 ease-out",
+            "relative h-full flex w-full transition-transform duration-200 ease-out",
             threadRoot ? "translate-x-0" : "translate-x-full",
+            threadExpanded ? "sidebar:w-full" : "sidebar:w-[23rem]",
           )}
         >
           {lastThreadRoot && (
@@ -696,7 +704,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
               canWrite={Boolean(user && canWrite)}
               botCommands
               autoFocus={threadAutoFocus}
-              onClose={() => setThreadRoot(undefined)}
+              onClose={() => { setThreadRoot(undefined); setThreadExpanded(false); }}
+              onExpandChange={setThreadExpanded}
             />
           )}
         </div>
