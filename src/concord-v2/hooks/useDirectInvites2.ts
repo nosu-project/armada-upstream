@@ -17,6 +17,7 @@ import {
   writeStoredInvites,
 } from "@/concord-v2/lib/inviteInbox";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
+import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord-v2/lib/inviteRelays";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { useDecryptConsent } from "@/hooks/useDecryptConsent";
@@ -106,9 +107,29 @@ export function useDirectInvites2() {
         limit: 200,
       };
       if (since > 0) filter.since = since;
-      const wraps = (await nostr.query([filter], {
-        signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-      })) as NostrEvent[];
+      // Scan exactly where senders deliver (CORD-05 §6): my own published inbox,
+      // or the stock interop floor when I've published none — the same set the
+      // sender resolves for me. A listless member is otherwise unreachable by a
+      // sender who doesn't share their app-relay defaults (e.g. another client).
+      const myInbox = await recipientInboxRelays(nostr, pubkey);
+      let wraps: NostrEvent[] = [];
+      // A FAILED lookup of my OWN inbox is not "no list": scanning stock on
+      // uncertainty would leak my `#p` REQ to the public stock relays. Skip the
+      // network fetch this round (parked invites still render below); the poll
+      // retries once the lookup succeeds.
+      if (myInbox !== null) {
+        const scanRelays = inviteDeliveryRelays(myInbox);
+        const perRelay = await Promise.all(
+          scanRelays.map((url) =>
+            nostr
+              .relay(url)
+              .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) })
+              .catch(() => [] as NostrEvent[]),
+          ),
+        );
+        const seenWrap = new Set<string>();
+        wraps = perRelay.flat().filter((e) => (seenWrap.has(e.id) ? false : seenWrap.add(e.id)));
+      }
 
       if (wraps.length > 0) {
         const stored = new Set((await queryStoredInvites({ signal })).map((i) => i.wrapId));
