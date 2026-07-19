@@ -27,6 +27,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import { mintCommunity } from "@/concord-v2/lib/community";
+import { adminRole } from "@/concord-v2/lib/roles";
 import {
   baseRekeyGroupKey,
   bytesToHex,
@@ -201,11 +202,18 @@ async function rotationWraps(
   return wraps;
 }
 
-function foldedFor(ownerPk: string, icon?: InviteBundle["icon"]) {
+function foldedFor(ownerPk: string, icon?: InviteBundle["icon"], creatorPk?: string) {
+  // Optionally grant a non-owner CREATE_INVITE (an admin role), so a link
+  // creator's own bundle refresh is authorized — the honest-client gate on
+  // useLinkRefreshWatch2 requires positive authority, not mere link possession.
+  const roleId = "aa".repeat(32);
+  const roster = creatorPk
+    ? { roles: [adminRole(roleId)], grants: [{ member: creatorPk, roleIds: [roleId] }] }
+    : { roles: [], grants: [] };
   return {
     ownerHex: ownerPk,
     banned: new Set<string>(),
-    roster: { roles: [], grants: [] },
+    roster,
     metadata: { name: "Fleet", relays: [], ...(icon ? { icon } : {}) },
     headEditions: new Map(),
   } as unknown;
@@ -427,7 +435,7 @@ describe("useLinkRefreshWatch2", () => {
           filters.some((f) => f.kinds?.includes(KIND_INVITE_LIST)) ? [listEvent] : [],
       };
       h.user = asNUser(me);
-      h.folded = foldedFor(owner.pubkey);
+      h.folded = foldedFor(owner.pubkey, undefined, me.pubkey); // me holds CREATE_INVITE
 
       const { wrapper } = makeWrapper();
       renderHook(() => useLinkRefreshWatch2(community), { wrapper });

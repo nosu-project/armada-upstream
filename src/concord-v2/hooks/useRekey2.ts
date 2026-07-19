@@ -385,6 +385,11 @@ export function useLinkRefreshWatch2(community: CommunityV2 | undefined): void {
 
   useEffect(() => {
     if (!community || !user?.signer.nip44 || !folded) return;
+    // Only an authorized creator may re-post bundles: a stripped creator's
+    // refresh would resurrect a link the authority watcher is retiring (the
+    // registry already ignores them, but the bundle coordinate is theirs
+    // alone). Skipping on a partial fold is safe — a refresh is never owed.
+    if (user.pubkey !== folded.ownerHex && !hasPermission(folded.roster, user.pubkey, Permissions.CREATE_INVITE)) return;
     const key = `${community.idHex}:${community.rootEpoch}:${community.relays.join(",")}`;
     if (refreshed.current.has(key)) return;
 
@@ -643,6 +648,12 @@ export function useRefound2(community: CommunityV2 | undefined) {
   const queryClient = useQueryClient();
 
   const refound = useMutation<void, Error, { keep: string[]; exclude: string[] }>({
+    // A rotation is community-global: serialize every refound for this
+    // community (a user-initiated ban racing the durable retry must queue,
+    // not mint sibling epochs), and give the key a name the retry hook can
+    // watch via useIsMutating.
+    mutationKey: ["concord2-refound", community?.idHex],
+    scope: { id: `concord2-refound:${community?.idHex}` },
     mutationFn: async ({ keep, exclude }) => {
       if (!user || !community) throw new Error("Not ready.");
       if (dissolved) throw new Error("This community was dissolved; no epoch advance past the tombstone is honored.");
@@ -656,6 +667,14 @@ export function useRefound2(community: CommunityV2 | undefined) {
       }
       const authorized = user.pubkey === folded.ownerHex || hasPermission(folded.roster, user.pubkey, Permissions.BAN);
       if (!authorized) throw new Error("You don't have permission to rotate this community's keys.");
+
+      // Freshness guard: if the list entry has advanced past the epoch this
+      // call captured (a prior rotation landed first), abort rather than mint a
+      // sibling epoch off a stale root — the caller re-issues from the current
+      // community. Serialization makes this the only residual concurrent case.
+      if (entry && BigInt(entry.current.root_epoch) !== community.rootEpoch) {
+        throw new Error("The community rotated since this action began; reopen it and try again.");
+      }
 
       const excluded = new Set(exclude);
       const recipients = [...new Set([user.pubkey, ...keep])].filter((pk) => !excluded.has(pk));

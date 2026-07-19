@@ -10,12 +10,14 @@ import {
   buildRegistryEdition,
   buildRoleEdition,
   foldControlState,
+  hasForeignLiveLinks,
+  isCommunityPublic,
   isDissolved,
   openControlWraps,
   sealDissolved,
   sealEdition,
 } from "@/concord-v2/lib/control";
-import { bytesToHex, communityIdOf, controlGroupKey, hex32, random32, type GroupKey } from "@/concord-v2/lib/derive";
+import { bytesToHex, communityIdOf, controlGroupKey, grantLocator, hex32, random32, type GroupKey } from "@/concord-v2/lib/derive";
 import { rewrapSeal, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { adminRole, badgeOf, hasPermission, isAdmin, moderatorRole, Permissions, type Role } from "@/concord-v2/lib/roles";
@@ -757,6 +759,87 @@ describe("control plane fold (CORD-04)", () => {
     const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
     expect(folded.liveInviteLinks.has(linkSigner)).toBe(true);
     expect(folded.liveInviteLinks.has("ff".repeat(32))).toBe(false);
+  });
+
+  it("a banned creator's registry drops from the aggregate: the ban itself can flip the mode Private (CORD-05 §5)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const adm = adminRole(bytesToHex(random32()));
+    const linkSigner = bytesToHex(random32());
+
+    const authorityWraps = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    // A non-owner edition must cite its own grant (vac), so fold for the head first.
+    const grantEid = grantLocator(communityId, hex32(admin.pubkey));
+    const grantHead = foldControlState(openControlWraps(authorityWraps, [control]), communityId, owner.pubkey)
+      .heads.get(bytesToHex(grantEid))!;
+    const preBan = [
+      ...authorityWraps,
+      await sealEdition(
+        buildRegistryEdition(communityId, admin.pubkey, [linkSigner], {
+          actorPubkey: admin.pubkey,
+          version: 1n,
+          authority: { entityId: grantEid, version: grantHead.version, editionHash: grantHead.hash },
+        }),
+        control,
+        admin,
+      ),
+    ];
+    const before = foldControlState(openControlWraps(preBan, [control]), communityId, owner.pubkey);
+    expect(before.liveInviteLinks.has(linkSigner)).toBe(true);
+    expect(isCommunityPublic(before)).toBe(true);
+    // The ban gate's view: judged as if the target's registry were already gone.
+    expect(isCommunityPublic(before, admin.pubkey)).toBe(false);
+
+    const wraps = [
+      ...preBan,
+      await sealEdition(buildBanlistEdition(communityId, [admin.pubkey], { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+    ];
+    const after = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(after.liveInviteLinks.has(linkSigner)).toBe(false);
+    expect(isCommunityPublic(after)).toBe(false);
+  });
+
+  it("isCommunityPublic: no registries and an emptied registry both read Private", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    expect(isCommunityPublic(foldControlState([], communityId, owner.pubkey))).toBe(false);
+
+    const emptied = await sealEdition(
+      buildRegistryEdition(communityId, owner.pubkey, [], { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const folded = foldControlState(openControlWraps([emptied], [control]), communityId, owner.pubkey);
+    expect(isCommunityPublic(folded)).toBe(false);
+  });
+
+  it("hasForeignLiveLinks: own links never block a rotation, anyone else's do", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const wraps = [
+      await sealEdition(
+        buildRegistryEdition(communityId, owner.pubkey, [bytesToHex(random32())], { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+
+    // The community reads Public, but every live link is the owner's own —
+    // their rotation refreshes their own bundles, so nothing gets stranded.
+    expect(isCommunityPublic(folded)).toBe(true);
+    expect(hasForeignLiveLinks(folded, owner.pubkey)).toBe(false);
+
+    // Any other rotator would strand the owner's link.
+    const otherAdmin = bytesToHex(random32());
+    expect(hasForeignLiveLinks(folded, otherAdmin)).toBe(true);
+    // ...unless the link creator is the very target of the ban being judged.
+    expect(hasForeignLiveLinks(folded, otherAdmin, owner.pubkey)).toBe(false);
   });
 
   it("a compaction re-wrap folds for a fresh joiner despite the dangling prev", async () => {
