@@ -331,7 +331,7 @@ export function MessageTimeline({
                     `pointer-events-none` (taps fall through to that row); the
                     inner wrapper re-enables events for the row's own content,
                     including its toolbar. */}
-                <div className="pt-12 -mt-12 pointer-events-none" style={ROW_CONTAINMENT}>
+                <div className="pt-12 -mt-12 pointer-events-none hover:z-10 focus-within:z-10 relative" style={ROW_CONTAINMENT}>
                   <div className="pointer-events-auto">{renderMessage(msg, continuation)}</div>
                 </div>
               </Fragment>

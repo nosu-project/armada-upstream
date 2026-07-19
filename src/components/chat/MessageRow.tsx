@@ -133,7 +133,7 @@ export const MessageRow = memo(function MessageRow({
     <div
       {...containerProps}
       className={cn(
-        "group relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors",
+        "group relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
         continuation ? "py-0.5" : "py-1.5",
         className,
         containerProps?.className,

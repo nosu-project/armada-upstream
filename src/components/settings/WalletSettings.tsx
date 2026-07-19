@@ -1,6 +1,8 @@
 import { ArrowDown, ArrowUp, CheckCircle2, Circle, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useState } from "react";
 
+import { cn } from "@/lib/utils";
+
 import { nwcWalletPubkey } from "@/lib/walletStorage";
 import { DEFAULT_ESPLORA_APIS, readEsploraApis, writeEsploraApis } from "@/lib/esploraStorage";
 import { Button } from "@/components/ui/button";
@@ -195,6 +197,38 @@ export function WalletSettings() {
           }}
           className="w-28 text-right"
         />
+      </SettingsRow>
+
+      <SettingsRow
+        label="Default payment method"
+        description="Which payment method to show first in the zap dialog when both are available."
+      >
+        <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
+          <button
+            type="button"
+            onClick={() => updateConfig((c) => ({ ...c, defaultZapMethod: "lightning" }))}
+            className={cn(
+              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-2",
+              config.defaultZapMethod === "lightning"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Lightning
+          </button>
+          <button
+            type="button"
+            onClick={() => updateConfig((c) => ({ ...c, defaultZapMethod: "bitcoin" }))}
+            className={cn(
+              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-2",
+              config.defaultZapMethod === "bitcoin"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Bitcoin
+          </button>
+        </div>
       </SettingsRow>
 
       <SettingsRow>
