@@ -4,6 +4,25 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.34.0] - 2026-07-19
+
+Adds swipe-to-reply on messages, a favorite GIFs tab, and a default payment method setting for zaps. Thread panels now have a jump-to-latest button, auto-scroll when opened, and a fullscreen expand toggle on desktop. Several community moderation and invite delivery edge cases are also fixed.
+
+### Added
+- Swipe right on a message to reply to it
+- Favorite GIFs tab that persists your saved GIFs across sessions
+- Default payment method setting for zaps in Wallet settings
+- Thread panel: jump-to-latest button and auto-scroll when opening a thread
+- Thread panel: fullscreen expand/collapse toggle on desktop
+
+### Fixed
+- Message action toolbar (react, reply, zap) no longer hidden behind the message above it
+- Editing messages from within a thread panel now works
+- Touch targets audited and corrected across the app
+- Members who joined before the ban that removed them are no longer incorrectly counted
+- Invites are now delivered to members who have no relay list configured
+- A rejoining member's stale ban list is correctly healed on re-entry
+
 ## [0.33.0] - 2026-07-18
 
 Community moderation is significantly improved. Admins now see a dedicated ban dialog with a progress indicator that walks through key rotation, locking the banned member out of encrypted history. Banned members see a clear "you've been banned" screen and are silently removed from the community. The client also refuses to join communities that have banned you. Communities are now classified as Public or Private based on their membership settings.
