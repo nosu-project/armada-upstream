@@ -69,7 +69,7 @@ import {
   type CommunityMetadata,
   type CommunityV2,
 } from "@/concord-v2/lib/types";
-import { fold, type Edition } from "@/concord-v2/lib/version";
+import { bootstrapHead, fold, type Edition } from "@/concord-v2/lib/version";
 
 // ── Addressing ───────────────────────────────────────────────────────────────
 
@@ -241,6 +241,16 @@ export interface FoldedControl {
    * re-wrappable plaintext seal a Refounding's compaction republishes.
    */
   headEditions: Map<string, ParsedEdition>;
+  /**
+   * Floored entities the served set could not account for: gap-held (the
+   * chain to our floor is withheld), or with zero served editions at all. A
+   * data-availability signal ONLY — an entity that was served but
+   * authority-rejected (stripped, banned) is deliberately absent, not listed.
+   * A Refounding MUST NOT compact while non-empty (CORD-06 §3
+   * fold-all-or-abort), or the entities listed here are silently dropped from
+   * the new epoch.
+   */
+  incomplete: string[];
 }
 
 function pushEdition(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdition) {
@@ -280,21 +290,60 @@ function pushEdition(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdit
  * floor in that case, so the entity holds at its last-known-good head and
  * refetches. A FRESH joiner (no floor) still accepts the highest head despite a
  * dangling `prev` — that is the legitimate compaction bootstrap.
+ *
+ * `snapshot` is the subset of editions wrapped under the CURRENT epoch's
+ * control group, passed once the community has Refounded at least once. A
+ * Refounding compacts every head into the new epoch (CORD-06 §3), so the
+ * current epoch is self-contained and readable-but-superseded fragments from
+ * older epochs must not outrank it. The snapshot folds by BOOTSTRAP
+ * (highest signed version, floor as version-only refuse-downgrade), NEVER the
+ * chain walk: behind a compaction, dangling `prev`s are normal, and — since
+ * seal signatures survive re-wrap — any group-key holder can re-serve a real
+ * OLD edition under the current group. Version anchoring is what bounds that:
+ * a re-wrap cannot raise the version inside the signed seal, so a re-served
+ * stale edition always loses to the compacted head. Old-epoch editions remain
+ * fallback candidates for the authority gate.
  */
-function headCandidates(editions: ParsedEdition[], floor?: EntityHead): ParsedEdition[] {
-  const folds: Edition[] = editions.map(toFoldEdition);
-  const result = fold(folds, floor?.version ?? 0n, floor?.hash);
-
-  // Tracking client + a gap: the served chain doesn't reach our floor. Refuse
-  // to adopt anything above the floor — a withheld-middle attack can't push a
-  // higher dangling edition onto a client that already advanced the chain.
-  const gapped = floor !== undefined && result.gap;
-
+function headCandidates(
+  editions: ParsedEdition[],
+  floor?: EntityHead,
+  snapshot?: ParsedEdition[],
+  onGap?: () => void,
+): ParsedEdition[] {
   const ordered: ParsedEdition[] = [];
   const seenRumors = new Set<string>();
-  if (result.head !== null && !gapped) {
-    ordered.push(editions[result.head]);
-    seenRumors.add(bytesToHex(editions[result.head].rumorId));
+  let gapped = false;
+
+  if (snapshot) {
+    // Compaction-era arm. Snapshot presence selects the ARM; version selects
+    // the HEAD — over ALL editions, not the subset. Honest paths are identical
+    // (the compacted head is ≥ every readable old-epoch edition), but bounding
+    // the bootstrap to the subset would let colluding relays serve only a
+    // stale re-wrap and outrank a higher true head sitting in our own store.
+    const idx = bootstrapHead(editions.map(toFoldEdition), floor?.version ?? 0n);
+    if (idx !== null) {
+      ordered.push(editions[idx]);
+      seenRumors.add(bytesToHex(editions[idx].rumorId));
+    } else if (floor !== undefined) {
+      // Nothing at/above our floor was served: the head we already accepted
+      // vanished from the served set — withheld, fail closed.
+      gapped = true;
+      onGap?.();
+    }
+  } else {
+    const folds: Edition[] = editions.map(toFoldEdition);
+    const result = fold(folds, floor?.version ?? 0n, floor?.hash);
+
+    // Tracking client + a gap: the served chain doesn't reach our floor. Refuse
+    // to adopt anything above the floor — a withheld-middle attack can't push a
+    // higher dangling edition onto a client that already advanced the chain.
+    gapped = floor !== undefined && result.gap;
+    if (gapped) onGap?.();
+
+    if (result.head !== null && !gapped) {
+      ordered.push(editions[result.head]);
+      seenRumors.add(bytesToHex(editions[result.head].rumorId));
+    }
   }
   const rest = editions
     .filter((e) => {
@@ -562,20 +611,31 @@ export function foldControlState(
   communityId: Uint8Array,
   ownerHex: string,
   priorHeads?: Map<string, EntityHead>,
+  snapshotIds?: Set<string>,
 ): FoldedControl {
   const cidHex = bytesToHex(communityId);
   const floorSig = priorHeads
     ? [...priorHeads.entries()].map(([k, v]) => `${k}@${v.version}`).sort().join(",")
     : "";
-  const memoKey = `${cidHex}:${ownerHex}:${floorSig}:${editions.map((e) => e.opened.wrapId).sort().join(",")}`;
+  // snapshotIds is part of the key: attribution can change (a re-wrap arriving)
+  // without the edition set changing, and must not serve a stale fold.
+  const snapSig = snapshotIds ? [...snapshotIds].sort().join(",") : "";
+  const memoKey = `${cidHex}:${ownerHex}:${floorSig}:${snapSig}:${editions.map((e) => e.opened.wrapId).sort().join(",")}`;
   const hit = foldMemo.get(memoKey);
   if (hit) return hit;
 
-  const first = foldOnce(editions, communityId, ownerHex, priorHeads);
+  const first = foldOnce(editions, communityId, ownerHex, priorHeads, snapshotIds);
   let result = first;
   const banned = new Set([...first.banned].filter((pk) => pk !== ownerHex));
   if (banned.size > 0 && editions.some((e) => banned.has(e.author))) {
-    result = { ...foldOnce(editions.filter((e) => !banned.has(e.author)), communityId, ownerHex, priorHeads), banned: first.banned };
+    // Pass 1 stays authoritative for `incomplete`: pass 2 drops banned authors'
+    // editions by SEMANTICS (CORD-04 §4), not data loss — a gap it introduces
+    // must not read as "plane unserved" and block the ban→refound flow.
+    result = {
+      ...foldOnce(editions.filter((e) => !banned.has(e.author)), communityId, ownerHex, priorHeads, snapshotIds),
+      banned: first.banned,
+      incomplete: first.incomplete,
+    };
   }
 
   // Single-entry-per-community cache so the memo doesn't grow unbounded.
@@ -629,6 +689,7 @@ function foldOnce(
   communityId: Uint8Array,
   ownerHex: string,
   priorHeads?: Map<string, EntityHead>,
+  snapshotIds?: Set<string>,
 ): FoldedControl {
   const cidHex = bytesToHex(communityId);
 
@@ -642,11 +703,19 @@ function foldOnce(
 
   const heads = new Map<string, EntityHead>();
   const headEditions = new Map<string, ParsedEdition>();
+  const gapHeld = new Set<string>();
   /** Ordered head candidates per entity of one vsk (floored per prior head). */
   const candidatesOf = (vsk: string): Map<string, ParsedEdition[]> => {
     const out = new Map<string, ParsedEdition[]>();
     for (const [eid, list] of byVsk.get(vsk) ?? new Map<string, ParsedEdition[]>()) {
-      out.set(eid, headCandidates(list, priorHeads?.get(eid)));
+      // Current-epoch subset: when any edition of this entity arrived under
+      // the current control group, the chain walk anchors there (see
+      // headCandidates) — an entity never re-wrapped keeps full-set semantics.
+      const snap = snapshotIds ? list.filter((p: ParsedEdition) => snapshotIds.has(bytesToHex(p.rumorId))) : [];
+      out.set(
+        eid,
+        headCandidates(list, priorHeads?.get(eid), snap.length > 0 ? snap : undefined, () => gapHeld.add(eid)),
+      );
     }
     return out;
   };
@@ -807,7 +876,19 @@ function foldOnce(
     for (const pk of list) liveInviteLinks.add(pk.toLowerCase());
   }
 
-  const result: FoldedControl = { roster, ownerHex, metadata, channels, banned, liveInviteLinks, registriesByCreator, heads, headEditions };
+  // Data-availability roll-up: gap-held entities, plus floored entities with
+  // ZERO served editions this fold. A floored entity whose editions were
+  // served but authority-rejected is NOT flagged — that's a deliberate drop
+  // (a stripped role, a banned creator's registry, CORD-04 §4), and flagging
+  // it would false-abort the very ban→refound flow the gate protects.
+  const servedEids = new Set<string>();
+  for (const m of byVsk.values()) for (const eid of m.keys()) servedEids.add(eid);
+  const incomplete = [...gapHeld];
+  for (const eid of priorHeads?.keys() ?? []) {
+    if (!servedEids.has(eid) && !gapHeld.has(eid)) incomplete.push(eid);
+  }
+
+  const result: FoldedControl = { roster, ownerHex, metadata, channels, banned, liveInviteLinks, registriesByCreator, heads, headEditions, incomplete };
   return result;
 }
 

@@ -1,6 +1,7 @@
 /**
  * Tests for the plane-sweep discipline (planeSync.ts):
- * batching, single-flight, auth-gating, per-scope cursors, retry.
+ * batching, single-flight, auth-gating, completeness modes (control =
+ * whole-plane refetch, guestbook = epoch-keyed forward cursor), retry.
  */
 
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
@@ -13,13 +14,17 @@ import { guestbookGroups } from "@/concord-v2/lib/guestbook";
 import { KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import {
   _configureAuthWaitForTests,
+  _configureSweepPagingForTests,
+  _resetPlaneSweepMemoForTests,
   controlScope,
+  controlSweepTruncated,
   guestbookScope,
   sweepControl,
   sweepGuestbook,
   sweepRelayScopes,
   whenAuthSettled,
 } from "@/concord-v2/lib/planeSync";
+import { updateStreamCursor } from "@/concord-v2/lib/rumorStore";
 import {
   _resetStreamAuthRegistry,
   noteAuthResult,
@@ -36,6 +41,7 @@ interface Filter {
   kinds?: number[];
   authors?: string[];
   since?: number;
+  until?: number;
   limit?: number;
 }
 
@@ -63,7 +69,8 @@ class FakeRelay {
           (ev) =>
             (!f.kinds || f.kinds.includes(ev.kind)) &&
             (!f.authors || f.authors.includes(ev.pubkey)) &&
-            (f.since === undefined || ev.created_at >= f.since),
+            (f.since === undefined || ev.created_at >= f.since) &&
+            (f.until === undefined || ev.created_at <= f.until),
         )
         .sort((a, b) => b.created_at - a.created_at)
         .slice(0, f.limit);
@@ -127,6 +134,8 @@ async function wrapAt(
 
 beforeEach(() => {
   _resetStreamAuthRegistry();
+  _resetPlaneSweepMemoForTests();
+  _configureSweepPagingForTests({ pageLimit: 500, maxPages: 8 });
   // Most tests exercise the fetch discipline, not the auth gate — let sweeps
   // proceed immediately (maxWaitMs 0 = the cap expires at once).
   _configureAuthWaitForTests({ maxWaitMs: 0 });
@@ -375,27 +384,27 @@ describe("sweepRelayScopes — one REQ per relay, per-scope filters", () => {
     expect(result.get(scopes[2].scope)).toEqual([]);
   });
 
-  it("advances each scope's cursor independently inside one batch (issue #19 isolation)", async () => {
+  it("advances each guestbook scope's cursor independently inside one batch (issue #19 isolation)", async () => {
     const owner = signer();
     const a = communityOf(48, owner.pubkey);
     const b = communityOf(52, owner.pubkey);
     const now = Math.floor(Date.now() / 1000);
-    // Only community A has an edition; B's plane is still empty on this relay.
-    const aCtl = await wrapAt(controlGroupKey(a.root, a.id, 0), owner, "ab".repeat(32), now - 100);
+    // Only community A has a motion; B's plane is still empty on this relay.
+    const aGb = await wrapAt(guestbookGroupKey(a.root, a.id, 0), owner, "ab".repeat(32), now - 100);
 
     const relay = new FakeRelay();
-    relay.events = [aCtl.wrap];
+    relay.events = [aGb.wrap];
     const nostr = poolOf({ [RELAY_A]: relay });
 
-    const scopesOf = () => [controlScope(a, RELAY_A), controlScope(b, RELAY_A)];
+    const scopesOf = () => [guestbookScope(a, RELAY_A), guestbookScope(b, RELAY_A)];
     await sweepRelayScopes(nostr, RELAY_A, scopesOf());
     await sweepRelayScopes(nostr, RELAY_A, scopesOf());
 
     expect(relay.calls.length).toBe(2);
     const [aFilter, bFilter] = relay.calls[1];
-    expect(aFilter.since, "A saw an edition — its cursor advances").toBe(aCtl.wrap.created_at);
-    // B must be re-asked from the start: A's newer edition must NEVER move
-    // B's cursor past editions B hasn't seen (the issue-#19 skip).
+    expect(aFilter.since, "A saw a motion — its cursor advances").toBe(aGb.wrap.created_at);
+    // B must be re-asked from the start: A's newer motion must NEVER move
+    // B's cursor past motions B hasn't seen (the issue-#19 skip).
     expect(bFilter.since, "B saw nothing — its cursor must not move").toBeUndefined();
   });
 
@@ -445,9 +454,30 @@ describe("sweepRelayScopes — one REQ per relay, per-scope filters", () => {
     expect(g.map((e) => e.rumorId)).toContain(gb.rumor.id);
   });
 
-  it("sequential sweeps advance the per-relay cursor (the second asks `since`, not full history)", async () => {
+  it("sequential guestbook sweeps advance the per-relay cursor (the second asks `since`)", async () => {
     const owner = signer();
     const community = communityOf(68, owner.pubkey);
+    const guestbook = guestbookGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(guestbook, owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [e1.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepGuestbook(nostr, community);
+    await sweepGuestbook(nostr, community);
+
+    expect(relay.calls.length).toBe(2);
+    expect(relay.calls[0][0].since, "first sweep is a full read").toBeUndefined();
+    expect(relay.calls[1][0].since, "second sweep must be cursor-gated").toBe(e1.wrap.created_at);
+  });
+});
+
+describe("control completeness — the whole plane, every sweep", () => {
+  it("never cursor-gates: repeat sweeps re-ask in full, announcing only session-new wraps", async () => {
+    const owner = signer();
+    const community = communityOf(80, owner.pubkey);
     const control = controlGroupKey(community.root, community.id, 0);
     const now = Math.floor(Date.now() / 1000);
     const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
@@ -456,11 +486,142 @@ describe("sweepRelayScopes — one REQ per relay, per-scope filters", () => {
     relay.events = [e1.wrap];
     const nostr = poolOf({ [RELAY_A]: relay });
 
-    await sweepControl(nostr, community);
-    await sweepControl(nostr, community);
+    const first = await sweepControl(nostr, community);
+    const second = await sweepControl(nostr, community);
 
     expect(relay.calls.length).toBe(2);
-    expect(relay.calls[0][0].since, "first sweep is a full read").toBeUndefined();
-    expect(relay.calls[1][0].since, "second sweep must be cursor-gated").toBe(e1.wrap.created_at);
+    expect(relay.calls[0][0].since, "control must not trust a forward cursor").toBeUndefined();
+    expect(relay.calls[1][0].since, "…on ANY sweep, not just the first").toBeUndefined();
+    expect(first.map((e) => e.rumorId)).toContain(e1.rumor.id);
+    expect(second, "a re-received wrap is not fresh — the session memo keeps repeats quiet").toEqual([]);
+
+    // A genuinely new edition landing between sweeps still surfaces alone.
+    const e2 = await wrapAt(control, owner, "cd".repeat(32), now - 50);
+    relay.events.push(e2.wrap);
+    const third = await sweepControl(nostr, community);
+    expect(third.map((e) => e.rumorId)).toEqual([e2.rumor.id]);
+  });
+
+  it("a stale persisted cursor (pre-fix state) cannot starve the control fold", async () => {
+    const owner = signer();
+    const community = communityOf(84, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    // The regression this guards: an unban edition sits BELOW a high-water
+    // cursor persisted across a leave/ban/rejoin — the old `since` discipline
+    // could never fetch it again, so the rejoiner folded a stale banlist.
+    const unban = await wrapAt(control, owner, "ab".repeat(32), now - 500);
+    await updateStreamCursor(`control:${community.idHex}|${RELAY_A}`, { newest: now - 10 });
+
+    const relay = new FakeRelay();
+    relay.events = [unban.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, community);
+
+    expect(relay.calls[0][0].since, "the poisoned cursor must be ignored").toBeUndefined();
+    expect(fresh.map((e) => e.rumorId), "the below-cursor edition must be recovered").toContain(unban.rumor.id);
+  });
+
+  it("pages past the relay's per-filter limit instead of silently truncating the plane", async () => {
+    _configureSweepPagingForTests({ pageLimit: 2 });
+    const owner = signer();
+    const community = communityOf(88, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = await Promise.all(
+      [0, 1, 2, 3, 4].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+
+    const relay = new FakeRelay();
+    relay.events = wraps.map((w) => w.wrap);
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, community);
+
+    expect(relay.calls.length, "a full first page must trigger `until` paging").toBeGreaterThan(1);
+    for (const w of wraps) {
+      expect(fresh.map((e) => e.rumorId), "every page's editions must be recovered").toContain(w.rumor.id);
+    }
+  });
+
+  it("flags truncation when the plane exceeds the pager budget (the refound safety gate)", async () => {
+    // A plane deeper than pageLimit*maxPages: the sweep leaves editions behind
+    // this round, and MUST advertise it so a Refounding aborts rather than
+    // compact a truncated plane (dropping unfetched entities from the new epoch
+    // for every member, forever).
+    _configureSweepPagingForTests({ pageLimit: 2, maxPages: 1 });
+    const owner = signer();
+    const community = communityOf(90, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = await Promise.all(
+      [0, 1, 2, 3, 4, 5].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+
+    const relay = new FakeRelay();
+    relay.events = wraps.map((w) => w.wrap);
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    expect(controlSweepTruncated(community), "clean before any sweep").toBe(false);
+    await sweepControl(nostr, community);
+    expect(controlSweepTruncated(community), "the pager hit its budget — refound must abort").toBe(true);
+  });
+
+  it("clears a prior truncation verdict once the plane fits the budget again", async () => {
+    const owner = signer();
+    const community = communityOf(91, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = await Promise.all(
+      [0, 1, 2, 3, 4, 5].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+    const relay = new FakeRelay();
+    relay.events = wraps.map((w) => w.wrap);
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    _configureSweepPagingForTests({ pageLimit: 2, maxPages: 1 });
+    await sweepControl(nostr, community);
+    expect(controlSweepTruncated(community)).toBe(true);
+
+    // A generous budget on the next round reaches the whole plane: the verdict
+    // must lift (a transient deep-plane must not wedge future refounds).
+    _resetPlaneSweepMemoForTests();
+    _configureSweepPagingForTests({ pageLimit: 500, maxPages: 8 });
+    await sweepControl(nostr, community);
+    expect(controlSweepTruncated(community)).toBe(false);
+  });
+});
+
+describe("guestbook forward cursor — epoch-keyed scope", () => {
+  it("an epoch advance re-baselines: the first sweep at the new epoch is a full backfill", async () => {
+    const owner = signer();
+    const base = communityOf(92, owner.pubkey);
+    const now = Math.floor(Date.now() / 1000);
+    const gb0 = await wrapAt(guestbookGroupKey(base.root, base.id, 0), owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [gb0.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepGuestbook(nostr, base);
+    await sweepGuestbook(nostr, base);
+    expect(relay.calls[1][0].since, "steady state stays cursor-gated").toBe(gb0.wrap.created_at);
+
+    // A rekey adoption / rejoin: the member now reads MORE (epoch 1 + retained
+    // epoch 0). The old cursor was minted under a narrower read scope — the
+    // first sweep at the new epoch must be a full backfill, not since-gated.
+    const root1 = new Uint8Array(32).fill(93);
+    const adopted = {
+      ...base,
+      root: root1,
+      rootEpoch: 1n,
+      heldRoots: [{ epoch: 1n, key: root1 }, ...base.heldRoots],
+    };
+    await sweepGuestbook(nostr, adopted);
+
+    const filter = relay.calls[2][0];
+    expect(filter.since, "a cursor from another epoch's read scope must not gate this sweep").toBeUndefined();
+    expect(filter.authors?.length, "the sweep must span every held epoch's group").toBe(2);
   });
 });
