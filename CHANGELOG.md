@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.33.0] - 2026-07-18
+
+Community moderation is significantly improved. Admins now see a dedicated ban dialog with a progress indicator that walks through key rotation, locking the banned member out of encrypted history. Banned members see a clear "you've been banned" screen and are silently removed from the community. The client also refuses to join communities that have banned you. Communities are now classified as Public or Private based on their membership settings.
+
+### Added
+- Ban dialog with step-by-step progress for admins banning a member
+- Banned view shown to members who have been removed from a community
+- Communities are now classified as Public or Private based on their membership settings
+- Banned users are silently self-removed from communities that list them (honest-client compliance)
+- Client refuses to join a community that has banned you
+
+### Fixed
+- Banning a member now correctly rotates encryption keys to prevent re-entry
+- Fixed a re-admission loop where a banned user could rejoin after leaving
+
 ## [0.32.2] - 2026-07-18
 
 Adds optional Plausible Analytics support for hosted deployments. Analytics is disabled in the Android APK, Electron desktop app, and local dev builds — it only activates when a hosting operator sets `VITE_PLAUSIBLE_DOMAIN` at build time.
