@@ -1101,6 +1101,90 @@ describe("control plane fold (CORD-04)", () => {
     const healed = foldControlState(openControlWraps([w1], [control]), communityId, owner.pubkey, first.heads);
     expect(healed.incomplete).toEqual([]);
   });
+
+  it("bannedAt records the newest AUTHORIZED ban time per npub; forgeries excluded", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const target = signer();
+    const rando = signer();
+
+    const b1 = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 1n, createdAtSecs: 1000 });
+    const w1 = await sealEdition(b1, control, owner);
+    const p1 = openControlWraps([w1], [control])[0];
+    // A newer authorized edition still naming the target.
+    const b2 = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash, createdAtSecs: 2000 });
+    const w2 = await sealEdition(b2, control, owner);
+    // A forged banlist edition by an unauthorized author, dated far in the future.
+    const forged = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: rando.pubkey, version: 3n, createdAtSecs: 9999 });
+    const wf = await sealEdition(forged, control, rando);
+
+    const folded = foldControlState(openControlWraps([w1, w2, wf], [control]), communityId, owner.pubkey);
+    expect(folded.banned.has(target.pubkey)).toBe(true);
+    // Newest AUTHORIZED edition wins (2000), never the forged 9999.
+    expect(folded.bannedAt.get(target.pubkey)).toBe(2000);
+    // The forger's own edition contributes nothing.
+    expect(folded.bannedAt.has(rando.pubkey)).toBe(false);
+  });
+
+  it("bannedAt survives an unban (the phantom-suppression signal outlives the ban)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const target = signer();
+    const b1 = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 1n, createdAtSecs: 1000 });
+    const w1 = await sealEdition(b1, control, owner);
+    const p1 = openControlWraps([w1], [control])[0];
+    const unban = buildBanlistEdition(communityId, [], { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash, createdAtSecs: 2000 });
+    const w2 = await sealEdition(unban, control, owner);
+
+    const folded = foldControlState(openControlWraps([w1, w2], [control]), communityId, owner.pubkey);
+    expect(folded.banned.has(target.pubkey)).toBe(false); // currently unbanned
+    expect(folded.bannedAt.get(target.pubkey)).toBe(1000); // but the ban history remains
+  });
+
+  it("bannedAt spans held epochs: a later ban in a DIFFERENT epoch's control group wins", async () => {
+    const { owner, communityId, root } = await makeCommunity();
+    const target = signer();
+    const control0 = controlGroupKey(root, communityId, 0);
+    const control1 = controlGroupKey(root, communityId, 1); // (test shortcut: same root, new epoch address)
+
+    const b0 = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 1n, createdAtSecs: 1000 });
+    const w0 = await sealEdition(b0, control0, owner);
+    const p0 = openControlWraps([w0], [control0])[0];
+    // A newer ban published under epoch 1's control group.
+    const b1 = buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 2n, prevHash: p0.selfHash, createdAtSecs: 2000 });
+    const w1 = await sealEdition(b1, control1, owner);
+
+    // Both epoch groups held → the fold sees both editions; newest ban wins.
+    const folded = foldControlState(openControlWraps([w0, w1], [control0, control1]), communityId, owner.pubkey);
+    expect(folded.bannedAt.get(target.pubkey)).toBe(2000);
+  });
+
+  it("bannedAt never names the owner — an authorized ban of the owner can't durably hide them", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const adm = adminRole(bytesToHex(random32()));
+    const authWraps = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    const grantEid = grantLocator(communityId, hex32(admin.pubkey));
+    const grantHead = foldControlState(openControlWraps(authWraps, [control]), communityId, owner.pubkey)
+      .heads.get(bytesToHex(grantEid))!;
+    // The admin (BAN authority) publishes a banlist edition naming the OWNER.
+    const evil = buildBanlistEdition(communityId, [owner.pubkey], {
+      actorPubkey: admin.pubkey,
+      version: 1n,
+      authority: { entityId: grantEid, version: grantHead.version, editionHash: grantHead.hash },
+    });
+    const folded = foldControlState(
+      openControlWraps([...authWraps, await sealEdition(evil, control, admin)], [control]),
+      communityId,
+      owner.pubkey,
+    );
+    expect(folded.bannedAt.has(owner.pubkey)).toBe(false);
+  });
 });
 
 describe("dissolution (CORD-02 §9)", () => {

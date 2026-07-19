@@ -1082,7 +1082,7 @@ export function ConcordV2Page() {
       const prev = observed.get(m.pubkey);
       if (prev === undefined || seenMs > prev) observed.set(m.pubkey, seenMs);
     }
-    const set = completeMemberlist(coalesced, observed, banned);
+    const set = completeMemberlist(coalesced, observed, banned, folded?.bannedAt);
     for (const g of roster?.grants ?? []) if (g.roleIds.length > 0 && !banned.has(g.member)) set.add(g.member);
     if (ownerHex) set.add(ownerHex);
     if (user && !banned.has(user.pubkey)) set.add(user.pubkey);

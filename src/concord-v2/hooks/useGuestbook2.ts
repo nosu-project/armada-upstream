@@ -77,7 +77,7 @@ export function useMembers2(
   const { coalesced } = useGuestbook2(community);
   const { data: folded } = useControlFold2(community);
   const members = useMemo(
-    () => completeMemberlist(coalesced, observed, folded?.banned ?? new Set()),
+    () => completeMemberlist(coalesced, observed, folded?.banned ?? new Set(), folded?.bannedAt),
     [coalesced, observed, folded],
   );
   return { members, coalesced };

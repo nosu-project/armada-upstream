@@ -251,6 +251,15 @@ export interface FoldedControl {
    * the new epoch.
    */
   incomplete: string[];
+  /**
+   * npub → the created_at (SECONDS) of the newest AUTHORIZED banlist edition
+   * that named them. A member's Guestbook Join that predates their most recent
+   * ban is a stale membership: a ban is a departure the Guestbook never records
+   * (self-removal is network-silent), so without this an unbanned member's old
+   * Join resurfaces as a phantom on the roster. Derived from the same authority
+   * gate as `banned`, so a forged banlist can't backdate-suppress a member.
+   */
+  bannedAt: Map<string, number>;
 }
 
 function pushEdition(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdition) {
@@ -634,6 +643,7 @@ export function foldControlState(
     result = {
       ...foldOnce(editions.filter((e) => !banned.has(e.author)), communityId, ownerHex, priorHeads, snapshotIds),
       banned: first.banned,
+      bannedAt: first.bannedAt,
       incomplete: first.incomplete,
     };
   }
@@ -832,10 +842,11 @@ function foldOnce(
 
   // 5. Banlist (vsk 4): the one anti-roster; unauthorized head → empty (fail closed).
   const banned = new Set<string>();
+  const bannedAt = new Map<string, number>();
   {
     const eid = bytesToHex(banlistLocator(communityId));
     const candidates = candidatesOf(VSK_BANLIST).get(eid) ?? [];
-    const head = pickHead(candidates, heads, headEditions, (p) => {
+    const banlistGate = (p: ParsedEdition): boolean => {
       if (!isAuthorized(roster, p.author, ownerHex, Permissions.BAN)) return false;
       if (!citationOk(p)) return false;
       try {
@@ -843,10 +854,37 @@ function foldOnce(
       } catch {
         return false;
       }
-    });
+    };
+    const head = pickHead(candidates, heads, headEditions, banlistGate);
     if (head) {
       for (const pk of JSON.parse(head.content) as unknown[]) {
         if (typeof pk === "string" && /^[0-9a-f]{64}$/i.test(pk)) banned.add(pk.toLowerCase());
+      }
+    }
+    // Ban history (for phantom-member suppression, see FoldedControl.bannedAt):
+    // the newest AUTHORIZED edition that named each npub. Same gate as the head,
+    // so a forged banlist can't backdate-suppress a legit member. `createdAt` is
+    // seconds. Editions span every held epoch, so the history is as complete as
+    // the reader's key set — which, by the compaction correlation, is exactly
+    // whenever they also hold the stale Join that would otherwise phantom.
+    for (const p of candidates) {
+      if (!banlistGate(p)) continue;
+      let list: unknown;
+      try {
+        list = JSON.parse(p.content);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(list)) continue;
+      for (const pk of list) {
+        if (typeof pk !== "string" || !/^[0-9a-f]{64}$/i.test(pk)) continue;
+        const k = pk.toLowerCase();
+        // The owner is never bannable (parity with foldControlState's `banned`
+        // filter): an authorized moderator listing the owner must not durably
+        // suppress them from the roster past the unban.
+        if (k === ownerHex) continue;
+        const prev = bannedAt.get(k);
+        if (prev === undefined || p.createdAt > prev) bannedAt.set(k, p.createdAt);
       }
     }
   }
@@ -888,7 +926,7 @@ function foldOnce(
     if (!servedEids.has(eid) && !gapHeld.has(eid)) incomplete.push(eid);
   }
 
-  const result: FoldedControl = { roster, ownerHex, metadata, channels, banned, liveInviteLinks, registriesByCreator, heads, headEditions, incomplete };
+  const result: FoldedControl = { roster, ownerHex, metadata, channels, banned, bannedAt, liveInviteLinks, registriesByCreator, heads, headEditions, incomplete };
   return result;
 }
 

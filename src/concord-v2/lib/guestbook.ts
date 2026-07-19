@@ -249,13 +249,25 @@ export function completeMemberlist(
   coalesced: Map<string, CoalescedMember>,
   observed: Map<string, number>,
   banned: Set<string>,
+  bannedAt?: Map<string, number>,
 ): Set<string> {
+  // A Join or activity that predates a member's most recent ban is STALE: a ban
+  // is a departure the Guestbook never records (self-removal is network-silent),
+  // so on unban an old Join would resurface as a phantom member. `bannedAt` (the
+  // control plane's authorized ban history) is in SECONDS; ms compares to it×1000.
+  // Activity/Join AFTER the ban still counts — that's a genuine rejoin. (A member
+  // offline for the WHOLE ban→unban window never actually left; they're briefly
+  // suppressed until they next publish — the `observed` path then re-adds them.)
+  const stalePreBan = (pk: string, ms: number): boolean => {
+    const at = bannedAt?.get(pk);
+    return at !== undefined && ms <= at * 1000;
+  };
   const out = new Set<string>();
   for (const [pk, m] of coalesced) {
-    if (m.state === "join" && !banned.has(pk)) out.add(pk);
+    if (m.state === "join" && !banned.has(pk) && !stalePreBan(pk, m.ms)) out.add(pk);
   }
   for (const [pk, seenMs] of observed) {
-    if (banned.has(pk)) continue;
+    if (banned.has(pk) || stalePreBan(pk, seenMs)) continue;
     const m = coalesced.get(pk);
     // Observation only counts FORWARD: activity newer than the latest Leave/
     // Kick re-enters them; a departed member's old history never resurrects them.

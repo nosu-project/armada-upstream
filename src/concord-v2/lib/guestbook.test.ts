@@ -181,4 +181,33 @@ describe("complete memberlist", () => {
     const rejoined = completeMemberlist(coalesced, new Map([[bob.pubkey, 6000]]), new Set());
     expect(rejoined.has(bob.pubkey)).toBe(true);
   });
+
+  it("a Join predating a member's ban is NOT counted after unban (no phantom); a fresh Join is", async () => {
+    const alice = signer();
+    // Alice joined at 1000ms; the control plane recorded a ban at 2s (= 2000ms).
+    const wraps = [await sealGuestbook(buildJoinRumor(alice.pubkey, 1000), gb, alice)];
+    const coalesced = coalesceGuestbook(openGuestbookWraps(wraps, [gb]), { nowMs: 10_000, canKick: denyAllKicks });
+    const bannedAt = new Map([[alice.pubkey, 2]]); // SECONDS
+
+    // Currently unbanned (empty banned set), but her Join predates the ban → stale.
+    expect(completeMemberlist(coalesced, new Map(), new Set(), bannedAt).has(alice.pubkey)).toBe(false);
+    // Without the ban history she counts — proving the gate is what suppresses her.
+    expect(completeMemberlist(coalesced, new Map(), new Set()).has(alice.pubkey)).toBe(true);
+
+    // A genuine rejoin (a fresh Join postdating the ban) re-adds her.
+    const withRejoin = [...wraps, await sealGuestbook(buildJoinRumor(alice.pubkey, 3000), gb, alice)];
+    const rejoined = coalesceGuestbook(openGuestbookWraps(withRejoin, [gb]), { nowMs: 10_000, canKick: denyAllKicks });
+    expect(completeMemberlist(rejoined, new Map(), new Set(), bannedAt).has(alice.pubkey)).toBe(true);
+  });
+
+  it("observed activity before a ban doesn't re-add; activity after the ban does", async () => {
+    const alice = signer();
+    const bannedAt = new Map([[alice.pubkey, 5]]); // 5s = 5000ms
+    const empty = coalesceGuestbook([], { nowMs: 10_000, canKick: denyAllKicks });
+
+    // Old activity (before the ban) can't resurrect a departed-by-ban member.
+    expect(completeMemberlist(empty, new Map([[alice.pubkey, 4000]]), new Set(), bannedAt).has(alice.pubkey)).toBe(false);
+    // Activity after the ban → observably present again.
+    expect(completeMemberlist(empty, new Map([[alice.pubkey, 6000]]), new Set(), bannedAt).has(alice.pubkey)).toBe(true);
+  });
 });
