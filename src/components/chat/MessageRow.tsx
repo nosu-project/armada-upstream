@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { Loader2, Reply } from "lucide-react";
 import { memo } from "react";
 
 import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard";
@@ -11,6 +11,7 @@ import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
+import { useSwipeToReply } from "@/hooks/useSwipeToReply";
 
 import type { ReactNode } from "react";
 
@@ -81,6 +82,11 @@ interface MessageRowProps {
   className?: string;
   /** Forwarded to the row container (data attrs, handlers). */
   containerProps?: React.HTMLAttributes<HTMLDivElement>;
+  /**
+   * Swipe-to-reply callback. When set, a swipe-right gesture on touch devices
+   * calls this (wired to `onReply` in ChatMessage). Ignored on desktop.
+   */
+  onSwipeReply?: () => void;
 }
 
 /**
@@ -104,6 +110,7 @@ export const MessageRow = memo(function MessageRow({
   continuation,
   className,
   containerProps,
+  onSwipeReply,
 }: MessageRowProps) {
   // Mesh authors carry an explicit identity; skip the Nostr author/profile
   // lookups entirely for them (the pubkey is a mesh peer id, not a real key).
@@ -114,6 +121,12 @@ export const MessageRow = memo(function MessageRow({
   const color = identityOverride?.color ?? scoped.color;
   const label = identityOverride ? undefined : scoped.label;
   const suffix = identityOverride?.suffix;
+
+  // Swipe-to-reply: only active when `onSwipeReply` is set (touch devices).
+  const swipe = useSwipeToReply(
+    () => onSwipeReply?.(),
+    Boolean(onSwipeReply),
+  );
 
   // For mesh authors there's no Nostr profile to preview — render the avatar/
   // name as plain (non-interactive) elements rather than profile-card triggers.
@@ -132,13 +145,43 @@ export const MessageRow = memo(function MessageRow({
   return (
     <div
       {...containerProps}
+      {...(onSwipeReply ? swipe.touchHandlers : undefined)}
       className={cn(
         "group relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors",
         continuation ? "py-0.5" : "py-1.5",
         className,
         containerProps?.className,
       )}
+      style={{
+        ...(onSwipeReply ? { touchAction: "pan-y" } : undefined),
+        ...containerProps?.style,
+      }}
     >
+      {/* Swipe-to-reply: reply icon positioned behind the sliding content */}
+      {onSwipeReply && swipe.offset > 0 && (
+        <div
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 z-0 pointer-events-none flex items-center justify-center"
+          style={{
+            opacity: Math.min(swipe.offset / 60, 1),
+          }}
+        >
+          <div className="flex items-center justify-center size-9 rounded-full bg-primary/15 text-primary">
+            <Reply className="size-4" />
+          </div>
+        </div>
+      )}
+      {/* Sliding content wrapper */}
+      <div
+        className="flex items-start gap-3 flex-1 min-w-0 relative"
+        style={
+          onSwipeReply && swipe.offset !== 0
+            ? {
+                transform: `translateX(${swipe.offset}px)`,
+                transition: swipe.dragging ? "none" : "transform 0.25s ease-out",
+              }
+            : undefined
+        }
+      >
       {continuation ? (
         <span className="shrink-0 w-10 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity tabular-nums select-none">
           {shortClockTime(createdAt)}
@@ -281,6 +324,7 @@ export const MessageRow = memo(function MessageRow({
         {beforeBody}
         {children}
         {afterBody}
+      </div>
       </div>
     </div>
   );
