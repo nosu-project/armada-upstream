@@ -1,5 +1,7 @@
 # Armada
 
+> **Canonical repository:** [gitworkshop.dev/chad@chadwick.site/armada](https://gitworkshop.dev/chad@chadwick.site/armada) — the GitLab repository is a read-only mirror.
+
 Discord without the company. **No host required.** Your keys, your people.
 
 Armada is an end-to-end encrypted community chat app built on
