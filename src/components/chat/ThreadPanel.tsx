@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
-import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import { ZapButton } from "@/components/chat/ZapButton";
@@ -124,8 +123,9 @@ function ThreadMessage({
   // (mirrors ChatMessage's gating). The transport decides how.
   const isOwn = user?.pubkey === event.pubkey;
   const canDelete = Boolean(onDelete) && (isOwn || canModerate);
-  // Only own plain chat messages are editable (same gating as ChatMessage).
-  const canEdit = isOwn && event.kind === KIND_GROUP_CHAT && Boolean(onEdit);
+  // Own messages are editable when the transport supports it. The transport
+  // only provides editMessage for kinds it can edit, so no kind check needed.
+  const canEdit = isOwn && Boolean(onEdit);
   const [editText, setEditText] = useState(event.content);
   // Sync edit text when entering edit mode (content may have changed).
   useEffect(() => {
@@ -360,6 +360,8 @@ interface ThreadPanelProps {
   /** Focus the reply input on open (e.g. when launched via /thread). */
   autoFocus?: boolean;
   onClose: () => void;
+  /** Called when the expand/collapse state changes. Parent uses this to resize the container. */
+  onExpandChange?: (expanded: boolean) => void;
 }
 
 /**
@@ -370,7 +372,7 @@ interface ThreadPanelProps {
  * via the {@link ChatTransport} (`threadRepliesFor`/`sendThreadReply`), so
  * replies never appear in the main timeline (they're nested here instead).
  */
-export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, onClose }: ThreadPanelProps) {
+export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, onClose, onExpandChange }: ThreadPanelProps) {
   const replies = transport.threadRepliesFor?.(root.id) ?? [];
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   const { config } = useAppContext();
@@ -387,6 +389,11 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
 
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Notify parent when expand state changes so it can resize the container.
+  useEffect(() => {
+    onExpandChange?.(isExpanded);
+  }, [isExpanded, onExpandChange]);
 
   const handleEditSubmit = (original: ChatMsg, content: string) => {
     const trimmed = content.trim();
@@ -424,8 +431,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   return (
     <ComposerBoundsProvider value={composerBoundsRef}>
     <aside className={cn(
-      "flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome transition-all duration-200",
-      isExpanded ? "md:flex-1 md:max-w-[80vw]" : "md:w-[400px] md:flex-none",
+      "flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome",
     )}>
       <div className="flex items-center justify-between px-2 py-1 shrink-0">
         <div className="flex items-center gap-2 min-w-0">

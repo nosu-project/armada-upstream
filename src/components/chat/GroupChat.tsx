@@ -306,6 +306,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     tallyIds,
   );
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
+  const [threadExpanded, setThreadExpanded] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<NostrEvent | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
@@ -672,7 +673,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           "overflow-hidden",
           "absolute inset-0 z-20 sidebar:static sidebar:z-auto",
           "sidebar:shrink-0 sidebar:w-0 sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
-          threadRoot ? "sidebar:w-[23rem]" : "pointer-events-none sidebar:pointer-events-auto",
+          threadRoot ? (threadExpanded ? "sidebar:w-full" : "sidebar:w-[23rem]") : "pointer-events-none sidebar:pointer-events-auto",
         )}
       >
         <div
@@ -683,8 +684,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
         />
         <div
           className={cn(
-            "relative h-full flex w-full sidebar:w-[23rem] transition-transform duration-200 ease-out",
+            "relative h-full flex w-full transition-transform duration-200 ease-out",
             threadRoot ? "translate-x-0" : "translate-x-full",
+            threadExpanded ? "sidebar:w-full" : "sidebar:w-[23rem]",
           )}
         >
           {lastThreadRoot && (
@@ -697,6 +699,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
               botCommands
               autoFocus={threadAutoFocus}
               onClose={() => setThreadRoot(undefined)}
+              onExpandChange={setThreadExpanded}
             />
           )}
         </div>
