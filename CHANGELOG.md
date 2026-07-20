@@ -4,6 +4,13 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.35.1] - 2026-07-20
+
+Swipe-to-reply now uses a leftward swipe.
+
+### Changed
+- Swipe left on a message to reply (was swipe right)
+
 ## [0.35.0] - 2026-07-20
 
 Chat and thread panels now use virtual scrolling for smooth performance with long histories. Voice calls now stay in sync with the live community state: the app automatically rejoins the room when the channel is rekeyed, and hangs up when you are banned or removed.
