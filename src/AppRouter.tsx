@@ -11,6 +11,7 @@ import {
 import { BootSplash } from "@/components/brand/BootSplash";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { VersionCheck } from "@/components/VersionCheck";
+import { Toaster } from "@/components/ui/toaster";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
@@ -239,6 +240,13 @@ export function AppRouter() {
         <NotificationNavigation />
         <ForegroundNotifications />
         <VersionCheck />
+        {/* MUST render inside <BrowserRouter>: toasts can carry router <Link>
+            actions (e.g. VersionCheck's "What's new" → /changelog). With the
+            Toaster outside the router, rendering such a toast throws useHref()
+            and unmounts the whole tree to the error screen — which is exactly
+            once per release, since VersionCheck stamps the version before
+            toasting. */}
+        <Toaster />
         {/* Lazy route chunks paint the branded splash while they load, never a
             blank frame. */}
       <Suspense fallback={<BootSplash />}>

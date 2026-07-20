@@ -21,7 +21,6 @@ import { PublishOutbox } from "@/components/PublishOutbox";
 import { ReadStateProvider } from "@/components/ReadStateProvider";
 import { ScreenSharePicker } from "@/components/ScreenSharePicker";
 import { SyncGate } from "@/components/SyncGate";
-import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import WalletProvider from "@/components/WalletProvider";
 import { WebPushNotifications } from "@/components/WebPushNotifications";
@@ -73,7 +72,6 @@ export function App() {
                     <WebPushNotifications />
                     <ControlPlaneSync />
                     <ScreenSharePicker />
-                    <Toaster />
                     <DecryptConsentDialog />
                     <MeshProvider>
                       <AppRouter />
