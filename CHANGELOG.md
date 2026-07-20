@@ -4,6 +4,14 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.35.3] - 2026-07-20
+
+Fixes crashes that could send the app to the error screen immediately after updating, and improves the crash screen to show the error message.
+
+### Fixed
+- Fix crashes to the error screen on first open after a release (stale cached app shell and a router link in the update toast)
+- Show the error message on the crash screen so issues can be reported from a phone
+
 ## [0.35.2] - 2026-07-20
 
 Fixes the first tap after an edge swipe being silently ignored.
