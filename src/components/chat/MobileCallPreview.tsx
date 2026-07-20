@@ -1,4 +1,4 @@
-import { GripVertical, Maximize2, X } from "lucide-react";
+import { GripHorizontal, Maximize2, MoveDiagonal2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useCall } from "@/hooks/useCall";
@@ -459,21 +459,23 @@ export function MobileCallPreview({
             gesture === "resize" && "text-foreground bg-foreground/10",
           )}
         >
-          <GripVertical className="size-4" aria-hidden />
+          <MoveDiagonal2 className="size-4" aria-hidden />
         </div>
         {/* Draggable title/empty area: dragging is scoped to THIS region only,
             so the resize handle and the action buttons never start a drag, and
             the interactive video body (which may gain controls later) is never
-            draggable. */}
+            draggable. A centered horizontal grip is the primary drag affordance;
+            the "Call" label sits beside it when there's room. */}
         <div
           onPointerDown={beginDrag}
           className={cn(
-            "flex items-center flex-1 min-w-0 h-full rounded-md px-1 touch-none",
+            "flex items-center justify-center gap-1 flex-1 min-w-0 h-full rounded-md px-1 touch-none",
             gesture === "drag" ? "cursor-grabbing" : "cursor-grab",
           )}
           role="presentation"
           aria-label="Drag call preview"
         >
+          <GripHorizontal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <span className="text-xs font-medium text-muted-foreground truncate">Call</span>
         </div>
         {onExpand && (
