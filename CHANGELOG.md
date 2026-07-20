@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.35.0] - 2026-07-20
+
+Chat and thread panels now use virtual scrolling for smooth performance with long histories. Voice calls now stay in sync with the live community state: the app automatically rejoins the room when the channel is rekeyed, and hangs up when you are banned or removed.
+
+### Added
+- Voice calls automatically rejoin the room when the channel is rekeyed or refounded
+- Voice calls hang up automatically when you are banned or removed from a community
+
+### Changed
+- Chat timeline and thread panel use virtual scrolling for smooth performance with long message histories
+
 ## [0.34.0] - 2026-07-19
 
 Adds swipe-to-reply on messages, a favorite GIFs tab, and a default payment method setting for zaps. Thread panels now have a jump-to-latest button, auto-scroll when opened, and a fullscreen expand toggle on desktop. Several community moderation and invite delivery edge cases are also fixed.
