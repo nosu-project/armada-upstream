@@ -1,6 +1,7 @@
 import { Braces, ChevronDown, Copy, Link2, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Virtuoso } from "react-virtuoso";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
@@ -39,6 +40,8 @@ import { dittoEventUrl } from "@/lib/dittoUrl";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, ChatTransport, MessageReactions, MessageZaps, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
+import type { ReactNode, UIEvent } from "react";
+import type { FollowOutputScalarType, VirtuosoHandle } from "react-virtuoso";
 
 /**
  * Consecutive replies from the same author within this window collapse into a
@@ -50,6 +53,30 @@ const CONTINUATION_WINDOW_SECONDS = 5 * 60;
 /** Stable no-op for a zap-only pill row (no reactions resolved), so the
  * ReactionBar keeps a constant prop instead of a fresh closure per render. */
 const NOOP_REACT = () => {};
+
+/** Stable empty list while the thread's replies are still loading. */
+const NO_REPLIES: ChatMsg[] = [];
+
+/**
+ * Context handed to the virtualizer's Header. The header (root message +
+ * divider + spinner) is built per render in ThreadPanel; routing it through
+ * `context` keeps the component map itself stable, so the header re-renders in
+ * place instead of remounting (which would drop e.g. an in-progress root edit).
+ */
+interface ThreadListContext {
+  header: ReactNode;
+}
+
+function ThreadListHeader({ context }: { context?: ThreadListContext }) {
+  return <>{context?.header}</>;
+}
+
+const THREAD_COMPONENTS = { Header: ThreadListHeader };
+
+/** Always snap to a newly-arrived reply (the panel's long-standing behavior). */
+function alwaysFollow(): FollowOutputScalarType {
+  return "smooth";
+}
 
 /** A single message row inside the thread panel (root or reply). */
 function ThreadMessage({
@@ -406,27 +433,53 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   };
 
   // --- Auto-scroll + jump-to-latest ---
-  const scrollRef = useRef<HTMLDivElement>(null);
+  // The list is virtualized (react-virtuoso): it mounts at the newest reply
+  // (`initialTopMostItemIndex`, re-applied per root via the `key`), and
+  // `followOutput` snaps to newly-arrived replies.
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   const scrollToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" });
     setShowJumpToLatest(false);
   }, []);
 
-  // Auto-scroll to bottom when the thread opens (root changes) or replies arrive.
-  useEffect(() => {
-    scrollToBottom();
-  }, [root.id, replies.length, scrollToBottom]);
-
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
+  const handleScroll = useCallback((e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     setShowJumpToLatest(distanceFromBottom > 120);
   }, []);
+
+  // Scrolls with the content above the replies: the root message (or its
+  // tombstone), the reply-count divider, and the loading spinner.
+  const listHeader = (
+    <>
+      {isTombstoneRoot(root) ? (
+        <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground/70">
+          <MessagesSquare className="size-4 shrink-0" />
+          <span className="italic">Original message not loaded — it may be older than the channel window.</span>
+        </div>
+      ) : (
+        <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} isEditing={editingId === root.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+      )}
+      <div className="flex items-center gap-2 px-3 py-1 mt-1">
+        <div className="h-px flex-1 bg-border/60" />
+        {!isLoading && (
+          <span className="text-[11px] text-muted-foreground/60 shrink-0">
+            {replies.length === 0
+              ? "No replies yet"
+              : `${replies.length} ${replies.length === 1 ? "reply" : "replies"}`}
+          </span>
+        )}
+        <div className="h-px flex-1 bg-border/60" />
+      </div>
+      {isLoading && (
+        <div className="flex justify-center py-6">
+          <Loader2 className="size-5 animate-spin text-muted-foreground" />
+        </div>
+      )}
+    </>
+  );
 
   return (
     <ComposerBoundsProvider value={composerBoundsRef}>
@@ -450,47 +503,37 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
         </div>
       </div>
 
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable space-y-1 relative">
-        {isTombstoneRoot(root) ? (
-          <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground/70">
-            <MessagesSquare className="size-4 shrink-0" />
-            <span className="italic">Original message not loaded — it may be older than the channel window.</span>
-          </div>
-        ) : (
-          <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} isEditing={editingId === root.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
-        )}
-        <div className="flex items-center gap-2 px-3 py-1">
-          <div className="h-px flex-1 bg-border/60" />
-          {!isLoading && (
-            <span className="text-[11px] text-muted-foreground/60 shrink-0">
-              {replies.length === 0
-                ? "No replies yet"
-                : `${replies.length} ${replies.length === 1 ? "reply" : "replies"}`}
-            </span>
-          )}
-          <div className="h-px flex-1 bg-border/60" />
-        </div>
-        {isLoading ? (
-          <div className="flex justify-center py-6">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : (
-          replies.map((reply, i) => {
+      <div className="flex-1 min-h-0 relative">
+        <Virtuoso<ChatMsg, ThreadListContext>
+          key={root.id}
+          ref={virtuosoRef}
+          className="h-full overflow-x-clip overscroll-contain scrollbar-stable"
+          data={isLoading ? NO_REPLIES : replies}
+          context={{ header: listHeader }}
+          components={THREAD_COMPONENTS}
+          computeItemKey={(_i, reply) => reply.id}
+          followOutput={alwaysFollow}
+          initialTopMostItemIndex={{ index: "LAST", align: "end" }}
+          increaseViewportBy={{ top: 400, bottom: 200 }}
+          onScroll={handleScroll}
+          itemContent={(index, reply) => {
             // Collapse consecutive same-author replies within a short window into
             // a compact continuation, mirroring the main timeline. The root never
             // continues into the first reply (they're separated by the divider).
-            const prev = replies[i - 1];
+            const prev = replies[index - 1];
             const continuation =
               !!prev &&
               prev.pubkey === reply.pubkey &&
               reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
             return (
-              <ThreadMessage key={reply.id} event={reply} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+              <div className="pt-1">
+                <ThreadMessage event={reply} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+              </div>
             );
-          })
-        )}
+          }}
+        />
         {showJumpToLatest && (
-          <div className="sticky bottom-3 z-10 h-0 flex justify-center items-end pointer-events-none">
+          <div className="absolute bottom-3 inset-x-0 z-10 flex justify-center pointer-events-none">
             <button
               type="button"
               onClick={scrollToBottom}

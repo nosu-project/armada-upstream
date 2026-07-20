@@ -267,7 +267,7 @@ export function MeshPage() {
                   // populated broadcast for an empty DM looks perpetually loading.
                   key={view.type === "dm" ? `dm:${view.peerID}` : "broadcast"}
                   transport={activeTransport}
-                  className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4"
+                  className="flex-1 min-h-0"
                   emptyState={view.type === "dm" ? <EmptyDM peer={selectedPeer} /> : <EmptyBroadcast />}
                   renderMessage={(msg, continuation) => (
                     <MeshMessage

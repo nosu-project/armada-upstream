@@ -915,7 +915,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         <MessageTimeline
           transport={transport}
           handleRef={timelineRef}
-          className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4"
+          className="flex-1 min-h-0"
           emptyState={
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <MessageSquare className="size-10 text-muted-foreground/40 mb-3" />
