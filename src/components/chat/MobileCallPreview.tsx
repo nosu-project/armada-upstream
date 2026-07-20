@@ -1,4 +1,4 @@
-import { GripHorizontal, Maximize2, MoveDiagonal2, X } from "lucide-react";
+import { GripHorizontal, Maximize2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useCall } from "@/hooks/useCall";
@@ -455,11 +455,29 @@ export function MobileCallPreview({
           aria-label="Resize call preview"
           className={cn(
             "shrink-0 flex items-center justify-center rounded-md touch-none cursor-nwse-resize",
-            "size-6 touch:size-8 text-muted-foreground hover:text-foreground hover:bg-foreground/10",
+            "size-6 touch:size-8",
+            // Subtle idle, clearer on hover/active.
+            "text-muted-foreground/60 hover:text-foreground hover:bg-foreground/10",
             gesture === "resize" && "text-foreground bg-foreground/10",
           )}
         >
-          <MoveDiagonal2 className="size-4" aria-hidden />
+          {/* Textarea-style corner resize grip: 3 short parallel diagonal
+              strokes clustered at the top-left corner (mirrored from the usual
+              bottom-right textarea marks). ~13px, inherits currentColor. */}
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 14 14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.25"
+            strokeLinecap="round"
+            aria-hidden
+          >
+            <path d="M1 4L4 1" />
+            <path d="M1 7.5L7.5 1" />
+            <path d="M1 11L11 1" />
+          </svg>
         </div>
         {/* Draggable title/empty area: dragging is scoped to THIS region only,
             so the resize handle and the action buttons never start a drag, and
