@@ -76,6 +76,33 @@ export interface CallContextType {
   /** Explicitly set the call stage open state (the stage's close button uses this). */
   setStageOpen: (open: boolean) => void;
   /**
+   * Whether the call stage is currently docked inside the compact floating
+   * window (desktop-only). True only when no normal call-stage slot is
+   * registered (the user has navigated away from the call's channel), the user
+   * hasn't hidden the floating window, and the viewport is desktop-width. The
+   * same persistent stage host is reparented into the floating window, so there
+   * is never a second stage or duplicate media subscription.
+   */
+  stageFloating: boolean;
+  /**
+   * Whether the user has dismissed the floating video window without leaving
+   * the call. While hidden, the stage parks off-DOM (video subscriptions stay
+   * alive) and only the call bar remains visible. Reset whenever the stage
+   * returns to a normal slot or a new call starts.
+   */
+  floatingHidden: boolean;
+  /** Hide the floating video window (the floating window's close button). */
+  setFloatingHidden: (hidden: boolean) => void;
+  /**
+   * Navigate to the active call's channel/conversation, registered by the
+   * connected voice room (which owns the correct route for NIP-29 groups, DMs,
+   * and Concord channels). The floating window's "expand" action calls this to
+   * return the user to the full call view. Null before the room registers it.
+   */
+  focusActiveCall: (() => void) | null;
+  /** Internal: the connected room registers its navigate-to-call handler here. */
+  registerFocusActiveCall: (fn: (() => void) | null) => void;
+  /**
    * Pubkeys currently speaking in the ACTIVE call (resolved from LiveKit
    * identities; unverified Concord identities are excluded). Lets UI outside
    * the LiveKit room — e.g. the sidebar's nested voice roster — show live

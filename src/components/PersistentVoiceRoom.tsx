@@ -578,6 +578,14 @@ function Nip29VoiceRoom({
     navigate(`/s/${relayToRouteParam(call.relayUrl)}/${encodeURIComponent(call.groupId)}`);
   }, [navigate, isDm, call.dmPeer, call.relayUrl, call.groupId]);
 
+  // Register the navigate-to-call handler so the floating video window's
+  // "return to call" action lands on this room's channel/conversation.
+  const { registerFocusActiveCall } = useCall();
+  useEffect(() => {
+    registerFocusActiveCall(goToChannel);
+    return () => registerFocusActiveCall(null);
+  }, [registerFocusActiveCall, goToChannel]);
+
   if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
 
@@ -656,8 +664,19 @@ function ConcordVoiceRoom({
 }) {
   const { community, channel, broker } = ctx;
   const { user } = useCurrentUser();
-  const { joinConcordCall } = useCall();
+  const { joinConcordCall, registerFocusActiveCall } = useCall();
+  const navigate = useNavigate();
   const { data: tokenData, error, isLoading } = useAvToken2(channel, broker, true);
+
+  // Register the navigate-to-call handler so the floating video window's
+  // "return to call" action lands on this Concord voice channel. The route
+  // params are the community + channel idHex (matching /c/:communityId/:channelId).
+  useEffect(() => {
+    const go = () =>
+      navigate(`/c/${encodeURIComponent(community.idHex)}/${encodeURIComponent(channel.idHex)}`);
+    registerFocusActiveCall(go);
+    return () => registerFocusActiveCall(null);
+  }, [registerFocusActiveCall, navigate, community.idHex, channel.idHex]);
 
   // Live presence (§4): the identity→member verification input, the rendezvous
   // hint stream (§5), and our own heartbeat (joined every 30s, left on leave).

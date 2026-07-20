@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { FloatingCallStage } from "@/components/chat/FloatingCallStage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { CallContext, type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
 import { cn } from "@/lib/utils";
@@ -39,7 +40,18 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const [exiting, setExiting] = useState(false);
   const [slots, setSlots] = useState<HTMLElement[]>([]);
   const [stageSlots, setStageSlots] = useState<HTMLElement[]>([]);
+  // The floating window's DOM host, registered by FloatingCallStage when the
+  // floating window is shown. Kept separate from the normal top-of-chat slots
+  // so the reparent effect can prefer a normal slot over the floating one.
+  const [floatingSlot, setFloatingSlot] = useState<HTMLElement | null>(null);
   const [stageOpen, setStageOpen] = useState(false);
+  // The user dismissed the floating video window (without leaving the call).
+  // While true the stage parks off-DOM instead of floating.
+  const [floatingHidden, setFloatingHidden] = useState(false);
+  // Navigate-to-call handler, registered by the connected voice room (which
+  // owns the correct route for its call type). Powers the floating window's
+  // "return to call" action.
+  const [focusActiveCall, setFocusActiveCall] = useState<(() => void) | null>(null);
   // Live speaker set (pubkeys), reported by the connected room so voice
   // activity can render outside the LiveKit context (sidebar rosters).
   const [speakingPubkeys, setSpeakingState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
@@ -92,6 +104,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const leaveCall = useCallback(() => {
     setExiting(true);
     setStageOpen(false);
+    setFloatingHidden(false);
     setSpeakingState(NO_SPEAKERS);
     setMutedState(NO_SPEAKERS);
     setRosterState(null);
@@ -117,38 +130,68 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     return () => setStageSlots((prev) => prev.filter((s) => s !== el));
   }, []);
 
+  // The floating window registers its host here (only while it's shown — see
+  // FloatingCallStage). Separate from the normal top-of-chat slots so the
+  // reparent effect below can always prefer a normal slot when one exists.
+  const registerFloatingSlot = useCallback((el: HTMLElement | null) => {
+    setFloatingSlot(el);
+  }, []);
+
+  const registerFocusActiveCall = useCallback((fn: (() => void) | null) => {
+    // Wrap in an updater's stable box: storing a function in state needs the
+    // functional form (React would otherwise call it as an updater).
+    setFocusActiveCall(() => fn);
+  }, []);
+
+  const hasNormalSlot = stageSlots.length > 0;
+
+  // Returning to the call's own channel (a normal slot appears) clears any
+  // prior floating-window dismissal, so navigating away again re-floats the
+  // video rather than staying hidden from a stale decision.
+  useEffect(() => {
+    if (hasNormalSlot) setFloatingHidden(false);
+  }, [hasNormalSlot]);
+
   // A stable, call-lifetime host element for the call stage. The stage portals
   // into THIS element for the whole call; the element itself is *reparented*
-  // into whichever page slot is currently registered (and parked detached when
-  // none is). Reparenting — instead of portaling into each slot directly —
-  // keeps CallStage mounted across navigation, so video subscriptions, the
-  // focused tile, theater mode, and the screenshare-appeared tracking all
-  // survive leaving the room UI (a remount used to pause remote video via
-  // adaptiveStream and drop it entirely on the E2EE Concord path).
+  // into whichever destination is currently active — a normal top-of-chat slot
+  // when the user is on the call's channel, the compact floating window when
+  // they've navigated away (desktop), or parked detached (mobile, or the user
+  // hid the floating window). Reparenting — instead of portaling into each slot
+  // directly — keeps CallStage mounted across navigation, so video
+  // subscriptions, the focused tile, theater mode, and the screenshare-appeared
+  // tracking all survive leaving the room UI (a remount used to pause remote
+  // video via adaptiveStream and drop it entirely on the E2EE Concord path).
   const stageHost = useMemo(() => {
     const el = document.createElement("div");
     el.style.display = "contents";
     return el;
   }, []);
 
+  // Reparent destination, in priority order: a registered normal slot (the
+  // call's channel is on screen) always wins, so the full stage and the
+  // floating window can never show at once; otherwise the floating window's
+  // host (when shown); otherwise null → parked off-DOM.
+  const stageTarget = hasNormalSlot ? stageSlots[stageSlots.length - 1] : floatingSlot;
+
   useEffect(() => {
-    const target = stageSlots.length > 0 ? stageSlots[stageSlots.length - 1] : null;
-    if (target) {
-      target.appendChild(stageHost);
+    if (stageTarget) {
+      stageTarget.appendChild(stageHost);
       // Browsers pause media elements while they're removed from the document
       // (which happens above whenever the user navigates away from the call's
-      // channel). Re-inserting the host does NOT resume them, and LiveKit only
-      // calls play() on a fresh attach or a tab visibility change — neither
-      // happens here since CallStage stays mounted. Without this kick, remote
-      // video stays frozen on its last frame after switching channels and back
-      // (audio is unaffected: its elements live outside the reparented host).
+      // channel, or parks between destinations). Re-inserting the host does NOT
+      // resume them, and LiveKit only calls play() on a fresh attach or a tab
+      // visibility change — neither happens here since CallStage stays mounted.
+      // Without this kick, remote video stays frozen on its last frame after
+      // switching channels and back, or after moving to/from the floating
+      // window (audio is unaffected: its elements live outside the host).
       for (const video of stageHost.querySelectorAll("video")) {
         if (video.paused) video.play().catch(() => {});
       }
     } else {
       stageHost.remove();
     }
-  }, [stageSlots, stageHost]);
+  }, [stageTarget, stageHost]);
   useEffect(() => () => stageHost.remove(), [stageHost]);
 
   const toggleStage = useCallback(() => setStageOpen((o) => !o), []);
@@ -175,6 +218,13 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  // The floating window is shown while: a call is active, its channel isn't on
+  // screen (no normal slot), the user hasn't hidden it, and the call isn't
+  // exiting. Desktop-only presentation is enforced by FloatingCallStage's own
+  // responsive CSS (it only registers its host at sidebar-width).
+  const showFloating = Boolean(user && activeCall) && !hasNormalSlot && !floatingHidden && !exiting;
+  const stageFloating = showFloating && floatingSlot !== null;
+
   return (
     <CallContext.Provider
       value={{
@@ -188,6 +238,11 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         stageOpen,
         toggleStage,
         setStageOpen,
+        stageFloating,
+        floatingHidden,
+        setFloatingHidden,
+        focusActiveCall,
+        registerFocusActiveCall,
         speakingPubkeys,
         setSpeakingPubkeys,
         mutedPubkeys,
@@ -230,6 +285,17 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
               shellRef={shellRef}
             />
           </Suspense>
+        )}
+        {/* The compact floating video window (desktop). Renders its host only
+            while the call's channel is off screen and the window isn't hidden;
+            CallProvider reparents the persistent stage host into it, so the
+            same stage — and its media — moves in without any remount. */}
+        {showFloating && (
+          <FloatingCallStage
+            registerSlot={registerFloatingSlot}
+            onExpand={focusActiveCall ?? undefined}
+            onHide={() => setFloatingHidden(true)}
+          />
         )}
       </div>
     </CallContext.Provider>

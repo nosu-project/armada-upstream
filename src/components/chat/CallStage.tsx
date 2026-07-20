@@ -466,7 +466,7 @@ export function CallStage({
   callLabel?: React.ReactNode;
   open: boolean;
 }) {
-  const { setStageOpen } = useCall();
+  const { setStageOpen, stageFloating } = useCall();
   const participants = useParticipants();
   const speakingParticipants = useSpeakingParticipants();
   const speakingIds = useMemo(
@@ -685,6 +685,17 @@ export function CallStage({
       </div>,
       document.body,
     );
+  }
+
+  if (stageFloating) {
+    // Fill the floating panel: no docked margins/collapse animation, and always
+    // visible (the panel — not `open` — gates it). The panel gives us a
+    // definite height, so the grid/spotlight fit math works unchanged. This is
+    // the SAME stage instance as the docked one — it just re-lays-out when
+    // CallProvider reparents its host into the floating window, so no video
+    // subscription is torn down or duplicated. The floating panel supplies its
+    // own header (return/hide), so the stage renders body only here.
+    return <div className="flex h-full w-full flex-col overflow-hidden">{body}</div>;
   }
 
   return (
