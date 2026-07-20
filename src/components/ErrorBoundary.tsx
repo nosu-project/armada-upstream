@@ -63,11 +63,12 @@ export class ErrorBoundary extends Component<Props, State> {
           The app hit an unexpected error and couldn't continue. Reloading
           usually clears it.
         </p>
-        {import.meta.env.DEV && (
-          <pre className="max-w-full max-h-40 overflow-auto rounded-md bg-muted p-3 text-left text-xs text-muted-foreground">
-            {error.message}
-          </pre>
-        )}
+        {/* Shown in production too: when a release-boot crash slips past the
+            stale-chunk recovery, the message on screen is the only diagnostic
+            we get from the field (no console on a phone). */}
+        <pre className="max-w-full max-h-40 overflow-auto rounded-md bg-muted p-3 text-left text-xs text-muted-foreground select-text whitespace-pre-wrap break-words">
+          {error.name}: {error.message}
+        </pre>
         <button
           type="button"
           onClick={this.handleReload}
