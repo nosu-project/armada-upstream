@@ -77,8 +77,9 @@ function defaultPosition(width: number, height: number): Point {
  * the room's existing state rather than duplicating any media handles.
  *
  * Desktop only: below the `sidebar` breakpoint we render nothing and register
- * no host, so the stage parks off-DOM and the existing fixed mobile call bar
- * stays the sole voice UI. Native browser Picture-in-Picture is out of scope.
+ * no host, so the compact `MobileCallPreview` (which registers only below that
+ * breakpoint) is the sole floating destination there. The two never register at
+ * once. Native browser Picture-in-Picture is out of scope.
  */
 export function FloatingCallStage({
   registerSlot,
@@ -86,7 +87,7 @@ export function FloatingCallStage({
   onHide,
 }: {
   /** Register (or clear, with null) the body element as the floating stage host. */
-  registerSlot: (el: HTMLElement | null) => void;
+  registerSlot: (el: HTMLElement | null, variant?: "desktop" | "mobile") => void;
   /** Return to the full call view (navigate to the call's channel). */
   onExpand?: () => void;
   /** Hide the floating window without leaving the call. */
@@ -108,13 +109,13 @@ export function FloatingCallStage({
   // stranding it inside a hidden panel (a display:none ancestor pauses video).
   useEffect(() => {
     if (!isDesktop) {
-      registerSlot(null);
+      registerSlot(null, "desktop");
       return;
     }
     const el = bodyRef.current;
     if (!el) return;
-    registerSlot(el);
-    return () => registerSlot(null);
+    registerSlot(el, "desktop");
+    return () => registerSlot(null, "desktop");
   }, [isDesktop, registerSlot]);
 
   // Initial placement: restore the persisted position (clamped to the current

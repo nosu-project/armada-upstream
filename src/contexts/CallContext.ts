@@ -85,6 +85,16 @@ export interface CallContextType {
    */
   stageFloating: boolean;
   /**
+   * Which floating destination the stage is currently docked into, so the
+   * stage's floating branch can adapt its chrome: the draggable desktop window
+   * (`"desktop"`) renders the full media control row; the compact mobile
+   * preview (`"mobile"`) omits it, because the fixed MobileCallBar already
+   * carries mic/camera/screen-share/leave. Null when not floating. Only one
+   * variant ever registers at a time (each floating host gates itself on the
+   * `sidebar` breakpoint), so the two destinations never compete.
+   */
+  floatingVariant: "desktop" | "mobile" | null;
+  /**
    * Whether the user has dismissed the floating video window without leaving
    * the call. While hidden, the stage parks off-DOM (video subscriptions stay
    * alive) and only the call bar remains visible. Reset whenever the stage

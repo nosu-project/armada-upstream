@@ -732,7 +732,7 @@ export function CallStage({
   callLabel?: React.ReactNode;
   open: boolean;
 }) {
-  const { setStageOpen, stageFloating } = useCall();
+  const { setStageOpen, stageFloating, floatingVariant } = useCall();
   const participants = useParticipants();
   const speakingParticipants = useSpeakingParticipants();
   const speakingIds = useMemo(
@@ -1054,18 +1054,33 @@ export function CallStage({
   }
 
   if (stageFloating) {
-    // Compact floating window: a SINGLE primary tile (screen share > focused >
-    // active speaker > fallback, chosen above) plus the media controls — not
-    // the full grid. Same tile renderer as the grid, so active-speaker rings,
-    // screenshare, and the camera-off avatar fallback all behave identically.
-    // This is the SAME stage instance as the docked one — it just re-lays-out
-    // when CallProvider reparents its host into the floating window, so no
-    // video subscription is torn down or duplicated. The floating panel
-    // supplies its own header (drag/return/hide); the stage renders the preview
-    // and controls.
+    // Compact floating destination: a SINGLE primary tile (screen share >
+    // focused > active speaker > fallback, chosen above) — not the full grid.
+    // Same tile renderer as the grid, so active-speaker rings, screenshare, and
+    // the camera-off avatar fallback all behave identically. This is the SAME
+    // stage instance as the docked one — it just re-lays-out when CallProvider
+    // reparents its host into the floating destination, so no video
+    // subscription is torn down or duplicated.
+    //
+    // Two destinations share this branch, differing only in chrome:
+    //   - desktop: the draggable window supplies its header (drag/return/hide);
+    //     the stage adds the media control row (mic/cam/share/leave).
+    //   - mobile: the compact preview supplies its header (return/hide) and the
+    //     always-present MobileCallBar carries the media controls, so the stage
+    //     omits the control row here — only the primary content (and the share
+    //     switcher when several shares are live) render.
+    const isMobileFloating = floatingVariant === "mobile";
     return (
       <div className="flex h-full w-full flex-col overflow-hidden">
-        <div className="relative h-44 w-full bg-black">
+        <div
+          className={cn(
+            "relative w-full bg-black",
+            // Desktop uses a fixed preview height inside the 320px panel; the
+            // mobile preview is width-constrained, so size the video to a 16:9
+            // box of the panel width instead.
+            isMobileFloating ? "aspect-video" : "h-44",
+          )}
+        >
           {showingShare && selectedShareTrackRef ? (
             // Render the SELECTED screen share directly from its own
             // TrackReference, keyed by participant identity + publication SID.
@@ -1112,7 +1127,10 @@ export function CallStage({
             />
           )}
         </div>
-        <FloatingControls />
+        {/* Media controls: only in the desktop floating window. On mobile the
+            fixed MobileCallBar already carries mic/camera/screen-share/leave, so
+            duplicating them here would be redundant. */}
+        {!isMobileFloating && <FloatingControls />}
       </div>
     );
   }

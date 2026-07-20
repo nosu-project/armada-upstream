@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FloatingCallStage } from "@/components/chat/FloatingCallStage";
+import { MobileCallPreview } from "@/components/chat/MobileCallPreview";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { CallContext, type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
 import { cn } from "@/lib/utils";
@@ -40,10 +41,27 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const [exiting, setExiting] = useState(false);
   const [slots, setSlots] = useState<HTMLElement[]>([]);
   const [stageSlots, setStageSlots] = useState<HTMLElement[]>([]);
-  // The floating window's DOM host, registered by FloatingCallStage when the
-  // floating window is shown. Kept separate from the normal top-of-chat slots
-  // so the reparent effect can prefer a normal slot over the floating one.
-  const [floatingSlot, setFloatingSlot] = useState<HTMLElement | null>(null);
+  // The floating window's DOM host, registered by FloatingCallStage (desktop)
+  // or MobileCallPreview (mobile) when a floating destination is shown. Kept
+  // separate from the normal top-of-chat slots so the reparent effect can
+  // prefer a normal slot over the floating one. Tracked per variant so a
+  // breakpoint transition (both components are mounted; each registers/clears
+  // its own host on the same tick) can't have one variant's cleanup clobber the
+  // other's registration — only whichever variant currently holds a host is
+  // used, and exactly one ever does (each host gates itself on the `sidebar`
+  // breakpoint). `floatingVariant` records which is active, so the stage's
+  // floating branch can adapt its chrome (desktop shows the media controls;
+  // mobile defers them to MobileCallBar).
+  const [floatingHosts, setFloatingHosts] = useState<{
+    desktop: HTMLElement | null;
+    mobile: HTMLElement | null;
+  }>({ desktop: null, mobile: null });
+  const floatingSlot = floatingHosts.desktop ?? floatingHosts.mobile;
+  const floatingVariant: "desktop" | "mobile" | null = floatingHosts.desktop
+    ? "desktop"
+    : floatingHosts.mobile
+      ? "mobile"
+      : null;
   const [stageOpen, setStageOpen] = useState(false);
   // The user dismissed the floating video window (without leaving the call).
   // While true the stage parks off-DOM instead of floating.
@@ -131,11 +149,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // The floating window registers its host here (only while it's shown — see
-  // FloatingCallStage). Separate from the normal top-of-chat slots so the
-  // reparent effect below can always prefer a normal slot when one exists.
-  const registerFloatingSlot = useCallback((el: HTMLElement | null) => {
-    setFloatingSlot(el);
-  }, []);
+  // FloatingCallStage / MobileCallPreview). Separate from the normal
+  // top-of-chat slots so the reparent effect below can always prefer a normal
+  // slot when one exists. Stored under its variant key so each destination
+  // manages its own registration independently (see `floatingHosts`).
+  const registerFloatingSlot = useCallback(
+    (el: HTMLElement | null, variant: "desktop" | "mobile" = "desktop") => {
+      setFloatingHosts((prev) => (prev[variant] === el ? prev : { ...prev, [variant]: el }));
+    },
+    [],
+  );
 
   const registerFocusActiveCall = useCallback((fn: (() => void) | null) => {
     // Wrap in an updater's stable box: storing a function in state needs the
@@ -218,10 +241,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  // The floating window is shown while: a call is active, its channel isn't on
-  // screen (no normal slot), the user hasn't hidden it, and the call isn't
-  // exiting. Desktop-only presentation is enforced by FloatingCallStage's own
-  // responsive CSS (it only registers its host at sidebar-width).
+  // The floating destination is shown while: a call is active, its channel
+  // isn't on screen (no normal slot), the user hasn't hidden it, and the call
+  // isn't exiting. Which destination actually mounts — the draggable desktop
+  // window or the compact mobile preview — is decided by each component's own
+  // responsive CSS (they register their host only at, respectively, sidebar
+  // width and below it), so exactly one is ever present.
   const showFloating = Boolean(user && activeCall) && !hasNormalSlot && !floatingHidden && !exiting;
   const stageFloating = showFloating && floatingSlot !== null;
 
@@ -239,6 +264,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         toggleStage,
         setStageOpen,
         stageFloating,
+        floatingVariant,
         floatingHidden,
         setFloatingHidden,
         focusActiveCall,
@@ -286,16 +312,27 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             />
           </Suspense>
         )}
-        {/* The compact floating video window (desktop). Renders its host only
-            while the call's channel is off screen and the window isn't hidden;
-            CallProvider reparents the persistent stage host into it, so the
-            same stage — and its media — moves in without any remount. */}
+        {/* The compact floating video destinations, shown while the call's
+            channel is off screen and the window isn't hidden. Both are rendered
+            together but only ONE registers its host at a time — FloatingCallStage
+            at sidebar-width (the draggable desktop window), MobileCallPreview
+            below it (the fixed above-the-call-bar preview). CallProvider
+            reparents the persistent stage host into whichever registered, so the
+            same stage — and its media — moves in without any remount or a second
+            LiveKit connection. */}
         {showFloating && (
-          <FloatingCallStage
-            registerSlot={registerFloatingSlot}
-            onExpand={focusActiveCall ?? undefined}
-            onHide={() => setFloatingHidden(true)}
-          />
+          <>
+            <FloatingCallStage
+              registerSlot={registerFloatingSlot}
+              onExpand={focusActiveCall ?? undefined}
+              onHide={() => setFloatingHidden(true)}
+            />
+            <MobileCallPreview
+              registerSlot={registerFloatingSlot}
+              onExpand={focusActiveCall ?? undefined}
+              onHide={() => setFloatingHidden(true)}
+            />
+          </>
         )}
       </div>
     </CallContext.Provider>
