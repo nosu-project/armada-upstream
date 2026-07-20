@@ -165,8 +165,9 @@ public class NotificationRelayService extends Service {
     //             the peer for routing/name. Derived in the WebView from the raw
     //             nsec key (never shipped here); one entry per followed peer.
     // The DM wrap filter is `{kinds:[1059], "#p":[userPubkey]}` on the DM relays
-    // (the sender is hidden, so it can't be authors-scoped); only wraps whose
-    // AUTHOR is in this map are opened + notified — the rest are the WebView's.
+    // (the sender is hidden, so it can't be authors-scoped); wraps whose AUTHOR
+    // is in this map are opened for a rich notification, all other inbox wraps
+    // fire a generic one (see handleOpaqueDm17Wrap).
     private final java.util.Map<String, Dm17Conv> pkToDm17 = new java.util.HashMap<>();
     // De-dupe notifications across relays/reconnects for this service lifetime.
     private final Set<String> notifiedIds = new HashSet<>();
@@ -847,15 +848,18 @@ public class NotificationRelayService extends Service {
                 }
                 // NIP-17 gift-wrapped DMs (kind 1059) addressed to me, on the
                 // DM/app relays. The wrap AUTHOR hides the sender, so this can't
-                // be authors-scoped — it's a broad `#p` inbox filter, and only
-                // wraps whose author matches a known conversation address
-                // (pkToDm17) get opened + notified in handleEvent; the rest are
-                // the WebView's DM inbox sync to handle. Empty map ⇒ no sub.
+                // be authors-scoped — it's a broad `#p` inbox filter. Wraps
+                // whose author matches a known conversation address (pkToDm17)
+                // decrypt to a rich notification in handleDm17Wrap; the rest
+                // (vanilla NIP-17 senders, extension/bunker logins, non-follows)
+                // fire a generic one there. Subscribed whenever DM notifications
+                // are on, even with no derivable conversation addresses.
                 // `since` rewinds the NIP-59 backdate window (a wrap's outer
                 // created_at is up to 2 days in the past, so `since = sinceSec`
                 // never matches a live wrap) and `limit: 0` skips the stored
                 // replay that rewind would otherwise pull in (live-only).
-                if (dmRelays.contains(relayUrl) && !pkToDm17.isEmpty()) {
+                if (dmRelays.contains(relayUrl)
+                        && (!pkToDm17.isEmpty() || prefBool("directMessages", true))) {
                     JSONObject f6 = new JSONObject();
                     f6.put("kinds", new JSONArray().put(1059));
                     f6.put("#p", new JSONArray().put(userPubkey));
@@ -1548,15 +1552,21 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * Notify for a NIP-17 DM wrap. Only wraps whose author is a known
-     * conversation address (pkToDm17) reach here; unknown wraps are the
-     * WebView's DM inbox sync to handle. Decrypts to "<sender>: <preview>"
-     * exactly like Concord V2 — the identity key never entered native code,
-     * only the two per-conversation NIP-44 keys derived in the WebView.
+     * Notify for a NIP-17 DM wrap. Wraps whose author is a known conversation
+     * address (pkToDm17) decrypt to "<sender>: <preview>" exactly like Concord
+     * V2 — the identity key never entered native code, only the two
+     * per-conversation NIP-44 keys derived in the WebView. Wraps from any
+     * OTHER author (a vanilla NIP-17 client, an Armada sender without an nsec
+     * login, a non-followed peer — or every wrap, when WE have no raw key)
+     * are unopenable here by construction, so they fire a generic
+     * "New direct message" instead of being dropped.
      */
-    private void handleDm17Wrap(JSONObject wrap, String id, String relayUrl) {
+    private void handleDm17Wrap(JSONObject wrap, String id, String relayUrl, boolean storedBefore) {
         Dm17Conv conv = pkToDm17.get(wrap.optString("pubkey"));
-        if (conv == null) return; // not a conversation we can open — WebView's job
+        if (conv == null) {
+            handleOpaqueDm17Wrap(wrap, id, storedBefore);
+            return;
+        }
         long cts = wrap.optLong("created_at", 0);
         // Clamp to the wall clock: a hostile future-stamped wrap must not drag
         // sinceSec forward and deafen every other filter's reconnect resume.
@@ -1612,6 +1622,42 @@ public class NotificationRelayService extends Service {
     }
 
     /**
+     * A kind-1059 wrap addressed to the user whose author is NOT a derivable
+     * conversation address. The sender is hidden by design and no key we hold
+     * opens the wrap, so the best possible notification is a generic
+     * "New direct message" — the WebView attributes it on open. (These used
+     * to be dropped silently, which meant NO notification at all for DMs from
+     * vanilla NIP-17 clients, from senders without an nsec login, or from
+     * anyone the user doesn't follow.)
+     *
+     * Dedupe is {@code storedBefore} (the shared event DB): a wrap either
+     * side EVER stored — a previous service incarnation, the WebView's inbox
+     * sync, or our own just-published self-copy — never re-notifies. That
+     * floor survives service restarts, unlike notifiedIds, and covers relays
+     * that ignore the filter's {@code limit: 0} and replay the rewound
+     * `since` window on reconnect.
+     */
+    private void handleOpaqueDm17Wrap(JSONObject wrap, String id, boolean storedBefore) {
+        // Only wraps addressed to me are DMs — the Concord V2 authors-scoped
+        // subscription also delivers kind 1059, with no `p` tag at us.
+        if (!isMentioned(wrap, userPubkey)) return;
+        notifiedIds.add(id);
+        if (storedBefore) return;
+        if (!prefBool("directMessages", true)) return;
+        // Viewing ANY DM thread suppresses: the live feed already paints the
+        // message there (or it's our own just-sent copy echoing back), and
+        // the wrap hides which peer it belongs to, so per-thread suppression
+        // is impossible.
+        for (String roomKey : activeRoomKeys) {
+            if (roomKey.startsWith("dm:")) return;
+        }
+        if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (opaque)");
+        enqueueRoomMessage("dm17:opaque", "Direct messages", "/dms", /*isGroup=*/false,
+                /*senderPubkey=*/null, "Someone", /*picture=*/null,
+                "New direct message", System.currentTimeMillis(), /*mention=*/true);
+    }
+
+    /**
      * Per-room cache key for the plugin's rolling event cache (see
      * ArmadaNotificationPlugin.getRoomEvents): NIP-29 events key by their group
      * (`h` tag), Concord V1 sealed outers by pseudonym (`z` tag), Concord V2
@@ -1628,9 +1674,12 @@ public class NotificationRelayService extends Service {
         if (kind == 1059) {
             Concord2Stream st = pkToStream2.get(event.optString("pubkey"));
             if (st != null) return "c2:" + st.channelId;
-            // A NIP-17 DM wrap shares the single "dm" cache bucket (the WebView
-            // splits threads by counterparty itself, like kind-4).
+            // A NIP-17 DM wrap — any wrap p-tagged at the user, whether or not
+            // the service can open it (the WebView holds the identity key and
+            // splits threads by counterparty itself, like kind-4). One shared
+            // "dm" cache bucket.
             if (pkToDm17.containsKey(event.optString("pubkey"))) return "dm";
+            if (isMentioned(event, userPubkey)) return "dm";
             return null;
         }
         String h = tagValue(event, "h");
@@ -1656,10 +1705,18 @@ public class NotificationRelayService extends Service {
         // — ciphertext; the WebView holds the NIP-04 keys). Each is also
         // recorded in the plugin's per-room rolling cache (see getRoomEvents)
         // so opening a room can pull its natively-received history directly.
+        // Whether a kind-1059 wrap was in the shared DB BEFORE this insert
+        // records it — the durable dedupe floor for DM wraps (their outer
+        // timestamps are backdated, so time-based gating can't apply): a wrap
+        // either side ever stored (a previous service incarnation, the
+        // WebView, or our own published self-copy) must not re-notify.
+        boolean storedBefore = false;
         switch (kind) {
             case 9: case 1068: case 7: case 1111: case 5: case 3300: case 1059: case 4:
                 try {
-                    SharedEventDb.get(this).insertEvent(event, SharedEventDb.SRC_SERVICE);
+                    SharedEventDb db = SharedEventDb.get(this);
+                    if (kind == 1059) storedBefore = db.hasEvent(id);
+                    db.insertEvent(event, SharedEventDb.SRC_SERVICE);
                 } catch (Exception e) {
                     Log.w(TAG, "event db write failed", e);
                 }
@@ -1760,9 +1817,8 @@ public class NotificationRelayService extends Service {
         if (kind == 1059) {
             Concord2Stream st = pkToStream2.get(event.optString("pubkey"));
             if (st == null) {
-                // Not a Concord V2 wrap — maybe a NIP-17 DM wrap from a known
-                // conversation address (nips#2396). Handle + return there.
-                handleDm17Wrap(event, id, relayUrl);
+                // Not a Concord V2 wrap — a NIP-17 DM wrap. Handle + return.
+                handleDm17Wrap(event, id, relayUrl, storedBefore);
                 return;
             }
             long cts = event.optLong("created_at", 0);

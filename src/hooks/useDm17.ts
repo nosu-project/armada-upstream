@@ -37,6 +37,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDecryptConsent } from "@/hooks/useDecryptConsent";
 import { useDmRelayList, useDmRelaysFor } from "@/hooks/useDmRelayList";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { effectiveDmRelays } from "@/contexts/AppContext";
@@ -441,6 +442,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   const rawKey = useDm17RawKey();
   const { consent } = useDecryptConsent();
   const support = useDm17Support();
+  const eventStore = useEventStore();
   const peerInboxRelays = useDmRelaysFor(peer);
   // Where OUR copies live and where our other sessions read: the same union the
   // inbox sync uses (effective DM relays ∪ our published kind-10050 inbox).
@@ -571,6 +573,14 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const wrapPeer = wrapDmSeal(sealPeer, peer, { wrapSk, firstContact: opts?.firstContact });
       const wrapSelf = sealSelf ? wrapDmSeal(sealSelf, self, { wrapSk }) : undefined;
 
+      // Persist OUR self-addressed wrap locally BEFORE publishing. On Android
+      // the event store is the same database the notification service dedupes
+      // its kind-1059 inbox against, so when this wrap echoes back off the
+      // relay (unopenable to the service unless nsec-derived) it's recognized
+      // as already seen instead of firing a spurious "New direct message".
+      const selfCopy = wrapSelf ?? wrapPeer; // peer === self ⇒ the peer copy IS the self copy
+      await eventStore.then((s) => s.event(selfCopy)).catch(() => undefined);
+
       // The self copy is fire-and-forget: it exists for OTHER devices/sessions,
       // and this device already has the rumor locally.
       if (wrapSelf && myRelays.length > 0) {
@@ -585,7 +595,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const peerTargets = [...new Set([...peerInboxRelays, ...myRelays])];
       await nostr.group(peerTargets).event(wrapPeer, { signal: AbortSignal.timeout(8000) });
     },
-    [nostr, user, self, peer, rawKey, peerInboxRelays, myRelays],
+    [nostr, user, self, peer, rawKey, peerInboxRelays, myRelays, eventStore],
   );
 
   /** Optimistically render a rumor, then seal/wrap/publish in the background. */

@@ -17,6 +17,7 @@ import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
 import { signStreamAuthsChunked } from "@/concord-v2/lib/streamAuth";
 import { dm17NativeConv } from "@/lib/nip17/protocol";
 import { useDm17RawKey } from "@/hooks/useDm17";
+import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { normalizeRelayUrl } from "@/lib/platform";
 
@@ -157,15 +158,21 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   // DM relays: where kind-4 DMs are read from (config.appRelays, or the user's
   // own DM relays if opted in). These are NOT the NIP-29 group relays — DMs
   // live on the general app relays and are addressed by #p, so they get their
-  // own connection + filter.
+  // own connection + filter. UNIONED with the user's PUBLISHED kind-10050
+  // inbox, matching the wire (WireSync) and useDm17's inbox scan: NIP-17
+  // senders deliver gift wraps to the recipient's published 10050 relays, and
+  // on a default login (useOwnDmRelays off) those aren't in effectiveDmRelays
+  // — without the union the service would hold its kind-1059 REQ on relays
+  // the wraps never reach.
+  const { relays: publishedDmRelays } = useDmRelayList();
   const dmRelays = useMemo(() => {
     const set = new Set<string>();
-    for (const url of effectiveDmRelays(config)) {
+    for (const url of [...effectiveDmRelays(config), ...publishedDmRelays]) {
       const n = normalizeRelayUrl(url);
       if (n) set.add(n);
     }
     return [...set].sort();
-  }, [config]);
+  }, [config, publishedDmRelays]);
 
   // People the user follows (kind 3). The kind-4 DM subscription is scoped to
   // `authors:[...dmFollows]` so the service only fires DM notifications from

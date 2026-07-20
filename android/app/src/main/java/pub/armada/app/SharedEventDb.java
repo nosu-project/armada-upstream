@@ -89,6 +89,20 @@ final class SharedEventDb extends SQLiteOpenHelper {
     // ── Service write path ───────────────────────────────────────────────────
 
     /**
+     * Whether an event id is already stored — by either writer (the service's
+     * own inserts, src 'svc', or the WebView's store writes, src 'web'). Used
+     * as the durable notification-dedupe floor for DM gift wraps, which have
+     * no usable timestamp for since-gating.
+     */
+    boolean hasEvent(String id) {
+        if (id == null || id.isEmpty()) return false;
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT 1 FROM events WHERE id = ? LIMIT 1", new String[]{id})) {
+            return c.moveToFirst();
+        }
+    }
+
+    /**
      * Insert one event with full store semantics (mirrors
      * SqliteEventStore.insertStatements): ephemeral kinds are skipped,
      * replaceable/addressable events supersede older versions at the same
