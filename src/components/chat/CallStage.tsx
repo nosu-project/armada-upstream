@@ -1072,15 +1072,10 @@ export function CallStage({
     const isMobileFloating = floatingVariant === "mobile";
     return (
       <div className="flex h-full w-full flex-col overflow-hidden">
-        <div
-          className={cn(
-            "relative w-full bg-black",
-            // Desktop uses a fixed preview height inside the 320px panel; the
-            // mobile preview is width-constrained, so size the video to a 16:9
-            // box of the panel width instead.
-            isMobileFloating ? "aspect-video" : "h-44",
-          )}
-        >
+        {/* Both floating variants are width-constrained (their panels are
+            resized by width), so the media area is a 16:9 box of the panel
+            width — it scales with the panel and always preserves the aspect. */}
+        <div className="relative w-full bg-black aspect-video">
           {showingShare && selectedShareTrackRef ? (
             // Render the SELECTED screen share directly from its own
             // TrackReference, keyed by participant identity + publication SID.
