@@ -195,6 +195,12 @@ export function FloatingCallStage({
   // height to clamp/default). Rendered invisibly for that one frame.
   const [pos, setPos] = useState<Point | null>(null);
   const [gesture, setGesture] = useState<null | "drag" | "resize">(null);
+  // Latches true once the panel has completed its one-time entry animation. The
+  // entry animation is gated on !entered (NOT on gesture state) so it plays only
+  // when the panel first appears; dragging/resizing never re-adds the animate-in
+  // classes, so a gesture end can't replay the fade/slide (which looked like a
+  // blink). Reset on unmount/hide via fresh mount, so reopening animates again.
+  const [entered, setEntered] = useState(false);
 
   // Live gesture bookkeeping in a ref so the move handler doesn't re-close.
   const active = useRef<
@@ -243,6 +249,16 @@ export function FloatingCallStage({
     const saved = loadPosition();
     setPos(clampToViewport(saved ?? defaultPosition(w, height), w, height));
   }, [isDesktop]);
+
+  // Latch `entered` once the panel first becomes visible (pos set). The
+  // animate-in classes render on that first visible frame; this flips them off
+  // afterward (via a timeout longer than the 200ms animation) so they're never
+  // re-applied on gesture end. Runs once because it early-returns after latching.
+  useEffect(() => {
+    if (!pos || entered) return;
+    const t = setTimeout(() => setEntered(true), 250);
+    return () => clearTimeout(t);
+  }, [pos, entered]);
 
   // Re-clamp against the panel's ACTUAL rendered size whenever it changes. The
   // panel is short on first paint (just the header) and grows when CallProvider
@@ -430,7 +446,9 @@ export function FloatingCallStage({
         // Hold invisible for the single frame before the first layout pass
         // positions it, so it never flashes at the top-left origin.
         pos ? "opacity-100" : "opacity-0 pointer-events-none",
-        !busy && "animate-in fade-in-0 slide-in-from-bottom-2 duration-200",
+        // Play the entry fade/slide only on first appearance — never re-added on
+        // gesture end (which caused a blink). Gated on !entered, not gesture.
+        !entered && "animate-in fade-in-0 slide-in-from-bottom-2 duration-200",
       )}
       style={{
         left: pos?.x ?? 0,
