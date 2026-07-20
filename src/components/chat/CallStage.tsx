@@ -1,4 +1,6 @@
 import {
+  DisconnectButton,
+  useLocalParticipant,
   useParticipants,
   useRoomContext,
   useSpeakingParticipants,
@@ -9,7 +11,19 @@ import type { TrackReference } from "@livekit/components-react";
 import type { NostrMetadata } from "@nostrify/nostrify";
 import type { Participant, RemoteParticipant } from "livekit-client";
 import { Track } from "livekit-client";
-import { Maximize2, Minimize2, MicOff, Monitor, ScreenShare, Shrink, X } from "lucide-react";
+import {
+  Maximize2,
+  Mic,
+  Minimize2,
+  MicOff,
+  Monitor,
+  PhoneOff,
+  ScreenShare,
+  Shrink,
+  Video,
+  VideoOff,
+  X,
+} from "lucide-react";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -26,7 +40,7 @@ import { useCall } from "@/hooks/useCall";
 import { useUserVolume } from "@/hooks/useUserVolume";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { playScreenShareSound } from "@/lib/callSounds";
+import { playScreenShareSound, playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
 import {
   getAvatarShape,
   shapedAvatarSpeakingStyle,
@@ -129,6 +143,56 @@ const VERIFY_GRACE_MS = 15_000;
  * (longer on the E2EE path), so this can't just check the first render.
  */
 const JOIN_VIDEO_EXPAND_WINDOW_MS = 10_000;
+
+/**
+ * How long the compact floating window keeps showing the current active
+ * speaker before it's allowed to switch to a newly-loudest one. Long enough
+ * that brief interjections ("mhm", a cough) and simultaneous talkers don't
+ * make the single-content preview flicker between faces.
+ */
+const FLOATING_SPEAKER_HOLD_MS = 2_000;
+
+/**
+ * Pick the single participant/track to show in the compact floating window,
+ * by priority: (1) an active screen share, (2) the manually focused tile,
+ * (3) the debounced active speaker, (4) a stable first-participant fallback.
+ * The chosen key indexes into the same `tiles` list the grid uses, so the
+ * compact view reuses the exact tile renderer (video or avatar fallback).
+ */
+function usePrimaryFloatingKey(args: {
+  enabled: boolean;
+  focusKey: string | null;
+  screenShareKey: string | null;
+  speakingKey: string | null;
+  fallbackKey: string | null;
+}): string | null {
+  const { enabled, focusKey, screenShareKey, speakingKey, fallbackKey } = args;
+  // The debounced active speaker: only adopt a new speaker after the hold
+  // window lapses since the last switch, so momentary/overlapping speech
+  // doesn't churn the preview.
+  const [heldSpeaker, setHeldSpeaker] = useState<string | null>(null);
+  const lastSwitch = useRef(0);
+  useEffect(() => {
+    if (!enabled || !speakingKey) return;
+    if (speakingKey === heldSpeaker) return;
+    const now = Date.now();
+    const wait = Math.max(0, FLOATING_SPEAKER_HOLD_MS - (now - lastSwitch.current));
+    if (wait === 0) {
+      lastSwitch.current = now;
+      setHeldSpeaker(speakingKey);
+      return;
+    }
+    const timer = setTimeout(() => {
+      lastSwitch.current = Date.now();
+      setHeldSpeaker(speakingKey);
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [enabled, speakingKey, heldSpeaker]);
+
+  if (!enabled) return null;
+  return screenShareKey ?? focusKey ?? heldSpeaker ?? speakingKey ?? fallbackKey;
+}
+
 
 /**
  * The name to render for a participant, folding in Concord's verification race
@@ -456,6 +520,74 @@ function AvatarTile({
 }
 
 /**
+ * The compact media controls shown in the floating window: mute/unmute,
+ * camera on/off, and leave. Rendered inside the LiveKit room context (it's part
+ * of the reparented CallStage), so it reuses the room's existing local
+ * participant + publish state via `useLocalParticipant` — no duplicate media
+ * state is created. Mirrors the VoiceBar's control behavior (sounds, camera
+ * error handling) so the two stay consistent.
+ */
+function FloatingControls() {
+  const { leaveCall } = useCall();
+  const { localParticipant, isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
+  return (
+    <div className="flex items-center justify-center gap-1.5 px-2 py-1.5 shrink-0 border-t border-white/10">
+      <button
+        type="button"
+        aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
+        title={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
+        onClick={() => {
+          const enabling = !isMicrophoneEnabled;
+          if (enabling) playUnmuteSound();
+          else playMuteSound();
+          void localParticipant.setMicrophoneEnabled(enabling);
+        }}
+        className={cn(
+          "inline-flex items-center justify-center rounded-md size-8 shrink-0",
+          isMicrophoneEnabled
+            ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
+            : "bg-destructive/20 text-destructive hover:bg-destructive/30",
+        )}
+      >
+        {isMicrophoneEnabled ? <Mic className="size-4" /> : <MicOff className="size-4" />}
+      </button>
+      <button
+        type="button"
+        aria-label={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
+        title={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
+        onClick={() => {
+          void localParticipant
+            .setCameraEnabled(!isCameraEnabled)
+            .catch((err) => console.warn("failed to toggle camera", err));
+        }}
+        className={cn(
+          "inline-flex items-center justify-center rounded-md size-8 shrink-0",
+          isCameraEnabled
+            ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
+            : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
+        )}
+      >
+        {isCameraEnabled ? <Video className="size-4" /> : <VideoOff className="size-4" />}
+      </button>
+      <DisconnectButton
+        // Play the leave chirp inside the gesture, before the disconnect tears
+        // down the room audio (same reasoning as the VoiceBar's hangup).
+        onClick={() => {
+          playLeaveSound();
+          // `leaveCall` runs the exit animation + teardown in CallProvider;
+          // DisconnectButton also disconnects the room. Both are idempotent.
+          leaveCall();
+        }}
+        aria-label="Leave call"
+        className="inline-flex items-center justify-center rounded-md size-8 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
+      >
+        <PhoneOff className="size-4" />
+      </DisconnectButton>
+    </div>
+  );
+}
+
+/**
  * The call stage: a dismissable box, shown at the top of the chat window, that
  * presents *everyone* in the call as tiles — cameras and screenshares as video,
  * audio-only participants as avatars (with a speaking ring). It animates open
@@ -582,6 +714,39 @@ export function CallStage({
 
   const focused = focusKey ? tiles.find((t) => t.key === focusKey) : undefined;
 
+  // Compact floating window: choose ONE tile to show, by priority. Screen share
+  // wins; then the manually focused tile; then the debounced active speaker;
+  // then a stable fallback (first video tile, else first tile) so something
+  // meaningful shows even in a silent, camera-off call.
+  const screenShareKey = useMemo(() => {
+    const ss = videoTracks.find((t) => t.source === Track.Source.ScreenShare);
+    return ss ? trackTileKey(ss) : null;
+  }, [videoTracks]);
+  // Highest-priority current speaker that has a tile (speakingParticipants is
+  // ordered loudest-first by LiveKit).
+  const speakingKey = useMemo(() => {
+    for (const p of speakingParticipants) {
+      const cam = tiles.find((t) => t.key === `${p.identity}:${Track.Source.Camera}`);
+      if (cam) return cam.key;
+      const avatar = tiles.find((t) => t.key === participantTileKey(p));
+      if (avatar) return avatar.key;
+    }
+    return null;
+  }, [speakingParticipants, tiles]);
+  // Stable fallback: prefer any camera tile, else the first tile.
+  const fallbackKey =
+    tiles.find((t) => t.key.endsWith(`:${Track.Source.Camera}`))?.key ?? tiles[0]?.key ?? null;
+
+  const primaryKey = usePrimaryFloatingKey({
+    enabled: stageFloating,
+    focusKey,
+    screenShareKey,
+    speakingKey,
+    fallbackKey,
+  });
+  const primaryTile =
+    (primaryKey && tiles.find((t) => t.key === primaryKey)) || tiles[0] || undefined;
+
   // Theater mode: detach the stage into a full-viewport overlay.
   const [theater, setTheater] = useState(false);
   // Leaving the call / closing the stage also exits theater.
@@ -696,14 +861,29 @@ export function CallStage({
   }
 
   if (stageFloating) {
-    // Fill the floating panel: no docked margins/collapse animation, and always
-    // visible (the panel — not `open` — gates it). The panel gives us a
-    // definite height, so the grid/spotlight fit math works unchanged. This is
-    // the SAME stage instance as the docked one — it just re-lays-out when
-    // CallProvider reparents its host into the floating window, so no video
-    // subscription is torn down or duplicated. The floating panel supplies its
-    // own header (return/hide), so the stage renders body only here.
-    return <div className="flex h-full w-full flex-col overflow-hidden">{body}</div>;
+    // Compact floating window: a SINGLE primary tile (screen share > focused >
+    // active speaker > fallback, chosen above) plus the media controls — not
+    // the full grid. Same tile renderer as the grid, so active-speaker rings,
+    // screenshare, and the camera-off avatar fallback all behave identically.
+    // This is the SAME stage instance as the docked one — it just re-lays-out
+    // when CallProvider reparents its host into the floating window, so no
+    // video subscription is torn down or duplicated. The floating panel
+    // supplies its own header (drag/return/hide); the stage renders the preview
+    // and controls.
+    return (
+      <div className="flex h-full w-full flex-col overflow-hidden">
+        <div className="relative h-44 w-full bg-black">
+          {primaryTile ? (
+            primaryTile.render(true)
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+              Connecting…
+            </div>
+          )}
+        </div>
+        <FloatingControls />
+      </div>
+    );
   }
 
   return (
