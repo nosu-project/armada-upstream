@@ -454,11 +454,13 @@ export function MobileCallPreview({
           role="presentation"
           aria-label="Resize call preview"
           className={cn(
-            "shrink-0 flex items-center justify-center rounded-md touch-none cursor-nwse-resize",
+            "shrink-0 flex items-center justify-center touch-none cursor-nwse-resize",
+            // Larger invisible touch target; the grip is not a button, so no
+            // surface/background — only a subtle color+opacity that sharpens on
+            // hover or while resizing.
             "size-6 touch:size-8",
-            // Subtle idle, clearer on hover/active.
-            "text-muted-foreground/60 hover:text-foreground hover:bg-foreground/10",
-            gesture === "resize" && "text-foreground bg-foreground/10",
+            "text-muted-foreground opacity-50 hover:opacity-100 hover:text-foreground transition-opacity",
+            gesture === "resize" && "opacity-100 text-foreground",
           )}
         >
           {/* Textarea-style corner resize grip: 3 short parallel diagonal
