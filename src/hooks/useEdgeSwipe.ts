@@ -93,13 +93,31 @@ export function useEdgeSwipe({
   // opening tracks rightward (+dx), closing tracks leftward (−dx).
   const sign = direction === "open" ? 1 : -1;
 
+  // Element the current gesture started on; carries the native (non-passive)
+  // touchmove listener for the duration of the gesture.
+  const touchTarget = useRef<HTMLElement | null>(null);
+
+  // Once the drag is claimed, consume the native touch stream. React's own
+  // touch/pointer listeners are passive, so preventDefault there can't stop the
+  // browser from running its scroll gesture for the same touches — and a drag
+  // the browser counts as a (touch-action-filtered) scroll arms its
+  // tap-suppression window, which silently eats the click of any tap landing
+  // within ~300ms after the swipe (the "first tap after swiping out does
+  // nothing" bug). Cancelling touchmove keeps the gesture out of the scroll
+  // pipeline entirely, so the following tap clicks normally.
+  const onNativeTouchMove = useCallback((e: TouchEvent) => {
+    if (claimed.current && e.cancelable) e.preventDefault();
+  }, []);
+
   const reset = useCallback(() => {
     claimed.current = false;
     rejected.current = false;
     pointerId.current = null;
     dragXRef.current = 0;
+    touchTarget.current?.removeEventListener("touchmove", onNativeTouchMove);
+    touchTarget.current = null;
     setState({ dragX: 0, dragging: false });
-  }, []);
+  }, [onNativeTouchMove]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -123,8 +141,11 @@ export function useEdgeSwipe({
       claimed.current = false;
       rejected.current = false;
       pointerId.current = e.pointerId;
+      touchTarget.current?.removeEventListener("touchmove", onNativeTouchMove);
+      touchTarget.current = el;
+      el.addEventListener("touchmove", onNativeTouchMove, { passive: false });
     },
-    [enabled, direction],
+    [enabled, direction, onNativeTouchMove],
   );
 
   const onPointerMove = useCallback(
