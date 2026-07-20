@@ -45,7 +45,7 @@ export function InviteDialog2({
 }
 
 function InviteBody({ community }: { community: CommunityV2 | undefined }) {
-  const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
+  const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, canCreateLink, linkAuthorityKnown, revokeWouldPrivatize } =
     useInviteActions2(community);
   const [link, setLink] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -187,7 +187,11 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
             </PopoverContent>
           </Popover>
         </div>
-        {link ? (
+        {!linkAuthorityKnown ? null : !canCreateLink ? (
+          <p className="text-xs text-muted-foreground">
+            Only members with invite permission can create shareable links. You can still invite people directly above.
+          </p>
+        ) : link ? (
           <>
             <div className="flex items-center gap-2">
               <Input readOnly value={link} className="min-w-0 font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />

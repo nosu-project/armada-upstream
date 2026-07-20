@@ -9,6 +9,7 @@ import {
   buildMetadataEdition,
   buildRegistryEdition,
   buildRoleEdition,
+  canMintInviteLink,
   foldControlState,
   hasForeignLiveLinks,
   isCommunityPublic,
@@ -804,6 +805,77 @@ describe("control plane fold (CORD-04)", () => {
     const after = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
     expect(after.liveInviteLinks.has(linkSigner)).toBe(false);
     expect(isCommunityPublic(after)).toBe(false);
+  });
+
+  it("registry: a member without CREATE_INVITE can't flip the mode Public, even at their own coordinate (CORD-05 §5)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const mod = signer();
+    // A Moderator holds BAN/KICK/etc. but NOT CREATE_INVITE — real authority,
+    // wrong bit. A registry at their OWN coordinate must still be dropped.
+    const modRole = moderatorRole(bytesToHex(random32()));
+    const linkSigner = bytesToHex(random32());
+
+    const authorityWraps = [
+      await sealEdition(buildRoleEdition(modRole, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: mod.pubkey, roleIds: [modRole.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    const grantEid = grantLocator(communityId, hex32(mod.pubkey));
+    const grantHead = foldControlState(openControlWraps(authorityWraps, [control]), communityId, owner.pubkey)
+      .heads.get(bytesToHex(grantEid))!;
+
+    const wraps = [
+      ...authorityWraps,
+      await sealEdition(
+        buildRegistryEdition(communityId, mod.pubkey, [linkSigner], {
+          actorPubkey: mod.pubkey,
+          version: 1n,
+          authority: { entityId: grantEid, version: grantHead.version, editionHash: grantHead.hash },
+        }),
+        control,
+        mod,
+      ),
+    ];
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(hasPermission(folded.roster, mod.pubkey, Permissions.BAN)).toBe(true); // real authority
+    expect(hasPermission(folded.roster, mod.pubkey, Permissions.CREATE_INVITE)).toBe(false); // just not this bit
+    expect(folded.liveInviteLinks.has(linkSigner)).toBe(false); // so the registry is dropped
+    expect(isCommunityPublic(folded)).toBe(false); // and the community stays Private
+  });
+
+  it("canMintInviteLink: owner + CREATE_INVITE holders may, others may not, unknown authority fails closed", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const mod = signer();
+    const rando = signer();
+    const adm = adminRole(bytesToHex(random32())); // ADMIN_ALL includes CREATE_INVITE
+    const modRole = moderatorRole(bytesToHex(random32())); // BAN/KICK etc., NOT CREATE_INVITE
+
+    const wraps = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(buildRoleEdition(modRole, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: mod.pubkey, roleIds: [modRole.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+
+    expect(canMintInviteLink(folded, owner.pubkey)).toBe(true); // owner always qualifies
+    expect(canMintInviteLink(folded, admin.pubkey)).toBe(true); // granted CREATE_INVITE
+    expect(canMintInviteLink(folded, mod.pubkey)).toBe(false); // holds BAN, not CREATE_INVITE
+    expect(canMintInviteLink(folded, rando.pubkey)).toBe(false); // roleless member
+    expect(canMintInviteLink(undefined, owner.pubkey)).toBe(false); // authority not yet known → fail closed
+    expect(canMintInviteLink(folded, undefined)).toBe(false); // no signed-in user
   });
 
   it("isCommunityPublic: no registries and an emptied registry both read Private", async () => {

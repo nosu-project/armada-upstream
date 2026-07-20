@@ -6,14 +6,10 @@ import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } fro
 import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
 import { resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { buildRegistryEdition } from "@/concord-v2/lib/control";
+import { buildRegistryEdition, canMintInviteLink } from "@/concord-v2/lib/control";
 import { isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import { bytesToHex, grantLocator, hexToBytes, inviteLinksLocator, hex32 } from "@/concord-v2/lib/derive";
-import {
-  buildDirectInviteRumor,
-  sealDirectInvite,
-  wrapDirectInvite,
-} from "@/concord-v2/lib/directInvite";
+import { buildExpiringDirectInvite } from "@/concord-v2/lib/directInvite";
 import {
   buildBundleEvent,
   buildInviteUrl,
@@ -177,6 +173,12 @@ function useUpdateInviteList2() {
  *     bundle posts at `(33301, link_signer, d="")` on the community's relays;
  *     the link is `<base>/invite/<naddr>#<fragment>`; the Invite List records
  *     the secrets; the member-facing Registry (vsk 8) lists the coordinate.
+ *     Gated on CREATE_INVITE: a link is an authoritative Public/Private lever
+ *     (its Registry entry is the CORD-05 §5 Public flag, honored only from a
+ *     CREATE_INVITE holder), and a non-admin's link would vend keys the
+ *     community never refreshes on a Refounding — a stale fork waiting to
+ *     happen. Honest-client enforcement; the fold ignores an unauthorized
+ *     Registry regardless (mirrors {@link useLinkAuthorityWatch2}).
  *   - REVOKE: the coordinate is re-posted as a tombstone (creator-only — needs
  *     the link-signer secret), the Registry drops it, the Invite List
  *     tombstones it. Retiring the last live link is what flips the Community
@@ -197,6 +199,15 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   // would embed an OLD epoch — the exact defect that strands a fresh joiner on
   // a dead epoch (CORD-05 §2 requires the CURRENT keys). Reconcile against this.
   const fresh = useCommunity2(community?.idHex);
+
+  // Minting a public link is an authoritative action (CORD-05 §5) — only a
+  // CREATE_INVITE holder may. Direct invites are deliberately ungated (CORD-05
+  // §6): any keyholder can whisper keys, the floor no permission could raise.
+  const canCreateLink = canMintInviteLink(folded, user?.pubkey);
+  // Whether the control fold has resolved, so the UI can hold the create/deny
+  // decision until authority is actually known (else a cold open flashes the
+  // no-permission note at an owner before the fold lands).
+  const linkAuthorityKnown = folded !== undefined;
 
   /**
    * The community to mint a bundle from: whichever of the caller's snapshot and
@@ -276,6 +287,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     mutationFn: async ({ expiresAtMs, label }) => {
       if (!user || !community) throw new Error("Not ready.");
       if (!user.signer.nip44) throw new Error("This signer can't mint invite links (NIP-44 unsupported).");
+      if (!canCreateLink) throw new Error("Only members with invite permission can create shareable links.");
 
       // Warn (don't refuse — localhost/LAN quickstarts are a supported flow)
       // when the invite will embed relays that secure platforms can't reach:
@@ -371,16 +383,21 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
    * look up indexed. No coordinate, no token, no Registry entry — a Direct
    * Invite never flips the community Public, which is what lets a Private
    * community grow one npub at a time. Unrevocable once landed.
+   *
+   * A one-shot handoff with no refresh, so its keys are frozen at send time
+   * and go stale on the next rotation — bounded to a three-day shelf life
+   * (CORD-05 §6) so a forgotten invite can't strand a late joiner on a dead
+   * fork. Stamped on both the bundle's `expires_at` (accept refuses past it)
+   * and the wrap's NIP-40 `expiration` (relays prune it).
    */
   const sendDirectInvite = useMutation<void, Error, { recipientPubkey: string; expiresAtMs?: number }>({
-    mutationFn: async ({ recipientPubkey, expiresAtMs }) => {
+    mutationFn: async ({ recipientPubkey, expiresAtMs: requestedExpiresAtMs }) => {
       if (!user || !community) throw new Error("Not ready.");
       if (!user.signer.nip44) throw new Error("This signer can't send direct invites (NIP-44 unsupported).");
 
-      const bundle = buildBundle({ expiresAtMs });
-      const rumor = buildDirectInviteRumor(bundle, user.pubkey);
-      const seal = await sealDirectInvite(rumor, recipientPubkey, user.signer);
-      const wrap = wrapDirectInvite(seal, recipientPubkey, { expiresAtMs });
+      const { wrap } = await buildExpiringDirectInvite(buildBundle(), recipientPubkey, user.pubkey, user.signer, {
+        requestedExpiryMs: requestedExpiresAtMs,
+      });
 
       // Deliver to the recipient's giftwrap inbox (their 10050 DM relays, else
       // NIP-65 reads), or the stock interop floor when they've published
@@ -426,6 +443,10 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     myLinks,
     /** Whether ANY live public link exists — the community's Public/Private flag. */
     isPublic: (folded?.liveInviteLinks.size ?? 0) > 0,
+    /** Whether the current user may mint a public link (holds CREATE_INVITE). */
+    canCreateLink,
+    /** Whether the control fold has resolved, so the UI can defer the create/deny UI. */
+    linkAuthorityKnown,
     revokeWouldPrivatize,
   };
 }

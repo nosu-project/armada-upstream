@@ -694,6 +694,20 @@ export function hasForeignLiveLinks(folded: FoldedControl, viewer: string, exclu
   return false;
 }
 
+/**
+ * Whether `userHex` may mint a public invite link: minting is an authoritative
+ * action (its Registry entry is the CORD-05 §5 Public flag), so it needs
+ * CREATE_INVITE. The owner always qualifies (isAuthorized short-circuits on
+ * ownerHex). Honest-client policy — the fold ignores an unauthorized Registry
+ * regardless — but keeping the predicate here keeps it beside the fold that
+ * enforces it, and testable in isolation. False when authority isn't yet known
+ * (`folded` undefined) so a cold read fails closed. Direct invites don't call
+ * this: they're deliberately ungated (CORD-05 §6).
+ */
+export function canMintInviteLink(folded: FoldedControl | undefined, userHex: string | undefined): boolean {
+  return Boolean(userHex && folded && isAuthorized(folded.roster, userHex, folded.ownerHex, Permissions.CREATE_INVITE));
+}
+
 function foldOnce(
   editions: ParsedEdition[],
   communityId: Uint8Array,

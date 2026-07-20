@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import { bytesToHex, communityIdOf, hex32, random32 } from "@/concord-v2/lib/derive";
 import {
+  boundedDirectInviteExpiry,
   buildDirectInviteRumor,
+  buildExpiringDirectInvite,
+  DIRECT_INVITE_MAX_TTL_MS,
   directInviteExpired,
   parseDirectInviteRumor,
   sealDirectInvite,
@@ -130,6 +133,49 @@ describe("direct invites (CORD-05 §6)", () => {
 
   it("gates on the rumor kind — the outer k tag was only ever a hint", () => {
     expect(parseDirectInviteRumor(9, JSON.stringify(makeBundle()))).toBeUndefined();
+  });
+
+  it("bounds a Direct Invite's shelf life to three days (CORD-05 §6, anti-stale-fork)", () => {
+    const now = 1_000_000_000_000;
+    const ceiling = now + DIRECT_INVITE_MAX_TTL_MS;
+    // No request: default to the ceiling (today's only call path).
+    expect(boundedDirectInviteExpiry(now)).toBe(ceiling);
+    // A shorter request is honored verbatim.
+    expect(boundedDirectInviteExpiry(now, now + 60_000)).toBe(now + 60_000);
+    // A longer request is CAPPED, not just defaulted — the keys go stale on the
+    // next rotation, so no path may mint a month-long stale-key handoff.
+    expect(boundedDirectInviteExpiry(now, now + 30 * 86_400_000)).toBe(ceiling);
+    // Exactly at the ceiling: unchanged.
+    expect(boundedDirectInviteExpiry(now, ceiling)).toBe(ceiling);
+  });
+
+  it("buildExpiringDirectInvite: stamps ONE capped deadline onto both the bundle and the wrap", async () => {
+    const inviterSk = generateSecretKey();
+    const recipientSk = generateSecretKey();
+    const inviterPk = getPublicKey(inviterSk);
+    const recipientPk = getPublicKey(recipientSk);
+    const now = 1_000_000_000_000;
+    const ceiling = now + DIRECT_INVITE_MAX_TTL_MS;
+
+    // Today's only call path: no requested expiry → the 3-day cap, and the SAME
+    // value on the wrap's NIP-40 tag (seconds) and the bundle's expires_at (ms).
+    // This is the wiring `sendDirectInvite` relies on; a regression that dropped
+    // the cap or desynced the two deadlines would fail here.
+    const { wrap, expiresAtMs } = await buildExpiringDirectInvite(makeBundle(), recipientPk, inviterPk, rawSigner(inviterSk), {
+      nowMs: now,
+    });
+    expect(expiresAtMs).toBe(ceiling);
+    expect(wrap.tags).toContainEqual(["expiration", String(Math.floor(ceiling / 1000))]);
+    const unwrapped = await unwrapDirectInvite(wrap, rawSigner(recipientSk));
+    const bundle = parseDirectInviteRumor(unwrapped!.rumor.kind, unwrapped!.rumor.content);
+    expect(bundle?.expires_at).toBe(ceiling); // bundle deadline == wrap deadline, can't drift
+
+    // A longer requested expiry is CAPPED, never honored (no month-long handoff).
+    const long = await buildExpiringDirectInvite(makeBundle(), recipientPk, inviterPk, rawSigner(inviterSk), {
+      requestedExpiryMs: now + 30 * 86_400_000,
+      nowMs: now,
+    });
+    expect(long.expiresAtMs).toBe(ceiling);
   });
 
   it("tracks expiry without refusing to parse (a parked invite still renders)", () => {

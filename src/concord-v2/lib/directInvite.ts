@@ -65,6 +65,31 @@ export interface DirectInviteRumor {
 
 // ── Sending ──────────────────────────────────────────────────────────────────
 
+/**
+ * A Direct Invite's maximum shelf life: three days. Unlike a public link (whose
+ * bundle re-posts fresh keys behind the same coordinate on every Rekey, CORD-05
+ * §2), a Direct Invite is a one-shot key handoff with no refresh (CORD-05 §6) —
+ * the keys it carries are frozen at send time. Once the community rotates, those
+ * keys are dead, and a late accept lands the joiner on a stale fork. Bounding
+ * the shelf life keeps a forgotten invite from becoming a fork years later.
+ *
+ * Three days, not longer: rotations are rare enough that the staleness window
+ * is thin either way, so the bound is set to comfortably clear a weekend of the
+ * recipient being offline (giftwrap delivery + NIP-40 relay pruning + clock
+ * skew all want margin) while keeping the stale-key window as short as is safe.
+ */
+export const DIRECT_INVITE_MAX_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+
+/**
+ * The `expires_at` (unix ms) to stamp on an outgoing Direct Invite: the caller's
+ * request if any, but never beyond {@link DIRECT_INVITE_MAX_TTL_MS} out — a cap,
+ * not just a default, so no path can mint a long-lived stale-key handoff.
+ */
+export function boundedDirectInviteExpiry(nowMs: number, requestedMs?: number): number {
+  const ceiling = nowMs + DIRECT_INVITE_MAX_TTL_MS;
+  return Math.min(requestedMs ?? ceiling, ceiling);
+}
+
 /** Build the kind-3313 rumor carrying the bundle as its content (CORD-05 §6). */
 export function buildDirectInviteRumor(bundle: InviteBundle, inviterPubkey: string): DirectInviteRumor {
   return {
@@ -122,6 +147,28 @@ export function wrapDirectInvite(
     },
     ephemeralSk,
   );
+}
+
+/**
+ * Build a ready-to-publish Direct Invite from a bundle: cap the shelf life
+ * ({@link boundedDirectInviteExpiry}), stamp that ONE value onto both the
+ * bundle's `expires_at` and the wrap's NIP-40 `expiration`, and seal + wrap it.
+ * The single seam is the point: the bundle deadline (which the accept path
+ * enforces) and the relay-prune deadline can never drift apart, and no caller
+ * can forget the cap. Returns the wrap plus the effective `expiresAtMs`.
+ */
+export async function buildExpiringDirectInvite(
+  bundle: InviteBundle,
+  recipientPubkey: string,
+  inviterPubkey: string,
+  signer: DirectInviteSigner,
+  opts?: { requestedExpiryMs?: number; nowMs?: number },
+): Promise<{ wrap: NostrEvent; expiresAtMs: number }> {
+  const expiresAtMs = boundedDirectInviteExpiry(opts?.nowMs ?? Date.now(), opts?.requestedExpiryMs);
+  const rumor = buildDirectInviteRumor({ ...bundle, expires_at: expiresAtMs }, inviterPubkey);
+  const seal = await sealDirectInvite(rumor, recipientPubkey, signer);
+  const wrap = wrapDirectInvite(seal, recipientPubkey, { expiresAtMs });
+  return { wrap, expiresAtMs };
 }
 
 // ── Receiving ────────────────────────────────────────────────────────────────
