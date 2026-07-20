@@ -74,6 +74,21 @@ const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(
 Avatar.displayName = "Avatar"
 
 /**
+ * Rewrite a plain-http image URL to https. The APK's WebView (secure
+ * https://localhost origin, MIXED_CONTENT_NEVER_ALLOW + the platform
+ * cleartext block) silently drops http:// images that Chrome on the web
+ * auto-upgrades, so old kind-0 pictures never rendered on native.
+ */
+function upgradeToHttps(src: string | undefined): string | undefined {
+  if (src && /^http:\/\//i.test(src)) return "https://" + src.slice(7)
+  return src
+}
+
+/** Timed retries after a failed load: 3s, 6s, 12s, 24s — then only on online/visible. */
+const RETRY_BASE_MS = 3000
+const MAX_TIMED_RETRIES = 4
+
+/**
  * Renders the <img> immediately with absolute positioning so it covers
  * the fallback. No hidden Image() verification — the browser renders
  * the image progressively as it downloads.
@@ -81,17 +96,43 @@ Avatar.displayName = "Avatar"
 const AvatarImage = React.forwardRef<
   HTMLImageElement,
   React.ImgHTMLAttributes<HTMLImageElement>
->(({ className, onError, ...props }, ref) => {
+>(({ className, onError, src: rawSrc, ...props }, ref) => {
   const [hasError, setHasError] = React.useState(false)
   const hasSrcRef = React.useContext(AvatarHasSrcContext)
-  const src = props.src
+  const src = upgradeToHttps(rawSrc)
 
-  // Reset error when src changes
+  // Reset error state when src changes
   const prevSrc = React.useRef(src)
+  const attemptsRef = React.useRef(0)
   if (src !== prevSrc.current) {
     prevSrc.current = src
+    attemptsRef.current = 0
     if (hasError) setHasError(false)
   }
+
+  // A failed load must NOT latch the fallback forever: transient fetch
+  // failures are routine on mobile (radio not up at cold start, Doze, the
+  // WebView freezing in-flight loads on background→foreground), and this
+  // component stays mounted across them. Retry with backoff, and whenever
+  // the network or the app comes back — remounting the <img> re-issues the
+  // fetch.
+  React.useEffect(() => {
+    if (!hasError) return
+    const retry = () => setHasError(false)
+    const timer = attemptsRef.current <= MAX_TIMED_RETRIES
+      ? setTimeout(retry, RETRY_BASE_MS * 2 ** (attemptsRef.current - 1))
+      : undefined
+    const onVisible = () => {
+      if (document.visibilityState === "visible") retry()
+    }
+    window.addEventListener("online", retry)
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      if (timer !== undefined) clearTimeout(timer)
+      window.removeEventListener("online", retry)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
+  }, [hasError])
 
   const showImage = !hasError && !!src
 
@@ -105,10 +146,16 @@ const AvatarImage = React.forwardRef<
   return (
     <img
       {...props}
+      src={src}
       ref={ref}
       alt=""
+      // Avatars come from arbitrary third-party hosts; a `Referer:
+      // https://localhost/` from the APK's WebView trips some hotlink
+      // protections that never see it from the web origin.
+      referrerPolicy="no-referrer"
       className={cn("absolute inset-0 h-full w-full object-cover", className)}
       onError={(e) => {
+        attemptsRef.current += 1
         setHasError(true)
         onError?.(e)
       }}
