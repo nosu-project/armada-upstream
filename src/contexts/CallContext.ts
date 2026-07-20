@@ -95,6 +95,18 @@ export interface CallContextType {
    */
   floatingVariant: "desktop" | "mobile" | null;
   /**
+   * The fixed mobile call bar's measured height in pixels (including its bottom
+   * safe-area padding), reported by MobileCallBar. The mobile preview positions
+   * itself directly above the bar off THIS value rather than the `--call-bar-h`
+   * CSS variable, so its placement is guaranteed regardless of DOM nesting or
+   * CSS-inheritance timing, and re-evaluates reactively whenever the bar's
+   * height changes (keyboard, participant count, safe-area/orientation). 0 when
+   * the bar isn't mounted (desktop, or no active call).
+   */
+  callBarHeight: number;
+  /** Internal: MobileCallBar reports its measured height (incl. safe area) here. */
+  setCallBarHeight: (px: number) => void;
+  /**
    * Whether the user has dismissed the floating video window without leaving
    * the call. While hidden, the stage parks off-DOM (video subscriptions stay
    * alive) and only the call bar remains visible. Reset whenever the stage

@@ -352,13 +352,19 @@ function MobileCallBar({
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const { setCallBarHeight } = useCall();
 
   useEffect(() => {
     const bar = ref.current;
     const shell = shellRef.current;
     if (!bar || !shell) return;
     const apply = () => {
-      shell.style.setProperty("--call-bar-h", `${bar.offsetHeight}px`);
+      const h = bar.offsetHeight;
+      shell.style.setProperty("--call-bar-h", `${h}px`);
+      // Also publish to call context: the mobile preview positions above the
+      // bar off this shared value (a guaranteed source, unlike CSS-variable
+      // inheritance), and re-evaluates whenever the bar resizes.
+      setCallBarHeight(h);
     };
     apply();
     const ro = new ResizeObserver(apply);
@@ -367,8 +373,9 @@ function MobileCallBar({
       ro.disconnect();
       // Release the reservation when the bar unmounts.
       shell.style.removeProperty("--call-bar-h");
+      setCallBarHeight(0);
     };
-  }, [shellRef]);
+  }, [shellRef, setCallBarHeight]);
 
   return (
     <div

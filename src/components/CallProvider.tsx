@@ -63,6 +63,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       ? "mobile"
       : null;
   const [stageOpen, setStageOpen] = useState(false);
+  // The fixed mobile call bar's measured height (incl. bottom safe area),
+  // reported by MobileCallBar. The mobile preview positions above the bar off
+  // this shared value so its placement never depends on CSS-variable
+  // inheritance, and re-evaluates whenever the bar resizes (keyboard, roster,
+  // orientation). 0 when the bar isn't mounted.
+  const [callBarHeight, setCallBarHeightState] = useState(0);
+  const setCallBarHeight = useCallback((px: number) => {
+    setCallBarHeightState((prev) => (prev === px ? prev : px));
+  }, []);
   // The user dismissed the floating video window (without leaving the call).
   // While true the stage parks off-DOM instead of floating.
   const [floatingHidden, setFloatingHidden] = useState(false);
@@ -265,6 +274,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         setStageOpen,
         stageFloating,
         floatingVariant,
+        callBarHeight,
+        setCallBarHeight,
         floatingHidden,
         setFloatingHidden,
         focusActiveCall,
