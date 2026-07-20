@@ -4,6 +4,13 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.35.2] - 2026-07-20
+
+Fixes the first tap after an edge swipe being silently ignored.
+
+### Fixed
+- Fix first tap after an edge swipe doing nothing (swipe was entering the browser scroll pipeline and suppressing the next tap)
+
 ## [0.35.1] - 2026-07-20
 
 Swipe-to-reply now uses a leftward swipe.
