@@ -169,13 +169,14 @@ function saveWidth(w: number) {
  * subscription, and video keeps playing across the reparent (CallProvider
  * re-kicks any paused `<video>` on move).
  *
- * The preview is freely positioned by one-finger DRAG of its header, and
- * RESIZED (keeping the 16:9 media ratio) by dragging the visible bottom-right
- * corner handle. Both gestures use pointer events, so touch, pen, and mouse all
- * work. Neither gesture starts from an action button, the video tile, or the
- * other handle, and a completed gesture suppresses the trailing click so it
- * can't land on the preview content. Position and width persist to
- * localStorage.
+ * The preview is freely positioned by one-finger DRAG of the title area in its
+ * header, and RESIZED (keeping the 16:9 media ratio) by dragging the visible
+ * TOP-LEFT handle in the header — which anchors the bottom-right corner, so
+ * dragging up/left enlarges and down/right shrinks. Both gestures use pointer
+ * events, so touch, pen, and mouse all work. Neither gesture starts from an
+ * action button, the video tile, or the other handle, and a completed gesture
+ * suppresses the trailing click so it can't land on the preview content.
+ * Position and width persist to localStorage.
  *
  * Position and size are always clamped to the VISIBLE viewport
  * (`window.visualViewport` when available, so it shrinks with the on-screen
@@ -222,7 +223,9 @@ export function MobileCallPreview({
   // Live gesture bookkeeping in a ref so the move handler doesn't re-close.
   const active = useRef<
     | { kind: "drag"; pointerId: number; offsetX: number; offsetY: number }
-    | { kind: "resize"; pointerId: number }
+    // Resize is anchored at the panel's bottom-right corner (captured at gesture
+    // start), so dragging the top-left handle grows/shrinks toward that fixed point.
+    | { kind: "resize"; pointerId: number; anchorRight: number; anchorBottom: number }
     | null
   >(null);
   // Set true once a gesture actually moved, so the trailing click is swallowed.
@@ -306,16 +309,19 @@ export function MobileCallPreview({
     if (a.kind === "drag") {
       setPos(clampPos({ x: e.clientX - a.offsetX, y: e.clientY - a.offsetY }, widthRef.current, cbh));
     } else {
-      // Resize from the bottom-right corner: width follows the pointer's x
-      // distance from the panel's (fixed) left edge; height follows via the
-      // 16:9 body ratio (the body is aspect-video). Re-clamp the position in
-      // case growth would push the bottom/right past the viewport box.
-      const cur = posRef.current;
-      if (!cur) return;
-      const w = clampWidth(e.clientX - cur.x, cbh);
+      // Resize from the TOP-LEFT handle with the bottom-right corner anchored:
+      // width is the distance from the pointer's x to the fixed right edge, so
+      // dragging left/up enlarges and right/down shrinks. Height follows via the
+      // 16:9 body ratio (the body is aspect-video). The top-left position is
+      // recomputed from the anchor and the new size, then clamped so the whole
+      // panel stays inside the viewport box (which reserves the call bar + safe
+      // areas). Growth pushes the top-left toward the top/left edges — exactly
+      // where the clamp guards — so the bottom-right stays put until a clamp is
+      // hit, then the whole panel is held on screen.
+      const w = clampWidth(a.anchorRight - e.clientX, cbh);
       widthRef.current = w;
       setWidth(w);
-      setPos(clampPos(cur, w, cbh));
+      setPos(clampPos({ x: a.anchorRight - w, y: a.anchorBottom - panelHeight(w) }, w, cbh));
     }
   }, []);
 
@@ -371,7 +377,16 @@ export function MobileCallPreview({
   const beginResize = useCallback(
     (e: React.PointerEvent) => {
       if (e.button !== 0 && e.pointerType === "mouse") return;
-      active.current = { kind: "resize", pointerId: e.pointerId };
+      const cur = posRef.current;
+      if (!cur) return;
+      // Anchor the bottom-right corner: capture it once at gesture start so the
+      // whole resize grows/shrinks toward this fixed point (top-left handle).
+      active.current = {
+        kind: "resize",
+        pointerId: e.pointerId,
+        anchorRight: cur.x + widthRef.current,
+        anchorBottom: cur.y + panelHeight(widthRef.current),
+      };
       moved.current = false;
       setGesture("resize");
       window.addEventListener("pointermove", onPointerMove);
@@ -431,18 +446,34 @@ export function MobileCallPreview({
         className="flex items-center gap-0.5 px-1 shrink-0 border-b border-white/10"
         style={{ height: HEADER_H }}
       >
-        {/* Drag handle: dragging is scoped to this grip + the label so the
-            action buttons never start a drag. */}
+        {/* Top-left resize handle (in the grip's former spot). Its own pointer
+            gesture; it never starts a drag (the drag lives on the title area,
+            its sibling). Bottom-right corner stays anchored while resizing. */}
+        <div
+          onPointerDown={beginResize}
+          role="presentation"
+          aria-label="Resize call preview"
+          className={cn(
+            "shrink-0 flex items-center justify-center rounded-md touch-none cursor-nwse-resize",
+            "size-6 touch:size-8 text-muted-foreground hover:text-foreground hover:bg-foreground/10",
+            gesture === "resize" && "text-foreground bg-foreground/10",
+          )}
+        >
+          <GripVertical className="size-4" aria-hidden />
+        </div>
+        {/* Draggable title/empty area: dragging is scoped to THIS region only,
+            so the resize handle and the action buttons never start a drag, and
+            the interactive video body (which may gain controls later) is never
+            draggable. */}
         <div
           onPointerDown={beginDrag}
           className={cn(
-            "flex items-center gap-1 flex-1 min-w-0 rounded-md px-1 py-1 touch-none",
+            "flex items-center flex-1 min-w-0 h-full rounded-md px-1 touch-none",
             gesture === "drag" ? "cursor-grabbing" : "cursor-grab",
           )}
           role="presentation"
           aria-label="Drag call preview"
         >
-          <GripVertical className="size-4 shrink-0 text-muted-foreground" />
           <span className="text-xs font-medium text-muted-foreground truncate">Call</span>
         </div>
         {onExpand && (
@@ -450,7 +481,7 @@ export function MobileCallPreview({
             type="button"
             aria-label="Return to call"
             title="Return to call"
-            // Stop the grip (its sibling) from ever seeing this gesture.
+            // Stop the drag area (its sibling) from ever seeing this gesture.
             onPointerDown={(e) => e.stopPropagation()}
             onClick={onExpand}
             className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10 touch:p-1.5"
@@ -476,22 +507,6 @@ export function MobileCallPreview({
           disable pointer events on the content so a moving finger can't land a
           stray tap on a tile/selector. */}
       <div ref={bodyRef} className={cn("w-full", dragging && "pointer-events-none")} />
-      {/* Visible bottom-right resize handle. Its own pointer gesture (does not
-          start a drag). Large enough to grab on touch without dominating. */}
-      <div
-        onPointerDown={beginResize}
-        role="presentation"
-        aria-label="Resize call preview"
-        className={cn(
-          "absolute bottom-0 right-0 z-10 flex items-end justify-end touch-none",
-          "size-6 touch:size-8 cursor-nwse-resize",
-        )}
-      >
-        <span
-          aria-hidden
-          className="m-0.5 block size-3 rounded-sm border-b-2 border-r-2 border-white/60"
-        />
-      </div>
     </div>
   );
 }
