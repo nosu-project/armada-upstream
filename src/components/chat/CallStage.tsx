@@ -1038,7 +1038,17 @@ export function CallStage({
       <div className="flex h-full w-full flex-col overflow-hidden">
         <div className="relative h-44 w-full bg-black">
           {primaryTile ? (
-            primaryTile.render(true)
+            // Key the wrapper by the tile key so switching the selected share
+            // (or any primary-content change) UNMOUNTS the old VideoTile and
+            // MOUNTS a fresh one. Without a changing key React reuses the same
+            // VideoTile in this fixed position and LiveKit keeps the previous
+            // track attached to the reused <video>, leaving the preview stuck on
+            // the prior share even though the selection/name/index updated. This
+            // only re-mounts the single compact tile — not CallStage, the room,
+            // or any subscription.
+            <div key={primaryTile.key} className="h-full w-full">
+              {primaryTile.render(true)}
+            </div>
           ) : (
             <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
               Connecting…
