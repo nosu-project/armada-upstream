@@ -2,7 +2,7 @@ import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { clearChunkReloadGuard } from "@/lib/chunkReload";
+import { clearChunkReloadGuard, tryChunkReload } from "@/lib/chunkReload";
 import { signalWebReady } from "@/lib/webReady";
 
 import App from "./App.tsx";
@@ -40,13 +40,43 @@ signalWebReady();
 // so a LATER deploy in this same session can recover again.
 requestAnimationFrame(() => clearChunkReloadGuard());
 
-// Register the service worker for offline app-shell caching and Web Push.
-// Best-effort: PWA install + push stays unavailable if registration fails or
-// isn't supported (e.g. insecure origin, private browsing).
+// Vite emits this event when a preloaded dependency of a dynamic import fails
+// to fetch (the modulepreload path, which bypasses lazyWithReload). Same
+// stale-build recovery: one hard reload; preventDefault suppresses the throw
+// that would otherwise bubble into the boundary during the reload.
+window.addEventListener("vite:preloadError", (event) => {
+  if (tryChunkReload()) event.preventDefault();
+});
+
+// Service worker: Web Push only — it must NOT cache or serve the app shell
+// (a stale SW-cached shell after a release survives even the one-time
+// chunk-error recovery reload and boots straight into the error screen).
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((err) => {
-      console.warn("[sw] registration failed:", err);
+  if (Capacitor.isNativePlatform()) {
+    // The APK's WebView resolves SW requests through Capacitor's local server
+    // and persists registrations across app updates, so a SW is pure risk
+    // here — push is native, the shell is local. Unregister anything left
+    // behind by older releases (including the old caching SW) and drop its
+    // shell caches so a poisoned install heals on this launch.
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => Promise.all(regs.map((reg) => reg.unregister())))
+      .catch(() => {});
+    if ("caches" in window) {
+      caches
+        .keys()
+        .then((keys) =>
+          Promise.all(keys.filter((k) => k.startsWith("armada-shell-")).map((k) => caches.delete(k))),
+        )
+        .catch(() => {});
+    }
+  } else {
+    // Web: best-effort registration for push; if it fails (insecure origin,
+    // private browsing), push is simply unavailable.
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((err) => {
+        console.warn("[sw] registration failed:", err);
+      });
     });
-  });
+  }
 }
