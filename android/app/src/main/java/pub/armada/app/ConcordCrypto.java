@@ -77,7 +77,64 @@ final class ConcordCrypto {
         }
     }
 
+    /**
+     * Encrypt a plaintext to a NIP-44 v2 base64 payload under a raw 32-byte
+     * conversation key (the inverse of {@link #decrypt}) — used by the native
+     * NIP-46 client to seal RPC requests to the bunker. Returns null on any
+     * failure.
+     */
+    static String encrypt(byte[] conversationKey, String plaintext) {
+        byte[] nonce = new byte[32];
+        new java.security.SecureRandom().nextBytes(nonce);
+        byte[] payload = encryptBytes(conversationKey, plaintext, nonce);
+        return payload != null
+                ? android.util.Base64.encodeToString(payload, android.util.Base64.NO_WRAP)
+                : null;
+    }
+
+    /** The byte-level encrypt core (fixed nonce injectable for the unit test). */
+    static byte[] encryptBytes(byte[] conversationKey, String plaintext, byte[] nonce) {
+        try {
+            if (conversationKey == null || conversationKey.length != 32) return null;
+            byte[] unpadded = plaintext.getBytes(StandardCharsets.UTF_8);
+            if (unpadded.length < 1 || unpadded.length > 65535) return null;
+
+            byte[] keys = hkdfExpand(conversationKey, nonce, 76);
+            byte[] chachaKey = Arrays.copyOfRange(keys, 0, 32);
+            byte[] chachaNonce = Arrays.copyOfRange(keys, 32, 44);
+            byte[] hmacKey = Arrays.copyOfRange(keys, 44, 76);
+
+            byte[] padded = new byte[2 + calcPaddedLen(unpadded.length)];
+            padded[0] = (byte) (unpadded.length >>> 8);
+            padded[1] = (byte) unpadded.length;
+            System.arraycopy(unpadded, 0, padded, 2, unpadded.length);
+
+            byte[] ciphertext = chacha20(chachaKey, chachaNonce, padded);
+            byte[] macMsg = new byte[nonce.length + ciphertext.length];
+            System.arraycopy(nonce, 0, macMsg, 0, nonce.length);
+            System.arraycopy(ciphertext, 0, macMsg, nonce.length, ciphertext.length);
+            byte[] mac = hmacSha256(hmacKey, macMsg);
+
+            byte[] payload = new byte[1 + 32 + ciphertext.length + 32];
+            payload[0] = 2;
+            System.arraycopy(nonce, 0, payload, 1, 32);
+            System.arraycopy(ciphertext, 0, payload, 33, ciphertext.length);
+            System.arraycopy(mac, 0, payload, 33 + ciphertext.length, 32);
+            return payload;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     // ── NIP-44 padding ──────────────────────────────────────────────────────
+
+    /** NIP-44 padded length: 32-byte floor, then power-of-two-derived chunks. */
+    private static int calcPaddedLen(int unpaddedLen) {
+        if (unpaddedLen <= 32) return 32;
+        int nextPower = Integer.highestOneBit(unpaddedLen - 1) << 1;
+        int chunk = nextPower <= 256 ? 32 : nextPower / 8;
+        return chunk * ((unpaddedLen - 1) / chunk + 1);
+    }
 
     /** Strip NIP-44 padding: [u16-BE len][plaintext][zeros] (extended u32 form for >= 65536). */
     private static String unpad(byte[] padded) {

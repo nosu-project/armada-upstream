@@ -166,9 +166,13 @@ public class NotificationRelayService extends Service {
     //             nsec key (never shipped here); one entry per followed peer.
     // The DM wrap filter is `{kinds:[1059], "#p":[userPubkey]}` on the DM relays
     // (the sender is hidden, so it can't be authors-scoped); wraps whose AUTHOR
-    // is in this map are opened for a rich notification, all other inbox wraps
-    // fire a generic one (see handleOpaqueDm17Wrap).
+    // is in this map open with the cheap derived keys, all other inbox wraps go
+    // through the shared signer (see handleForeignDm17Wrap).
     private final java.util.Map<String, Dm17Conv> pkToDm17 = new java.util.HashMap<>();
+    // The user's shared signer (nsec key / Amber grant / NIP-46 session),
+    // rebuilt on every config load. Opens wraps outside pkToDm17 and signs
+    // NIP-42 AUTH natively; null when the WebView shipped no credential.
+    private volatile NativeSigner nativeSigner;
     // De-dupe notifications across relays/reconnects for this service lifetime.
     private final Set<String> notifiedIds = new HashSet<>();
     // Connect time; we only notify for events at/after this to avoid backfill spam.
@@ -466,6 +470,9 @@ public class NotificationRelayService extends Service {
     public void onDestroy() {
         super.onDestroy();
         if (instance == this) instance = null;
+        NativeSigner signer = nativeSigner;
+        nativeSigner = null;
+        if (signer != null) signer.close();
         closeAllConnections();
         unregisterNetworkCallback();
         unregisterConfigListener();
@@ -522,6 +529,26 @@ public class NotificationRelayService extends Service {
         parseConcordSubs(sp.getString("concordSubs", null));
         parseConcord2Subs(sp.getString("concord2Subs", null));
         parseDm17Subs(sp.getString("dm17Subs", null));
+
+        // The user's shared signer credential (Keystore-sealed by the plugin):
+        // lets the service open ANY gift wrap addressed to the user and answer
+        // NIP-42 AUTH itself — see NativeSigner. Absent/undecryptable ⇒ null,
+        // and DM wraps outside pkToDm17 degrade to the generic notification.
+        NativeSigner oldSigner = nativeSigner;
+        nativeSigner = null;
+        if (oldSigner != null) oldSigner.close();
+        String sealedSigner = sp.getString("signerSealed", null);
+        if (sealedSigner != null) {
+            String signerJson = SealedStore.open(sealedSigner);
+            if (signerJson != null) {
+                try {
+                    nativeSigner = NativeSigner.from(this, httpClient, userPubkey, new JSONObject(signerJson));
+                } catch (JSONException e) {
+                    Log.w(TAG, "signer config unreadable");
+                }
+            }
+            if (nativeSigner == null) Log.w(TAG, "shared signer credential unavailable");
+        }
 
         // The relays to connect to: NIP-29 group relays ∪ DM relays ∪ Concord relays.
         Set<String> allRelays = new LinkedHashSet<>(relayUrls);
@@ -1049,15 +1076,26 @@ public class NotificationRelayService extends Service {
             JSONArray msg = new JSONArray(text);
             String type = msg.optString(0);
             if ("AUTH".equals(type)) {
-                // NIP-42 challenge. The user's kind-22242 goes through the
-                // WebView's signer (handles nsec / bunker / extension) and
-                // comes back via ArmadaNotificationPlugin.submitAuth →
-                // deliverAuth.
+                // NIP-42 challenge. The bridge is still emitted when the
+                // WebView is up (it signs the Concord V2 STREAM auths, whose
+                // derived keys live JS-side), but the user's own kind-22242 is
+                // signed natively whenever a shared signer credential exists —
+                // so auth-gated subscriptions (the classic #p DM inbox wall)
+                // survive with the app killed. A duplicate user AUTH from the
+                // bridge is harmless; a relay just re-authenticates.
                 String challenge = msg.optString(1);
                 if (BuildConfig.DEBUG) Log.d(TAG, "AUTH challenge from " + relayUrl);
                 boolean bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge);
-                if (!bridged) {
-                    Log.w(TAG, "No bridge (WebView down) — can't AUTH " + relayUrl + " as the user");
+                NativeSigner signer = nativeSigner;
+                if (signer != null) {
+                    JSONArray authTags = new JSONArray()
+                            .put(new JSONArray().put("relay").put(relayUrl))
+                            .put(new JSONArray().put("challenge").put(challenge));
+                    signer.signEvent(22242, "", authTags, System.currentTimeMillis() / 1000, ev -> {
+                        if (ev != null) deliverAuth(relayUrl, ev.toString());
+                    });
+                } else if (!bridged) {
+                    Log.w(TAG, "No bridge (WebView down) and no shared signer — can't AUTH " + relayUrl);
                 }
                 return;
             }
@@ -1564,7 +1602,7 @@ public class NotificationRelayService extends Service {
     private void handleDm17Wrap(JSONObject wrap, String id, String relayUrl, boolean storedBefore) {
         Dm17Conv conv = pkToDm17.get(wrap.optString("pubkey"));
         if (conv == null) {
-            handleOpaqueDm17Wrap(wrap, id, storedBefore);
+            handleForeignDm17Wrap(wrap, id, relayUrl, storedBefore);
             return;
         }
         long cts = wrap.optLong("created_at", 0);
@@ -1623,12 +1661,15 @@ public class NotificationRelayService extends Service {
 
     /**
      * A kind-1059 wrap addressed to the user whose author is NOT a derivable
-     * conversation address. The sender is hidden by design and no key we hold
-     * opens the wrap, so the best possible notification is a generic
-     * "New direct message" — the WebView attributes it on open. (These used
-     * to be dropped silently, which meant NO notification at all for DMs from
-     * vanilla NIP-17 clients, from senders without an nsec login, or from
-     * anyone the user doesn't follow.)
+     * conversation address — a vanilla NIP-17 sender, a non-followed peer, or
+     * any sender when we hold no raw key. With a shared signer credential
+     * (NativeSigner: nsec key, Amber grant, or NIP-46 session) the wrap is
+     * opened wrap → seal → rumor exactly like the WebView's openDmWrap, for a
+     * full "<sender>: <preview>" notification; non-DM rumor kinds (Concord
+     * invites, reactions, deletes) and our own sent copies stay silent. Only
+     * when the signer is absent or UNREACHABLE (Amber grant missing, bunker
+     * offline) does it degrade to a generic "New direct message". (These used
+     * to be dropped entirely — no notification at all for most real DMs.)
      *
      * Dedupe is {@code storedBefore} (the shared event DB): a wrap either
      * side EVER stored — a previous service incarnation, the WebView's inbox
@@ -1637,13 +1678,78 @@ public class NotificationRelayService extends Service {
      * that ignore the filter's {@code limit: 0} and replay the rewound
      * `since` window on reconnect.
      */
-    private void handleOpaqueDm17Wrap(JSONObject wrap, String id, boolean storedBefore) {
+    private void handleForeignDm17Wrap(JSONObject wrap, String id, String relayUrl, boolean storedBefore) {
         // Only wraps addressed to me are DMs — the Concord V2 authors-scoped
         // subscription also delivers kind 1059, with no `p` tag at us.
         if (!isMentioned(wrap, userPubkey)) return;
         notifiedIds.add(id);
         if (storedBefore) return;
         if (!prefBool("directMessages", true)) return;
+
+        NativeSigner signer = nativeSigner;
+        if (signer == null) {
+            notifyOpaqueDm17();
+            return;
+        }
+        // Open the wrap with the user's signer (async — Amber/bunker are RPC).
+        // Mirrors openDmWrap's checks: seal kind 13, rumor author == seal
+        // signer (NIP-59 anti-spoof; the NIP-44 AEAD already authenticated the
+        // seal against us).
+        signer.decrypt44(wrap.optString("pubkey"), wrap.optString("content"), (sealJson, unavailable) -> {
+            if (sealJson == null) {
+                // Crypto says no → not a readable DM (foreign protocol,
+                // garbage): silent. Signer unreachable → still tell the user
+                // SOMETHING arrived.
+                if (unavailable) notifyOpaqueDm17();
+                return;
+            }
+            try {
+                JSONObject seal = new JSONObject(sealJson);
+                if (seal.optInt("kind", -1) != 13) return;
+                final String peer = seal.optString("pubkey", "");
+                if (peer.length() != 64) return;
+                if (peer.equals(userPubkey)) return; // our own sent copy
+                signer.decrypt44(peer, seal.optString("content", ""), (rumorJson, unavailable2) -> {
+                    if (rumorJson == null) {
+                        if (unavailable2) notifyOpaqueDm17();
+                        return;
+                    }
+                    try {
+                        JSONObject rumor = new JSONObject(rumorJson);
+                        if (!peer.equals(rumor.optString("pubkey"))) return;
+                        // Chat/file messages only — reactions (7), deletes (5)
+                        // and foreign rumor kinds (Concord invites) stay
+                        // silent, matching the WebView's DM rumor kinds.
+                        final int rumorKind = rumor.optInt("kind", -1);
+                        if (rumorKind != 14 && rumorKind != 15) return;
+                        final String preview = truncate(
+                                rumorKind == 15 ? "Sent a file" : rumor.optString("content"));
+                        final long rts = rumor.optLong("created_at", 0);
+                        final long fTs = (rts > 0 ? rts * 1000L : System.currentTimeMillis());
+                        resolveAuthor(peer, relayUrl, profile -> {
+                            String name = displayName(profile, peer);
+                            String picture = profile != null ? profile.picture : null;
+                            String line = preview.isEmpty() ? "Sent you a direct message" : preview;
+                            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (signer) from=" + name);
+                            enqueueRoomMessage("dm:" + peer, name, "/dms/" + peer, /*isGroup=*/false,
+                                    peer, name, picture, line, fTs, /*mention=*/true);
+                        });
+                    } catch (Exception ignored) {
+                        // Malformed rumor JSON — silent.
+                    }
+                });
+            } catch (Exception ignored) {
+                // Malformed seal JSON — silent.
+            }
+        });
+    }
+
+    /**
+     * The unattributed fallback: an inbox wrap we could not open (no signer, or
+     * the signer was unreachable). Better a generic ping than silence — the
+     * WebView attributes it on open.
+     */
+    private void notifyOpaqueDm17() {
         // Viewing ANY DM thread suppresses: the live feed already paints the
         // message there (or it's our own just-sent copy echoing back), and
         // the wrap hides which peer it belongs to, so per-thread suppression

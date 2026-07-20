@@ -458,6 +458,19 @@ public class ArmadaNotificationPlugin extends Plugin {
         } catch (Exception e) {
             Log.w(TAG, "Failed to read prefs", e);
         }
+        // The shared signer credential ({type:"key"|"amber"|"nip46", …} — see
+        // NativeSigner). Secret-bearing, so it is sealed with an Android
+        // Keystore key before touching SharedPreferences and wiped with the
+        // rest of the config on disable/logout.
+        String signerSealed = null;
+        try {
+            if (call.getObject("signer") != null) {
+                signerSealed = SealedStore.seal(call.getObject("signer").toString());
+                if (signerSealed == null) Log.w(TAG, "Failed to seal signer credential");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to read signer", e);
+        }
 
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         boolean hasWatch = relayUrlsRaw != null || concordSubsRaw != null || concord2SubsRaw != null
@@ -481,6 +494,8 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("concord2Subs");
             if (dm17SubsRaw != null) editor.putString("dm17Subs", dm17SubsRaw);
             else editor.remove("dm17Subs");
+            if (signerSealed != null) editor.putString("signerSealed", signerSealed);
+            else editor.remove("signerSealed");
             if (prefsRaw != null) editor.putString("prefs", prefsRaw);
             // Bump a revision so the running service's SharedPreferences
             // listener always fires even if the values look unchanged.

@@ -69,9 +69,11 @@ export interface ArmadaNotificationPlugin {
    */
   getRoomEvents(options: { room: string }): Promise<{ events: string[] }>;
   /**
-   * Fired when a relay issues a NIP-42 AUTH challenge. The JS layer signs a
-   * kind-22242 with the user's signer and calls submitAuth — so no private key
-   * ever enters native code, and bunker/extension signers work too.
+   * Fired when a relay issues a NIP-42 AUTH challenge. The JS layer signs the
+   * Concord V2 stream auths (their derived keys live JS-side) and the user's
+   * kind-22242, then calls submitAuth. The service ALSO signs the user's
+   * 22242 itself when a signer credential was shared (configure's `signer`),
+   * so auth-gated relays keep working with the app dead.
    */
   addListener(
     eventName: "authChallenge",
@@ -189,10 +191,10 @@ export interface ArmadaNotificationPlugin {
      * NIP-44 conversation keys that open wrap → seal → rumor — so the service
      * shows a rich "<sender>: <preview>" DM notification WITHOUT ever holding
      * the identity key (exactly like concord2Subs' per-stream convKey). The
-     * service subscribes `{kinds:[1059], "#p":[userPubkey]}` on the DM relays
-     * and only opens/notifies wraps whose author matches a `wrapPk` here;
-     * everything else is left to the WebView's own DM inbox sync. Empty for
-     * extension/bunker logins (no raw key to derive the keys).
+     * service subscribes `{kinds:[1059], "#p":[userPubkey]}` on the DM relays;
+     * wraps whose author matches a `wrapPk` here open with these cheap derived
+     * keys, and any other inbox wrap goes through the shared `signer`
+     * credential. Empty for non-nsec logins (no raw key to derive the keys).
      */
     dm17Subs?: Array<{
       /** Conversation wrap address (x-only hex) — the wrap author to match. */
@@ -204,6 +206,27 @@ export interface ArmadaNotificationPlugin {
       /** The conversation peer (hex) — deep link (/dms/<peer>) + name. */
       peer: string;
     }>;
+    /**
+     * The user's signer credential, shared with the service so it can open
+     * ANY gift wrap addressed to the user (rich DM notifications regardless
+     * of sender client) and answer NIP-42 AUTH challenges with the app dead.
+     * One shape per login type; the native side seals it with an Android
+     * Keystore key before persisting and wipes it with the config on
+     * disable/logout:
+     *   - nsec:   the raw identity key (hex) — already resident in this same
+     *             app sandbox (localStorage); native storage is sealed, so
+     *             at-rest posture strictly improves.
+     *   - amber:  the NIP-55 signer app's package name; the service queries
+     *             its ContentResolver directly (background grant required).
+     *   - nip46:  the bunker session — the pairing's CLIENT key, bunker
+     *             pubkey and bunker relays; the service runs its own
+     *             kind-24133 RPC channel. The identity key stays in the
+     *             bunker, exactly as the user chose.
+     */
+    signer?:
+      | { type: "key"; sk: string }
+      | { type: "amber"; packageName: string }
+      | { type: "nip46"; clientSk: string; bunkerPk: string; relays: string[] };
   }): Promise<void>;
 }
 

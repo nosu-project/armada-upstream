@@ -1,4 +1,7 @@
 import { Capacitor } from "@capacitor/core";
+import { useNostrLogin } from "@nostrify/react/login";
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -199,6 +202,46 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     return out;
   }, [rawKey, dmFollows, prefs.directMessages]);
 
+  // The signer credential shared with the service (Keystore-sealed natively,
+  // wiped with the config on disable/logout) so it can open ANY inbox gift
+  // wrap and answer NIP-42 AUTH with the app dead. Every login type carries a
+  // shareable credential: the nsec's raw key, the NIP-55 signer app's package
+  // (its ContentResolver is callable from native code), or the NIP-46 bunker
+  // session (client key + bunker pubkey + relays — the identity key stays in
+  // the bunker). See NativeSigner.java.
+  const { logins } = useNostrLogin();
+  const login = logins[0];
+  const signerCfg = useMemo(():
+    | { type: "key"; sk: string }
+    | { type: "amber"; packageName: string }
+    | { type: "nip46"; clientSk: string; bunkerPk: string; relays: string[] }
+    | undefined => {
+    try {
+      if (login?.type === "nsec") {
+        const decoded = nip19.decode(login.data.nsec);
+        if (decoded.type === "nsec") return { type: "key", sk: bytesToHex(decoded.data) };
+      }
+      if (login?.type === "bunker") {
+        const decoded = nip19.decode(login.data.clientNsec);
+        if (decoded.type === "nsec") {
+          return {
+            type: "nip46",
+            clientSk: bytesToHex(decoded.data),
+            bunkerPk: login.data.bunkerPubkey,
+            relays: login.data.relays,
+          };
+        }
+      }
+      if (login?.type === "x-android-signer") {
+        const { packageName } = login.data as { packageName: string };
+        if (packageName) return { type: "amber", packageName };
+      }
+    } catch {
+      // Malformed login data — the service just gets no signer.
+    }
+    return undefined;
+  }, [login]);
+
   const prefsRecord = useMemo<Record<string, boolean>>(
     () => ({
       mentions: prefs.mentions,
@@ -282,6 +325,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         dmRelays,
         dmFollows,
         dm17Subs,
+        signer: signerCfg,
       };
     }
 
@@ -293,7 +337,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, dm17Subs]);
+  }, [supported, enabled, user, relayUrls, groupIds, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, dm17Subs, signerCfg]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off, start the background service. Android lets us request the OS
