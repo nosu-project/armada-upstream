@@ -12,6 +12,8 @@ import type { NostrMetadata } from "@nostrify/nostrify";
 import type { Participant, RemoteParticipant } from "livekit-client";
 import { Track } from "livekit-client";
 import {
+  ChevronLeft,
+  ChevronRight,
   Maximize2,
   Mic,
   Minimize2,
@@ -522,6 +524,71 @@ function AvatarTile({
 }
 
 /**
+ * Compact prev/next selector shown over the floating preview when more than one
+ * screen share is active, letting the viewer cycle between them (the raw track
+ * order can't be trusted — it differs per client and reorders on subscribe, so
+ * selection is driven by a stable, sorted key list in the parent). Also labels
+ * the currently-selected sharer by display name. Rendered inside the LiveKit
+ * room context, so `useTileDisplayName` resolves the sharer's name/verification.
+ */
+function ShareSelector({
+  participant,
+  index,
+  total,
+  onPrev,
+  onNext,
+}: {
+  participant: Participant | null;
+  index: number;
+  total: number;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  const name = useShareSharerName(participant);
+  return (
+    <div className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 px-1 py-0.5 text-[11px] text-white">
+      <button
+        type="button"
+        aria-label="Previous screen share"
+        title="Previous screen share"
+        onClick={onPrev}
+        className="rounded p-0.5 hover:bg-white/20"
+      >
+        <ChevronLeft className="size-3.5" />
+      </button>
+      <span className="flex items-center gap-1 max-w-40 truncate">
+        <ScreenShare className="size-3 shrink-0" />
+        <span className="truncate">{name}</span>
+        <span className="tabular-nums text-white/60">
+          {index + 1}/{total}
+        </span>
+      </span>
+      <button
+        type="button"
+        aria-label="Next screen share"
+        title="Next screen share"
+        onClick={onNext}
+        className="rounded p-0.5 hover:bg-white/20"
+      >
+        <ChevronRight className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/** Resolve a sharer's display name for the share selector label. */
+function useShareSharerName(participant: Participant | null): string {
+  const resolve = useVoiceIdentity();
+  const identity = participant?.identity ?? "";
+  const { pubkey, verified } = resolve(identity);
+  const author = useAuthor(verified ? pubkey : undefined);
+  const scopedName = useScopedDisplayName(pubkey, author.data?.metadata);
+  if (!participant) return "";
+  if (participant.isLocal) return "Your screen";
+  return verified ? scopedName : "Screen share";
+}
+
+/**
  * Whether this browser can capture the screen (absent on most mobile). Same
  * guard the VoiceBar uses to gate its screen-share button; the floating window
  * is desktop-only, but this keeps parity and hides the button where the API is
@@ -763,10 +830,51 @@ export function CallStage({
   // wins; then the manually focused tile; then the debounced active speaker;
   // then a stable fallback (first video tile, else first tile) so something
   // meaningful shows even in a silent, camera-off call.
-  const screenShareKey = useMemo(() => {
-    const ss = videoTracks.find((t) => t.source === Track.Source.ScreenShare);
-    return ss ? trackTileKey(ss) : null;
-  }, [videoTracks]);
+  //
+  // All active screen-share tiles, in a STABLE order (by participant identity,
+  // not the track array's incidental order — which flips between clients and
+  // reorders on (re)subscribe). Keying the selection off this order keeps the
+  // selected share from jumping when the array churns.
+  const sortedShareKeys = useMemo(
+    () =>
+      videoTracks
+        .filter((t) => t.source === Track.Source.ScreenShare)
+        .map(trackTileKey)
+        .sort(),
+    [videoTracks],
+  );
+  // The selected screen share (stable across track-array reordering). One share
+  // auto-selects; with several, the current pick is kept while it's still live,
+  // and we fall back to the first stable one when it ends or none is chosen.
+  const [selectedShareKey, setSelectedShareKey] = useState<string | null>(null);
+  useEffect(() => {
+    setSelectedShareKey((cur) => {
+      if (sortedShareKeys.length === 0) return null;
+      if (cur && sortedShareKeys.includes(cur)) return cur; // keep stable
+      return sortedShareKeys[0]; // auto-select (single) or recover (ended)
+    });
+  }, [sortedShareKeys]);
+  // Honor manual focus on a screen share: if the user focused a share tile,
+  // treat that as the selection so prev/next + preview agree with the grid.
+  useEffect(() => {
+    if (focusKey && sortedShareKeys.includes(focusKey)) setSelectedShareKey(focusKey);
+  }, [focusKey, sortedShareKeys]);
+  const screenShareKey =
+    selectedShareKey && sortedShareKeys.includes(selectedShareKey)
+      ? selectedShareKey
+      : sortedShareKeys[0] ?? null;
+  const selectedShareIndex = screenShareKey ? sortedShareKeys.indexOf(screenShareKey) : -1;
+  const cycleShare = useCallback(
+    (dir: 1 | -1) => {
+      setSelectedShareKey((cur) => {
+        if (sortedShareKeys.length === 0) return null;
+        const base = cur && sortedShareKeys.includes(cur) ? sortedShareKeys.indexOf(cur) : 0;
+        const next = (base + dir + sortedShareKeys.length) % sortedShareKeys.length;
+        return sortedShareKeys[next];
+      });
+    },
+    [sortedShareKeys],
+  );
   // Highest-priority current speaker that has a tile (speakingParticipants is
   // ordered loudest-first by LiveKit).
   const speakingKey = useMemo(() => {
@@ -791,6 +899,17 @@ export function CallStage({
   });
   const primaryTile =
     (primaryKey && tiles.find((t) => t.key === primaryKey)) || tiles[0] || undefined;
+  // Whether the compact preview is currently showing a screen share (so the
+  // floating window can render its prev/next share selector + sharer name).
+  const showingShare = Boolean(screenShareKey && primaryKey === screenShareKey);
+  // The participant behind the selected share, for the sharer-name label.
+  const selectedShareParticipant = useMemo(
+    () =>
+      videoTracks.find(
+        (t) => t.source === Track.Source.ScreenShare && trackTileKey(t) === screenShareKey,
+      )?.participant ?? null,
+    [videoTracks, screenShareKey],
+  );
 
   // Theater mode: detach the stage into a full-viewport overlay.
   const [theater, setTheater] = useState(false);
@@ -924,6 +1043,17 @@ export function CallStage({
             <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
               Connecting…
             </div>
+          )}
+          {/* Multiple simultaneous screen shares: overlay a prev/next selector
+              (single shares auto-select and need no switcher). */}
+          {showingShare && sortedShareKeys.length > 1 && (
+            <ShareSelector
+              participant={selectedShareParticipant}
+              index={selectedShareIndex}
+              total={sortedShareKeys.length}
+              onPrev={() => cycleShare(-1)}
+              onNext={() => cycleShare(1)}
+            />
           )}
         </div>
         <FloatingControls />

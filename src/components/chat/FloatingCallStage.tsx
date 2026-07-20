@@ -119,7 +119,11 @@ export function FloatingCallStage({
 
   // Initial placement: restore the persisted position (clamped to the current
   // viewport, in case it shrank) or fall back to bottom-right. Runs after the
-  // panel mounts so its real height is available.
+  // panel mounts. The panel's final height isn't known yet here — the stage
+  // host (video + controls) is reparented in asynchronously — so this is a
+  // provisional placement that the ResizeObserver below corrects once the real
+  // height settles. `pos` stays null (panel held invisible) until this runs, so
+  // there's no top-left flash.
   useLayoutEffect(() => {
     if (!isDesktop) return;
     const el = panelRef.current;
@@ -127,6 +131,30 @@ export function FloatingCallStage({
     const height = el.offsetHeight || 240;
     const saved = loadPosition();
     setPos(clampToViewport(saved ?? defaultPosition(PANEL_WIDTH, height), PANEL_WIDTH, height));
+  }, [isDesktop]);
+
+  // Re-clamp against the panel's ACTUAL rendered size whenever it changes. The
+  // panel is short on first paint (just the header) and grows when CallProvider
+  // reparents the stage + controls into it; without this the initial clamp uses
+  // the too-small height and the panel opens too low (its grown bottom edge
+  // ends up near/under the viewport). The observer re-clamps the current
+  // top-left using the final height, so the complete panel is always visible —
+  // and it also covers later content-driven size changes. A saved position is
+  // re-clamped the same way (using current dimensions), never trusted blindly.
+  useEffect(() => {
+    if (!isDesktop) return;
+    const el = panelRef.current;
+    if (!el) return;
+    const reclamp = () => {
+      // Don't fight an in-progress drag; the move handler already clamps.
+      if (drag.current) return;
+      const height = el.offsetHeight || 240;
+      const width = el.offsetWidth || PANEL_WIDTH;
+      setPos((cur) => (cur ? clampToViewport(cur, width, height) : cur));
+    };
+    const ro = new ResizeObserver(reclamp);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [isDesktop]);
 
   // Re-clamp whenever the viewport resizes so the panel never drifts off screen.
