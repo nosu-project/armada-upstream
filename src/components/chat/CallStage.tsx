@@ -545,13 +545,24 @@ function ShareSelector({
   onNext: () => void;
 }) {
   const name = useShareSharerName(participant);
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
-    <div className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 px-1 py-0.5 text-[11px] text-white">
+    <div
+      className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 px-1 py-0.5 text-[11px] text-white"
+      // Keep any pointer/click on the selector from bubbling to the underlying
+      // tile (which carries the focus toggle) or any wrapper handler.
+      onPointerDown={stop}
+      onClick={stop}
+    >
       <button
         type="button"
         aria-label="Previous screen share"
         title="Previous screen share"
-        onClick={onPrev}
+        onPointerDown={stop}
+        onClick={(e) => {
+          e.stopPropagation();
+          onPrev();
+        }}
         className="rounded p-0.5 hover:bg-white/20"
       >
         <ChevronLeft className="size-3.5" />
@@ -567,7 +578,11 @@ function ShareSelector({
         type="button"
         aria-label="Next screen share"
         title="Next screen share"
-        onClick={onNext}
+        onPointerDown={stop}
+        onClick={(e) => {
+          e.stopPropagation();
+          onNext();
+        }}
         className="rounded p-0.5 hover:bg-white/20"
       >
         <ChevronRight className="size-3.5" />
@@ -866,14 +881,22 @@ export function CallStage({
   const selectedShareIndex = screenShareKey ? sortedShareKeys.indexOf(screenShareKey) : -1;
   const cycleShare = useCallback(
     (dir: 1 | -1) => {
-      setSelectedShareKey((cur) => {
-        if (sortedShareKeys.length === 0) return null;
-        const base = cur && sortedShareKeys.includes(cur) ? sortedShareKeys.indexOf(cur) : 0;
-        const next = (base + dir + sortedShareKeys.length) % sortedShareKeys.length;
-        return sortedShareKeys[next];
-      });
+      if (sortedShareKeys.length === 0) return;
+      const cur = selectedShareKey;
+      const base = cur && sortedShareKeys.includes(cur) ? sortedShareKeys.indexOf(cur) : 0;
+      const next = (base + dir + sortedShareKeys.length) % sortedShareKeys.length;
+      const nextKey = sortedShareKeys[next];
+      setSelectedShareKey(nextKey);
+      // Move focus with the cycle. Otherwise the focus-honoring effect above
+      // (which snaps the selection back to `focusKey` — pinned to the share
+      // that auto-expanded) would immediately revert this switch: the name and
+      // index would flip for a frame and then the preview would stay on the
+      // previously selected share. Keeping `focusKey` in step lets the switch
+      // stick. Only move focus if it was already on a share (don't create focus
+      // the user didn't ask for).
+      setFocusKey((f) => (f && sortedShareKeys.includes(f) ? nextKey : f));
     },
-    [sortedShareKeys],
+    [sortedShareKeys, selectedShareKey],
   );
   // Highest-priority current speaker that has a tile (speakingParticipants is
   // ordered loudest-first by LiveKit).
@@ -902,14 +925,20 @@ export function CallStage({
   // Whether the compact preview is currently showing a screen share (so the
   // floating window can render its prev/next share selector + sharer name).
   const showingShare = Boolean(screenShareKey && primaryKey === screenShareKey);
-  // The participant behind the selected share, for the sharer-name label.
-  const selectedShareParticipant = useMemo(
+  // The selected screen share's TrackReference (resolved DIRECTLY, not via the
+  // generic `tiles` list), plus the participant behind it for the name label.
+  // Rendering the share from its own TrackReference — keyed by publication SID —
+  // guarantees the compact <video> reattaches to the newly selected track when
+  // switching, independent of how the shared `tiles`/primary-key indirection
+  // reconciles.
+  const selectedShareTrackRef = useMemo(
     () =>
       videoTracks.find(
         (t) => t.source === Track.Source.ScreenShare && trackTileKey(t) === screenShareKey,
-      )?.participant ?? null,
+      ) ?? null,
     [videoTracks, screenShareKey],
   );
+  const selectedShareParticipant = selectedShareTrackRef?.participant ?? null;
 
   // Theater mode: detach the stage into a full-viewport overlay.
   const [theater, setTheater] = useState(false);
@@ -1037,15 +1066,32 @@ export function CallStage({
     return (
       <div className="flex h-full w-full flex-col overflow-hidden">
         <div className="relative h-44 w-full bg-black">
-          {primaryTile ? (
-            // Key the wrapper by the tile key so switching the selected share
-            // (or any primary-content change) UNMOUNTS the old VideoTile and
-            // MOUNTS a fresh one. Without a changing key React reuses the same
-            // VideoTile in this fixed position and LiveKit keeps the previous
-            // track attached to the reused <video>, leaving the preview stuck on
-            // the prior share even though the selection/name/index updated. This
-            // only re-mounts the single compact tile — not CallStage, the room,
-            // or any subscription.
+          {showingShare && selectedShareTrackRef ? (
+            // Render the SELECTED screen share directly from its own
+            // TrackReference, keyed by participant identity + publication SID.
+            // Switching shares changes the SID → React unmounts the old
+            // VideoTile and its LiveKit <video>, and mounts a fresh one bound to
+            // the newly selected publication, so the preview always shows the
+            // chosen presenter (no reused/stuck element, no black frame after
+            // resubscribe). Only this one compact tile re-mounts — never
+            // CallStage, the room, the stage host, or unrelated subscriptions.
+            <div
+              key={`${selectedShareTrackRef.participant.identity}:${selectedShareTrackRef.publication?.trackSid ?? "ss"}`}
+              className="h-full w-full"
+            >
+              <VideoTile
+                trackRef={selectedShareTrackRef}
+                isSpeaking={false}
+                focused
+                onToggleFocus={() =>
+                  setFocusKey((cur) => (cur === screenShareKey ? null : screenShareKey))
+                }
+              />
+            </div>
+          ) : primaryTile ? (
+            // Non-share primary content (active speaker / camera / avatar): the
+            // generic tile keyed by its stable tile key still reattaches cleanly
+            // on change.
             <div key={primaryTile.key} className="h-full w-full">
               {primaryTile.render(true)}
             </div>
