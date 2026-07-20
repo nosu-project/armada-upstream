@@ -42,6 +42,7 @@ import { useVoiceIdentity, VoiceIdentityContext, type VoiceIdentityResolver } fr
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { random32, voiceSenderKey } from "@/concord-v2/lib/derive";
 import { rendezvousCandidates, verifiedAuthorOf } from "@/concord-v2/lib/voice";
+import { useCallSync2 } from "@/concord-v2/hooks/useCallSync2";
 import { useAvToken2, useVoiceHeartbeat2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
@@ -658,6 +659,13 @@ function ConcordVoiceRoom({
   const { user } = useCurrentUser();
   const { joinConcordCall } = useCall();
   const { data: tokenData, error, isLoading } = useAvToken2(channel, broker, true);
+
+  // Live enforcement (CORD-07 §7): `ctx` is a join-time snapshot, so follow
+  // the vault + Control fold while connected — rejoin the freshly-derived room
+  // when the channel's key rolls (the rotation that severs a removed member
+  // from chat must move the call too), and hang up on a ban verdict, vault
+  // removal, or channel deletion.
+  useCallSync2(ctx, onLeave);
 
   // Live presence (§4): the identity→member verification input, the rendezvous
   // hint stream (§5), and our own heartbeat (joined every 30s, left on leave).
