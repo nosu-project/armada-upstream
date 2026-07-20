@@ -1,63 +1,162 @@
-import { ArrowLeftRight, Maximize2, Ruler, X } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { GripVertical, Maximize2, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useCall } from "@/hooks/useCall";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
-import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { cn } from "@/lib/utils";
 
-/** Which corner the preview snaps to. */
-type Side = "left" | "right";
-/** The preview size preset. */
-type SizePreset = "small" | "medium" | "large";
+/** localStorage keys for the persisted preview geometry. */
+const POS_KEY = "armada:mobile-call-preview:pos";
+const SIZE_KEY = "armada:mobile-call-preview:width";
 
-/** localStorage keys for the persisted preview size + side. */
-const SIZE_KEY = "armada:mobile-call-preview:size";
-const SIDE_KEY = "armada:mobile-call-preview:side";
-
-/** The gap kept from each viewport side edge and from the call bar (0.5rem). */
-const EDGE_GAP = "0.5rem";
+/** Gap kept from every viewport edge (and from the call bar). */
+const EDGE_GAP = 8;
+/** Fixed header height (px) — used to compute total panel height from width. */
+const HEADER_H = 32;
+/** The 16:9 media aspect ratio; body height = width * 9/16. */
+const BODY_RATIO = 9 / 16;
 
 /**
- * The three responsive width presets. Each is viewport-relative so it tracks
- * rotation/resize natively (pure CSS, no JS resize listener), with a fixed
- * lower bound so it stays useful on narrow phones and an upper bound so it
- * never grows absurdly on wide/landscape viewports. All are additionally capped
- * to `calc(100vw - 1rem)` on the element (`maxWidth`), so even the lower bound
- * can't touch the side gutters on an unusually narrow device.
- *
- *   small  = clamp(128px, 42vw, 190px)  — minimal but legible preview
- *   medium = clamp(168px, 62vw, 288px)  — comfortable general call preview (default)
- *   large  = min(100vw - 1rem, 460px)   — most of the viewport width, edges clear
- *
- * The body below the header is `aspect-video` (16:9), so height follows width
- * and the video aspect ratio is always preserved.
+ * Width limits. The minimum keeps the header (return / hide / grip / resize)
+ * usable and the video legible; the maximum is derived per-clamp from the
+ * current visible viewport (never the full width, and always leaving room for
+ * the call bar) — see `clampWidth`. `MAX_WIDTH_CAP` is an absolute ceiling so
+ * the panel never grows absurdly on a wide landscape viewport.
  */
-const SIZE_WIDTH: Record<SizePreset, string> = {
-  small: "clamp(128px, 42vw, 190px)",
-  medium: "clamp(168px, 62vw, 288px)",
-  large: "min(calc(100vw - 1rem), 460px)",
-};
+const MIN_WIDTH = 128;
+const MAX_WIDTH_CAP = 460;
 
-/** Human labels for the size toggle (announced + shown, never icon/color only). */
-const SIZE_LABEL: Record<SizePreset, string> = {
-  small: "Small",
-  medium: "Medium",
-  large: "Large",
-};
-
-/** Cycle order for the size toggle. */
-const SIZE_ORDER: SizePreset[] = ["small", "medium", "large"];
-
-function nextSize(cur: SizePreset): SizePreset {
-  return SIZE_ORDER[(SIZE_ORDER.indexOf(cur) + 1) % SIZE_ORDER.length];
+interface Point {
+  x: number;
+  y: number;
 }
 
-function isSize(v: string): v is SizePreset {
-  return v === "small" || v === "medium" || v === "large";
+/**
+ * The visible viewport rect the preview must stay within, and the safe-area
+ * insets to keep clear. Uses `visualViewport` when available so the box shrinks
+ * with the on-screen keyboard (and tracks pinch/scroll offsets); falls back to
+ * the layout viewport otherwise. `callBarHeight` (which already folds in the
+ * bottom safe-area inset) is reserved at the bottom so the panel can never
+ * overlap the fixed MobileCallBar.
+ */
+function viewportBox(callBarHeight: number): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const vv = typeof window !== "undefined" ? window.visualViewport : null;
+  const vw = vv?.width ?? window.innerWidth;
+  const vh = vv?.height ?? window.innerHeight;
+  const offLeft = vv?.offsetLeft ?? 0;
+  const offTop = vv?.offsetTop ?? 0;
+
+  // Safe-area insets (landscape notches, status bar, home indicator). Read from
+  // the root computed style; the call bar already accounts for the BOTTOM inset,
+  // so only top/left/right are added here.
+  const cs = typeof window !== "undefined" ? getComputedStyle(document.documentElement) : null;
+  const px = (v: string | undefined) => {
+    const n = v ? parseFloat(v) : 0;
+    return Number.isFinite(n) ? n : 0;
+  };
+  const insetTop = px(cs?.getPropertyValue("--safe-area-inset-top"));
+  const insetLeft = px(cs?.getPropertyValue("--safe-area-inset-left"));
+  const insetRight = px(cs?.getPropertyValue("--safe-area-inset-right"));
+
+  const left = offLeft + insetLeft + EDGE_GAP;
+  const top = offTop + insetTop + EDGE_GAP;
+  const width = Math.max(0, vw - insetLeft - insetRight - EDGE_GAP * 2);
+  const height = Math.max(0, vh - insetTop - callBarHeight - EDGE_GAP * 2);
+  return { left, top, width, height };
 }
-function isSide(v: string): v is Side {
-  return v === "left" || v === "right";
+
+/** Total panel height (header + 16:9 body) for a given width. */
+function panelHeight(width: number): number {
+  return HEADER_H + width * BODY_RATIO;
+}
+
+/**
+ * Clamp a width to [MIN_WIDTH, max], where max is the largest width whose full
+ * panel (header + 16:9 body) still fits the current visible viewport box, capped
+ * at MAX_WIDTH_CAP. Width is bounded by BOTH the box width and the box height
+ * (via the body ratio) so a short landscape viewport can't produce a panel
+ * taller than the screen.
+ */
+function clampWidth(width: number, callBarHeight: number): number {
+  const box = viewportBox(callBarHeight);
+  const maxByWidth = box.width;
+  const maxByHeight = (box.height - HEADER_H) / BODY_RATIO;
+  const max = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH_CAP, maxByWidth, maxByHeight));
+  return Math.min(Math.max(width, MIN_WIDTH), max);
+}
+
+/**
+ * Clamp a top-left point so the whole `width`×(header+body) panel stays inside
+ * the current visible viewport box (which reserves the call bar + safe areas).
+ */
+function clampPos(p: Point, width: number, callBarHeight: number): Point {
+  const box = viewportBox(callBarHeight);
+  const h = panelHeight(width);
+  const maxX = Math.max(box.left, box.left + box.width - width);
+  const maxY = Math.max(box.top, box.top + box.height - h);
+  return {
+    x: Math.min(Math.max(p.x, box.left), maxX),
+    y: Math.min(Math.max(p.y, box.top), maxY),
+  };
+}
+
+/** Default bottom-right position for a panel of the given width. */
+function defaultPos(width: number, callBarHeight: number): Point {
+  const box = viewportBox(callBarHeight);
+  return {
+    x: box.left + box.width - width,
+    y: box.top + box.height - panelHeight(width),
+  };
+}
+
+function loadWidth(): number {
+  try {
+    const raw = localStorage.getItem(SIZE_KEY);
+    const n = raw ? parseFloat(raw) : NaN;
+    if (Number.isFinite(n)) return n;
+  } catch {
+    // ignore
+  }
+  return 260; // sensible default (~old "medium")
+}
+
+function loadPos(): Point | null {
+  try {
+    const raw = localStorage.getItem(POS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as Point).x === "number" &&
+      typeof (parsed as Point).y === "number"
+    ) {
+      return { x: (parsed as Point).x, y: (parsed as Point).y };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function savePos(p: Point) {
+  try {
+    localStorage.setItem(POS_KEY, JSON.stringify(p));
+  } catch {
+    // ignore
+  }
+}
+function saveWidth(w: number) {
+  try {
+    localStorage.setItem(SIZE_KEY, String(Math.round(w)));
+  } catch {
+    // ignore
+  }
 }
 
 /**
@@ -70,33 +169,31 @@ function isSide(v: string): v is Side {
  * subscription, and video keeps playing across the reparent (CallProvider
  * re-kicks any paused `<video>` on move).
  *
- * Unlike the desktop window it is NOT draggable. It is a fixed, corner-snapped
- * preview pinned to the bottom-LEFT or bottom-RIGHT (user's choice, persisted),
- * sitting directly ABOVE the fixed MobileCallBar. Its bottom offset is driven
- * by the bar's measured height reported through the call context
- * (`callBarHeight`) — a guaranteed shared value that doesn't depend on
- * CSS-variable inheritance — so it re-evaluates reactively whenever the bar
- * resizes (keyboard open/close, participant count, safe-area/orientation). The
- * bar's height already folds in the bottom safe-area inset (it uses pb-safe),
- * so a single gap above it clears the composer, bottom navigation, and the bar.
+ * The preview is freely positioned by one-finger DRAG of its header, and
+ * RESIZED (keeping the 16:9 media ratio) by dragging the visible bottom-right
+ * corner handle. Both gestures use pointer events, so touch, pen, and mouse all
+ * work. Neither gesture starts from an action button, the video tile, or the
+ * other handle, and a completed gesture suppresses the trailing click so it
+ * can't land on the preview content. Position and width persist to
+ * localStorage.
  *
- * The user picks one of three responsive size presets (small/medium/large,
- * default medium; see SIZE_WIDTH) and the side; both persist to localStorage.
- * Width is viewport-relative and clamped, so sizing stays correct across
- * rotation/resize and on narrow devices, and the 16:9 body preserves the video
- * aspect ratio.
+ * Position and size are always clamped to the VISIBLE viewport
+ * (`window.visualViewport` when available, so it shrinks with the on-screen
+ * keyboard), minus the safe-area insets and the fixed MobileCallBar's height
+ * (`callBarHeight` from the call context, which already folds in the bottom
+ * safe area). The panel therefore never overlaps the call bar or crosses the
+ * gutters, and it re-clamps on rotation, viewport resize, keyboard show/hide,
+ * safe-area changes, and call-bar height changes.
  *
- * The preview's own chrome carries only the actions that must live here:
- * "return to call" (expand), "hide", "change size", and "change side". The mic
- * / camera / screen-share / leave controls stay in the always-present
- * MobileCallBar, so they aren't duplicated; the stage's floating branch renders
- * only the primary content (and, when more than one screen share is live, the
- * share switcher) — see CallStage.
+ * The header carries only the actions that must live here: "return to call"
+ * (expand) and "hide". Mic / camera / screen-share / leave stay in the
+ * always-present MobileCallBar; the stage's floating branch renders the primary
+ * content (and, for multiple screen shares, the switcher) — see CallStage.
  *
  * Mobile only: at/above the `sidebar` breakpoint we render nothing and register
  * no host, so the desktop `FloatingCallStage` (which registers only at that
  * breakpoint) is the sole floating destination there. The two never register at
- * once. Native browser Picture-in-Picture is out of scope.
+ * once. Native browser Picture-in-Picture (and pinch resizing) are out of scope.
  */
 export function MobileCallPreview({
   registerSlot,
@@ -113,18 +210,31 @@ export function MobileCallPreview({
   const isDesktop = useIsDesktop();
   const { callBarHeight } = useCall();
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
-  const [size, setSize] = useLocalStorage<SizePreset>(SIZE_KEY, "medium", {
-    serialize: (v) => v,
-    deserialize: (v) => (isSize(v) ? v : "medium"),
-  });
-  const [side, setSide] = useLocalStorage<Side>(SIDE_KEY, "right", {
-    serialize: (v) => v,
-    deserialize: (v) => (isSide(v) ? v : "right"),
-  });
+  // Persisted width; clamped against the live viewport on mount and on every
+  // change. Position is null until the first layout pass places it (held
+  // invisible for that frame so it never flashes at the origin).
+  const [width, setWidth] = useState<number>(() => loadWidth());
+  const [pos, setPos] = useState<Point | null>(null);
+  const [gesture, setGesture] = useState<null | "drag" | "resize">(null);
 
-  const cycleSize = useCallback(() => setSize((s) => nextSize(s)), [setSize]);
-  const flipSide = useCallback(() => setSide((s) => (s === "right" ? "left" : "right")), [setSide]);
+  // Live gesture bookkeeping in a ref so the move handler doesn't re-close.
+  const active = useRef<
+    | { kind: "drag"; pointerId: number; offsetX: number; offsetY: number }
+    | { kind: "resize"; pointerId: number }
+    | null
+  >(null);
+  // Set true once a gesture actually moved, so the trailing click is swallowed.
+  const moved = useRef(false);
+  // Latest width/position in refs for handlers that must not re-close on state
+  // changes (and so the resize handler can read the fixed top-left directly).
+  const widthRef = useRef(width);
+  widthRef.current = width;
+  const posRef = useRef<Point | null>(pos);
+  posRef.current = pos;
+  const callBarHeightRef = useRef(callBarHeight);
+  callBarHeightRef.current = callBarHeight;
 
   // Register the body as the reparent target only on mobile and only while
   // mounted; clearing on unmount/desktop parks the stage off-DOM instead of
@@ -142,70 +252,206 @@ export function MobileCallPreview({
     return () => registerSlot(null, "mobile");
   }, [isDesktop, registerSlot]);
 
+  // Initial placement: clamp the persisted width, then restore the persisted
+  // position (clamped to the current viewport) or fall back to bottom-right.
+  useLayoutEffect(() => {
+    if (isDesktop) return;
+    const w = clampWidth(loadWidth(), callBarHeightRef.current);
+    setWidth(w);
+    const saved = loadPos();
+    setPos(clampPos(saved ?? defaultPos(w, callBarHeightRef.current), w, callBarHeightRef.current));
+  }, [isDesktop]);
+
+  // Re-clamp on any viewport change: rotation, resize, keyboard show/hide
+  // (visualViewport resize/scroll), and safe-area changes. Also re-runs when
+  // callBarHeight changes (below). Never fights an in-progress gesture (those
+  // handlers clamp live).
+  const reclamp = useCallback(() => {
+    if (active.current) return;
+    setWidth((w) => {
+      const cw = clampWidth(w, callBarHeightRef.current);
+      setPos((cur) => (cur ? clampPos(cur, cw, callBarHeightRef.current) : cur));
+      return cw;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (isDesktop) return;
+    reclamp();
+    const vv = window.visualViewport;
+    window.addEventListener("resize", reclamp);
+    window.addEventListener("orientationchange", reclamp);
+    vv?.addEventListener("resize", reclamp);
+    vv?.addEventListener("scroll", reclamp);
+    return () => {
+      window.removeEventListener("resize", reclamp);
+      window.removeEventListener("orientationchange", reclamp);
+      vv?.removeEventListener("resize", reclamp);
+      vv?.removeEventListener("scroll", reclamp);
+    };
+  }, [isDesktop, reclamp]);
+
+  // Re-clamp when the call bar's height changes (roster count, keyboard-driven
+  // bar reflow) so the panel keeps clear of it.
+  useEffect(() => {
+    if (isDesktop) return;
+    reclamp();
+  }, [callBarHeight, isDesktop, reclamp]);
+
+  const onPointerMove = useCallback((e: PointerEvent) => {
+    const a = active.current;
+    if (!a || e.pointerId !== a.pointerId) return;
+    moved.current = true;
+    const cbh = callBarHeightRef.current;
+    if (a.kind === "drag") {
+      setPos(clampPos({ x: e.clientX - a.offsetX, y: e.clientY - a.offsetY }, widthRef.current, cbh));
+    } else {
+      // Resize from the bottom-right corner: width follows the pointer's x
+      // distance from the panel's (fixed) left edge; height follows via the
+      // 16:9 body ratio (the body is aspect-video). Re-clamp the position in
+      // case growth would push the bottom/right past the viewport box.
+      const cur = posRef.current;
+      if (!cur) return;
+      const w = clampWidth(e.clientX - cur.x, cbh);
+      widthRef.current = w;
+      setWidth(w);
+      setPos(clampPos(cur, w, cbh));
+    }
+  }, []);
+
+  const endGesture = useCallback(
+    (e: PointerEvent) => {
+      const a = active.current;
+      if (!a || e.pointerId !== a.pointerId) return;
+      active.current = null;
+      setGesture(null);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", endGesture);
+      window.removeEventListener("pointercancel", endGesture);
+      // Persist resting geometry.
+      setPos((cur) => {
+        if (cur) savePos(cur);
+        return cur;
+      });
+      saveWidth(widthRef.current);
+      // Clear the moved flag on the next tick so the click that fires right
+      // after pointerup (if any) is still suppressed, but later clicks aren't.
+      if (moved.current) {
+        setTimeout(() => {
+          moved.current = false;
+        }, 0);
+      }
+    },
+    [onPointerMove],
+  );
+
+  const beginDrag = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      const el = panelRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      active.current = {
+        kind: "drag",
+        pointerId: e.pointerId,
+        offsetX: e.clientX - rect.left,
+        offsetY: e.clientY - rect.top,
+      };
+      moved.current = false;
+      setGesture("drag");
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", endGesture);
+      window.addEventListener("pointercancel", endGesture);
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    [onPointerMove, endGesture],
+  );
+
+  const beginResize = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      active.current = { kind: "resize", pointerId: e.pointerId };
+      moved.current = false;
+      setGesture("resize");
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", endGesture);
+      window.addEventListener("pointercancel", endGesture);
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    [onPointerMove, endGesture],
+  );
+
+  // Swallow the synthetic click that follows a moving gesture, so a drag/resize
+  // that ends over a button or the video tile can't trigger it.
+  const swallowClick = useCallback((e: React.MouseEvent) => {
+    if (moved.current) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, []);
+
+  // Clean up global listeners if we unmount mid-gesture.
+  useEffect(
+    () => () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", endGesture);
+      window.removeEventListener("pointercancel", endGesture);
+    },
+    [onPointerMove, endGesture],
+  );
+
   // Desktop: no mobile preview (the draggable FloatingCallStage is the floating
   // destination there).
   if (isDesktop) return null;
 
-  const width = SIZE_WIDTH[size];
-  // Sit directly above the fixed MobileCallBar. `callBarHeight` already folds in
-  // the bottom safe-area inset (the bar uses pb-safe); add one gap. Before the
-  // bar has measured itself (callBarHeight === 0) fall back to just the
-  // safe-area inset so the first frame still clears the home indicator.
-  const bottom =
-    callBarHeight > 0
-      ? `calc(${callBarHeight}px + ${EDGE_GAP})`
-      : `calc(var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) + ${EDGE_GAP})`;
+  const dragging = gesture !== null;
 
   return (
     <div
+      ref={panelRef}
+      onClickCapture={swallowClick}
       className={cn(
-        "fixed z-40 flex flex-col overflow-hidden select-none",
+        "fixed z-40 flex flex-col overflow-hidden select-none touch-none",
         "clip-corner-lg bg-chrome-deep shadow-2xl ring-1 ring-white/10",
-        "animate-in fade-in-0 slide-in-from-bottom-2 duration-200",
+        // Hold invisible for the single frame before the first layout pass
+        // positions it, so it never flashes at the top-left origin.
+        pos ? "opacity-100" : "opacity-0 pointer-events-none",
+        !dragging && "animate-in fade-in-0 slide-in-from-bottom-2 duration-200",
         "sidebar:hidden",
       )}
       style={{
-        bottom,
-        // Corner-snapped to the chosen side, one gap in from the edge.
-        left: side === "left" ? EDGE_GAP : undefined,
-        right: side === "right" ? EDGE_GAP : undefined,
+        left: pos?.x ?? 0,
+        top: pos?.y ?? 0,
         width,
-        // Final clamp: never touch the side gutters even at the preset's lower
-        // bound on an unusually narrow device.
-        maxWidth: "calc(100vw - 1rem)",
       }}
     >
-      <div className="flex items-center gap-0.5 px-1 py-0.5 shrink-0 border-b border-white/10">
-        <span className="flex-1 min-w-0 truncate px-1 text-xs font-medium text-muted-foreground">
-          Call
-        </span>
-        <button
-          type="button"
-          aria-label={`Preview size: ${SIZE_LABEL[size]}. Tap to change size`}
-          title={`Size: ${SIZE_LABEL[size]} (tap to change)`}
-          onClick={cycleSize}
-          className="shrink-0 inline-flex items-center gap-0.5 rounded-md px-1 py-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10 touch:px-1.5 touch:py-1.5"
+      <div
+        className="flex items-center gap-0.5 px-1 shrink-0 border-b border-white/10"
+        style={{ height: HEADER_H }}
+      >
+        {/* Drag handle: dragging is scoped to this grip + the label so the
+            action buttons never start a drag. */}
+        <div
+          onPointerDown={beginDrag}
+          className={cn(
+            "flex items-center gap-1 flex-1 min-w-0 rounded-md px-1 py-1 touch-none",
+            gesture === "drag" ? "cursor-grabbing" : "cursor-grab",
+          )}
+          role="presentation"
+          aria-label="Drag call preview"
         >
-          <Ruler className="size-4" />
-          {/* Text label so the current size isn't communicated by icon alone. */}
-          <span className="text-[10px] font-semibold uppercase tabular-nums">
-            {SIZE_LABEL[size][0]}
-          </span>
-        </button>
-        <button
-          type="button"
-          aria-label={`Move preview to the ${side === "right" ? "left" : "right"}`}
-          title={`Move to ${side === "right" ? "left" : "right"}`}
-          onClick={flipSide}
-          className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10 touch:p-1.5"
-        >
-          <ArrowLeftRight className="size-4" />
-        </button>
+          <GripVertical className="size-4 shrink-0 text-muted-foreground" />
+          <span className="text-xs font-medium text-muted-foreground truncate">Call</span>
+        </div>
         {onExpand && (
           <button
             type="button"
             aria-label="Return to call"
             title="Return to call"
+            // Stop the grip (its sibling) from ever seeing this gesture.
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={onExpand}
             className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10 touch:p-1.5"
           >
@@ -216,6 +462,7 @@ export function MobileCallPreview({
           type="button"
           aria-label="Hide video preview"
           title="Hide video preview"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={onHide}
           className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10 touch:p-1.5"
         >
@@ -225,8 +472,26 @@ export function MobileCallPreview({
       {/* The reparent target: CallProvider appends the stage host here. The
           host's CallStage floating branch renders the compact preview (and, for
           multiple screen shares, the share switcher) — but NOT the media
-          controls, which stay in MobileCallBar. */}
-      <div ref={bodyRef} className="w-full" />
+          controls, which stay in MobileCallBar. While a gesture is active,
+          disable pointer events on the content so a moving finger can't land a
+          stray tap on a tile/selector. */}
+      <div ref={bodyRef} className={cn("w-full", dragging && "pointer-events-none")} />
+      {/* Visible bottom-right resize handle. Its own pointer gesture (does not
+          start a drag). Large enough to grab on touch without dominating. */}
+      <div
+        onPointerDown={beginResize}
+        role="presentation"
+        aria-label="Resize call preview"
+        className={cn(
+          "absolute bottom-0 right-0 z-10 flex items-end justify-end touch-none",
+          "size-6 touch:size-8 cursor-nwse-resize",
+        )}
+      >
+        <span
+          aria-hidden
+          className="m-0.5 block size-3 rounded-sm border-b-2 border-r-2 border-white/60"
+        />
+      </div>
     </div>
   );
 }
