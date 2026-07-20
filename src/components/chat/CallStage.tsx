@@ -17,6 +17,8 @@ import {
   Minimize2,
   MicOff,
   Monitor,
+  MonitorOff,
+  MonitorUp,
   PhoneOff,
   ScreenShare,
   Shrink,
@@ -520,16 +522,28 @@ function AvatarTile({
 }
 
 /**
+ * Whether this browser can capture the screen (absent on most mobile). Same
+ * guard the VoiceBar uses to gate its screen-share button; the floating window
+ * is desktop-only, but this keeps parity and hides the button where the API is
+ * unavailable.
+ */
+const supportsScreenShare =
+  typeof navigator !== "undefined" &&
+  typeof navigator.mediaDevices?.getDisplayMedia === "function";
+
+/**
  * The compact media controls shown in the floating window: mute/unmute,
- * camera on/off, and leave. Rendered inside the LiveKit room context (it's part
- * of the reparented CallStage), so it reuses the room's existing local
- * participant + publish state via `useLocalParticipant` — no duplicate media
- * state is created. Mirrors the VoiceBar's control behavior (sounds, camera
- * error handling) so the two stay consistent.
+ * camera on/off, screen share, and leave. Rendered inside the LiveKit room
+ * context (it's part of the reparented CallStage), so it reuses the room's
+ * existing local participant + publish state via `useLocalParticipant` — no
+ * duplicate media state is created. Mirrors the VoiceBar's control behavior
+ * (sounds, screen-share picker/cancellation + error handling) so the two stay
+ * consistent.
  */
 function FloatingControls() {
   const { leaveCall } = useCall();
-  const { localParticipant, isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
+  const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } =
+    useLocalParticipant();
   return (
     <div className="flex items-center justify-center gap-1.5 px-2 py-1.5 shrink-0 border-t border-white/10">
       <button
@@ -569,6 +583,37 @@ function FloatingControls() {
       >
         {isCameraEnabled ? <Video className="size-4" /> : <VideoOff className="size-4" />}
       </button>
+      {supportsScreenShare && (
+        <button
+          type="button"
+          aria-label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
+          title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
+          onClick={() => {
+            // Same flow as the VoiceBar's screen-share button: publish/unpublish
+            // the dedicated screenshare track (with best-effort tab audio); the
+            // browser shows its native picker. A user cancelling the picker
+            // rejects with NotAllowedError — expected, not surfaced.
+            void localParticipant
+              .setScreenShareEnabled(!isScreenShareEnabled, { audio: true })
+              .catch((err) => {
+                if (err instanceof Error && err.name === "NotAllowedError") return;
+                console.warn("failed to toggle screen share", err);
+              });
+          }}
+          className={cn(
+            "inline-flex items-center justify-center rounded-md size-8 shrink-0",
+            isScreenShareEnabled
+              ? "bg-primary/20 text-primary hover:bg-primary/30"
+              : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
+          )}
+        >
+          {isScreenShareEnabled ? (
+            <MonitorOff className="size-4" />
+          ) : (
+            <MonitorUp className="size-4" />
+          )}
+        </button>
+      )}
       <DisconnectButton
         // Play the leave chirp inside the gesture, before the disconnect tears
         // down the room audio (same reasoning as the VoiceBar's hangup).
