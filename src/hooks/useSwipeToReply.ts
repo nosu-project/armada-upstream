@@ -3,15 +3,23 @@ import { useCallback, useRef, useState } from "react";
 /**
  * Swipe-to-reply gesture hook for touch devices.
  *
- * Tracks a predominantly-horizontal touch drag on a message row and calls
- * `onSwipe` when the horizontal travel exceeds `THRESHOLD` pixels at release.
- * The caller gets back the current pixel offset (for `translateX` visual
- * feedback) and touch handlers to spread onto the row element.
+ * Tracks a predominantly-horizontal LEFTWARD touch drag on a message row and
+ * calls `onSwipe` when the horizontal travel exceeds `THRESHOLD` pixels at
+ * release. The caller gets back the current pixel offset (a positive magnitude;
+ * apply it as a negative `translateX`) and touch handlers to spread onto the
+ * row element.
  *
  * Design notes:
+ * - Reply is a LEFT swipe (Telegram-style) specifically so it can never collide
+ *   with the SwipeReveal edge-swipe: a RIGHTWARD drag anywhere on the chat pane
+ *   slides the pane away to reveal the channel list (see `useEdgeSwipe`). The
+ *   two gestures share the same surface (message rows fill the pane), so intent
+ *   is disambiguated purely by direction: left on a message = reply, right
+ *   anywhere = leave the room.
  * - Only gestures whose horizontal travel exceeds 2× their vertical travel are
  *   considered "swipes". Purely-vertical touches (scrolling) are ignored so the
- *   page scrolls normally.
+ *   page scrolls normally, and a rightward horizontal drag bails out so it
+ *   belongs exclusively to the pane-reveal gesture.
  * - `touch-action: pan-y` on the row (set by the caller via inline style or a
  *   class) tells the browser the same thing at the compositor level.
  * - The drag is clamped to `MAX_DRAG` so the row can't be dragged off-screen.
@@ -30,7 +38,10 @@ const MAX_DRAG = 100;
 const HORIZONTAL_RATIO = 2;
 
 export interface UseSwipeToReplyResult {
-  /** Current horizontal offset in pixels (0 at rest, positive while swiping right). */
+  /**
+   * Current drag magnitude in pixels (0 at rest, grows as the user swipes
+   * LEFT). Apply as `translateX(-offset)` for the visual slide.
+   */
   offset: number;
   /** Whether a drag is currently in progress (disables the spring-back transition). */
   dragging: boolean;
@@ -91,18 +102,19 @@ export function useSwipeToReply(
         const absDx = Math.abs(dx);
         const absDy = Math.abs(dy);
         if (absDx < 5 && absDy < 5) return; // wait for real movement
-        if (absDx > absDy * HORIZONTAL_RATIO) {
+        if (absDx > absDy * HORIZONTAL_RATIO && dx < 0) {
           horizontal.current = true;
           setDragging(true);
         } else {
-          // Vertical gesture — bail out entirely.
+          // Vertical gesture (scroll) or a rightward drag (the pane-reveal
+          // "leave room" gesture, see useEdgeSwipe) — bail out entirely.
           active.current = false;
           return;
         }
       }
 
-      // Clamp the drag for visual feedback.
-      const clamped = Math.max(0, Math.min(dx, MAX_DRAG));
+      // Clamp the leftward drag for visual feedback (positive magnitude).
+      const clamped = Math.max(0, Math.min(-dx, MAX_DRAG));
       setOffset(clamped);
 
       // Haptic feedback the moment the user crosses the threshold.

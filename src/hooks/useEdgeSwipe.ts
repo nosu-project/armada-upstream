@@ -61,7 +61,9 @@ function startsInRightwardScroller(
  * - `direction: "open"` engages on a rightward drag starting anywhere on the
  *   chat pane (reveal the list). The `dx`-vs-`dy` claim test keeps it from
  *   fighting vertical scrolling, and a right-scrollable ancestor (code block,
- *   tile row) is left to consume the swipe instead.
+ *   tile row) is left to consume the swipe instead. Message rows share this
+ *   surface: swipe-to-reply (`useSwipeToReply`) is deliberately a LEFT swipe
+ *   so the two gestures are disambiguated purely by direction.
  * - `direction: "close"` engages on a leftward drag from anywhere, used to
  *   bring a fully-revealed chat back over the list.
  */

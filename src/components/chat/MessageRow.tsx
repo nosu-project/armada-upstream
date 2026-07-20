@@ -83,8 +83,10 @@ interface MessageRowProps {
   /** Forwarded to the row container (data attrs, handlers). */
   containerProps?: React.HTMLAttributes<HTMLDivElement>;
   /**
-   * Swipe-to-reply callback. When set, a swipe-right gesture on touch devices
+   * Swipe-to-reply callback. When set, a swipe-LEFT gesture on touch devices
    * calls this (wired to `onReply` in ChatMessage). Ignored on desktop.
+   * Leftward on purpose: a rightward swipe anywhere on the chat pane is the
+   * SwipeReveal "leave room" gesture, so direction alone disambiguates intent.
    */
   onSwipeReply?: () => void;
 }
@@ -157,10 +159,12 @@ export const MessageRow = memo(function MessageRow({
         ...containerProps?.style,
       }}
     >
-      {/* Swipe-to-reply: reply icon positioned behind the sliding content */}
+      {/* Swipe-to-reply: reply icon revealed at the right edge as the content
+          slides left (reply is a LEFT swipe; rightward is the pane-reveal
+          "leave room" gesture) */}
       {onSwipeReply && swipe.offset > 0 && (
         <div
-          className="absolute left-2.5 top-1/2 -translate-y-1/2 z-0 pointer-events-none flex items-center justify-center"
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 z-0 pointer-events-none flex items-center justify-center"
           style={{
             opacity: Math.min(swipe.offset / 60, 1),
           }}
@@ -176,7 +180,7 @@ export const MessageRow = memo(function MessageRow({
         style={
           onSwipeReply && swipe.offset !== 0
             ? {
-                transform: `translateX(${swipe.offset}px)`,
+                transform: `translateX(${-swipe.offset}px)`,
                 transition: swipe.dragging ? "none" : "transform 0.25s ease-out",
               }
             : undefined
