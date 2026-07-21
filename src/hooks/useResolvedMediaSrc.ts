@@ -1,5 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
+import {
+  getBuzzMediaHostsVersion,
+  isBuzzMediaUrl,
+  resolveBuzzMediaObjectURL,
+  subscribeBuzzMediaHosts,
+} from "@/buzz/media";
 import { decryptAttachmentToObjectURL } from "@/lib/encryptedMedia";
 
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -42,14 +48,41 @@ export function useResolvedMediaSrc(ref: EncryptedRef | string): State {
   const encNonce = encryption?.nonce;
   const encAlgo = encryption?.algorithm;
 
+  // Re-evaluate Buzz-ness when the host registry grows (a URL whose relay's
+  // NIP-11 hadn't resolved yet becomes authenticable once its host registers).
+  useSyncExternalStore(subscribeBuzzMediaHosts, getBuzzMediaHostsVersion);
+  const encrypted = Boolean(encKey && encNonce && encAlgo);
+  // A Buzz-hosted blob needs a signed GET header (see @/buzz/media); the
+  // encrypted path already fetches with its own key, so Buzz auth is only for
+  // the non-encrypted case.
+  const needsBuzzAuth = !encrypted && isBuzzMediaUrl(url);
+
   const [state, setState] = useState<State>(
-    encryption ? { status: "loading" } : { status: "ready", src: url },
+    encrypted || needsBuzzAuth ? { status: "loading" } : { status: "ready", src: url },
   );
 
   useEffect(() => {
     if (!encKey || !encNonce || !encAlgo) {
-      setState({ status: "ready", src: url });
-      return;
+      if (!needsBuzzAuth) {
+        setState({ status: "ready", src: url });
+        return;
+      }
+      let cancelled = false;
+      const controller = new AbortController();
+      setState({ status: "loading" });
+      resolveBuzzMediaObjectURL(url, controller.signal)
+        .then((src) => {
+          if (!cancelled) setState({ status: "ready", src });
+        })
+        .catch(() => {
+          // Fall back to the plain URL (it will 401, but that's no worse than
+          // before, and lets a public/unauth'd host still render).
+          if (!cancelled) setState({ status: "ready", src: url });
+        });
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
     }
     let cancelled = false;
     const controller = new AbortController();
@@ -66,7 +99,7 @@ export function useResolvedMediaSrc(ref: EncryptedRef | string): State {
       controller.abort();
     };
     // Re-resolve only when the blob URL or its crypto params actually change.
-  }, [url, encKey, encNonce, encAlgo, mime]);
+  }, [url, encKey, encNonce, encAlgo, mime, needsBuzzAuth]);
 
   return state;
 }

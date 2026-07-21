@@ -270,7 +270,10 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     // bare NIP-19 ids | hashtags.
     const tokenizeSegment = (segment: string): ContentToken[] => {
       const regex = new RegExp(
-        "(?:lightning:)?(ln(?:bc|tb|bcrt|tbs)\\d*[munp]?1[023456789acdefghjklmnpqrstuvwxyz]+)" +
+        // Markdown image `![alt](url)` (Buzz posts use it) — captured first so
+        // the `![alt](` / `)` wrapper is consumed rather than left as stray text.
+        "!\\[[^\\]]*\\]\\((https?:\\/\\/[^\\s)]+)\\)" +
+        "|(?:lightning:)?(ln(?:bc|tb|bcrt|tbs)\\d*[munp]?1[023456789acdefghjklmnpqrstuvwxyz]+)" +
         "|((?:https?|wss?):\\/\\/[^\\s]+)" +
         "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
         "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
@@ -284,10 +287,13 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
 
       while ((match = regex.exec(segment)) !== null) {
         let [fullMatch] = match;
-        const bolt11 = match[1];
-        let url = match[2];
-        const hashtag = match[7];
-        const { 3: nostrPrefix, 4: nostrData, 5: barePrefix, 6: bareData } = match;
+        const mdImageUrl = match[1];
+        const bolt11 = match[2];
+        let url = mdImageUrl ?? match[3];
+        // A markdown `![…](url)` is an image regardless of the URL's extension.
+        const forceImage = Boolean(mdImageUrl);
+        const hashtag = match[8];
+        const { 4: nostrPrefix, 5: nostrData, 6: barePrefix, 7: bareData } = match;
         const index = match.index;
 
         // Add text before this match
@@ -299,7 +305,8 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
           out.push({ type: "lightning-invoice", invoice: bolt11.toLowerCase() });
         } else if (url) {
           // Strip common trailing punctuation that's likely not part of the URL
-          const trailingPunctMatch = url.match(/^(.*?)([.,;:!?)\]]+)$/);
+          // (skipped for a markdown image, whose URL was delimited by the `)`).
+          const trailingPunctMatch = forceImage ? null : url.match(/^(.*?)([.,;:!?)\]]+)$/);
           if (trailingPunctMatch) {
             const [, urlWithoutPunct] = trailingPunctMatch;
             if (urlWithoutPunct && urlWithoutPunct.length > 10) {
@@ -322,7 +329,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
           const inlineImeta = imetaByUrl.get(url);
           const inlineImetaMime = inlineImeta ? imageMimeFor(inlineImeta) : undefined;
           const isImetaImage = inlineImetaMime?.startsWith("image/") ?? false;
-          if (IMAGE_URL_REGEX.test(url) || isImetaImage) {
+          if (forceImage || IMAGE_URL_REGEX.test(url) || isImetaImage) {
             if (out.length > 0) {
               const prev = out[out.length - 1];
               if (prev.type === "text") {

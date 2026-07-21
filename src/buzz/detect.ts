@@ -8,6 +8,9 @@
  * Buzz mode (extra timeline kinds, kind-9 NIP-10 threads, 40003 edits, …).
  */
 
+import { useEffect } from "react";
+
+import { registerBuzzMediaHost } from "@/buzz/media";
 import { useRelayInfo, type RelayInfoDocument } from "@/hooks/useRelayInfo";
 
 /** Whether a NIP-11 document identifies a Buzz relay. */
@@ -25,5 +28,14 @@ export function isBuzzRelayInfo(info: RelayInfoDocument | undefined): boolean {
  */
 export function useIsBuzzRelay(relayUrl: string | undefined): { isBuzz: boolean; ready: boolean } {
   const { data, isFetched } = useRelayInfo(relayUrl);
-  return { isBuzz: isBuzzRelayInfo(data), ready: Boolean(data) || isFetched };
+  const isBuzz = isBuzzRelayInfo(data);
+
+  // Once a relay is known to be Buzz, register its host so Buzz-hosted media
+  // (avatars, inline images) on it is fetched with BUD-11 GET auth instead of
+  // 401-ing through a plain `<img src>`. The media host is the relay host.
+  useEffect(() => {
+    if (isBuzz && relayUrl) registerBuzzMediaHost(relayUrl);
+  }, [isBuzz, relayUrl]);
+
+  return { isBuzz, ready: Boolean(data) || isFetched };
 }

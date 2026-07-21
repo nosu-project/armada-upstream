@@ -1,5 +1,6 @@
 import * as React from "react"
 
+import { useBuzzMediaSrc } from "@/buzz/useBuzzMediaSrc"
 import { cn } from "@/lib/utils"
 import { type AvatarShape, isEmoji, getAvatarMaskUrl, isValidAvatarShape } from "@/lib/avatarShape"
 
@@ -99,7 +100,11 @@ const AvatarImage = React.forwardRef<
 >(({ className, onError, src: rawSrc, ...props }, ref) => {
   const [hasError, setHasError] = React.useState(false)
   const hasSrcRef = React.useContext(AvatarHasSrcContext)
-  const src = upgradeToHttps(rawSrc)
+  // Buzz-hosted avatars require a signed BUD-11 GET header a plain `<img src>`
+  // can't send; useBuzzMediaSrc fetches them into an object URL and passes any
+  // other URL straight through unchanged.
+  const { src: resolvedSrc } = useBuzzMediaSrc(typeof rawSrc === "string" ? rawSrc : undefined)
+  const src = upgradeToHttps(resolvedSrc)
 
   // Reset error state when src changes
   const prevSrc = React.useRef(src)

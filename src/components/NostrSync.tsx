@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
+import { setBuzzMediaSigner } from "@/buzz/media";
 import { SYNCED_CONFIG_KEYS, type AppConfig } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -119,6 +120,13 @@ export function NostrSync() {
   // by applying an incoming pull).
   const lastSyncedSnapshot = useRef<string | undefined>(undefined);
   const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Publish the current signer to the Buzz media module so Buzz-hosted images
+  // and avatars can be fetched with a signed BUD-11 GET header from any render
+  // site without each pulling `useCurrentUser`.
+  useEffect(() => {
+    setBuzzMediaSigner(user?.signer);
+  }, [user?.signer]);
 
   // Reset guards when the account changes.
   useEffect(() => {
