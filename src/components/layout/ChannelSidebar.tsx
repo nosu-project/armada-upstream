@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { BuzzDmName } from "@/buzz/BuzzDmName";
-import { BuzzProjectsDialog } from "@/buzz/BuzzProjects";
 import { useIsBuzzRelay } from "@/buzz/detect";
 import { buzzChannelArchived, buzzChannelType } from "@/buzz/protocol";
 import { useBuzzHiddenDms } from "@/buzz/useBuzzDms";
@@ -196,8 +195,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const { registerCallBarSlot } = useCall();
   const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  // Buzz projects (NIP-34 repos) browser, opened from the server menu.
-  const [projectsOpen, setProjectsOpen] = useState(false);
   // The server-name header menu (Discord-style): expands inline below the
   // header, pushing the channel list down with a height animation.
   const [serverMenuOpen, setServerMenuOpen] = useState(false);
@@ -299,12 +296,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                   onClick: () => setCreateOpen(true),
                 },
                 {
-                  show: isBuzz,
-                  icon: <FolderGit2 className="size-4" />,
-                  label: "Projects",
-                  onClick: () => setProjectsOpen(true),
-                },
-                {
                   show: true,
                   icon: <LinkIcon className="size-4" />,
                   label: "Copy server link",
@@ -348,6 +339,25 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       }
       addChannelLabel={user ? "Create channel" : undefined}
       onAddChannel={user ? () => setCreateOpen(true) : undefined}
+      preChannels={
+        isBuzz ? (
+          <NavLink
+            to={`/s/${relayToRouteParam(relayUrl)}/projects`}
+            onClick={onNavigate}
+            className={({ isActive }) =>
+              cn(
+                "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors clip-corner-lg",
+                isActive
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+              )
+            }
+          >
+            <FolderGit2 className="size-4 shrink-0" />
+            <span className="truncate flex-1 min-w-0">Projects</span>
+          </NavLink>
+        ) : undefined
+      }
       footer={
         <>
           {/* Voice call bar slot — the persistent call UI portals here. */}
@@ -370,9 +380,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           </div>
 
           <CreateGroupDialog relayUrl={relayUrl} open={createOpen} onOpenChange={setCreateOpen} />
-          {isBuzz && (
-            <BuzzProjectsDialog relayUrl={relayUrl} open={projectsOpen} onOpenChange={setProjectsOpen} />
-          )}
         </>
       }
     >

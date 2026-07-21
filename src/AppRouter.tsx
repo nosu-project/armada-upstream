@@ -40,6 +40,7 @@ const MeshPage = lazy(lazyWithReload(() => import("@/pages/MeshPage")));
 const ChangelogPage = lazy(lazyWithReload(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage }))));
 const NotFound = lazy(lazyWithReload(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound }))));
 const PrivacyPolicyPage = lazy(lazyWithReload(() => import("@/pages/PrivacyPolicyPage").then((m) => ({ default: m.PrivacyPolicyPage }))));
+const ProjectsPage = lazy(lazyWithReload(() => import("@/pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage }))));
 const RemoteLoginSuccessPage = lazy(lazyWithReload(() => import("@/pages/RemoteLoginSuccessPage").then((m) => ({ default: m.RemoteLoginSuccessPage }))));
 const ServerPage = lazy(lazyWithReload(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage }))));
 const SettingsPage = lazy(lazyWithReload(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage }))));
@@ -255,6 +256,9 @@ export function AppRouter() {
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/s/:server" element={<ServerPage />} />
+            {/* Static `projects` outranks the `:groupId` param, so a Buzz
+                workspace's Projects view resolves here, not as a channel. */}
+            <Route path="/s/:server/projects" element={<ProjectsPage />} />
             <Route path="/s/:server/:groupId" element={<GroupPage />} />
             <Route path="/c1/:communityId" element={<ConcordPage />} />
             <Route path="/c1/:communityId/:channelId" element={<ConcordPage />} />

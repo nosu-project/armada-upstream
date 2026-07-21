@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, CircleDot, GitBranch, GitMerge, GitPullRequest, Link as LinkIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -258,36 +257,25 @@ function RepoCard({ relayUrl, repo }: { relayUrl: string; repo: BuzzRepo }) {
 /**
  * Read-only view of a Buzz workspace's projects: the relay's NIP-34 repo
  * announcements (kind 30617) with their issues (1621), patches (1617) and
- * PRs (1618), each resolved to its latest status (1630–1633).
+ * PRs (1618), each resolved to its latest status (1630–1633). Rendered as the
+ * body of the dedicated Projects page; the caller supplies the scroll region.
  */
-export function BuzzProjectsDialog({
-  relayUrl,
-  open,
-  onOpenChange,
-}: {
-  relayUrl: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const { data: repos, isLoading } = useBuzzRepos(relayUrl, open);
+export function BuzzProjectsList({ relayUrl }: { relayUrl: string }) {
+  const { data: repos, isLoading } = useBuzzRepos(relayUrl, true);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Projects">
-        <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
-          {isLoading ? (
-            <>
-              <Skeleton className="h-14 w-full" />
-              <Skeleton className="h-14 w-full" />
-            </>
-          ) : repos && repos.length > 0 ? (
-            repos.map((repo) => <RepoCard key={repo.coord} relayUrl={relayUrl} repo={repo} />)
-          ) : (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              No projects on this workspace yet.
-            </p>
-          )}
-        </div>
-      </ChromeDialogContent>
-    </Dialog>
+    <div className="space-y-2">
+      {isLoading ? (
+        <>
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+        </>
+      ) : repos && repos.length > 0 ? (
+        repos.map((repo) => <RepoCard key={repo.coord} relayUrl={relayUrl} repo={repo} />)
+      ) : (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          No projects on this workspace yet.
+        </p>
+      )}
+    </div>
   );
 }
