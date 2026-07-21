@@ -1,6 +1,6 @@
 import { createContext } from "react";
 
-import { APP_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { RailLayoutNode } from "@/lib/railLayout";
@@ -270,14 +270,16 @@ export const defaultConfig: AppConfig = {
 export const AppContext = createContext<AppContextType | undefined>(undefined);
 
 /**
- * The relays direct messages read from and write to. Defaults to the app
- * relays; switches to the user's own DM relays only when they opt in (and
- * have configured at least one). Falls back to the app relays if the custom
- * list is empty.
+ * The relays direct messages read from and write to. When the user opts into
+ * their own DM relays (and has configured at least one), those are used
+ * verbatim. Otherwise the default is the app relays plus the platform default
+ * DM relay(s) (`DM_RELAYS`) — the latter gives gift-wrapped DMs a dependable
+ * home for the push/native watch sets, while the app relays keep legacy NIP-04
+ * (kind 4) DMs working (the default DM relay is gift-wrap-only).
  */
 export function effectiveDmRelays(config: AppConfig): string[] {
   if (config.useOwnDmRelays && config.dmRelays.length > 0) {
     return config.dmRelays;
   }
-  return config.appRelays;
+  return [...new Set([...config.appRelays, ...DM_RELAYS])];
 }

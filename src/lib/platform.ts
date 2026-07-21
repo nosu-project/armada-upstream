@@ -175,6 +175,24 @@ export const DM_VOICE_RELAYS: string[] = (
   .filter((url: string | undefined): url is string => Boolean(url));
 
 /**
+ * Default DM relay(s): the fallback direct-message relays used when a user has
+ * not configured their own (no kind-10050 inbox, `useOwnDmRelays` off). Added
+ * to the app relays in `effectiveDmRelays` so gift-wrapped DMs (NIP-17, kind
+ * 1059) have a dependable home that the push/native watch sets can rely on —
+ * the public default is a gift-wrap-only relay, so legacy NIP-04 (kind 4) DMs
+ * continue to use the general app relays alongside it.
+ *
+ * Defaults to Armada's public gift-wrap relay for every build (like
+ * `DM_VOICE_RELAYS` / `CONCORD_AV_SERVERS`); operators can override with
+ * `VITE_DM_RELAYS` (comma-separated ws/wss) or set it empty to disable.
+ */
+const DEFAULT_PUBLIC_DM_RELAY = "wss://relay.armada.buzz";
+export const DM_RELAYS: string[] = (import.meta.env.VITE_DM_RELAYS ?? DEFAULT_PUBLIC_DM_RELAY)
+  .split(",")
+  .map((url: string) => normalizeRelayUrl(url))
+  .filter((url: string | undefined): url is string => Boolean(url));
+
+/**
  * Parse a build-time boolean env var. Vite env vars are always strings (or
  * undefined when unset), so we treat "true"/"1" as true, "false"/"0" as false,
  * and fall back to `dflt` when unset/unrecognised.
