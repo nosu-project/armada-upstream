@@ -12,7 +12,6 @@ import { JoinButton } from "@/components/auth/JoinButton";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { VoiceParticipantList } from "@/components/VoicePresence";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import {
@@ -345,11 +344,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           <div className="size-full overflow-hidden">
             <img src={relayInfo.banner} alt="" className="size-full object-cover" />
           </div>
-        ) : undefined
-      }
-      badge={
-        relayInfo?.limitation?.auth_required ? (
-          <Badge variant="secondary" className="mt-0.5 w-fit text-[10px] px-1.5 py-0">AUTH required</Badge>
         ) : undefined
       }
       addChannelLabel={user ? "Create channel" : undefined}
