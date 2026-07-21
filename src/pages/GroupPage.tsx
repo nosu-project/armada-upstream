@@ -7,6 +7,7 @@ import { BuzzChat } from "@/buzz/BuzzChat";
 import { BuzzDmName } from "@/buzz/BuzzDmName";
 import { useIsBuzzRelay } from "@/buzz/detect";
 import { buzzChannelTopic, buzzChannelType } from "@/buzz/protocol";
+import { useBuzzOpenDm } from "@/buzz/useBuzzDms";
 import { useBuzzPresence } from "@/buzz/useBuzzPresence";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { AppStageSlot } from "@/components/chat/AppStage";
@@ -128,6 +129,23 @@ export function GroupPage() {
   const { isBuzz } = useIsBuzzRelay(relayUrl);
   // Live Buzz presence (ephemeral heartbeats; also publishes the viewer's).
   const buzzPresence = useBuzzPresence(isBuzz ? relayUrl : undefined);
+  const openBuzzDm = useBuzzOpenDm(isBuzz ? relayUrl : undefined);
+  const handleBuzzMessage = useCallback(
+    async (peer: string) => {
+      if (!relayUrl) return;
+      try {
+        const dmId = await openBuzzDm(peer);
+        navigate(`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(dmId)}`);
+      } catch (e) {
+        toast({
+          title: "Couldn't start the conversation",
+          description: relayRejectionMessage(e),
+          variant: "destructive",
+        });
+      }
+    },
+    [relayUrl, openBuzzDm, navigate],
+  );
   const leave = useLeaveGroup(relayUrl ?? "", groupId ?? "");
   const { removeUser, putUser, deleteGroup } = useGroupModeration(relayUrl ?? "", groupId ?? "");
   const { mutateAsync: updateList } = useUpdateUserGroupList();
@@ -810,6 +828,7 @@ export function GroupPage() {
                 members={details?.members ?? []}
                 memberRoles={details?.memberRoles}
                 presence={isBuzz ? buzzPresence : undefined}
+                onMessage={isBuzz ? handleBuzzMessage : undefined}
                 canModerate={isAdmin}
                 viewerIsAdmin={isAdmin}
                 currentUserPubkey={user?.pubkey}

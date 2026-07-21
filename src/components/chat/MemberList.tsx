@@ -1,4 +1,4 @@
-import { AtSign, Ban, Bot, Copy, Crown, IdCard, MoreVertical, Music, Shield, ShieldOff, Smile, UserMinus, X } from "lucide-react";
+import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Shield, ShieldOff, Smile, UserMinus, X } from "lucide-react";
 
 import { useState } from "react";
 
@@ -79,6 +79,8 @@ interface MemberRowProps {
   isBanned?: boolean;
   /** Open the per-server nickname/label editor (shown only on the viewer's own row). */
   onEditProfile?: () => void;
+  /** Start a direct message with this member (Buzz relays: kind 41010). */
+  onMessage?: (pubkey: string) => void;
 }
 
 function MemberRow({
@@ -96,6 +98,7 @@ function MemberRow({
   onUnban,
   isBanned,
   onEditProfile,
+  onMessage,
 }: MemberRowProps) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -134,6 +137,12 @@ function MemberRow({
         <AtSign className="size-4" />
         Mention
       </Item>
+      {onMessage && !isSelf && (
+        <Item className="gap-3 px-3 py-2.5" onSelect={() => onMessage(pubkey)}>
+          <MessageSquareText className="size-4" />
+          Message
+        </Item>
+      )}
       <Item className="gap-3 px-3 py-2.5" onSelect={copyNpub}>
         <Copy className="size-4" />
         Copy npub
@@ -386,6 +395,8 @@ interface MemberListProps {
   onClose?: () => void;
   /** Open the per-server nickname/label editor for the current user. */
   onEditProfile?: () => void;
+  /** Start a direct message with a member (Buzz relays: kind 41010). */
+  onMessage?: (pubkey: string) => void;
   /** Override the default desktop panel chrome (e.g. for the mobile drawer). */
   className?: string;
 }
@@ -408,6 +419,7 @@ export function MemberList({
   presence,
   onClose,
   onEditProfile,
+  onMessage,
   className,
 }: MemberListProps) {
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
@@ -466,6 +478,7 @@ export function MemberList({
               onUnban={onUnban}
               isBanned={bannedPubkeys?.has(admin.pubkey)}
               onEditProfile={onEditProfile}
+              onMessage={onMessage}
             />
           ))}
         </>
@@ -496,6 +509,7 @@ export function MemberList({
             onUnban={onUnban}
             isBanned={bannedPubkeys?.has(pubkey)}
             onEditProfile={onEditProfile}
+            onMessage={onMessage}
           />
         ))
       )}

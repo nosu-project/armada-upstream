@@ -1,16 +1,19 @@
 import { Check, Copy, Link2, Loader2, PartyPopper, RefreshCw, Share2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { useIsBuzzRelay } from "@/buzz/detect";
+import { buzzHttpPost } from "@/buzz/http";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   ChromeDialogContent,
 } from "@/components/ui/dialog";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayClaim } from "@/hooks/useRelayMembership";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
-import { relayToRouteParam } from "@/lib/platform";
+import { relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 import { canShare, share as nativeShare } from "@/lib/share";
 import { shareOrigin } from "@/lib/shareOrigin";
 
@@ -39,8 +42,10 @@ function buildInviteUrl(relayUrl: string, groupId: string, code: string): string
  * code (kind 9009) and builds a shareable link. One click copies or shares it.
  */
 export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: InvitePeopleDialogProps) {
+  const { user } = useCurrentUser();
   const { createInvite } = useGroupModeration(relayUrl, group.id);
   const { mutateAsync: fetchRelayClaim } = useRelayClaim();
+  const { isBuzz } = useIsBuzzRelay(relayUrl);
   const [url, setUrl] = useState<string | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -51,6 +56,22 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
     setError(false);
     setGenerating(true);
     try {
+      // Buzz relays mint invites over HTTP (NIP-98-signed POST /api/invites,
+      // owner/admin only — kind 9009 is a stored no-op there). The response
+      // carries a shareable landing URL on the workspace host, which Armada's
+      // own Add dialog also understands.
+      if (isBuzz) {
+        if (!user) throw new Error("Sign in to mint invites");
+        const origin = relayToHttpUrl(relayUrl).replace(/\/$/, "");
+        const res = await buzzHttpPost<{ code: string; url: string }>(
+          user.signer,
+          `${origin}/api/invites`,
+          {},
+        );
+        setCode(res.code);
+        setUrl(res.url);
+        return;
+      }
       // On community relays that gate access at the relay level (zooid/Coracle),
       // the invite must be a relay-issued `claim` (kind 28935) so the recipient
       // can become a relay member. Prefer that claim when the relay issues one;
@@ -69,7 +90,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
     } finally {
       setGenerating(false);
     }
-  }, [createInvite, fetchRelayClaim, relayUrl, group.id]);
+  }, [createInvite, fetchRelayClaim, relayUrl, group.id, isBuzz, user]);
 
   // Mint an invite as soon as the dialog opens (the silly-easy part).
   useEffect(() => {
