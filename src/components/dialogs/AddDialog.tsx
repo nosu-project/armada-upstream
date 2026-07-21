@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Tooltip,
   TooltipContent,
@@ -156,19 +157,21 @@ export function AddBody({ onDone }: { onDone: () => void }) {
           )}
         </Button>
 
-        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-          <CollapsibleTrigger asChild>
+        <Popover open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <PopoverTrigger asChild>
             <button
               type="button"
               className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               <Server className="size-3.5" />
-              Choose relays
-              <ChevronDown className={cn("size-3.5 transition-transform", advancedOpen && "rotate-180")} />
+              Relays
+              {effectiveRelays.length > 0 && (
+                <span className="tabular-nums opacity-70">· {effectiveRelays.length}</span>
+              )}
             </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
-            <p className="mb-2 mt-3 text-left text-xs text-muted-foreground">
+          </PopoverTrigger>
+          <PopoverContent align="center" className="w-80">
+            <p className="mb-2 text-left text-xs text-muted-foreground">
               Where this community lives. Members read and write here, so pick
               relays that accept your writes. An auth-only or DM-only relay can
               reject the genesis and strand the create.
@@ -179,8 +182,8 @@ export function AddBody({ onDone }: { onDone: () => void }) {
               onReset={candidates ? () => setRelays(candidates) : undefined}
               emptyText="Add at least one relay to host this community."
             />
-          </CollapsibleContent>
-        </Collapsible>
+          </PopoverContent>
+        </Popover>
       </div>
 
       <EscapeHatch onDone={onDone} />

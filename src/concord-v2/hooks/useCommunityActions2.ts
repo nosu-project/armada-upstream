@@ -166,17 +166,18 @@ export function inviteRefOf(invite: ParsedInviteLink): string {
 }
 
 /**
- * The default home-relay set for a NEW community: the app relays UNIONED with
- * the creator's NIP-17 DM relays, app relays FIRST so a write-open relay always
- * survives the cap. A creator's inbox relays alone can be a poor community
- * home. An auth-gated or DM-only relay rejects the genesis gift wrap (kind
+ * The default home-relay set for a NEW community: the app relays and the CORD
+ * stock set (the wss:// interop relays every CORD client shares — jskitty,
+ * asia.vectorapp, ditto, dreamith) as the reliable base, then the creator's
+ * NIP-17 DM relays. A creator's inbox relays alone can be a poor community
+ * home: an auth-gated or DM-only relay rejects the genesis gift wrap (kind
  * 1059), and if that's the whole set the create strands with "No relay accepted
- * the change." Always seeding the app relays guarantees at least one relay that
- * accepts the write. Portable-filtered so a stray `ws://` dev relay can't lock
- * https members out (#47); `mintCommunity` dedupes and caps the result.
+ * the change." Leading with known write-open CORD relays guarantees the genesis
+ * lands. Portable-filtered so a stray `ws://` dev relay can't lock https members
+ * out (#47), deduped, and capped to the recommended community relay count.
  */
 export function defaultCreateRelays(appRelays: string[], dmRelays: string[]): string[] {
-  return preferPortableRelays([...appRelays, ...dmRelays]);
+  return capRelays(preferPortableRelays([...appRelays, ...STOCK_RELAYS, ...dmRelays]));
 }
 
 /**
