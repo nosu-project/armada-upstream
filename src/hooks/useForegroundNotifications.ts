@@ -21,6 +21,7 @@ import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { registerNotifySink } from "@/wire/notify";
+import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 
 /**
  * useForegroundNotifications
@@ -69,15 +70,22 @@ export function useForegroundNotifications(): void {
   const { data: groupList } = useUserGroupList();
   const { data: concordList } = useConcordList();
 
-  // groupId → host relay URL (NIP-29 events don't carry their relay).
+  // groupId → host relay URL (NIP-29 events don't carry their relay). The
+  // kind-10009 list covers explicit joins; the wire's per-server directory
+  // discovery covers the rest (channels the user never 10009-listed — e.g.
+  // Buzz channels an admin added them to).
+  const wireGroups = useWireNip29Groups();
   const relayByGroup = useMemo(() => {
     const m = new Map<string, string>();
     for (const g of groupList?.groups ?? []) {
       const relay = normalizeRelayUrl(g.relay);
       if (relay && g.id) m.set(g.id, relay);
     }
+    for (const g of wireGroups) {
+      if (g.id && g.relay && !m.has(g.id)) m.set(g.id, g.relay);
+    }
     return m;
-  }, [groupList]);
+  }, [groupList, wireGroups]);
 
   // V1 channel id hex → its community route + display names + `z` set.
   const v1ByChannel = useMemo(() => {
