@@ -8,6 +8,8 @@
  * - `VITE_APP_NAME` — display name of the deployment.
  */
 
+import { nip19 } from "nostr-tools";
+
 /** Normalize a relay URL: require ws/wss scheme, strip trailing slash. */
 export function normalizeRelayUrl(url: string): string | undefined {
   let value = url.trim();
@@ -252,3 +254,48 @@ export const SANDBOX_DOMAIN: string = import.meta.env.VITE_SANDBOX_DOMAIN || "if
  */
 export const PLAUSIBLE_DOMAIN: string = (import.meta.env.VITE_PLAUSIBLE_DOMAIN ?? "").trim();
 export const PLAUSIBLE_ENDPOINT: string = (import.meta.env.VITE_PLAUSIBLE_ENDPOINT ?? "").trim();
+
+/**
+ * nostr-push web-push server (the NIP-PUSH gateway that replaces the deprecated
+ * armada-relay push endpoint).
+ *
+ * - `VITE_NOSTR_PUSH_PUBKEY` — the push server's Nostr identity (npub or hex).
+ *   Clients address it by `#p`-tagging this pubkey on kind-25742 RPC events.
+ * - `VITE_NOSTR_PUSH_RELAYS` — the rendezvous relays the RPC events are
+ *   published to / listened for the reply on (comma-separated ws/wss). The
+ *   server must read these relays too.
+ *
+ * Both empty ⇒ nostr-push is not configured and the client falls back to the
+ * legacy relay push gateway (usePushNotifications). Unlike the legacy gateway
+ * (whose URL is derived from `PLATFORM_RELAYS`), nostr-push is content-blind
+ * and can serve any deployment, so it is configured explicitly and works even
+ * when `PLATFORM_RELAYS` is empty.
+ */
+function decodePushPubkey(raw: string): string | undefined {
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
+  if (value.startsWith("npub1")) {
+    try {
+      const decoded = nip19.decode(value);
+      if (decoded.type === "npub") return decoded.data;
+    } catch {
+      // fall through
+    }
+  }
+  return undefined;
+}
+
+export const NOSTR_PUSH_PUBKEY: string | undefined = decodePushPubkey(
+  import.meta.env.VITE_NOSTR_PUSH_PUBKEY ?? "",
+);
+
+export const NOSTR_PUSH_RELAYS: string[] = (import.meta.env.VITE_NOSTR_PUSH_RELAYS ?? "")
+  .split(",")
+  .map((url: string) => normalizeRelayUrl(url))
+  .filter((url: string | undefined): url is string => Boolean(url));
+
+/** True when the nostr-push gateway is configured for this build. */
+export function nostrPushConfigured(): boolean {
+  return Boolean(NOSTR_PUSH_PUBKEY) && NOSTR_PUSH_RELAYS.length > 0;
+}

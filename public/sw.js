@@ -46,7 +46,22 @@ self.addEventListener("activate", (event) => {
 // Web Push
 // ---------------------------------------------------------------------------
 
-// The relay push payload: { title, body, icon, badge, data: { url, tag } }.
+// Two payload sources land here:
+//
+//  - The legacy relay gateway sends a fully-rendered payload:
+//    { title, body, icon, badge, data: { url, tag } } — shown as-is.
+//
+//  - The content-blind nostr-push gateway sends a static wake-up plus routing
+//    hints: { title, body, data: { event_id, scope, relays } } (see
+//    pushSubscriptions.ts). The server never sees plaintext; WE fetch the
+//    referenced event and render it. We ALWAYS show the static notification
+//    first (synchronously, so the userVisibleOnly contract is never broken —
+//    iOS revokes the subscription after a few silent pushes), then, for
+//    plaintext group messages, replace it in place with the message preview
+//    using the same `tag`. Encrypted scopes (dm/dm17/c1/c2) can't be opened
+//    here without bundled crypto, so they keep the generic wake-up.
+
+const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
 
 self.addEventListener("push", (event) => {
   if (!event.data) return;
@@ -59,19 +74,134 @@ self.addEventListener("push", (event) => {
   }
 
   const data = payload.data ?? {};
-  const options = {
-    body: payload.body ?? "",
+  const tag = data.tag || data.subscription_id || data.event_id || "armada-notification";
+  const title = payload.title ?? "Armada";
+  const base = {
     icon: payload.icon || "/favicon.png",
     badge: payload.badge || "/favicon.png",
-    data,
-    // Collapse repeated notifications for the same conversation; renotify so a
-    // new message in an already-notified conversation still alerts.
-    tag: data.tag || "armada-notification",
     renotify: true,
   };
 
-  event.waitUntil(self.registration.showNotification(payload.title ?? "Armada", options));
+  event.waitUntil(
+    (async () => {
+      // 1. Guaranteed visible notification, immediately.
+      await self.registration.showNotification(title, {
+        ...base,
+        body: payload.body ?? "",
+        data,
+        tag,
+      });
+
+      // 2. Best-effort enrichment for plaintext events (nostr-push scopes).
+      if (!data.event_id || !PLAINTEXT_SCOPES.has(data.scope)) return;
+      const relays = Array.isArray(data.relays) ? data.relays : [];
+      if (relays.length === 0) return;
+
+      let ev;
+      try {
+        ev = await fetchEventFromRelays(relays, data.event_id, 4000);
+      } catch {
+        return; // leave the static notification in place
+      }
+      if (!ev) return;
+
+      const h = tagValue(ev, "h");
+      await self.registration.showNotification(title, {
+        ...base,
+        body: truncate(ev.content, 140) || payload.body || "",
+        tag,
+        data: {
+          ...data,
+          url: h && relays[0] ? groupUrl(relays[0], h) : data.url,
+        },
+      });
+    })(),
+  );
 });
+
+/** First value of the first `name` tag on an event, or undefined. */
+function tagValue(event, name) {
+  const t = (event.tags || []).find((x) => x[0] === name);
+  return t ? t[1] : undefined;
+}
+
+function truncate(text, max) {
+  if (typeof text !== "string") return "";
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** Deep link to a NIP-29 group, matching the SPA router's relay route param. */
+function groupUrl(relayUrl, groupId) {
+  const param = encodeURIComponent(
+    relayUrl.replace(/^wss?:\/\//i, (m) => (m.toLowerCase() === "ws://" ? "ws:" : "")),
+  );
+  return `/s/${param}/${groupId}`;
+}
+
+/**
+ * Fetch one event by id, racing the given relays, resolving with the first hit
+ * (or undefined). Each socket is torn down on resolve or after `timeoutMs`.
+ */
+function fetchEventFromRelays(relays, id, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const sockets = [];
+    const done = (ev) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      for (const ws of sockets) {
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      resolve(ev);
+    };
+    const timer = setTimeout(() => done(undefined), timeoutMs);
+
+    for (const url of relays) {
+      let ws;
+      try {
+        ws = new WebSocket(url);
+      } catch {
+        continue;
+      }
+      sockets.push(ws);
+      const subId = `sw-${Math.random().toString(36).slice(2, 10)}`;
+      ws.onopen = () => {
+        try {
+          ws.send(JSON.stringify(["REQ", subId, { ids: [id] }]));
+        } catch {
+          /* ignore */
+        }
+      };
+      ws.onmessage = (msg) => {
+        let frame;
+        try {
+          frame = JSON.parse(msg.data);
+        } catch {
+          return;
+        }
+        if (frame[0] === "EVENT" && frame[1] === subId && frame[2] && frame[2].id === id) {
+          done(frame[2]);
+        } else if (frame[0] === "EOSE" && frame[1] === subId) {
+          try {
+            ws.close();
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+      ws.onerror = () => {
+        /* other relays may still answer */
+      };
+    }
+
+    if (relays.length === 0) done(undefined);
+  });
+}
 
 self.addEventListener("pushsubscriptionchange", (event) => {
   // The browser invalidated or rotated the push subscription (endpoint expiry,
