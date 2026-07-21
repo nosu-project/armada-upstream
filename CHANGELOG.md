@@ -4,6 +4,32 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.36.0] - 2026-07-21
+
+Adds emoji reactions and raise-hand gestures to voice calls, a floating in-call video window for browsing other channels during a call, a resizable compact mobile call preview, push notifications for direct messages, and active-speaker video highlighting. DM relay settings are now managed independently.
+
+### Added
+- Emoji reactions and raise-hand in Concord voice calls, visible in the video pane
+- Floating in-app video window so you can browse other channels during an active call
+- Screen-share control in the floating call window
+- Compact mobile call preview above the call bar, draggable and resizable with a corner grip
+- Active-speaker ring highlight on camera video tiles
+- Push notifications for direct messages
+- Default DM relay fallback so DM delivery works without a configured relay list
+
+### Changed
+- Call controls unified across views; raise-hand split into its own button; stage auto-opens when video is active
+- Video pane and sidebar are now resizable
+- DM relay settings managed independently with their own toggles
+- DM conversations with sent or received messages stay listed across sessions (with durable storage requested)
+
+### Fixed
+- Show the avatar when a video track is muted instead of a blank tile
+- Retry failed avatar loads and upgrade HTTP picture URLs to HTTPS
+- Suppress DM notifications while the conversation with that person is open
+- Fix screen-share switching reverting or detaching video in the floating window
+- Fix brace-expansion security vulnerability in dependencies
+
 ## [0.35.3] - 2026-07-20
 
 Fixes crashes that could send the app to the error screen immediately after updating, and improves the crash screen to show the error message.
