@@ -64,14 +64,17 @@ import {
   type OpenedDm,
 } from "@/lib/nip17/protocol";
 import {
+  DM17_SEEN_CAP,
   drainLiveDmWraps,
   hasBufferedLiveDmWraps,
   queryDm17Conversations,
   queryDm17Thread,
   readDm17Cursor,
+  readDm17SeenWrapIds,
   rebufferLiveDmWraps,
   updateDm17Cursor,
   writeDm17Rumors,
+  writeDm17SeenWrapIds,
 } from "@/lib/nip17/dm17Store";
 import { useWireScopes } from "@/wire/useWireScopes";
 
@@ -84,6 +87,8 @@ const SYNC_MIN_INTERVAL_MS = 30_000;
 const RESYNC_SLACK_SECS = MAX_WRAP_BACKDATE_SECS + 3600;
 /** Newest wraps fetched per inbox scan / backfill page. */
 const INBOX_PAGE = 500;
+/** Wraps decrypted per wave in openAndStore (yields between waves). */
+const DECRYPT_WAVE = 4;
 /** Rumors read per thread window. */
 const THREAD_WINDOW = 300;
 
@@ -192,15 +197,54 @@ interface SyncCtx {
   relays: string[];
 }
 
-/** Per-viewer sync throttling + session-seen wrap ids (skip re-decrypt churn). */
+/** Per-viewer sync throttling + seen wrap ids (skip re-decrypt churn). */
 const lastSyncAt = new Map<string, number>();
 const lastSyncDeclined = new Map<string, boolean>();
 const seenWrapIds = new Map<string, Set<string>>();
+const seenWrapsLoaded = new Map<string, Promise<void>>();
 
 function seenSetFor(self: string): Set<string> {
   let set = seenWrapIds.get(self);
   if (!set) seenWrapIds.set(self, (set = new Set()));
   return set;
+}
+
+/**
+ * Union the persisted opened-wrap memo into the session seen set (once per
+ * viewer). Must complete before any `seenSetFor` filter, or a cold launch
+ * re-decrypts the whole slack window it already opened last session.
+ */
+function loadSeenWraps(self: string): Promise<void> {
+  let p = seenWrapsLoaded.get(self);
+  if (!p) {
+    p = readDm17SeenWrapIds(self)
+      .then((ids) => {
+        if (!ids) return;
+        const seen = seenSetFor(self);
+        for (const id of ids) seen.add(id);
+      })
+      .catch(() => undefined);
+    seenWrapsLoaded.set(self, p);
+  }
+  return p;
+}
+
+/**
+ * Persist the seen set (evicting the oldest half past the cap). Gated behind
+ * the load so a write can never clobber persisted ids with a partial set.
+ */
+function persistSeenWraps(self: string): void {
+  void loadSeenWraps(self).then(() => {
+    const seen = seenSetFor(self);
+    if (seen.size > DM17_SEEN_CAP) {
+      let drop = seen.size - (DM17_SEEN_CAP >> 1);
+      for (const id of seen) {
+        if (drop-- <= 0) break;
+        seen.delete(id);
+      }
+    }
+    return writeDm17SeenWrapIds(self, seen);
+  }).catch(() => undefined);
 }
 
 /**
@@ -229,16 +273,25 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
 
   const seen = seenSetFor(ctx.self);
   const opened: OpenedDm[] = [];
-  await Promise.all(
-    wraps.map(async (wrap) => {
-      const dm = await openDmWrap(wrap, ctx.signer as Dm17Signer, ctx.self);
-      seen.add(wrap.id);
-      // Foreign rumor kinds (e.g. Concord direct invites, kind 3313) are not
-      // ours to store — their own scan paths handle them.
-      if (dm && DM_RUMOR_KINDS.includes(dm.kind)) opened.push(dm);
-    }),
-  );
+  // Bounded waves, never one unthrottled Promise.all: each wrap costs two
+  // NIP-44 opens (synchronous noble crypto for local signers), so a full
+  // cold-scan page as one microtask-chained batch blocks the main thread for
+  // seconds. A small wave still pipelines remote (bunker) signers; the
+  // setTimeout(0) between waves yields the event loop.
+  for (let i = 0; i < wraps.length; i += DECRYPT_WAVE) {
+    await Promise.all(
+      wraps.slice(i, i + DECRYPT_WAVE).map(async (wrap) => {
+        const dm = await openDmWrap(wrap, ctx.signer as Dm17Signer, ctx.self);
+        seen.add(wrap.id);
+        // Foreign rumor kinds (e.g. Concord direct invites, kind 3313) are not
+        // ours to store — their own scan paths handle them.
+        if (dm && DM_RUMOR_KINDS.includes(dm.kind)) opened.push(dm);
+      }),
+    );
+    if (i + DECRYPT_WAVE < wraps.length) await new Promise((r) => setTimeout(r, 0));
+  }
   await writeDm17Rumors(opened);
+  persistSeenWraps(ctx.self);
   return true;
 }
 
@@ -294,6 +347,7 @@ async function runLiveDm17Pass(
   if (!ctx.self || !ctx.signer.nip44) return "empty";
   const wraps = drainLiveDmWraps();
   if (wraps.length === 0) return "empty";
+  await loadSeenWraps(ctx.self);
   const seen = seenSetFor(ctx.self);
   const fresh = wraps.filter((w) => !seen.has(w.id));
   // Everything drained was already decrypted (an earlier pass, the poll, or a
@@ -329,7 +383,7 @@ export async function syncDm17Inbox(ctx: SyncCtx, opts?: { force?: boolean; inte
   lastSyncAt.set(ctx.self, now);
 
   try {
-    const cursor = await readDm17Cursor(ctx.self);
+    const [cursor] = await Promise.all([readDm17Cursor(ctx.self), loadSeenWraps(ctx.self)]);
     const since = cursor?.newest ? Math.max(0, cursor.newest - RESYNC_SLACK_SECS) : undefined;
     const filter: { kinds: number[]; "#p": string[]; limit: number; since?: number } = {
       kinds: [1059],
@@ -766,6 +820,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       oldestRef.current = Math.min(...wraps.map((w) => w.created_at)) - 1;
       if (wraps.length < INBOX_PAGE) setHasMore(false);
 
+      await loadSeenWraps(self);
       const seen = seenSetFor(self);
       const before = await queryDm17Thread(peer, { limit: THREAD_WINDOW * 2 });
       await openAndStore(ctx, wraps.filter((w) => !seen.has(w.id)), true);

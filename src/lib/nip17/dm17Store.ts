@@ -225,6 +225,32 @@ export async function updateDm17Cursor(self: string, patch: Partial<Dm17Cursor>)
   await writeFolded(cursorKey(self), next);
 }
 
+// ── Opened-wrap memo ─────────────────────────────────────────────────────────
+//
+// Wrap ids the inbox scan has already opened (rumor stored, or judged not
+// ours / a foreign rumor kind), persisted per viewer. The scan re-fetches a
+// 2-day slack window behind its cursor on every pass (NIP-59 backdating), so
+// with only a session-scoped seen set every cold launch re-decrypted up to a
+// full inbox page — two NIP-44 opens per wrap — before the UI settled. An
+// Android WebView kill makes every resume a cold start, so the memo must be
+// durable. Wiped with `armada-concord-cache` on logout; a lost or evicted id
+// merely re-decrypts once.
+
+const seenWrapsKey = (self: string) => `dm17-seen:${self}`;
+
+/** Cap on persisted opened-wrap ids (callers half-evict at this bound). */
+export const DM17_SEEN_CAP = 4096;
+
+/** Read the viewer's persisted opened-wrap ids (insertion order preserved). */
+export function readDm17SeenWrapIds(self: string): Promise<string[] | undefined> {
+  return readFolded<string[]>(seenWrapsKey(self));
+}
+
+/** Persist the viewer's opened-wrap ids (best-effort). */
+export async function writeDm17SeenWrapIds(self: string, ids: Iterable<string>): Promise<void> {
+  await writeFolded(seenWrapsKey(self), [...ids]);
+}
+
 // ── Live inbound-wrap buffer ────────────────────────────────────────────────
 //
 // The wire's standing kind-1059 subscription RECEIVES a DM gift wrap live, but

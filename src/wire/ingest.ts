@@ -1,7 +1,7 @@
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { KIND_MESSAGE, KIND_REACTION } from "@/concord-v2/lib/kinds";
 import type { GroupKey } from "@/concord-v2/lib/derive";
-import { openPlaneWraps } from "@/concord-v2/lib/planeSync";
+import { notePlaneWrapsSeen, openPlaneWrapsChunked, unseenPlaneWraps } from "@/concord-v2/lib/planeSync";
 import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { bufferLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
@@ -193,10 +193,18 @@ export async function ingestWireEvents(
       else byCommunity.set(entry.idHex, { groups: entry.groups, wraps: [ev] });
     }
     for (const [idHex, { groups, wraps }] of byCommunity) {
-      const opened = openPlaneWraps(wraps, groups);
-      if (opened.length === 0) continue;
-      await writeOpened(opened);
-      scopes.add(`c2ctl:${idHex}`);
+      // Skip wraps already processed (the persisted plane memo, shared with
+      // the sweep): rotated rounds replay recent control wraps every time, and
+      // on the APK the native service delivers the same wraps a second time —
+      // without the memo each replay re-paid the full decrypt+verify.
+      const unseen = await unseenPlaneWraps(wraps);
+      if (unseen.length === 0) continue;
+      const opened = await openPlaneWrapsChunked(unseen, groups);
+      if (opened.length > 0) {
+        await writeOpened(opened);
+        scopes.add(`c2ctl:${idHex}`);
+      }
+      notePlaneWrapsSeen(unseen.map((w) => w.id));
     }
   }
   // Wraps for streams we hold no key for (control plane, invites, or a

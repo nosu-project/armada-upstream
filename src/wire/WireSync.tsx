@@ -11,7 +11,7 @@ import { openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView } from "@/concord-v2/lib/community";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { controlGroups } from "@/concord-v2/lib/control";
-import { openPlaneWraps } from "@/concord-v2/lib/planeSync";
+import { openPlaneWrapsChunked } from "@/concord-v2/lib/planeSync";
 import { ackPendingWraps, peekPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 import { effectiveDmRelays } from "@/contexts/AppContext";
@@ -76,6 +76,17 @@ const SILENT_REQ_TIMEOUT_MS = 30_000;
 const QUIET_ROTATE_MS = 90_000;
 /** How often a round's silence is re-checked against the deadlines above. */
 const WATCHDOG_TICK_MS = 5_000;
+/**
+ * Max events buffered from a round's stored replay (pre-EOSE) before they're
+ * flushed through ingest as ONE batch. Awaiting `ingestWireEvents` per event
+ * defeats the store's burst batching (see the ingest.ts write-path comment):
+ * an N-event catch-up replay becomes N idle-scheduled single-event
+ * transactions plus N bus emissions — the post-resume main-thread chug.
+ * Batching restores the single-transaction burst write and one bus ring per
+ * batch; the cap bounds memory and keeps the cursor advancing. Post-EOSE
+ * (live) events still ingest immediately for notification latency.
+ */
+const REPLAY_BATCH_MAX = 200;
 
 function cursorKey(relay: string): string {
   return `armada:wire-cursor:${relay}`;
@@ -494,21 +505,47 @@ export function WireSync() {
             logSync("wire", `${relay}: round open (since=${since}, ${filters.length} filter(s))`);
             firstRound = false;
           }
+          // Pre-EOSE events are a stored replay — buffer them and flush in
+          // batches (see REPLAY_BATCH_MAX); post-EOSE events are live and
+          // ingest one-by-one as they arrive.
+          let replay: NostrEvent[] = [];
+          const flushReplay = async () => {
+            if (replay.length === 0) return;
+            const batch = replay;
+            replay = [];
+            await ingestWireEvents(sinksRef.current, batch, { live: false });
+            ingested += batch.length;
+            writeCursor(relay, Math.max(...batch.map((e) => e.created_at)));
+          };
           try {
-            for await (const msg of nostr.relay(relay).req(
-              stampRoundSince(filters, since, now),
-              { signal: roundSignal },
-            )) {
-              sawAnything = true;
-              lastMsgAt = Date.now();
-              if (msg[0] === "EOSE") eosed = true;
-              if (msg[0] === "EVENT") {
-                backoff = 1_000;
-                const event = msg[2] as NostrEvent;
-                await ingestWireEvents(sinksRef.current, [event], { live: eosed });
-                ingested += 1;
-                writeCursor(relay, event.created_at);
+            try {
+              for await (const msg of nostr.relay(relay).req(
+                stampRoundSince(filters, since, now),
+                { signal: roundSignal },
+              )) {
+                sawAnything = true;
+                lastMsgAt = Date.now();
+                if (msg[0] === "EOSE") {
+                  await flushReplay();
+                  eosed = true;
+                }
+                if (msg[0] === "EVENT") {
+                  backoff = 1_000;
+                  const event = msg[2] as NostrEvent;
+                  if (eosed) {
+                    await ingestWireEvents(sinksRef.current, [event], { live: true });
+                    ingested += 1;
+                    writeCursor(relay, event.created_at);
+                  } else {
+                    replay.push(event);
+                    if (replay.length >= REPLAY_BATCH_MAX) await flushReplay();
+                  }
+                }
               }
+            } finally {
+              // A round torn down mid-replay (watchdog, reopen bump, effect
+              // cleanup) still ingests what it already received.
+              await flushReplay();
             }
           } catch {
             // Aborted or transport error — handled by the loop condition.
@@ -666,7 +703,7 @@ export function WireSync() {
           }
 
           for (const [idHex, { groups, wraps }] of ctlByCommunity) {
-            const opened = openPlaneWraps(wraps, groups);
+            const opened = await openPlaneWrapsChunked(wraps, groups);
             if (opened.length === 0) continue;
             await writeOpened(opened);
             scopes.add(`c2ctl:${idHex}`);

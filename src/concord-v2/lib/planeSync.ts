@@ -23,8 +23,9 @@
  *   ingested (an unban published while the client was out, a compaction
  *   re-wrap under a newly-held epoch) stays invisible forever — the client
  *   then folds a STALE banlist/roster and mis-renders membership. Repeat
- *   sweeps stay cheap: a session-scoped seen-wrap memo skips the re-decrypt,
- *   and `onFresh` fires only for wraps new to this session.
+ *   sweeps stay cheap: a persisted seen-wrap memo skips the re-decrypt (the
+ *   folds re-read the opened-event store), and `onFresh` fires only for wraps
+ *   not yet processed.
  * - FORWARD (Guestbook): append-mostly and unbounded, so it keeps the
  *   persisted `since` cursor — but the cursor scope is keyed by the newest
  *   held epoch, so an epoch advance (rejoin, rekey adoption) re-baselines
@@ -40,6 +41,7 @@ import { isStreamPubkey, streamAuthsSettled } from "@/concord-v2/lib/streamAuth"
 import { openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { beginSyncTask } from "@/lib/syncActivity";
 import { logSync, sinceMs } from "@/lib/syncLog";
 
@@ -178,6 +180,38 @@ export function openPlaneWraps(wraps: NostrEvent[], groups: GroupKey[]): OpenedE
   return out;
 }
 
+/** Max unbroken main-thread time (ms) spent decrypting before yielding
+ *  (mirrors chat.ts's DECODE_SLICE_MS — see the rationale there). */
+const PLANE_DECODE_SLICE_MS = 5;
+
+/**
+ * Time-sliced {@link openPlaneWraps}: the same decrypt, but yields the event
+ * loop whenever a slice has run past {@link PLANE_DECODE_SLICE_MS}. Each wrap
+ * costs a NIP-44 open + Schnorr verify (+ a second NIP-44 open for encrypted
+ * seals) — all synchronous noble crypto — so decoding a whole plane in one
+ * unbroken loop freezes the UI for the duration on a phone.
+ */
+export async function openPlaneWrapsChunked(wraps: NostrEvent[], groups: GroupKey[]): Promise<OpenedEvent[]> {
+  const byPk = new Map(groups.map((g) => [g.pk, g]));
+  const out: OpenedEvent[] = [];
+  let sliceStart = performance.now();
+  for (let i = 0; i < wraps.length; i++) {
+    const group = byPk.get(wraps[i].pubkey);
+    if (group) {
+      try {
+        out.push(openWrap(wraps[i], group));
+      } catch {
+        // not ours / malformed
+      }
+    }
+    if (i + 1 < wraps.length && performance.now() - sliceStart >= PLANE_DECODE_SLICE_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      sliceStart = performance.now();
+    }
+  }
+  return out;
+}
+
 /** Paging knobs (test seam via {@link _configureSweepPagingForTests}). */
 const paging = {
   /** Per-filter page size, shared by the batch REQ and the complete-mode pager. */
@@ -192,16 +226,56 @@ export function _configureSweepPagingForTests(cfg: Partial<typeof paging>): void
 }
 
 /**
- * Wrap ids a COMPLETE scope has already processed this session (decrypted or
- * judged garbage). Full-plane sweeps re-receive the same wraps every round —
- * the memo keeps repeat sweeps decrypt-free and `onFresh` quiet. Ids are
- * global (a wrap id is content-addressed), so the same wrap arriving from a
- * second relay is also deduped. Insertion-ordered, half-evicted at the cap.
+ * Wrap ids a COMPLETE scope has already processed (decrypted or judged
+ * garbage). Full-plane sweeps re-receive the same wraps every round — the
+ * memo keeps repeat sweeps decrypt-free and `onFresh` quiet. Ids are global
+ * (a wrap id is content-addressed), so the same wrap arriving from a second
+ * relay is also deduped. Insertion-ordered, half-evicted at the cap.
+ *
+ * PERSISTED (foldedCache): an id is only noted after its decrypted rumor is
+ * durably in the opened-event store (or it failed to decrypt under a held key
+ * — permanent garbage, since every wrap here matched a held group's address),
+ * and the folds re-read the store, so a cold launch can skip re-decrypting
+ * the whole plane. A session-only memo made every relaunch re-pay the full
+ * NIP-44+Schnorr pass over thousands of control wraps — the main-thread stall
+ * on startup. Wiped with the rest of `armada-concord-cache` on logout; an
+ * evicted or lost id merely re-decrypts once.
  */
 const seenCompleteWraps = new Set<string>();
 const SEEN_WRAPS_CAP = 16_384;
+const SEEN_WRAPS_KEY = "plane-seen-wraps";
+/** Debounce for the persisted-memo write, so a sweep burst is one write. */
+const SEEN_WRAPS_PERSIST_MS = 1_000;
 
-function noteSeenWraps(ids: string[]): void {
+let seenWrapsLoaded: Promise<void> | undefined;
+let seenWrapsPersistTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Union the persisted memo into the session set (once per session). */
+function loadSeenWraps(): Promise<void> {
+  seenWrapsLoaded ??= readFolded<string[]>(SEEN_WRAPS_KEY)
+    .then((ids) => {
+      if (ids) for (const id of ids) seenCompleteWraps.add(id);
+    })
+    .catch(() => undefined);
+  return seenWrapsLoaded;
+}
+
+function schedulePersistSeenWraps(): void {
+  if (seenWrapsPersistTimer !== undefined) return;
+  seenWrapsPersistTimer = setTimeout(() => {
+    seenWrapsPersistTimer = undefined;
+    void writeFolded(SEEN_WRAPS_KEY, [...seenCompleteWraps]);
+  }, SEEN_WRAPS_PERSIST_MS);
+}
+
+/**
+ * Mark wrap ids as processed. Call only once their rumors are durably in the
+ * opened-event store (or they failed under a held key). Shared with the
+ * wire's control-wrap ingest path, so a wrap decrypted by either transport is
+ * never re-decrypted by the other.
+ */
+export function notePlaneWrapsSeen(ids: string[]): void {
+  const before = seenCompleteWraps.size;
   for (const id of ids) seenCompleteWraps.add(id);
   if (seenCompleteWraps.size > SEEN_WRAPS_CAP) {
     let toDrop = seenCompleteWraps.size - SEEN_WRAPS_CAP / 2;
@@ -210,11 +284,24 @@ function noteSeenWraps(ids: string[]): void {
       seenCompleteWraps.delete(id);
     }
   }
+  if (seenCompleteWraps.size !== before) schedulePersistSeenWraps();
 }
 
-/** Test seam: forget which wraps this session already processed. */
+/** The subset of `wraps` not yet processed (loads the persisted memo first). */
+export async function unseenPlaneWraps(wraps: NostrEvent[]): Promise<NostrEvent[]> {
+  await loadSeenWraps();
+  return wraps.filter((w) => !seenCompleteWraps.has(w.id));
+}
+
+/** Test seam: forget which wraps have been processed (session + persisted). */
 export function _resetPlaneSweepMemoForTests(): void {
   seenCompleteWraps.clear();
+  if (seenWrapsPersistTimer !== undefined) {
+    clearTimeout(seenWrapsPersistTimer);
+    seenWrapsPersistTimer = undefined;
+  }
+  seenWrapsLoaded = Promise.resolve();
+  void writeFolded(SEEN_WRAPS_KEY, []);
 }
 
 /**
@@ -276,6 +363,9 @@ async function runScopes(
   url: string,
   scopes: PlaneScope[],
 ): Promise<Map<string, OpenedEvent[]>> {
+  // The persisted seen-wrap memo must be in the session set before the
+  // complete-scope narrowing below, or a cold launch re-decrypts everything.
+  await loadSeenWraps();
   const cursors = await Promise.all(
     scopes.map((s) => (s.complete ? undefined : readStreamCursor(s.scope))),
   );
@@ -316,15 +406,19 @@ async function runScopes(
         }
       }
 
-      // Decrypt everything new, then ONE store write and parallel cursor
-      // advances. A complete scope narrows to wraps unseen this session; a
-      // forward scope's `since` already did that narrowing.
-      const freshPerScope = scopes.map((s, i) =>
-        openPlaneWraps(
-          s.complete ? perScope[i].filter((w) => !seenCompleteWraps.has(w.id)) : perScope[i],
-          s.groups,
-        ),
-      );
+      // Decrypt everything new (time-sliced — a cold plane is thousands of
+      // synchronous EC ops), then ONE store write and parallel cursor
+      // advances. A complete scope narrows to wraps not yet processed (the
+      // persisted memo); a forward scope's `since` already did that narrowing.
+      const freshPerScope: OpenedEvent[][] = [];
+      for (const [i, s] of scopes.entries()) {
+        freshPerScope.push(
+          await openPlaneWrapsChunked(
+            s.complete ? perScope[i].filter((w) => !seenCompleteWraps.has(w.id)) : perScope[i],
+            s.groups,
+          ),
+        );
+      }
       const allFresh = freshPerScope.flat();
       if (allFresh.length > 0) await writeOpened(allFresh);
       await Promise.all(
@@ -337,7 +431,7 @@ async function runScopes(
           if (s.complete) {
             // Only the memo advances — every sweep re-asks for the whole
             // plane, so nothing received can ever become unreachable.
-            noteSeenWraps(mine.map((w) => w.id));
+            notePlaneWrapsSeen(mine.map((w) => w.id));
             return undefined;
           }
           if (mine.length === 0) return undefined;
