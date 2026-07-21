@@ -76,6 +76,55 @@ export interface CallContextType {
   /** Explicitly set the call stage open state (the stage's close button uses this). */
   setStageOpen: (open: boolean) => void;
   /**
+   * Whether the call stage is currently docked inside the compact floating
+   * window (desktop-only). True only when no normal call-stage slot is
+   * registered (the user has navigated away from the call's channel), the user
+   * hasn't hidden the floating window, and the viewport is desktop-width. The
+   * same persistent stage host is reparented into the floating window, so there
+   * is never a second stage or duplicate media subscription.
+   */
+  stageFloating: boolean;
+  /**
+   * Which floating destination the stage is currently docked into, so the
+   * stage's floating branch can adapt its chrome: the draggable desktop window
+   * (`"desktop"`) renders the full media control row; the compact mobile
+   * preview (`"mobile"`) omits it, because the fixed MobileCallBar already
+   * carries mic/camera/screen-share/leave. Null when not floating. Only one
+   * variant ever registers at a time (each floating host gates itself on the
+   * `sidebar` breakpoint), so the two destinations never compete.
+   */
+  floatingVariant: "desktop" | "mobile" | null;
+  /**
+   * The fixed mobile call bar's measured height in pixels (including its bottom
+   * safe-area padding), reported by MobileCallBar. The mobile preview positions
+   * itself directly above the bar off THIS value rather than the `--call-bar-h`
+   * CSS variable, so its placement is guaranteed regardless of DOM nesting or
+   * CSS-inheritance timing, and re-evaluates reactively whenever the bar's
+   * height changes (keyboard, participant count, safe-area/orientation). 0 when
+   * the bar isn't mounted (desktop, or no active call).
+   */
+  callBarHeight: number;
+  /** Internal: MobileCallBar reports its measured height (incl. safe area) here. */
+  setCallBarHeight: (px: number) => void;
+  /**
+   * Whether the user has dismissed the floating video window without leaving
+   * the call. While hidden, the stage parks off-DOM (video subscriptions stay
+   * alive) and only the call bar remains visible. Reset whenever the stage
+   * returns to a normal slot or a new call starts.
+   */
+  floatingHidden: boolean;
+  /** Hide the floating video window (the floating window's close button). */
+  setFloatingHidden: (hidden: boolean) => void;
+  /**
+   * Navigate to the active call's channel/conversation, registered by the
+   * connected voice room (which owns the correct route for NIP-29 groups, DMs,
+   * and Concord channels). The floating window's "expand" action calls this to
+   * return the user to the full call view. Null before the room registers it.
+   */
+  focusActiveCall: (() => void) | null;
+  /** Internal: the connected room registers its navigate-to-call handler here. */
+  registerFocusActiveCall: (fn: (() => void) | null) => void;
+  /**
    * Pubkeys currently speaking in the ACTIVE call (resolved from LiveKit
    * identities; unverified Concord identities are excluded). Lets UI outside
    * the LiveKit room — e.g. the sidebar's nested voice roster — show live

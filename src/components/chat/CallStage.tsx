@@ -1,4 +1,6 @@
 import {
+  DisconnectButton,
+  useLocalParticipant,
   useParticipants,
   useRoomContext,
   useSpeakingParticipants,
@@ -9,7 +11,23 @@ import type { TrackReference } from "@livekit/components-react";
 import type { NostrMetadata } from "@nostrify/nostrify";
 import type { Participant, RemoteParticipant } from "livekit-client";
 import { Track } from "livekit-client";
-import { Maximize2, Minimize2, MicOff, Monitor, ScreenShare, Shrink, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Maximize2,
+  Mic,
+  Minimize2,
+  MicOff,
+  Monitor,
+  MonitorOff,
+  MonitorUp,
+  PhoneOff,
+  ScreenShare,
+  Shrink,
+  Video,
+  VideoOff,
+  X,
+} from "lucide-react";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -26,7 +44,7 @@ import { useCall } from "@/hooks/useCall";
 import { useUserVolume } from "@/hooks/useUserVolume";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { playScreenShareSound } from "@/lib/callSounds";
+import { playScreenShareSound, playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
 import {
   getAvatarShape,
   shapedAvatarSpeakingStyle,
@@ -129,6 +147,56 @@ const VERIFY_GRACE_MS = 15_000;
  * (longer on the E2EE path), so this can't just check the first render.
  */
 const JOIN_VIDEO_EXPAND_WINDOW_MS = 10_000;
+
+/**
+ * How long the compact floating window keeps showing the current active
+ * speaker before it's allowed to switch to a newly-loudest one. Long enough
+ * that brief interjections ("mhm", a cough) and simultaneous talkers don't
+ * make the single-content preview flicker between faces.
+ */
+const FLOATING_SPEAKER_HOLD_MS = 2_000;
+
+/**
+ * Pick the single participant/track to show in the compact floating window,
+ * by priority: (1) an active screen share, (2) the manually focused tile,
+ * (3) the debounced active speaker, (4) a stable first-participant fallback.
+ * The chosen key indexes into the same `tiles` list the grid uses, so the
+ * compact view reuses the exact tile renderer (video or avatar fallback).
+ */
+function usePrimaryFloatingKey(args: {
+  enabled: boolean;
+  focusKey: string | null;
+  screenShareKey: string | null;
+  speakingKey: string | null;
+  fallbackKey: string | null;
+}): string | null {
+  const { enabled, focusKey, screenShareKey, speakingKey, fallbackKey } = args;
+  // The debounced active speaker: only adopt a new speaker after the hold
+  // window lapses since the last switch, so momentary/overlapping speech
+  // doesn't churn the preview.
+  const [heldSpeaker, setHeldSpeaker] = useState<string | null>(null);
+  const lastSwitch = useRef(0);
+  useEffect(() => {
+    if (!enabled || !speakingKey) return;
+    if (speakingKey === heldSpeaker) return;
+    const now = Date.now();
+    const wait = Math.max(0, FLOATING_SPEAKER_HOLD_MS - (now - lastSwitch.current));
+    if (wait === 0) {
+      lastSwitch.current = now;
+      setHeldSpeaker(speakingKey);
+      return;
+    }
+    const timer = setTimeout(() => {
+      lastSwitch.current = Date.now();
+      setHeldSpeaker(speakingKey);
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [enabled, speakingKey, heldSpeaker]);
+
+  if (!enabled) return null;
+  return screenShareKey ?? focusKey ?? heldSpeaker ?? speakingKey ?? fallbackKey;
+}
+
 
 /**
  * The name to render for a participant, folding in Concord's verification race
@@ -456,6 +524,197 @@ function AvatarTile({
 }
 
 /**
+ * Compact prev/next selector shown over the floating preview when more than one
+ * screen share is active, letting the viewer cycle between them (the raw track
+ * order can't be trusted — it differs per client and reorders on subscribe, so
+ * selection is driven by a stable, sorted key list in the parent). Also labels
+ * the currently-selected sharer by display name. Rendered inside the LiveKit
+ * room context, so `useTileDisplayName` resolves the sharer's name/verification.
+ */
+function ShareSelector({
+  participant,
+  index,
+  total,
+  onPrev,
+  onNext,
+}: {
+  participant: Participant | null;
+  index: number;
+  total: number;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  const name = useShareSharerName(participant);
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  return (
+    <div
+      className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 px-1 py-0.5 text-[11px] text-white"
+      // Keep any pointer/click on the selector from bubbling to the underlying
+      // tile (which carries the focus toggle) or any wrapper handler.
+      onPointerDown={stop}
+      onClick={stop}
+    >
+      <button
+        type="button"
+        aria-label="Previous screen share"
+        title="Previous screen share"
+        onPointerDown={stop}
+        onClick={(e) => {
+          e.stopPropagation();
+          onPrev();
+        }}
+        className="rounded p-0.5 hover:bg-white/20"
+      >
+        <ChevronLeft className="size-3.5" />
+      </button>
+      <span className="flex items-center gap-1 max-w-40 truncate">
+        <ScreenShare className="size-3 shrink-0" />
+        <span className="truncate">{name}</span>
+        <span className="tabular-nums text-white/60">
+          {index + 1}/{total}
+        </span>
+      </span>
+      <button
+        type="button"
+        aria-label="Next screen share"
+        title="Next screen share"
+        onPointerDown={stop}
+        onClick={(e) => {
+          e.stopPropagation();
+          onNext();
+        }}
+        className="rounded p-0.5 hover:bg-white/20"
+      >
+        <ChevronRight className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/** Resolve a sharer's display name for the share selector label. */
+function useShareSharerName(participant: Participant | null): string {
+  const resolve = useVoiceIdentity();
+  const identity = participant?.identity ?? "";
+  const { pubkey, verified } = resolve(identity);
+  const author = useAuthor(verified ? pubkey : undefined);
+  const scopedName = useScopedDisplayName(pubkey, author.data?.metadata);
+  if (!participant) return "";
+  if (participant.isLocal) return "Your screen";
+  return verified ? scopedName : "Screen share";
+}
+
+/**
+ * Whether this browser can capture the screen (absent on most mobile). Same
+ * guard the VoiceBar uses to gate its screen-share button; the floating window
+ * is desktop-only, but this keeps parity and hides the button where the API is
+ * unavailable.
+ */
+const supportsScreenShare =
+  typeof navigator !== "undefined" &&
+  typeof navigator.mediaDevices?.getDisplayMedia === "function";
+
+/**
+ * The compact media controls shown in the floating window: mute/unmute,
+ * camera on/off, screen share, and leave. Rendered inside the LiveKit room
+ * context (it's part of the reparented CallStage), so it reuses the room's
+ * existing local participant + publish state via `useLocalParticipant` — no
+ * duplicate media state is created. Mirrors the VoiceBar's control behavior
+ * (sounds, screen-share picker/cancellation + error handling) so the two stay
+ * consistent.
+ */
+function FloatingControls() {
+  const { leaveCall } = useCall();
+  const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } =
+    useLocalParticipant();
+  return (
+    <div className="flex items-center justify-center gap-1.5 px-2 py-1.5 shrink-0 border-t border-white/10">
+      <button
+        type="button"
+        aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
+        title={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
+        onClick={() => {
+          const enabling = !isMicrophoneEnabled;
+          if (enabling) playUnmuteSound();
+          else playMuteSound();
+          void localParticipant.setMicrophoneEnabled(enabling);
+        }}
+        className={cn(
+          "inline-flex items-center justify-center rounded-md size-8 shrink-0",
+          isMicrophoneEnabled
+            ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
+            : "bg-destructive/20 text-destructive hover:bg-destructive/30",
+        )}
+      >
+        {isMicrophoneEnabled ? <Mic className="size-4" /> : <MicOff className="size-4" />}
+      </button>
+      <button
+        type="button"
+        aria-label={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
+        title={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
+        onClick={() => {
+          void localParticipant
+            .setCameraEnabled(!isCameraEnabled)
+            .catch((err) => console.warn("failed to toggle camera", err));
+        }}
+        className={cn(
+          "inline-flex items-center justify-center rounded-md size-8 shrink-0",
+          isCameraEnabled
+            ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
+            : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
+        )}
+      >
+        {isCameraEnabled ? <Video className="size-4" /> : <VideoOff className="size-4" />}
+      </button>
+      {supportsScreenShare && (
+        <button
+          type="button"
+          aria-label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
+          title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
+          onClick={() => {
+            // Same flow as the VoiceBar's screen-share button: publish/unpublish
+            // the dedicated screenshare track (with best-effort tab audio); the
+            // browser shows its native picker. A user cancelling the picker
+            // rejects with NotAllowedError — expected, not surfaced.
+            void localParticipant
+              .setScreenShareEnabled(!isScreenShareEnabled, { audio: true })
+              .catch((err) => {
+                if (err instanceof Error && err.name === "NotAllowedError") return;
+                console.warn("failed to toggle screen share", err);
+              });
+          }}
+          className={cn(
+            "inline-flex items-center justify-center rounded-md size-8 shrink-0",
+            isScreenShareEnabled
+              ? "bg-primary/20 text-primary hover:bg-primary/30"
+              : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
+          )}
+        >
+          {isScreenShareEnabled ? (
+            <MonitorOff className="size-4" />
+          ) : (
+            <MonitorUp className="size-4" />
+          )}
+        </button>
+      )}
+      <DisconnectButton
+        // Play the leave chirp inside the gesture, before the disconnect tears
+        // down the room audio (same reasoning as the VoiceBar's hangup).
+        onClick={() => {
+          playLeaveSound();
+          // `leaveCall` runs the exit animation + teardown in CallProvider;
+          // DisconnectButton also disconnects the room. Both are idempotent.
+          leaveCall();
+        }}
+        aria-label="Leave call"
+        className="inline-flex items-center justify-center rounded-md size-8 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
+      >
+        <PhoneOff className="size-4" />
+      </DisconnectButton>
+    </div>
+  );
+}
+
+/**
  * The call stage: a dismissable box, shown at the top of the chat window, that
  * presents *everyone* in the call as tiles — cameras and screenshares as video,
  * audio-only participants as avatars (with a speaking ring). It animates open
@@ -473,7 +732,7 @@ export function CallStage({
   callLabel?: React.ReactNode;
   open: boolean;
 }) {
-  const { setStageOpen } = useCall();
+  const { setStageOpen, stageFloating, floatingVariant } = useCall();
   const participants = useParticipants();
   const speakingParticipants = useSpeakingParticipants();
   const speakingIds = useMemo(
@@ -581,6 +840,105 @@ export function CallStage({
   }, [focusKey, tiles]);
 
   const focused = focusKey ? tiles.find((t) => t.key === focusKey) : undefined;
+
+  // Compact floating window: choose ONE tile to show, by priority. Screen share
+  // wins; then the manually focused tile; then the debounced active speaker;
+  // then a stable fallback (first video tile, else first tile) so something
+  // meaningful shows even in a silent, camera-off call.
+  //
+  // All active screen-share tiles, in a STABLE order (by participant identity,
+  // not the track array's incidental order — which flips between clients and
+  // reorders on (re)subscribe). Keying the selection off this order keeps the
+  // selected share from jumping when the array churns.
+  const sortedShareKeys = useMemo(
+    () =>
+      videoTracks
+        .filter((t) => t.source === Track.Source.ScreenShare)
+        .map(trackTileKey)
+        .sort(),
+    [videoTracks],
+  );
+  // The selected screen share (stable across track-array reordering). One share
+  // auto-selects; with several, the current pick is kept while it's still live,
+  // and we fall back to the first stable one when it ends or none is chosen.
+  const [selectedShareKey, setSelectedShareKey] = useState<string | null>(null);
+  useEffect(() => {
+    setSelectedShareKey((cur) => {
+      if (sortedShareKeys.length === 0) return null;
+      if (cur && sortedShareKeys.includes(cur)) return cur; // keep stable
+      return sortedShareKeys[0]; // auto-select (single) or recover (ended)
+    });
+  }, [sortedShareKeys]);
+  // Honor manual focus on a screen share: if the user focused a share tile,
+  // treat that as the selection so prev/next + preview agree with the grid.
+  useEffect(() => {
+    if (focusKey && sortedShareKeys.includes(focusKey)) setSelectedShareKey(focusKey);
+  }, [focusKey, sortedShareKeys]);
+  const screenShareKey =
+    selectedShareKey && sortedShareKeys.includes(selectedShareKey)
+      ? selectedShareKey
+      : sortedShareKeys[0] ?? null;
+  const selectedShareIndex = screenShareKey ? sortedShareKeys.indexOf(screenShareKey) : -1;
+  const cycleShare = useCallback(
+    (dir: 1 | -1) => {
+      if (sortedShareKeys.length === 0) return;
+      const cur = selectedShareKey;
+      const base = cur && sortedShareKeys.includes(cur) ? sortedShareKeys.indexOf(cur) : 0;
+      const next = (base + dir + sortedShareKeys.length) % sortedShareKeys.length;
+      const nextKey = sortedShareKeys[next];
+      setSelectedShareKey(nextKey);
+      // Move focus with the cycle. Otherwise the focus-honoring effect above
+      // (which snaps the selection back to `focusKey` — pinned to the share
+      // that auto-expanded) would immediately revert this switch: the name and
+      // index would flip for a frame and then the preview would stay on the
+      // previously selected share. Keeping `focusKey` in step lets the switch
+      // stick. Only move focus if it was already on a share (don't create focus
+      // the user didn't ask for).
+      setFocusKey((f) => (f && sortedShareKeys.includes(f) ? nextKey : f));
+    },
+    [sortedShareKeys, selectedShareKey],
+  );
+  // Highest-priority current speaker that has a tile (speakingParticipants is
+  // ordered loudest-first by LiveKit).
+  const speakingKey = useMemo(() => {
+    for (const p of speakingParticipants) {
+      const cam = tiles.find((t) => t.key === `${p.identity}:${Track.Source.Camera}`);
+      if (cam) return cam.key;
+      const avatar = tiles.find((t) => t.key === participantTileKey(p));
+      if (avatar) return avatar.key;
+    }
+    return null;
+  }, [speakingParticipants, tiles]);
+  // Stable fallback: prefer any camera tile, else the first tile.
+  const fallbackKey =
+    tiles.find((t) => t.key.endsWith(`:${Track.Source.Camera}`))?.key ?? tiles[0]?.key ?? null;
+
+  const primaryKey = usePrimaryFloatingKey({
+    enabled: stageFloating,
+    focusKey,
+    screenShareKey,
+    speakingKey,
+    fallbackKey,
+  });
+  const primaryTile =
+    (primaryKey && tiles.find((t) => t.key === primaryKey)) || tiles[0] || undefined;
+  // Whether the compact preview is currently showing a screen share (so the
+  // floating window can render its prev/next share selector + sharer name).
+  const showingShare = Boolean(screenShareKey && primaryKey === screenShareKey);
+  // The selected screen share's TrackReference (resolved DIRECTLY, not via the
+  // generic `tiles` list), plus the participant behind it for the name label.
+  // Rendering the share from its own TrackReference — keyed by publication SID —
+  // guarantees the compact <video> reattaches to the newly selected track when
+  // switching, independent of how the shared `tiles`/primary-key indirection
+  // reconciles.
+  const selectedShareTrackRef = useMemo(
+    () =>
+      videoTracks.find(
+        (t) => t.source === Track.Source.ScreenShare && trackTileKey(t) === screenShareKey,
+      ) ?? null,
+    [videoTracks, screenShareKey],
+  );
+  const selectedShareParticipant = selectedShareTrackRef?.participant ?? null;
 
   // Theater mode: detach the stage into a full-viewport overlay.
   const [theater, setTheater] = useState(false);
@@ -692,6 +1050,83 @@ export function CallStage({
         {body}
       </div>,
       document.body,
+    );
+  }
+
+  if (stageFloating) {
+    // Compact floating destination: a SINGLE primary tile (screen share >
+    // focused > active speaker > fallback, chosen above) — not the full grid.
+    // Same tile renderer as the grid, so active-speaker rings, screenshare, and
+    // the camera-off avatar fallback all behave identically. This is the SAME
+    // stage instance as the docked one — it just re-lays-out when CallProvider
+    // reparents its host into the floating destination, so no video
+    // subscription is torn down or duplicated.
+    //
+    // Two destinations share this branch, differing only in chrome:
+    //   - desktop: the draggable window supplies its header (drag/return/hide);
+    //     the stage adds the media control row (mic/cam/share/leave).
+    //   - mobile: the compact preview supplies its header (return/hide) and the
+    //     always-present MobileCallBar carries the media controls, so the stage
+    //     omits the control row here — only the primary content (and the share
+    //     switcher when several shares are live) render.
+    const isMobileFloating = floatingVariant === "mobile";
+    return (
+      <div className="flex h-full w-full flex-col overflow-hidden">
+        {/* Both floating variants are width-constrained (their panels are
+            resized by width), so the media area is a 16:9 box of the panel
+            width — it scales with the panel and always preserves the aspect. */}
+        <div className="relative w-full bg-black aspect-video">
+          {showingShare && selectedShareTrackRef ? (
+            // Render the SELECTED screen share directly from its own
+            // TrackReference, keyed by participant identity + publication SID.
+            // Switching shares changes the SID → React unmounts the old
+            // VideoTile and its LiveKit <video>, and mounts a fresh one bound to
+            // the newly selected publication, so the preview always shows the
+            // chosen presenter (no reused/stuck element, no black frame after
+            // resubscribe). Only this one compact tile re-mounts — never
+            // CallStage, the room, the stage host, or unrelated subscriptions.
+            <div
+              key={`${selectedShareTrackRef.participant.identity}:${selectedShareTrackRef.publication?.trackSid ?? "ss"}`}
+              className="h-full w-full"
+            >
+              <VideoTile
+                trackRef={selectedShareTrackRef}
+                isSpeaking={false}
+                focused
+                onToggleFocus={() =>
+                  setFocusKey((cur) => (cur === screenShareKey ? null : screenShareKey))
+                }
+              />
+            </div>
+          ) : primaryTile ? (
+            // Non-share primary content (active speaker / camera / avatar): the
+            // generic tile keyed by its stable tile key still reattaches cleanly
+            // on change.
+            <div key={primaryTile.key} className="h-full w-full">
+              {primaryTile.render(true)}
+            </div>
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+              Connecting…
+            </div>
+          )}
+          {/* Multiple simultaneous screen shares: overlay a prev/next selector
+              (single shares auto-select and need no switcher). */}
+          {showingShare && sortedShareKeys.length > 1 && (
+            <ShareSelector
+              participant={selectedShareParticipant}
+              index={selectedShareIndex}
+              total={sortedShareKeys.length}
+              onPrev={() => cycleShare(-1)}
+              onNext={() => cycleShare(1)}
+            />
+          )}
+        </div>
+        {/* Media controls: only in the desktop floating window. On mobile the
+            fixed MobileCallBar already carries mic/camera/screen-share/leave, so
+            duplicating them here would be redundant. */}
+        {!isMobileFloating && <FloatingControls />}
+      </div>
     );
   }
 

@@ -353,13 +353,19 @@ function MobileCallBar({
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const { setCallBarHeight } = useCall();
 
   useEffect(() => {
     const bar = ref.current;
     const shell = shellRef.current;
     if (!bar || !shell) return;
     const apply = () => {
-      shell.style.setProperty("--call-bar-h", `${bar.offsetHeight}px`);
+      const h = bar.offsetHeight;
+      shell.style.setProperty("--call-bar-h", `${h}px`);
+      // Also publish to call context: the mobile preview positions above the
+      // bar off this shared value (a guaranteed source, unlike CSS-variable
+      // inheritance), and re-evaluates whenever the bar resizes.
+      setCallBarHeight(h);
     };
     apply();
     const ro = new ResizeObserver(apply);
@@ -368,8 +374,9 @@ function MobileCallBar({
       ro.disconnect();
       // Release the reservation when the bar unmounts.
       shell.style.removeProperty("--call-bar-h");
+      setCallBarHeight(0);
     };
-  }, [shellRef]);
+  }, [shellRef, setCallBarHeight]);
 
   return (
     <div
@@ -579,6 +586,14 @@ function Nip29VoiceRoom({
     navigate(`/s/${relayToRouteParam(call.relayUrl)}/${encodeURIComponent(call.groupId)}`);
   }, [navigate, isDm, call.dmPeer, call.relayUrl, call.groupId]);
 
+  // Register the navigate-to-call handler so the floating video window's
+  // "return to call" action lands on this room's channel/conversation.
+  const { registerFocusActiveCall } = useCall();
+  useEffect(() => {
+    registerFocusActiveCall(goToChannel);
+    return () => registerFocusActiveCall(null);
+  }, [registerFocusActiveCall, goToChannel]);
+
   if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
 
@@ -657,7 +672,8 @@ function ConcordVoiceRoom({
 }) {
   const { community, channel, broker } = ctx;
   const { user } = useCurrentUser();
-  const { joinConcordCall } = useCall();
+  const { joinConcordCall, registerFocusActiveCall } = useCall();
+  const navigate = useNavigate();
   const { data: tokenData, error, isLoading } = useAvToken2(channel, broker, true);
 
   // Live enforcement (CORD-07 §7): `ctx` is a join-time snapshot, so follow
@@ -666,6 +682,16 @@ function ConcordVoiceRoom({
   // from chat must move the call too), and hang up on a ban verdict, vault
   // removal, or channel deletion.
   useCallSync2(ctx, onLeave);
+
+  // Register the navigate-to-call handler so the floating video window's
+  // "return to call" action lands on this Concord voice channel. The route
+  // params are the community + channel idHex (matching /c/:communityId/:channelId).
+  useEffect(() => {
+    const go = () =>
+      navigate(`/c/${encodeURIComponent(community.idHex)}/${encodeURIComponent(channel.idHex)}`);
+    registerFocusActiveCall(go);
+    return () => registerFocusActiveCall(null);
+  }, [registerFocusActiveCall, navigate, community.idHex, channel.idHex]);
 
   // Live presence (§4): the identity→member verification input, the rendezvous
   // hint stream (§5), and our own heartbeat (joined every 30s, left on leave).
