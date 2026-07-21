@@ -244,3 +244,112 @@ signature, same as every chat message.
 nsec signs locally; NIP-07 extension via `signPsbt`; NIP-46 bunker via
 `sign_psbt` RPC. Unsupported signers fall back to a BIP-21 QR (the sats still
 arrive, but no tally is posted).
+
+---
+
+## In-Call Reactions and Raise-Hand
+
+Zoom/Signal-style raise-hand and emoji reactions during a Concord voice/video
+call (CORD-07), carried as **additive tags on the call's own presence rumor**.
+They therefore inherit its blindness — relays and the blind AV broker never see
+them (CORD-07 §4) — and spend no new kind: a client that doesn't understand the
+tags ignores them and round-trips them untouched (CORD-02 §6), so the call is
+unaffected.
+
+Both ride the ephemeral kind `23313` voice-presence rumor (CORD-07 §4): a
+`joined`/`left` sealed under the Channel key at the Channel's own stream
+address, published on join and every 30 s, expiring after 90 s of silence.
+
+### Raise-hand
+
+Sticky per-member state, expressed as an additive `["hand", "1"]` tag on the
+member's `joined` presence rumor. Because it rides presence, it is carried on
+every heartbeat and healed by the same staleness window: a late joiner learns
+who has a hand up within one heartbeat, and a missed "lower" ages out. The tag's
+absence (or a `left`) means the hand is down. Lowering republishes `joined`
+without the tag immediately — off the 30 s cycle — so others see it promptly.
+
+```jsonc
+{
+  "kind": 23313,
+  "content": "joined",
+  "tags": [
+    ["channel", "<channel_id>"],
+    ["epoch", "0"],
+    ["ms", "417"],
+    ["identity", "<broker-assigned SFU identity>"],   // CORD-07 §4
+    ["broker", "https://broker.example"],             // CORD-07 §4
+    ["hand", "1"]                                      // ← raised hand
+  ]
+}
+```
+
+The set of raised hands folds directly off the live presence view.
+
+### Reactions
+
+Transient, fire-and-forget emoji, expressed as an additive
+`["react", "<emoji>", "<nonce>"]` tag on an **off-cycle** `joined` presence
+rumor (which doubles as a heartbeat, so it also carries the member's current
+`hand` state). The `nonce` is a sender-chosen random string; a receiver fires
+each emoji exactly once per unseen nonce and never folds it into state, letting
+it float and fade (~4 s) on its own. A member's own reactions echo back through
+the same subscription and animate identically — no separate optimistic path.
+
+```jsonc
+{
+  "kind": 23313,
+  "content": "joined",
+  "tags": [
+    ["channel", "<channel_id>"],
+    ["epoch", "0"],
+    ["ms", "417"],
+    ["identity", "<broker-assigned SFU identity>"],
+    ["broker", "https://broker.example"],
+    ["react", "🎉", "<nonce>"]                          // ← one emoji reaction
+  ]
+}
+```
+
+### Validation
+
+- **Hand** is read only on a `joined`; any value other than `"1"` — or the tag's
+  absence, or a `left` — is hand-down.
+- **Reaction** requires a non-empty `emoji` of at most 64 UTF-8 bytes (ample for
+  any single emoji, incl. ZWJ sequences, or a short shortcode) and a non-empty
+  `nonce` of at most 128 chars. Untrusted member input is bounded and *rejected*
+  rather than truncated, so two clients never disagree on what floated. Each
+  nonce fires once; replays and already-expired stamps are dropped.
+- **Binding**: `channel`/`epoch` strict-equal the Channel and epoch whose key
+  decrypted the wrap (CORD-03 §3), like every chat rumor.
+
+The author of both is the presence rumor's seal signer — the member's real key —
+so a hand-raise or a reaction is authenticated exactly as their presence is.
+
+### Privacy
+
+Both are sealed under the Channel key inside the ephemeral gift wrap at the
+Channel's own stream address, identical to all voice presence (CORD-07 §4).
+Relays never store them (ephemeral) and cannot read them; neither can the blind
+AV broker. Nothing about a hand-raise or a reaction reaches the public network.
+
+### Scope
+
+Concord-only: it relies on the encrypted presence channel to stay blind. NIP-29
+relay-hosted calls have no such channel and carry no hand/reaction signal.
+
+### Implementation
+
+In the Armada client:
+
+- `client/src/concord-v2/lib/voice.ts` — the `hand` field on
+  `VoicePresenceEntry`, `presenceTags`/`parsePresence` (raise-hand), and
+  `reactionTag`/`parseReaction` (the `VoiceReactionEntry` shape + validation).
+- `client/src/concord-v2/hooks/useVoice2.ts` — `useVoiceHeartbeat2` carries the
+  hand state and emits reactions (`sendReaction`); `useVoiceReactions2`
+  subscribes and fires each once per nonce (decaying ~4 s).
+- `client/src/contexts/CallSignalsContext.ts` — exposes the raise-hand toggle,
+  the reaction sender, and the live reactions to the in-call UI.
+- `client/src/components/chat/CallControls.tsx` +
+  `client/src/components/chat/CallStage.tsx` — the raise-hand + emoji buttons and
+  the per-tile hand badge / floating-emoji rendering.
