@@ -1,5 +1,6 @@
-import { ExternalLink, FileQuestion } from "lucide-react";
+import { Check, ExternalLink, FileDigit, FileQuestion } from "lucide-react";
 import { nip19 } from "nostr-tools";
+import { useState } from "react";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatContent } from "@/components/chat/ChatContent";
@@ -10,11 +11,14 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAddrEvent, useEvent, type AddrCoords } from "@/hooks/useEvent";
 import { useAuthor } from "@/hooks/useAuthor";
+import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { writeClipboardText } from "@/lib/clipboard";
 import { getCustomEmojiUrl, isCustomEmoji, isRenderableReactionKey } from "@/lib/customEmoji";
 import { dittoEventUrl } from "@/lib/dittoUrl";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { tryNaddrEncode, tryNeventEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -52,6 +56,23 @@ function kindLabel(kind: number): string | null {
     default:
       return null;
   }
+}
+
+/**
+ * NIP-21 `nostr:` URI for a resolved event, so the user can copy it and
+ * paste into their preferred client. Addressable events encode to an
+ * `naddr` (stable across edits); everything else to an `nevent` carrying
+ * the author pubkey as a relay hint. Returns `undefined` for malformed
+ * id/pubkey (matching `dittoEventUrl`'s routing).
+ */
+function eventNostrUri(event: NostrEvent): string | undefined {
+  if (event.kind >= 30000 && event.kind < 40000) {
+    const identifier = event.tags.find((t) => t[0] === "d")?.[1] ?? "";
+    const naddr = tryNaddrEncode({ kind: event.kind, pubkey: event.pubkey, identifier });
+    return naddr ? `nostr:${naddr}` : undefined;
+  }
+  const nevent = tryNeventEncode({ id: event.id, author: event.pubkey });
+  return nevent ? `nostr:${nevent}` : undefined;
 }
 
 /** Inline embedded note card – like a link preview but for Nostr events. */
@@ -121,6 +142,8 @@ function GenericEventCard({ event, className }: { event: NostrEvent; className?:
 
   // Off-ramp to the fuller social view of this event on ditto.pub.
   const dittoHref = dittoEventUrl(event);
+  // NIP-21 identifier to copy for pasting into any other Nostr client.
+  const nostrUri = eventNostrUri(event);
 
   return (
     <div
@@ -187,8 +210,13 @@ function GenericEventCard({ event, className }: { event: NostrEvent; className?:
           </div>
         )}
 
-        {/* View on Ditto off-ramp */}
-        {dittoHref && <DittoLink href={dittoHref} />}
+        {/* Off-ramp footer: view on Ditto (left) + copy id (lower-right) */}
+        {(dittoHref || nostrUri) && (
+          <div className="mt-0.5 flex items-center">
+            {dittoHref && <DittoLink href={dittoHref} />}
+            {nostrUri && <CopyIdButton uri={nostrUri} className="ml-auto" />}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -206,12 +234,52 @@ function DittoLink({ href, label = "View on Ditto" }: { href: string; label?: st
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => e.stopPropagation()}
-      className="mt-0.5 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors"
+      className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors"
     >
       <DittoIcon className="size-3.5 shrink-0" />
       <span>{label}</span>
       <ExternalLink className="size-3 shrink-0" />
     </a>
+  );
+}
+
+/**
+ * Copy-ID affordance — a small "file digit" icon button in the card's
+ * lower-right corner. Clicking copies the event's NIP-21 `nostr:` URI so the
+ * reader can paste it into any client. Preferred over a `nostr:` href, which
+ * only navigates when the OS/browser has a scheme handler registered.
+ */
+function CopyIdButton({ uri, className }: { uri: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    writeClipboardText(uri).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+        toast({ title: "Copied event ID" });
+      },
+      () => toast({ title: "Couldn't copy event ID", variant: "destructive" }),
+    );
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="Copy event ID"
+      aria-label="Copy event ID"
+      className={cn(
+        "shrink-0 grid place-items-center size-6 touch:size-8 -mr-1 -mb-0.5 rounded-md",
+        "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors",
+        className,
+      )}
+    >
+      {copied
+        ? <Check className="size-3.5 shrink-0" />
+        : <FileDigit className="size-3.5 shrink-0" />}
+    </button>
   );
 }
 
