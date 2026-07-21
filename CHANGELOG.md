@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.36.1] - 2026-07-21
+
+Adds a relay picker to the community creation flow (pre-seeded with sensible defaults) and tightens invite controls: public invite links now require the CREATE_INVITE permission and direct invites are capped at 3 days.
+
+### Added
+- Relay picker in the create-community flow, pre-seeded with app relays and expandable inline
+
+### Changed
+- Public invite links now require the CREATE_INVITE permission
+- Direct invites are capped at a 3-day expiry
+
 ## [0.36.0] - 2026-07-21
 
 Adds emoji reactions and raise-hand gestures to voice calls, a floating in-call video window for browsing other channels during a call, a resizable compact mobile call preview, push notifications for direct messages, and active-speaker video highlighting. DM relay settings are now managed independently.
