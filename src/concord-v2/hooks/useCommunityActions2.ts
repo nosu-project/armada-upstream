@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
@@ -166,6 +166,43 @@ export function inviteRefOf(invite: ParsedInviteLink): string {
 }
 
 /**
+ * The default home-relay set for a NEW community: the app relays UNIONED with
+ * the creator's NIP-17 DM relays, app relays FIRST so a write-open relay always
+ * survives the cap. A creator's inbox relays alone can be a poor community
+ * home. An auth-gated or DM-only relay rejects the genesis gift wrap (kind
+ * 1059), and if that's the whole set the create strands with "No relay accepted
+ * the change." Always seeding the app relays guarantees at least one relay that
+ * accepts the write. Portable-filtered so a stray `ws://` dev relay can't lock
+ * https members out (#47); `mintCommunity` dedupes and caps the result.
+ */
+export function defaultCreateRelays(appRelays: string[], dmRelays: string[]): string[] {
+  return preferPortableRelays([...appRelays, ...dmRelays]);
+}
+
+/**
+ * The candidate relays the advanced create menu pre-selects: the same set
+ * {@link defaultCreateRelays} the create path would pick on its own, resolved
+ * for display so the user can pare it down or add to it before minting. Gated
+ * behind `enabled` so a user who never opens the advanced menu pays no DM-relay
+ * lookup.
+ */
+export function useCreateRelayCandidates2(enabled = true) {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const { config } = useAppContext();
+  const appRelays = config.appRelays.length > 0 ? config.appRelays : APP_RELAYS;
+  return useQuery<string[]>({
+    queryKey: ["concord2", "create-relays", user?.pubkey ?? null, appRelays],
+    enabled: enabled && Boolean(user),
+    staleTime: 60_000,
+    queryFn: async () => {
+      const dm = user ? await fetchCreatorDmRelays(nostr, user.pubkey).catch(() => []) : [];
+      return defaultCreateRelays(appRelays, dm);
+    },
+  });
+}
+
+/**
  * Create / preview / join for Concord V2 communities. Creating publishes the
  * genesis Control Plane — EXACTLY two owner-signed editions, the metadata and
  * one public `#general` (CORD-02 §1) — plus the creator's own Guestbook Join,
@@ -185,28 +222,27 @@ export function useCommunityActions2() {
   // link must still resolve against the relays every CORD client shares.
   const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : STOCK_RELAYS;
 
-  const create = useMutation<{ communityId: string; name: string }, Error, { name: string }>({
-    mutationFn: async ({ name }) => {
+  const create = useMutation<{ communityId: string; name: string }, Error, { name: string; relays?: string[] }>({
+    mutationFn: async ({ name, relays: chosen }) => {
       if (!user) throw new Error("Sign in to start an encrypted community.");
       if (!user.signer.nip44) throw new Error("This signer can't hold encrypted communities (NIP-44 unsupported).");
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Name your community first.");
 
-      // Snapshot the creator's NIP-17 DM relays as the community's home —
-      // inbox relays are curated for sealed, privacy-expecting traffic like
-      // Concord's. Fall back to the user's configured app relays when no DM
-      // relay list is published (and to the deployment defaults if that
-      // list was emptied). Prefer the wss:// subset: a stray ws:// dev relay
-      // sealed into the bundle is permanently unreachable for every member on
-      // a secure origin, however reachable it is for the creator (#47).
-      const dmRelays = await fetchCreatorDmRelays(nostr, user.pubkey);
-      const relays = preferPortableRelays(
-        dmRelays.length > 0
-          ? dmRelays
-          : config.appRelays.length > 0
-            ? config.appRelays
-            : APP_RELAYS,
-      );
+      // The community's home relays. When the advanced menu supplied an
+      // explicit set, honor it (portable-filtered all the same). Otherwise seed
+      // the app relays UNIONED with the creator's NIP-17 DM relays: inbox
+      // relays are curated for sealed, privacy-expecting traffic like Concord's,
+      // but a creator whose only DM relays are auth-gated or DM-only will have
+      // the genesis gift wrap rejected everywhere, so always including the app
+      // relays guarantees a write-open home. Prefer the wss:// subset: a stray
+      // ws:// dev relay sealed into the bundle is permanently unreachable for
+      // every member on a secure origin, however reachable it is for the
+      // creator (#47).
+      const appRelays = config.appRelays.length > 0 ? config.appRelays : APP_RELAYS;
+      const relays = chosen && chosen.length > 0
+        ? preferPortableRelays(chosen)
+        : defaultCreateRelays(appRelays, await fetchCreatorDmRelays(nostr, user.pubkey));
       const { community, generalChannelId } = mintCommunity(trimmed, user.pubkey, relays);
 
       // Genesis: two owner-signed editions, nothing more (CORD-02 §1).

@@ -19,8 +19,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
+import { RelayListEditor } from "@/components/RelayListEditor";
 import { useConcordActions } from "@/concord-v1/hooks/useConcordActions";
-import { useCommunityActions2 } from "@/concord-v2/hooks/useCommunityActions2";
+import { useCommunityActions2, useCreateRelayCandidates2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
@@ -74,11 +75,23 @@ export function AddBody({ onDone }: { onDone: () => void }) {
   const [name, setName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
 
+  // Advanced: which relays the community is minted on. `null` = untouched (the
+  // create path picks its own default); once the user edits, `relays` holds the
+  // explicit set. The candidate query (gated on the menu being open) resolves
+  // the same default for pre-selection.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [relays, setRelays] = useState<string[] | null>(null);
+  const { data: candidates } = useCreateRelayCandidates2(advancedOpen);
+  const effectiveRelays = relays ?? candidates ?? [];
+
   const handleCreate = async () => {
     setCreateError(null);
     try {
       // New communities are always Concord V2.
-      const { communityId, name: created } = await create({ name: name.trim() });
+      const { communityId, name: created } = await create({
+        name: name.trim(),
+        relays: relays ?? undefined,
+      });
       onDone();
       toast({ title: "Encrypted community ready", description: created });
       navigate(`/c/${encodeURIComponent(communityId)}`);
@@ -106,16 +119,16 @@ export function AddBody({ onDone }: { onDone: () => void }) {
         </p>
       </div>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          handleCreate();
-        }}
-        className="w-full max-w-sm space-y-3"
-      >
+      <div className="w-full max-w-sm space-y-3">
         <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && name.trim() && !isCreating) {
+              e.preventDefault();
+              handleCreate();
+            }
+          }}
           placeholder="Name your community"
           aria-label="Community name"
           autoComplete="off"
@@ -130,8 +143,9 @@ export function AddBody({ onDone }: { onDone: () => void }) {
         )}
 
         <Button
-          type="submit"
+          type="button"
           size="lg"
+          onClick={handleCreate}
           disabled={isCreating || !name.trim()}
           className="h-12 w-full clip-corner-lg text-base font-medium"
         >
@@ -141,7 +155,33 @@ export function AddBody({ onDone }: { onDone: () => void }) {
             <><ShieldCheck className="size-4 mr-2" /> Create encrypted community</>
           )}
         </Button>
-      </form>
+
+        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Server className="size-3.5" />
+              Choose relays
+              <ChevronDown className={cn("size-3.5 transition-transform", advancedOpen && "rotate-180")} />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+            <p className="mb-2 mt-3 text-left text-xs text-muted-foreground">
+              Where this community lives. Members read and write here, so pick
+              relays that accept your writes. An auth-only or DM-only relay can
+              reject the genesis and strand the create.
+            </p>
+            <RelayListEditor
+              relays={effectiveRelays}
+              onChange={setRelays}
+              onReset={candidates ? () => setRelays(candidates) : undefined}
+              emptyText="Add at least one relay to host this community."
+            />
+          </CollapsibleContent>
+        </Collapsible>
+      </div>
 
       <EscapeHatch onDone={onDone} />
     </div>
