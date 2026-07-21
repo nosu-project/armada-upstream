@@ -1,5 +1,4 @@
 import {
-  DisconnectButton,
   useConnectionState,
   useLocalParticipant,
   useMediaDeviceSelect,
@@ -7,25 +6,11 @@ import {
 } from "@livekit/components-react";
 import { ConnectionState, LocalAudioTrack, Track } from "livekit-client";
 import type { Participant } from "livekit-client";
-import {
-  Check,
-  Headphones,
-  Loader2,
-  Mic,
-  MicOff,
-  MonitorOff,
-  MonitorUp,
-  PhoneOff,
-  Settings2,
-  Video,
-  VideoOff,
-  Volume2,
-} from "lucide-react";
+import { Check, Headphones, Loader2, Mic, Settings2, Video, Volume2 } from "lucide-react";
 
 import "@livekit/components-styles";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useCallback, useState } from "react";
 import {
@@ -37,7 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ReactionsMenu } from "@/components/chat/ReactionsMenu";
+import { CameraButton, LeaveButton, MicButton, ScreenShareButton } from "@/components/chat/CallControls";
 import { VolumeSliderRow } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -45,7 +30,6 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useUserVolume } from "@/hooks/useUserVolume";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
 import {
   getAudioProcessing,
   rememberVoiceDevice,
@@ -58,11 +42,6 @@ import { cn } from "@/lib/utils";
 /** Whether this browser supports choosing the audio output (speaker) sink. */
 const supportsSpeakerSelection =
   typeof document !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
-
-/** Whether this browser can capture the screen (absent on most mobile). */
-const supportsScreenShare =
-  typeof navigator !== "undefined" &&
-  typeof navigator.mediaDevices?.getDisplayMedia === "function";
 
 function DeviceSelectGroup({
   kind,
@@ -167,9 +146,17 @@ function DeviceMenu({ className }: { className?: string }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="icon" className={cn("size-8 touch:size-11 shrink-0", className)} aria-label="Audio settings">
+            <button
+              type="button"
+              aria-label="Audio settings"
+              className={cn(
+                "inline-flex items-center justify-center rounded-md size-8 touch:size-11 shrink-0 transition-colors",
+                "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
+                className,
+              )}
+            >
               <Settings2 className="size-3.5" />
-            </Button>
+            </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent>Audio settings</TooltipContent>
@@ -291,10 +278,6 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   const { stageOpen, toggleStage } = useCall();
   const participants = useParticipants();
   const connectionState = useConnectionState();
-  // These flags are reactive (the hook re-renders on the local participant's
-  // track publish/mute), so the toggle buttons reflect live publish state.
-  const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } =
-    useLocalParticipant();
 
   if (connectionState === ConnectionState.Connecting) {
     return (
@@ -350,83 +333,6 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     </div>
   );
 
-  const micBtn = (
-    <Button
-      variant={isMicrophoneEnabled ? "default" : "outline"}
-      size="icon"
-      className="size-9 touch:size-11 shrink-0"
-      aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
-      onClick={() => {
-        const enabling = !isMicrophoneEnabled;
-        // Self-only feedback, played on the click gesture (AudioContext is
-        // unlocked) so you hear a blip even though no roster change occurs.
-        if (enabling) playUnmuteSound();
-        else playMuteSound();
-        localParticipant.setMicrophoneEnabled(enabling);
-      }}
-    >
-      {isMicrophoneEnabled ? <Mic className="size-4" /> : <MicOff className="size-4" />}
-    </Button>
-  );
-
-  const cameraBtn = (
-    <Button
-      variant={isCameraEnabled ? "default" : "outline"}
-      size="icon"
-      className="size-9 touch:size-11 shrink-0"
-      aria-label={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
-      onClick={() => {
-        void localParticipant
-          .setCameraEnabled(!isCameraEnabled)
-          .catch((err) => console.warn("failed to toggle camera", err));
-      }}
-    >
-      {isCameraEnabled ? <Video className="size-4" /> : <VideoOff className="size-4" />}
-    </Button>
-  );
-
-  const screenShareBtn = (
-    <Button
-      variant={isScreenShareEnabled ? "default" : "outline"}
-      size="icon"
-      className="size-9 touch:size-11 shrink-0"
-      aria-label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
-      onClick={() => {
-        // Screenshare publishes its own track regardless of the camera; the
-        // browser shows its native picker. Audio capture of the shared tab is
-        // requested too (best-effort — not all sources provide it).
-        void localParticipant
-          .setScreenShareEnabled(!isScreenShareEnabled, { audio: true })
-          .catch((err) => {
-            // The user cancelling the OS picker rejects with NotAllowedError —
-            // that's expected, not an error worth surfacing.
-            if (err instanceof Error && err.name === "NotAllowedError") return;
-            console.warn("failed to toggle screen share", err);
-          });
-      }}
-    >
-      {isScreenShareEnabled ? (
-        <MonitorOff className="size-4" />
-      ) : (
-        <MonitorUp className="size-4" />
-      )}
-    </Button>
-  );
-
-  const hangupBtn = (
-    <DisconnectButton
-      // Play the leave chirp on the click itself, before LiveKit disconnects.
-      // Doing it in CallProvider's leaveCall is too late: the disconnect tears
-      // down the room's audio around the same tick and the sound gets cut off.
-      // This fires inside the user's gesture, so the AudioContext is unlocked.
-      onClick={() => playLeaveSound()}
-      aria-label="Leave call"
-      className="inline-flex items-center justify-center rounded-md size-9 touch:size-11 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
-    >
-      <PhoneOff className="size-4" />
-    </DisconnectButton>
-  );
-
   // A stacked panel (à la Discord): header → control bar. `stacked` only
   // widens the layout (desktop side-panel); the structure is the same on
   // mobile so the controls are never crammed onto the activity row.
@@ -443,12 +349,11 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
       <div className="flex items-center gap-1.5 px-2 py-1.5 min-h-12">
         <div className="flex-1 min-w-0">{headerEl}</div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {micBtn}
-          {cameraBtn}
-          {supportsScreenShare && screenShareBtn}
-          <ReactionsMenu className="size-9" />
-          <DeviceMenu className="size-9" />
-          {hangupBtn}
+          <MicButton />
+          <CameraButton />
+          <ScreenShareButton />
+          <DeviceMenu />
+          <LeaveButton />
         </div>
       </div>
     );
@@ -459,14 +364,13 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
       {headerEl}
       <div className="flex items-center gap-1.5 pt-1.5 border-t border-foreground/10">
         <div className="flex items-center gap-1.5">
-          {micBtn}
-          {cameraBtn}
-          {supportsScreenShare && screenShareBtn}
-          <ReactionsMenu />
+          <MicButton />
+          <CameraButton />
+          <ScreenShareButton />
           <DeviceMenu />
         </div>
         <div className="flex-1" />
-        {hangupBtn}
+        <LeaveButton />
       </div>
     </div>
   );

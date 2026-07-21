@@ -1,6 +1,4 @@
 import {
-  DisconnectButton,
-  useLocalParticipant,
   useParticipants,
   useRoomContext,
   useSpeakingParticipants,
@@ -16,17 +14,11 @@ import {
   ChevronRight,
   Hand,
   Maximize2,
-  Mic,
   Minimize2,
   MicOff,
   Monitor,
-  MonitorOff,
-  MonitorUp,
-  PhoneOff,
   ScreenShare,
   Shrink,
-  Video,
-  VideoOff,
   X,
 } from "lucide-react";
 import type { CSSProperties } from "react";
@@ -39,7 +31,14 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ReactionsMenu } from "@/components/chat/ReactionsMenu";
+import {
+  CameraButton,
+  LeaveButton,
+  MicButton,
+  RaiseHandButton,
+  ReactionsMenu,
+  ScreenShareButton,
+} from "@/components/chat/CallControls";
 import { VoiceUserContextMenu, VolumeSliderRow } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -47,7 +46,7 @@ import { useUserVolume } from "@/hooks/useUserVolume";
 import { useCallSignals } from "@/contexts/CallSignalsContext";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { playScreenShareSound, playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
+import { playScreenShareSound } from "@/lib/callSounds";
 import {
   getAvatarShape,
   shapedAvatarSpeakingStyle,
@@ -665,16 +664,6 @@ function useShareSharerName(participant: Participant | null): string {
 }
 
 /**
- * Whether this browser can capture the screen (absent on most mobile). Same
- * guard the VoiceBar uses to gate its screen-share button; the floating window
- * is desktop-only, but this keeps parity and hides the button where the API is
- * unavailable.
- */
-const supportsScreenShare =
-  typeof navigator !== "undefined" &&
-  typeof navigator.mediaDevices?.getDisplayMedia === "function";
-
-/**
  * The compact media controls shown inside the call stage: mute/unmute, camera
  * on/off, screen share, reactions, and leave. Used by the floating window and
  * by theater mode (where the fixed call bar is hidden behind the overlay, so
@@ -686,94 +675,14 @@ const supportsScreenShare =
  * consistent.
  */
 function StageControls({ className }: { className?: string }) {
-  const { leaveCall } = useCall();
-  const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } =
-    useLocalParticipant();
   return (
     <div className={cn("flex items-center justify-center gap-1.5 px-2 py-1.5 shrink-0 border-t border-white/10", className)}>
-      <button
-        type="button"
-        aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
-        title={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
-        onClick={() => {
-          const enabling = !isMicrophoneEnabled;
-          if (enabling) playUnmuteSound();
-          else playMuteSound();
-          void localParticipant.setMicrophoneEnabled(enabling);
-        }}
-        className={cn(
-          "inline-flex items-center justify-center rounded-md size-8 shrink-0",
-          isMicrophoneEnabled
-            ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
-            : "bg-destructive/20 text-destructive hover:bg-destructive/30",
-        )}
-      >
-        {isMicrophoneEnabled ? <Mic className="size-4" /> : <MicOff className="size-4" />}
-      </button>
-      <button
-        type="button"
-        aria-label={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
-        title={isCameraEnabled ? "Turn off camera" : "Turn on camera"}
-        onClick={() => {
-          void localParticipant
-            .setCameraEnabled(!isCameraEnabled)
-            .catch((err) => console.warn("failed to toggle camera", err));
-        }}
-        className={cn(
-          "inline-flex items-center justify-center rounded-md size-8 shrink-0",
-          isCameraEnabled
-            ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
-            : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
-        )}
-      >
-        {isCameraEnabled ? <Video className="size-4" /> : <VideoOff className="size-4" />}
-      </button>
-      {supportsScreenShare && (
-        <button
-          type="button"
-          aria-label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
-          title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}
-          onClick={() => {
-            // Same flow as the VoiceBar's screen-share button: publish/unpublish
-            // the dedicated screenshare track (with best-effort tab audio); the
-            // browser shows its native picker. A user cancelling the picker
-            // rejects with NotAllowedError — expected, not surfaced.
-            void localParticipant
-              .setScreenShareEnabled(!isScreenShareEnabled, { audio: true })
-              .catch((err) => {
-                if (err instanceof Error && err.name === "NotAllowedError") return;
-                console.warn("failed to toggle screen share", err);
-              });
-          }}
-          className={cn(
-            "inline-flex items-center justify-center rounded-md size-8 shrink-0",
-            isScreenShareEnabled
-              ? "bg-primary/20 text-primary hover:bg-primary/30"
-              : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
-          )}
-        >
-          {isScreenShareEnabled ? (
-            <MonitorOff className="size-4" />
-          ) : (
-            <MonitorUp className="size-4" />
-          )}
-        </button>
-      )}
-      <ReactionsMenu floating />
-      <DisconnectButton
-        // Play the leave chirp inside the gesture, before the disconnect tears
-        // down the room audio (same reasoning as the VoiceBar's hangup).
-        onClick={() => {
-          playLeaveSound();
-          // `leaveCall` runs the exit animation + teardown in CallProvider;
-          // DisconnectButton also disconnects the room. Both are idempotent.
-          leaveCall();
-        }}
-        aria-label="Leave call"
-        className="inline-flex items-center justify-center rounded-md size-8 shrink-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
-      >
-        <PhoneOff className="size-4" />
-      </DisconnectButton>
+      <MicButton />
+      <CameraButton />
+      <ScreenShareButton />
+      <RaiseHandButton />
+      <ReactionsMenu />
+      <LeaveButton />
     </div>
   );
 }
@@ -1128,7 +1037,8 @@ export function CallStage({
       <span className="text-xs text-muted-foreground tabular-nums shrink-0">
         {participants.length} in call
       </span>
-      <ReactionsMenu floating />
+      <RaiseHandButton />
+      <ReactionsMenu />
       <button
         type="button"
         aria-label={theater ? "Exit theater mode" : "Theater mode"}

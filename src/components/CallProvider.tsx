@@ -103,6 +103,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       exitTimer.current = null;
     }
     setExiting(false);
+    // Open the call stage on join so the panel is visible without a manual
+    // "Show" click (a screenshare/camera appearing keeps it open too).
+    setStageOpen(true);
     setActiveCall({ relayUrl, groupId });
   }, []);
 
@@ -112,6 +115,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       exitTimer.current = null;
     }
     setExiting(false);
+    setStageOpen(true);
     setActiveCall({ relayUrl, groupId: roomId, dmPeer: peer });
   }, []);
 
@@ -121,6 +125,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       exitTimer.current = null;
     }
     setExiting(false);
+    setStageOpen(true);
     // relayUrl/groupId are display/remount coordinates for the Concord path
     // (the room name + token derive inside ConcordVoiceRoom from the channel).
     setActiveCall({ relayUrl: ctx.broker, groupId: ctx.channel.idHex, concord: ctx });
