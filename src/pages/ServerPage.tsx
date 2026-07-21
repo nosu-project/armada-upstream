@@ -16,17 +16,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useMutes } from "@/hooks/useMutes";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
-import { toast } from "@/hooks/useToast";
-import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
+import { useServerActions } from "@/hooks/useServerActions";
 import { useIsBuzzRelay } from "@/buzz/detect";
-import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
-import { addServerTombstone } from "@/lib/serverTombstone";
-import { writeClipboardText } from "@/lib/clipboard";
-import { shareOrigin } from "@/lib/shareOrigin";
+import { PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 
 /**
  * Server home (drill-down level 1). On mobile the server rail + channel list
@@ -36,13 +30,14 @@ import { shareOrigin } from "@/lib/shareOrigin";
 export function ServerPage() {
   const { server } = useParams<{ server: string }>();
   const navigate = useNavigate();
-  const { updateConfig } = useAppContext();
   const { user } = useCurrentUser();
-  const { mutateAsync: updateList } = useUpdateUserGroupList();
   const relayUrl = server ? routeParamToRelay(server) : undefined;
   const [profileOpen, setProfileOpen] = useState(false);
-  const { isCommunityMuted, toggleCommunityMute } = useMutes();
-  const serverMuted = Boolean(relayUrl && isCommunityMuted(relayUrl));
+  // Shared with the mobile channel-sidebar header menu. Called unconditionally
+  // (rules of hooks) with a placeholder before the `relayUrl` guard below; the
+  // returned actions are only invoked once a real server is resolved.
+  const { serverMuted, isRemovable, toggleMute, copyLink, removeServer } =
+    useServerActions(relayUrl ?? "");
 
   const { data: groups, isLoading, isError, relayInfo } = useRelayGroups(relayUrl);
   // Buzz relays: hide DM channels (hidden groups) from the public channel
@@ -56,44 +51,6 @@ export function ServerPage() {
   }
 
   const isPinned = PINNED_RAIL_RELAYS.includes(relayUrl);
-  // A server is removable unless it's an opt-in build-time pinned relay
-  // (`VITE_PIN_PLATFORM_RELAYS`, off by default). We compare by NORMALIZED url, not raw string equality: the stored
-  // `addedRelays` entry may differ superficially from the route-derived url
-  // (e.g. a trailing slash or casing off a kind-10009 `r` tag), which used to
-  // hide "Remove server" for a server that's plainly in the rail. Any
-  // non-pinned server the user can navigate to should be removable — including
-  // one whose relay is now offline/shut down (removal is purely local).
-  const isRemovable = !isPinned;
-
-  const handleRemove = () => {
-    updateConfig((current) => ({
-      ...current,
-      // Drop every stored entry that normalizes to this server, so a
-      // trailing-slash/casing variant can't linger and re-add the rail icon.
-      addedRelays: current.addedRelays.filter(
-        (url) => normalizeRelayUrl(url) !== relayUrl,
-      ),
-    }));
-    if (user && relayUrl) {
-      // Tombstone the removal so a stale relay echoing the pre-removal 10009
-      // list can't re-add this server via NostrSync's hydration before the
-      // update propagates. Cleared once a read confirms it's gone.
-      addServerTombstone(user.pubkey, relayUrl);
-      updateList({ type: "remove-server", url: relayUrl }).catch((err) =>
-        console.warn("Failed to sync server removal to group list:", err));
-    }
-    toast({ title: "Server removed", description: relayUrl });
-    navigate("/");
-  };
-
-  const handleCopyLink = () => {
-    if (!relayUrl) return;
-    const link = `${shareOrigin()}/s/${relayToRouteParam(relayUrl)}`;
-    writeClipboardText(link).then(
-      () => toast({ title: "Copied link" }),
-      () => toast({ title: "Copy failed", variant: "destructive" }),
-    );
-  };
 
   return (
     <ServerScopeProvider relayUrl={relayUrl}>
@@ -159,20 +116,20 @@ export function ServerPage() {
                 {user && (
                   <DropdownMenuItem
                     className="gap-3 px-3 py-2.5"
-                    onClick={() => toggleCommunityMute(relayUrl)}
+                    onClick={toggleMute}
                   >
                     {serverMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
                     {serverMuted ? "Unmute server" : "Mute server"}
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={handleCopyLink}>
+                <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={copyLink}>
                   <Link2 className="size-4" />
                   Copy link
                 </DropdownMenuItem>
                 {isRemovable && (
                   <DropdownMenuItem
                     className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
-                    onClick={handleRemove}
+                    onClick={removeServer}
                   >
                     <Trash2 className="size-4" />
                     Remove server

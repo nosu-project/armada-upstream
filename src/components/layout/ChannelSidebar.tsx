@@ -1,5 +1,5 @@
-import { BellOff, CheckCheck, ChevronDown, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, MessageSquareText, MessagesSquare, Plus, RefreshCw, Volume2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Bell, BellOff, CheckCheck, ChevronDown, FolderGit2, Hash, Headphones, IdCard, Link as LinkIcon, Loader2, Lock, MessageSquareText, MessagesSquare, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { BuzzDmName } from "@/buzz/BuzzDmName";
@@ -7,6 +7,7 @@ import { useIsBuzzRelay } from "@/buzz/detect";
 import { buzzChannelArchived, buzzChannelType } from "@/buzz/protocol";
 import { useBuzzHiddenDms } from "@/buzz/useBuzzDms";
 import { CreateGroupDialog } from "@/components/dialogs/CreateGroupDialog";
+import { ServerProfileDialog } from "@/components/dialogs/ServerProfileDialog";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { VoiceParticipantList } from "@/components/VoicePresence";
@@ -31,6 +32,7 @@ import { useNotifLevels, channelScopeKey } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
+import { useServerActions } from "@/hooks/useServerActions";
 import { relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -195,9 +197,14 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const { registerCallBarSlot } = useCall();
   const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   // The server-name header menu (Discord-style): expands inline below the
-  // header, pushing the channel list down with a height animation.
+  // header, pushing the channel list down with a height animation. This is the
+  // only place these server actions are reachable on mobile, where the desktop
+  // welcome pane (ServerPage) is hidden.
   const [serverMenuOpen, setServerMenuOpen] = useState(false);
+  const { serverMuted, isRemovable, toggleMute, copyLink, removeServer } =
+    useServerActions(relayUrl);
   // Buzz relays: channels partition into typed sections (forum channels, DM
   // channels — hidden NIP-29 groups — and archived channels at the bottom).
   const { isBuzz } = useIsBuzzRelay(relayUrl);
@@ -229,6 +236,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   // the user's permission to create) doesn't carry over to the new server.
   useEffect(() => {
     setCreateOpen(false);
+    setProfileOpen(false);
     setServerMenuOpen(false);
   }, [relayUrl]);
 
@@ -288,7 +296,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
         <Collapsible open={serverMenuOpen} onOpenChange={setServerMenuOpen}>
           <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
             <div className="mx-2 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
-              {[
+              {([
                 {
                   show: !!user,
                   icon: <Plus className="size-4" />,
@@ -296,13 +304,22 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                   onClick: () => setCreateOpen(true),
                 },
                 {
+                  show: !!user,
+                  icon: <IdCard className="size-4" />,
+                  label: "Server identity",
+                  onClick: () => setProfileOpen(true),
+                },
+                {
+                  show: !!user,
+                  icon: serverMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />,
+                  label: serverMuted ? "Unmute server" : "Mute server",
+                  onClick: toggleMute,
+                },
+                {
                   show: true,
                   icon: <LinkIcon className="size-4" />,
                   label: "Copy server link",
-                  onClick: () => {
-                    const url = `${shareOrigin()}/s/${relayToRouteParam(relayUrl)}`;
-                    writeClipboardText(url).catch(() => undefined);
-                  },
+                  onClick: copyLink,
                 },
                 {
                   show: true,
@@ -310,13 +327,29 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                   label: "Refresh channels",
                   onClick: () => refetch(),
                 },
-              ]
+                {
+                  show: isRemovable,
+                  icon: <Trash2 className="size-4" />,
+                  label: "Remove server",
+                  onClick: removeServer,
+                  destructive: true,
+                },
+              ] as Array<{
+                show: boolean;
+                icon: ReactNode;
+                label: string;
+                onClick: () => void;
+                destructive?: boolean;
+              }>)
                 .filter((i) => i.show)
                 .map((i) => (
                   <button
                     key={i.label}
                     type="button"
-                    className="flex w-full items-center gap-3 px-3 py-2 text-sm text-left transition-colors clip-corner-lg hover:bg-foreground/10"
+                    className={cn(
+                      "flex w-full items-center gap-3 px-3 py-2 text-sm text-left transition-colors clip-corner-lg hover:bg-foreground/10",
+                      i.destructive && "text-destructive",
+                    )}
                     onClick={() => {
                       i.onClick();
                       setServerMenuOpen(false);
@@ -380,6 +413,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           </div>
 
           <CreateGroupDialog relayUrl={relayUrl} open={createOpen} onOpenChange={setCreateOpen} />
+          <ServerProfileDialog relayUrl={relayUrl} open={profileOpen} onOpenChange={setProfileOpen} />
         </>
       }
     >
