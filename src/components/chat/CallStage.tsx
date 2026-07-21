@@ -399,9 +399,11 @@ function VideoTile({
   const { pubkey, displayName, metadata } = useTileDisplayName(participant);
   const shape = getAvatarShape(metadata);
   const isScreenShare = trackRef.source === Track.Source.ScreenShare;
-  // A placeholder (no track) means the participant has the source but the track
-  // isn't subscribed yet — show their avatar instead of video.
-  const hasVideo = Boolean(trackRef.publication?.track);
+  // Show the avatar (not a black frame) unless there's a LIVE video track:
+  // a placeholder (track not subscribed yet) OR a muted publication — turning
+  // the camera/screen off mutes the track before its publication clears, and
+  // rendering that produced a black tile instead of reverting to the avatar.
+  const hasVideo = Boolean(trackRef.publication?.track) && !trackRef.publication?.isMuted;
   const isLocal = participant.isLocal;
   // Keep the persisted per-user volume applied to this participant's audio.
   useApplyUserVolume(participant, pubkey);
