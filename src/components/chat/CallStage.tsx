@@ -262,10 +262,12 @@ function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
 /** A single video tile (camera or screenshare) for one participant track. */
 function VideoTile({
   trackRef,
+  isSpeaking,
   focused,
   onToggleFocus,
 }: {
   trackRef: TrackReference;
+  isSpeaking: boolean;
   focused: boolean;
   onToggleFocus: () => void;
 }) {
@@ -299,7 +301,12 @@ function VideoTile({
   const tile = (
     <div
       className={cn(
-        "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10 h-full w-full",
+        "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10 h-full w-full transition-shadow",
+        // Active-speaker highlight, matching the avatar-tile visual language.
+        // Screenshare tiles never get the participant speaking ring.
+        !isScreenShare &&
+          isSpeaking &&
+          "ring-2 ring-success shadow-[0_0_0_4px_hsl(var(--success)/0.35)]",
       )}
     >
       {hasVideo ? (
@@ -542,6 +549,7 @@ export function CallStage({
         render: (focused) => (
           <VideoTile
             trackRef={trackRef}
+            isSpeaking={speakingIds.has(trackRef.participant.identity)}
             focused={focused}
             onToggleFocus={() => setFocusKey((cur) => (cur === key ? null : key))}
           />
