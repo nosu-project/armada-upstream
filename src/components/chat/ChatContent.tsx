@@ -10,6 +10,7 @@ import { InviteEmbed } from "@/components/chat/InviteEmbed";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
 import { CodeBlock, InlineCode } from "@/components/chat/Markdown";
+import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { renderInlineMarkdown } from "@/components/chat/markdownRender";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { XdcAttachment } from "@/components/chat/XdcAttachment";
@@ -1197,15 +1198,21 @@ function NostrMention({ pubkey, noAtPrefix = false }: { pubkey: string; noAtPref
   const displayName = scopedName;
 
   return (
-    <span
-      className={cn(
-        "font-medium",
-        hasRealName ? "text-primary" : "text-muted-foreground",
-      )}
-      title={pubkey}
-    >
-      {noAtPrefix ? "" : "@"}{displayName}
-    </span>
+    <ProfilePreviewCard pubkey={pubkey}>
+      <button
+        type="button"
+        className={cn(
+          "font-medium hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded",
+          hasRealName ? "text-primary" : "text-muted-foreground",
+        )}
+        title={pubkey}
+        // Don't let the click bubble to the surrounding message row (selection,
+        // reply focus, etc.) — this chip owns the interaction.
+        onClick={(e) => e.stopPropagation()}
+      >
+        {noAtPrefix ? "" : "@"}{displayName}
+      </button>
+    </ProfilePreviewCard>
   );
 }
 
