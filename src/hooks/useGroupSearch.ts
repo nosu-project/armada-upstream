@@ -29,13 +29,21 @@ export function useGroupSearch(
   relayUrl: string | undefined,
   groupId: string | undefined,
   query: string,
+  opts?: {
+    /** Message kinds to search (default: NIP-29 chat + polls). */
+    kinds?: number[];
+    /** Cache key of the loaded timeline to merge local matches from. */
+    messagesKey?: readonly unknown[];
+  },
 ) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const debounced = useDebounce(query.trim(), 300);
+  const kinds = opts?.kinds ?? SEARCH_KINDS;
+  const messagesKey = opts?.messagesKey ?? ["nip29", "messages", relayUrl, groupId];
 
   const search = useQuery<NostrEvent[]>({
-    queryKey: ["nip29", "search", relayUrl, groupId, debounced],
+    queryKey: ["nip29", "search", relayUrl, groupId, kinds.join(","), debounced],
     enabled: Boolean(relayUrl && groupId) && debounced.length >= 2,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -44,17 +52,19 @@ export function useGroupSearch(
       // ignore the `search` field (returning recent #h events) — harmless,
       // since we re-filter locally below.
       const events = await nostr.relay(relayUrl!).query(
-        [{ kinds: SEARCH_KINDS, "#h": [groupId!], search: debounced, limit: 100 }],
+        [{ kinds, "#h": [groupId!], search: debounced, limit: 100 }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
 
       // Merge with the locally-cached timeline so already-seen messages are
       // searchable offline / on non-NIP-50 relays.
-      const cached =
-        queryClient.getQueryData<NostrEvent[]>(["nip29", "messages", relayUrl, groupId]) ?? [];
+      const cached = queryClient.getQueryData<NostrEvent[]>(messagesKey) ?? [];
 
+      const kindSet = new Set(kinds);
       const byId = new Map<string, NostrEvent>();
-      for (const e of [...events, ...cached]) byId.set(e.id, e);
+      for (const e of [...events, ...cached]) {
+        if (kindSet.has(e.kind)) byId.set(e.id, e);
+      }
 
       return localMatches([...byId.values()], debounced, 100);
     },

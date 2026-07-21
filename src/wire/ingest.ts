@@ -5,6 +5,7 @@ import { notePlaneWrapsSeen, openPlaneWrapsChunked, unseenPlaneWraps } from "@/c
 import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { bufferLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { KIND_STREAM_MESSAGE_V2 } from "@/buzz/kinds";
 import { KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { emitWireScopes } from "@/wire/bus";
@@ -345,10 +346,13 @@ function plaintextCandidate(
 ): NotifyCandidate | undefined {
   if (self && ev.pubkey === self) return undefined; // never notify on our own message
 
-  // NIP-29 group chat / poll.
+  // NIP-29 group chat / poll (and a Buzz stream-message v2, which reads the
+  // same as kind 9 — see src/buzz/kinds.ts).
   const h = tagValue(ev, "h");
   if (h) {
-    if (ev.kind !== KIND_GROUP_CHAT && ev.kind !== KIND_POLL) return undefined;
+    if (ev.kind !== KIND_GROUP_CHAT && ev.kind !== KIND_POLL && ev.kind !== KIND_STREAM_MESSAGE_V2) {
+      return undefined;
+    }
     // The relay URL isn't on the event; the notifier hook maps groupId → relay
     // (+ route + name) from the user's group list. Leave relayUrl unset here.
     return {

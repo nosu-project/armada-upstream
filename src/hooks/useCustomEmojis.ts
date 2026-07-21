@@ -1,6 +1,9 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
+import { useBuzzEmojiPalette } from "@/buzz/useBuzzEmojiPalette";
+import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { parseAddr } from "@/lib/parseAddr";
 
@@ -124,8 +127,30 @@ export function useCustomEmojis() {
     gcTime: 10 * 60_000,
   });
 
+  // Buzz workspaces share a community palette (the union of every member's
+  // `buzz:custom-emoji` kind-30030 set). When the surrounding chat scope is a
+  // channel on a Buzz relay, merge that palette in — the user's own emojis
+  // win shortcode collisions.
+  const scope = useChatScope();
+  const scopeRelay = scope?.kind === "nip29" ? scope.relayUrl : undefined;
+  const buzzPalette = useBuzzEmojiPalette(scopeRelay);
+
+  const emojis = useMemo(() => {
+    const own = query.data ?? [];
+    if (buzzPalette.length === 0) return own;
+    const seen = new Set(own.map((e) => e.shortcode));
+    const merged = [...own];
+    for (const e of buzzPalette) {
+      if (!seen.has(e.shortcode)) {
+        seen.add(e.shortcode);
+        merged.push(e);
+      }
+    }
+    return merged;
+  }, [query.data, buzzPalette]);
+
   return {
-    emojis: query.data ?? [],
+    emojis,
     isLoading: query.isLoading,
   };
 }

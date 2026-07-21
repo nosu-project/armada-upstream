@@ -1,7 +1,12 @@
-import { BellOff, CheckCheck, ChevronDown, Hash, Headphones, Link as LinkIcon, Loader2, Lock, Plus, RefreshCw, Volume2 } from "lucide-react";
+import { BellOff, CheckCheck, ChevronDown, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, MessageSquareText, MessagesSquare, Plus, RefreshCw, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
+import { BuzzDmName } from "@/buzz/BuzzDmName";
+import { BuzzProjectsDialog } from "@/buzz/BuzzProjects";
+import { useIsBuzzRelay } from "@/buzz/detect";
+import { buzzChannelArchived, buzzChannelType } from "@/buzz/protocol";
+import { useBuzzHiddenDms } from "@/buzz/useBuzzDms";
 import { CreateGroupDialog } from "@/components/dialogs/CreateGroupDialog";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { LoginArea } from "@/components/auth/LoginArea";
@@ -22,6 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
+import { useGroup } from "@/hooks/useGroup";
 import { useLivekitParticipants, useRelayLivekitSupport } from "@/hooks/useLivekit";
 import { useNotifLevels, channelScopeKey } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
@@ -38,15 +44,25 @@ function ChannelLink({
   group,
   unread,
   onNavigate,
+  buzzDm = false,
+  dimmed = false,
 }: {
   group: Nip29Group;
   unread?: GroupUnread;
   onNavigate?: () => void;
+  /** Render as a Buzz DM row: participant names as the title, DM icon. */
+  buzzDm?: boolean;
+  /** Dim the row (archived Buzz channels). */
+  dimmed?: boolean;
 }) {
+  const { user } = useCurrentUser();
   const { activeCall, speakingPubkeys, mutedPubkeys, voiceRoomPubkeys } = useCall();
   const { markRead } = useReadState();
   const { channelLevel, setLevel } = useNotifLevels();
   const muted = channelLevel(group.relay, group.id) === "nothing";
+  // A Buzz DM channel's identity is its roster, so resolve the members
+  // (kind 39002) for the title. Disabled (undefined relay) for normal rows.
+  const { data: dmDetails } = useGroup(buzzDm ? group.relay : undefined, buzzDm ? group.id : undefined);
   // Voice capability: prefer the per-group `livekit` metadata tag, but fall
   // back to the relay-level capability (`/.well-known/nip29/livekit` 204).
   // Armada's relay29 metadata doesn't emit the `livekit` group tag, so
@@ -74,7 +90,7 @@ function ChannelLink({
   // in it or others are) — otherwise a voice-capable channel reads as a normal
   // text channel.
   const callActive = inCall || othersInVoice;
-  const Icon = callActive ? Volume2 : Hash;
+  const Icon = buzzDm ? MessageSquareText : callActive ? Volume2 : Hash;
 
   return (
     <ContextMenu>
@@ -95,13 +111,17 @@ function ChannelLink({
             // Muted channels never bold — their unread is deliberately silent.
             !isActive && hasUnread && !muted && "text-foreground font-semibold",
             // Muted channels read dimmer (Discord-style).
-            !isActive && muted && "opacity-60",
+            !isActive && (muted || dimmed) && "opacity-60",
             // Active/navigated channel: primary-filled chamfered rectangle.
             isActive && "clip-corner-lg bg-primary text-primary-foreground font-medium",
           )}
       >
         <Icon className="size-4 shrink-0" />
-        <span className="truncate flex-1">{group.name}</span>
+        <span className="truncate flex-1">
+          {buzzDm
+            ? <BuzzDmName members={dmDetails?.members ?? []} selfPubkey={user?.pubkey} />
+            : group.name}
+        </span>
         {inCall && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -177,9 +197,37 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const { registerCallBarSlot } = useCall();
   const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  // Buzz projects (NIP-34 repos) browser, opened from the server menu.
+  const [projectsOpen, setProjectsOpen] = useState(false);
   // The server-name header menu (Discord-style): expands inline below the
   // header, pushing the channel list down with a height animation.
   const [serverMenuOpen, setServerMenuOpen] = useState(false);
+  // Buzz relays: channels partition into typed sections (forum channels, DM
+  // channels — hidden NIP-29 groups — and archived channels at the bottom).
+  const { isBuzz } = useIsBuzzRelay(relayUrl);
+  const hiddenDms = useBuzzHiddenDms(isBuzz ? relayUrl : undefined);
+  const buzzSections = useMemo(() => {
+    if (!isBuzz || !groups) return undefined;
+    const streams: typeof groups = [];
+    const forums: typeof groups = [];
+    const dms: typeof groups = [];
+    const archived: typeof groups = [];
+    for (const g of groups) {
+      if (buzzChannelArchived(g.event)) {
+        archived.push(g);
+        continue;
+      }
+      const type = buzzChannelType(g.event);
+      if (type === "dm") {
+        if (!hiddenDms.has(g.id)) dms.push(g);
+      } else if (type === "forum") {
+        forums.push(g);
+      } else {
+        streams.push(g);
+      }
+    }
+    return { streams, forums, dms, archived };
+  }, [isBuzz, groups, hiddenDms]);
 
   // Close the create-channel dialog when switching servers — its context (and
   // the user's permission to create) doesn't carry over to the new server.
@@ -252,6 +300,12 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                   onClick: () => setCreateOpen(true),
                 },
                 {
+                  show: isBuzz,
+                  icon: <FolderGit2 className="size-4" />,
+                  label: "Projects",
+                  onClick: () => setProjectsOpen(true),
+                },
+                {
                   show: true,
                   icon: <LinkIcon className="size-4" />,
                   label: "Copy server link",
@@ -322,6 +376,9 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           </div>
 
           <CreateGroupDialog relayUrl={relayUrl} open={createOpen} onOpenChange={setCreateOpen} />
+          {isBuzz && (
+            <BuzzProjectsDialog relayUrl={relayUrl} open={projectsOpen} onOpenChange={setProjectsOpen} />
+          )}
         </>
       }
     >
@@ -343,6 +400,55 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
             <Loader2 className="size-4 animate-spin" /> Connecting to server…
           </span>
         </div>
+      ) : buzzSections ? (
+        <>
+          {buzzSections.streams.map((group) => (
+            <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
+          ))}
+          {buzzSections.forums.length > 0 && (
+            <>
+              <div className="flex items-center gap-1.5 pl-4 pr-2 pt-3 pb-1">
+                <MessagesSquare className="size-3 text-muted-foreground" />
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Forums
+                </span>
+              </div>
+              {buzzSections.forums.map((group) => (
+                <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
+              ))}
+            </>
+          )}
+          {buzzSections.dms.length > 0 && (
+            <>
+              <div className="flex items-center gap-1.5 pl-4 pr-2 pt-3 pb-1">
+                <MessageSquareText className="size-3 text-muted-foreground" />
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Direct messages
+                </span>
+              </div>
+              {buzzSections.dms.map((group) => (
+                <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} buzzDm />
+              ))}
+            </>
+          )}
+          {buzzSections.archived.length > 0 && (
+            <>
+              <div className="pl-4 pr-2 pt-3 pb-1">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
+                  Archived
+                </span>
+              </div>
+              {buzzSections.archived.map((group) => (
+                <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} dimmed />
+              ))}
+            </>
+          )}
+          {buzzSections.streams.length + buzzSections.forums.length + buzzSections.dms.length + buzzSections.archived.length === 0 && (
+            <div className="px-2 py-8 text-center text-sm text-muted-foreground">
+              No channels yet.
+            </div>
+          )}
+        </>
       ) : groups && groups.length > 0 ? (
         groups.map((group) => (
           <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />

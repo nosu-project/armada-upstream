@@ -126,6 +126,14 @@ export function useGroupReactions(
   relayUrl: string | undefined,
   groupId: string | undefined,
   messageIds: string[],
+  opts?: {
+    /**
+     * The react-query cache key holding this room's message list, used to
+     * resolve a reaction's target event at click time. Defaults to the NIP-29
+     * messages key; Buzz channels pass their own (see useBuzzMessages).
+     */
+    messagesKey?: readonly unknown[];
+  },
 ): { reactionsFor: (id: string) => MessageReactions } {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -259,6 +267,7 @@ export function useGroupReactions(
   const reactCache = useRef(new Map<string, (input: ReactInput) => void>());
   const objCache = useRef(new Map<string, { tallies: ReactionTally[]; value: MessageReactions }>());
 
+  const messagesKey = opts?.messagesKey ?? ["nip29", "messages", relayUrl, groupId];
   const reactionsFor = useCallback(
     (id: string): MessageReactions => {
       const tallies = talliesById.get(id) ?? EMPTY_TALLIES;
@@ -269,7 +278,7 @@ export function useGroupReactions(
         // Resolve the target event from the messages cache lazily at click time.
         const reactFn = (input: ReactInput) => {
           const messages =
-            queryClient.getQueryData<NostrEvent[]>(["nip29", "messages", relayUrl, groupId]) ?? [];
+            queryClient.getQueryData<NostrEvent[]>(messagesKey) ?? [];
           const target = messages.find((m) => m.id === id);
           if (!target) return;
           reactRef.current({ target, ...input });
@@ -280,6 +289,9 @@ export function useGroupReactions(
       objCache.current.set(id, { tallies, value });
       return value;
     },
+    // messagesKey is an array literal at the call site; its parts are covered
+    // by relayUrl/groupId at every caller.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [talliesById, queryClient, relayUrl, groupId],
   );
 

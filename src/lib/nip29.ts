@@ -557,6 +557,22 @@ export function parseGroupMembers(event: NostrEvent): string[] {
     .map(([, pubkey]) => pubkey);
 }
 
+/**
+ * Parse per-member roles from a kind 39002 members event. Buzz relays carry
+ * the member's role in the tag's last slot (`["p", pk, "", "bot"]`); plain
+ * NIP-29 members events carry none, yielding an empty map.
+ */
+export function parseGroupMemberRoles(event: NostrEvent): Record<string, string> {
+  if (event.kind !== KIND_GROUP_MEMBERS) return {};
+  const out: Record<string, string> = {};
+  for (const [n, pubkey, ...rest] of event.tags) {
+    if (n !== "p" || !HEX64.test(pubkey ?? "")) continue;
+    const role = rest.filter(Boolean).pop();
+    if (role) out[pubkey] = role;
+  }
+  return out;
+}
+
 /** Parse a kind 39003 group-roles event. */
 export function parseGroupRoles(event: NostrEvent): Nip29Role[] {
   if (event.kind !== KIND_GROUP_ROLES) return [];

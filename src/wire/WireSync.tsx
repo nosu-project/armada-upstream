@@ -3,6 +3,7 @@ import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
+import { isBuzzRelayInfo } from "@/buzz/detect";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { buildConcordSubs, buildConcordControlSubs } from "@/concord-v1/lib/concordNotifications";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
@@ -222,7 +223,7 @@ function useWireConcord2Control(): Array<{ relays: string[]; idHex: string; grou
  * The union feeds buildWireSpec's `groups`, so the wire holds one `#h` filter
  * per host covering every channel on it.
  */
-function useWireNip29Groups(): Array<{ id: string; relay: string }> {
+function useWireNip29Groups(): Array<{ id: string; relay: string; buzz?: boolean }> {
   const { nostr } = useNostr();
   const { config } = useAppContext();
   const eventStore = useEventStore();
@@ -242,7 +243,7 @@ function useWireNip29Groups(): Array<{ id: string; relay: string }> {
 
   const serversKey = servers.join(",");
 
-  const query = useQuery<Array<{ id: string; relay: string }>>({
+  const query = useQuery<Array<{ id: string; relay: string; buzz?: boolean }>>({
     queryKey: ["wire", "nip29-groups", serversKey],
     enabled: servers.length > 0,
     // Relay-signed, rarely-changing directory data. Re-read periodically to
@@ -257,14 +258,18 @@ function useWireNip29Groups(): Array<{ id: string; relay: string }> {
       const perRelay = await Promise.all(
         servers.map(async (relay) => {
           // The relay's own signing key (kind-39000 is authored by it). Best
-          // effort — a broken NIP-11 endpoint must not block the others.
+          // effort — a broken NIP-11 endpoint must not block the others. The
+          // same doc also identifies Buzz relays, whose channels get the wider
+          // Buzz kind set in the wire filter (see buildWireSpec).
           let selfKey: string | undefined;
+          let buzz = false;
           try {
             const info = await Promise.race([
               fetchRelayInfoDoc(relay, signal).catch(() => undefined),
               new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2_000)),
             ]);
             selfKey = info?.self || info?.pubkey;
+            buzz = isBuzzRelayInfo(info);
           } catch {
             selfKey = undefined;
           }
@@ -283,7 +288,7 @@ function useWireNip29Groups(): Array<{ id: string; relay: string }> {
           } catch {
             // Best effort; the cached metadata still yields the known channels.
           }
-          return buildRelayGroups([...cached, ...live], relay).map((g) => ({ id: g.id, relay }));
+          return buildRelayGroups([...cached, ...live], relay).map((g) => ({ id: g.id, relay, buzz }));
         }),
       );
       return perRelay.flat();
@@ -328,12 +333,15 @@ export function WireSync() {
   // `groups` list (which additionally carries private/closed channels the open
   // directory hides). De-duplicated by relay+id.
   const groups = useMemo(() => {
-    const byKey = new Map<string, { id: string; relay: string }>();
+    const byKey = new Map<string, { id: string; relay: string; buzz?: boolean }>();
     for (const g of nip29Groups) {
       if (g.id && g.relay) byKey.set(`${g.relay}\u0000${g.id}`, g);
     }
     for (const g of groupList?.groups ?? []) {
-      if (g.id && g.relay) byKey.set(`${g.relay}\u0000${g.id}`, { id: g.id, relay: g.relay });
+      // Never overwrite a directory-discovered entry: it carries the relay's
+      // Buzz flag, which the 10009 list doesn't know about.
+      const key = `${g.relay}\u0000${g.id}`;
+      if (g.id && g.relay && !byKey.has(key)) byKey.set(key, { id: g.id, relay: g.relay });
     }
     return [...byKey.values()];
   }, [nip29Groups, groupList?.groups]);

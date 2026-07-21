@@ -22,6 +22,7 @@ import { useMutes } from "@/hooks/useMutes";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
+import { useIsBuzzRelay } from "@/buzz/detect";
 import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { addServerTombstone } from "@/lib/serverTombstone";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -44,6 +45,11 @@ export function ServerPage() {
   const serverMuted = Boolean(relayUrl && isCommunityMuted(relayUrl));
 
   const { data: groups, isLoading, isError, relayInfo } = useRelayGroups(relayUrl);
+  // Buzz relays: hide DM channels (hidden groups) from the public channel
+  // grid, and drop the "Invite-only" badge (Buzz stamps `closed` on every
+  // channel; open ones are still joinable at runtime).
+  const { isBuzz } = useIsBuzzRelay(relayUrl);
+  const visibleGroups = isBuzz ? groups?.filter((g) => !g.isHidden) : groups;
 
   if (!relayUrl) {
     return <Navigate to="/" replace />;
@@ -125,7 +131,11 @@ export function ServerPage() {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {isPinned && <Badge variant="secondary">Pinned</Badge>}
                 {relayInfo?.limitation?.auth_required && <Badge variant="secondary">NIP-42 AUTH</Badge>}
-                {relayInfo?.supported_nips?.includes(29) && <Badge variant="secondary">NIP-29 groups</Badge>}
+                {isBuzz ? (
+                  <Badge variant="secondary">Buzz workspace</Badge>
+                ) : (
+                  relayInfo?.supported_nips?.includes(29) && <Badge variant="secondary">NIP-29 groups</Badge>
+                )}
                 {relayInfo?.software && (
                   <Badge variant="outline" className="max-w-48 truncate">
                     {relayInfo.software.split("/").pop()} {relayInfo.version}
@@ -182,9 +192,9 @@ export function ServerPage() {
                   <Skeleton key={i} className="h-24 rounded-xl" />
                 ))}
               </div>
-            ) : groups && groups.length > 0 ? (
+            ) : visibleGroups && visibleGroups.length > 0 ? (
               <div className="grid sm:grid-cols-2 gap-3">
-                {groups.map((group) => (
+                {visibleGroups.map((group) => (
                   <Card
                     key={group.id}
                     role="button"
@@ -209,7 +219,7 @@ export function ServerPage() {
                     </CardHeader>
                     <CardContent className="pt-0 flex flex-wrap gap-1.5">
                       {group.isPrivate && <Badge variant="outline" className="text-[10px]">Members-only</Badge>}
-                      {group.isClosed && <Badge variant="outline" className="text-[10px]">Invite-only</Badge>}
+                      {group.isClosed && !isBuzz && <Badge variant="outline" className="text-[10px]">Invite-only</Badge>}
                       {group.hasLivekit && <Badge variant="outline" className="text-[10px]">Voice</Badge>}
                     </CardContent>
                   </Card>

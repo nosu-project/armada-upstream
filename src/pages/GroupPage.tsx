@@ -1,7 +1,13 @@
-import { Bell, BellOff, CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MoreVertical, Phone, Pin, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
+import { Bell, BellOff, CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MessageSquareText, MoreVertical, Phone, Pin, ScrollText, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
+import { BuzzCanvasBar } from "@/buzz/BuzzCanvas";
+import { BuzzChat } from "@/buzz/BuzzChat";
+import { BuzzDmName } from "@/buzz/BuzzDmName";
+import { useIsBuzzRelay } from "@/buzz/detect";
+import { buzzChannelTopic, buzzChannelType } from "@/buzz/protocol";
+import { useBuzzPresence } from "@/buzz/useBuzzPresence";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
@@ -116,6 +122,12 @@ export function GroupPage() {
   const { data: details, isLoading } = useGroup(relayUrl, groupId);
   const { data: membership, isLoading: membershipLoading } = useGroupMembership(relayUrl, groupId);
   const { data: relayHasLivekit } = useRelayLivekitSupport(relayUrl);
+  // Buzz relays (NIP-29-based, detected via NIP-11) swap the chat surface for
+  // BuzzChat and drop the NIP-29-only extras their relay doesn't speak
+  // (pins/calendar/polls); they gain a canvas panel + typing indicators.
+  const { isBuzz } = useIsBuzzRelay(relayUrl);
+  // Live Buzz presence (ephemeral heartbeats; also publishes the viewer's).
+  const buzzPresence = useBuzzPresence(isBuzz ? relayUrl : undefined);
   const leave = useLeaveGroup(relayUrl ?? "", groupId ?? "");
   const { removeUser, putUser, deleteGroup } = useGroupModeration(relayUrl ?? "", groupId ?? "");
   const { mutateAsync: updateList } = useUpdateUserGroupList();
@@ -179,8 +191,12 @@ export function GroupPage() {
   // first, then pins. Measured (not breakpoint'd) because the action set is
   // conditional, so a fixed breakpoint would mis-collapse. Must be called
   // before any early return (rules-of-hooks).
-  const showEvents = hasEvents || isAdmin;
-  const showPins = hasPins;
+  // Buzz relays don't speak the pins (39041) or calendar (NIP-52) extensions,
+  // so those toggles are dropped there; the canvas panel takes their place.
+  const showEvents = !isBuzz && (hasEvents || isAdmin);
+  const showPins = !isBuzz && hasPins;
+  /** Whether the Buzz canvas bar is expanded below the header. */
+  const [canvasOpen, setCanvasOpen] = useState(false);
   const collapsibleCount = (showEvents ? 1 : 0) + (showPins ? 1 : 0);
   const { ref: headerActionsRef, overflowCount } = useHeaderOverflow(collapsibleCount);
   // Collapse order: events first (overflowCount >= 1), then pins (>= 2).
@@ -255,6 +271,9 @@ export function GroupPage() {
   }, [relayUrl, updateConfig]);
 
   const group = details?.group;
+  // Buzz channel type (stream/forum/dm/workflow) from the 39000 `t` tag.
+  const buzzType = isBuzz && group ? buzzChannelType(group.event) : undefined;
+  const buzzTopic = isBuzz && group ? buzzChannelTopic(group.event) : undefined;
   // The user's own kind 10009 list (NIP-51) is the locally-persisted,
   // cross-device source of truth for "groups I joined". Unlike the relay's
   // membership signals (kind 9000/9001, kind 39002 members), it's cached in the
@@ -390,18 +409,24 @@ export function GroupPage() {
             <ChevronLeft className="size-5" />
           </Button>
 
-          {group?.hasLivekit
-            ? <Volume2 className="size-5 text-muted-foreground shrink-0" />
-            : <Hash className="size-5 text-muted-foreground shrink-0" />}
+          {buzzType === "dm"
+            ? <MessageSquareText className="size-5 text-muted-foreground shrink-0" />
+            : group?.hasLivekit
+              ? <Volume2 className="size-5 text-muted-foreground shrink-0" />
+              : <Hash className="size-5 text-muted-foreground shrink-0" />}
           {/* Title keeps a min-width floor so the action buttons can't squeeze
               it to nothing — instead the row overflows, which is what
               useHeaderOverflow measures to fold pins/events into the ⋮ menu. */}
           <div className="min-w-[5rem] flex-1">
             <h1 className="font-semibold truncate leading-tight">
-              {isLoading ? "…" : group?.name ?? groupId}
+              {isLoading
+                ? "…"
+                : buzzType === "dm"
+                  ? <BuzzDmName members={details?.members ?? []} selfPubkey={user?.pubkey} />
+                  : group?.name ?? groupId}
             </h1>
-            {group?.about && (
-              <p className="text-xs text-muted-foreground truncate">{group.about}</p>
+            {(buzzTopic || group?.about) && (
+              <p className="text-xs text-muted-foreground truncate">{buzzTopic || group?.about}</p>
             )}
           </div>
           {group?.isPrivate && (
@@ -426,6 +451,24 @@ export function GroupPage() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Join voice</TooltipContent>
+            </Tooltip>
+          )}
+          {/* Buzz canvas — toggles the shared-document bar below the header. */}
+          {isBuzz && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Canvas"
+                  aria-pressed={canvasOpen}
+                  className={cn("size-8 touch:size-11 text-muted-foreground", canvasOpen && "text-foreground")}
+                  onClick={() => setCanvasOpen((v) => !v)}
+                >
+                  <ScrollText className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Canvas</TooltipContent>
             </Tooltip>
           )}
           {/* Pinned messages — toggles the browse bar below the header. Folds
@@ -658,6 +701,16 @@ export function GroupPage() {
           </div>
         </header>
 
+        {/* Buzz canvas bar — the channel's shared document, below the header. */}
+        {isBuzz && (
+          <BuzzCanvasBar
+            open={canvasOpen}
+            relayUrl={relayUrl}
+            channelId={groupId}
+            onClose={() => setCanvasOpen(false)}
+          />
+        )}
+
         {/* Pinned messages bar — slides open below the header. */}
         <PinnedMessagesBar
           open={pinsOpen}
@@ -690,9 +743,11 @@ export function GroupPage() {
             webxdc) portals in here when this channel is the one it's open in. */}
         <AppStageSlot scope={{ kind: "nip29", relayUrl, groupId }} />
 
-        {/* Join banner */}
+        {/* Join banner. Buzz relays always stamp `closed` on kind-39000 (open
+            channels are still joinable at runtime, and Buzz has no NIP-29
+            invite codes), so the closed/invite-code affordance is NIP-29-only. */}
         {user && !isMember && !isLoading && (
-          <JoinBanner relayUrl={relayUrl} groupId={groupId} isClosed={Boolean(group?.isClosed)} />
+          <JoinBanner relayUrl={relayUrl} groupId={groupId} isClosed={Boolean(group?.isClosed) && !isBuzz} />
         )}
 
         {/* The active voice call (if any) renders as a persistent docked bar in
@@ -704,15 +759,28 @@ export function GroupPage() {
         <ChatScopeContext.Provider value={{ kind: "nip29", relayUrl, groupId }}>
         <ChannelNavContext.Provider value={channelNav}>
         <div className="relative flex flex-1 min-h-0">
-          <GroupChat
-            relayUrl={relayUrl}
-            groupId={groupId}
-            canWrite={canWrite}
-            membershipPending={membershipPending}
-            canModerate={isAdmin}
-            searchQuery={searchOpen ? searchQuery : ""}
-            scrollToMessageRef={scrollToMessageRef}
-          />
+          {isBuzz ? (
+            <BuzzChat
+              relayUrl={relayUrl}
+              channelId={groupId}
+              channelType={buzzType}
+              canWrite={canWrite}
+              membershipPending={membershipPending}
+              canModerate={isAdmin}
+              searchQuery={searchOpen ? searchQuery : ""}
+              scrollToMessageRef={scrollToMessageRef}
+            />
+          ) : (
+            <GroupChat
+              relayUrl={relayUrl}
+              groupId={groupId}
+              canWrite={canWrite}
+              membershipPending={membershipPending}
+              canModerate={isAdmin}
+              searchQuery={searchOpen ? searchQuery : ""}
+              scrollToMessageRef={scrollToMessageRef}
+            />
+          )}
           <div
             className={cn(
               "overflow-hidden",
@@ -740,6 +808,8 @@ export function GroupPage() {
               <MemberList
                 admins={details?.admins ?? []}
                 members={details?.members ?? []}
+                memberRoles={details?.memberRoles}
+                presence={isBuzz ? buzzPresence : undefined}
                 canModerate={isAdmin}
                 viewerIsAdmin={isAdmin}
                 currentUserPubkey={user?.pubkey}

@@ -5,6 +5,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useMutes } from "@/hooks/useMutes";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
+import { BUZZ_UNREAD_KINDS } from "@/buzz/kinds";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { useWireScopes } from "@/wire/useWireScopes";
 
@@ -12,7 +13,13 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 /** NIP-88 poll kind — counts toward channel activity like chat does. */
 const KIND_POLL = 1068;
-const ACTIVITY_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
+/**
+ * Human-visible activity kinds: NIP-29 chat + polls, plus the Buzz
+ * "new content" set (stream v2, forum posts/comments — kind 9 is shared).
+ * Buzz system rows / job events deliberately excluded (phantom unreads).
+ * Kinds absent from a relay simply never match.
+ */
+const ACTIVITY_KINDS = [...new Set([KIND_GROUP_CHAT, KIND_POLL, ...BUZZ_UNREAD_KINDS])];
 
 /** Newest store events scanned per relay when deriving unread. */
 const SCAN_LIMIT = 300;

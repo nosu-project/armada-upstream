@@ -51,6 +51,7 @@ import { useUploadFile } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
+import { buzzThreadRef } from "@/buzz/protocol";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { encryptFileForUpload } from "@/lib/encryptedMedia";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
@@ -217,9 +218,14 @@ interface ChatComposerProps {
    * - `"nip10"` (default): NIP-10 marked `e`/`p` tags (NIP-29 groups).
    * - `"nipc7"`: a NIP-C7 `q` tag citing the parent rumor id (Concord — keeps
    *   `q` for inline quotes, kind-1111 for threads, per CORD-03 §3).
-   * The referenced-message chrome (`ReplyContextLine`) reads either shape.
+   * - `"buzz"`: Buzz's thread shape — a marked `reply` tag at the parent (and
+   *   a marked `root` when the parent is itself a reply). Buzz requires the
+   *   `reply` marker for threading (a root-only marker doesn't thread there);
+   *   pair with `replyExtraTags: [["broadcast","1"]]` to also surface the
+   *   reply on the main timeline.
+   * The referenced-message chrome (`ReplyContextLine`) reads any shape.
    */
-  replyMarker?: "nip10" | "nipc7";
+  replyMarker?: "nip10" | "nipc7" | "buzz";
   /** Called after a message is successfully sent. */
   onSent?: () => void;
   /**
@@ -321,6 +327,19 @@ interface ChatComposerProps {
    * rides `relayUrl="dm"` and so must supply its community's relays here.
    */
   conversationRelays?: string[];
+  /**
+   * Whether the poll composer (NIP-88 kind 1068) is offered. On by default for
+   * the group publish path; Buzz relays don't accept poll events, so their
+   * surfaces turn it off.
+   */
+  pollsEnabled?: boolean;
+  /**
+   * Extra tags appended when the outgoing message is an inline reply to
+   * `replyTo`. Buzz passes `[["broadcast","1"]]` so the reply threads under
+   * its root AND surfaces on the main timeline (Buzz's broadcast-reply
+   * semantics — a bare marked reply would be thread-only there).
+   */
+  replyExtraTags?: string[][];
 }
 
 /**
@@ -333,7 +352,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, replyExtraTags }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -375,13 +394,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // slash commands without the NIP-29-specific ones.
   const slashCapabilities = useMemo(() => {
     const caps = new Set<SlashCapability>();
-    if (!sendOverride) caps.add("poll"); // poll mode is the group publish path
+    if (!sendOverride && pollsEnabled) caps.add("poll"); // poll mode is the group publish path
     if (onSlashAction) {
       caps.add("thread");
       if (canModerate) caps.add("moderation");
     }
     return caps;
-  }, [sendOverride, onSlashAction, canModerate]);
+  }, [sendOverride, pollsEnabled, onSlashAction, canModerate]);
 
   const draftKey = `chat-draft:${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
@@ -853,6 +872,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     if (replyTo) {
       if (replyMarker === "nipc7") {
         tags.push(["q", replyTo.id, "", replyTo.pubkey]);
+      } else if (replyMarker === "buzz") {
+        // Buzz threads on the MARKED `reply` tag (a root-only marker doesn't
+        // thread there). Direct reply to a root = single `reply` tag; replying
+        // to a reply pins the thread root with a `root` marker.
+        const ref = buzzThreadRef(replyTo.tags);
+        const rootId = ref.rootId ?? replyTo.id;
+        if (rootId === replyTo.id) {
+          tags.push(["e", replyTo.id, "", "reply"]);
+        } else {
+          tags.push(["e", rootId, "", "root"]);
+          tags.push(["e", replyTo.id, "", "reply"]);
+        }
       } else {
         const rootTag = replyTo.tags.find(([name, , , marker]) => name === "e" && marker === "root");
         if (rootTag) {
@@ -865,6 +896,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       if (replyTo.pubkey !== user?.pubkey && !mentionedPubkeys.has(replyTo.pubkey)) {
         tags.push(["p", replyTo.pubkey]);
       }
+      // Caller-supplied reply markers (Buzz's `["broadcast","1"]`).
+      for (const t of replyExtraTags ?? []) tags.push([...t]);
     }
 
     // NIP-18 quote tags for visible nevent/naddr embeds
@@ -914,7 +947,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
 
     return tags;
-  }, [groupId, user, replyTo, replyMarker, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
+  }, [groupId, user, replyTo, replyMarker, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups, replyExtraTags]);
 
   /**
    * Publish a finalized message body via the active send path.
@@ -1586,10 +1619,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                         setPlusOpen(false);
                         textareaRef.current?.focus();
                       }}
-                      hidden={Boolean(sendOverride)}
+                      hidden={Boolean(sendOverride) || !pollsEnabled}
                       className={cn(
                         "flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm transition-colors",
-                        sendOverride && "hidden",
+                        (sendOverride || !pollsEnabled) && "hidden",
                         mode === "poll"
                           ? "text-primary bg-primary/10"
                           : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",

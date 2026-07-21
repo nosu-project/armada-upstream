@@ -12,6 +12,8 @@ export interface RelayInfoDocument {
   software?: string;
   version?: string;
   supported_nips?: number[];
+  /** Buzz relays: custom protocol extensions (e.g. "nip-er", "nip-pl"). */
+  supported_extensions?: string[];
   auth_required?: boolean;
   payment_required?: boolean;
   limitation?: {

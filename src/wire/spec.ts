@@ -1,4 +1,5 @@
 import { normalizeRelayUrl } from "@/lib/platform";
+import { BUZZ_WIRE_KINDS } from "@/buzz/kinds";
 import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_REACTION, KIND_COMMUNITY_CONTROL } from "@/concord-v1/lib/kinds";
@@ -65,8 +66,12 @@ export function stampRoundSince(filters: NostrFilter[], since: number, now: numb
 export interface WireInputs {
   /** The logged-in user (DM filters are addressed to them). */
   pubkey?: string;
-  /** Joined NIP-29 groups. relay = the community host (one REQ per host). */
-  groups: Array<{ id: string; relay: string }>;
+  /**
+   * Joined NIP-29 groups. relay = the community host (one REQ per host).
+   * `buzz` marks channels on a Buzz relay (see src/buzz/), whose standing
+   * filter carries the wider Buzz kind set instead of the plain NIP-29 one.
+   */
+  groups: Array<{ id: string; relay: string; buzz?: boolean }>;
   /** DM inbox relays (kind-4 reads; NIP-42-authed where the relay gates them). */
   dmRelays: string[];
   /** Friends-only DM senders (kind-3 follows). */
@@ -158,16 +163,25 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
   };
 
   // ── NIP-29: one `#h` filter per host relay ────────────────────────────────
+  // Buzz relays (NIP-29-based, detected via NIP-11) get the wider Buzz kind
+  // set — stream messages v1/v2, edits, deletions, reactions, system rows,
+  // diffs, jobs, forum activity, huddle lifecycle — so Buzz timelines and
+  // unread badges stay live through the same standing subscription.
   const groupsByRelay = new Map<string, Set<string>>();
+  const buzzRelays = new Set<string>();
   for (const g of inputs.groups) {
     const relay = normalizeRelayUrl(g.relay);
     if (!relay || !g.id) continue;
     let set = groupsByRelay.get(relay);
     if (!set) groupsByRelay.set(relay, (set = new Set()));
     set.add(g.id);
+    if (g.buzz) buzzRelays.add(relay);
   }
   for (const [relay, ids] of groupsByRelay) {
-    add(relay, { kinds: [KIND_GROUP_CHAT, KIND_POLL, KIND_DELETE], "#h": [...ids].sort() });
+    const kinds = buzzRelays.has(relay)
+      ? [...BUZZ_WIRE_KINDS]
+      : [KIND_GROUP_CHAT, KIND_POLL, KIND_DELETE];
+    add(relay, { kinds, "#h": [...ids].sort() });
   }
 
   // ── DMs: sent + friends-only received, on the DM relays ──────────────────

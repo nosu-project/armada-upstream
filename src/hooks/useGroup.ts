@@ -9,6 +9,7 @@ import {
   KIND_GROUP_METADATA,
   KIND_GROUP_ROLES,
   parseGroupAdmins,
+  parseGroupMemberRoles,
   parseGroupMembers,
   parseGroupMetadata,
   parseGroupRoles,
@@ -23,6 +24,8 @@ export interface GroupDetails {
   group: Nip29Group | undefined;
   admins: Nip29Admin[];
   members: string[];
+  /** Per-member role labels (Buzz: owner/admin/member/guest/bot). */
+  memberRoles: Record<string, string>;
   roles: Nip29Role[];
 }
 
@@ -45,6 +48,7 @@ function composeGroupDetails(events: NostrEvent[], relayUrl: string): GroupDetai
     group: metadataEvent ? parseGroupMetadata(metadataEvent, relayUrl) : undefined,
     admins: adminsEvent ? parseGroupAdmins(adminsEvent) : [],
     members: membersEvent ? parseGroupMembers(membersEvent) : [],
+    memberRoles: membersEvent ? parseGroupMemberRoles(membersEvent) : {},
     roles: rolesEvent ? parseGroupRoles(rolesEvent) : [],
   };
 }

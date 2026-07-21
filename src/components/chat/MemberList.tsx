@@ -1,4 +1,4 @@
-import { AtSign, Ban, Copy, Crown, IdCard, MoreVertical, Music, Shield, ShieldOff, Smile, UserMinus, X } from "lucide-react";
+import { AtSign, Ban, Bot, Copy, Crown, IdCard, MoreVertical, Music, Shield, ShieldOff, Smile, UserMinus, X } from "lucide-react";
 
 import { useState } from "react";
 
@@ -40,6 +40,9 @@ import type { ComponentType, ReactNode } from "react";
 const ROLE_OWNER = "owner";
 const ROLE_ADMIN = "admin";
 const ROLE_MODERATOR = "moderator";
+/** Buzz roles carried on the 39002 members event. */
+const ROLE_BOT = "bot";
+const ROLE_GUEST = "guest";
 
 /**
  * The menu primitives shared by the ⋮ dropdown and the right-click context
@@ -55,6 +58,8 @@ interface MenuParts {
 interface MemberRowProps {
   pubkey: string;
   roles?: string[];
+  /** Live presence dot (Buzz relays). Undefined = unknown (no dot). */
+  presence?: "online" | "away";
   canModerate: boolean;
   /** Whether the viewer is an admin (required to grant the admin role). */
   viewerIsAdmin: boolean;
@@ -79,6 +84,7 @@ interface MemberRowProps {
 function MemberRow({
   pubkey,
   roles,
+  presence,
   canModerate,
   viewerIsAdmin,
   currentUserPubkey,
@@ -233,13 +239,22 @@ function MemberRow({
     <ContextMenuTrigger className="block">
     <div className="gutter-tick group flex items-center gap-2.5 pl-3 pr-2 py-2 clip-corner-lg transition-colors hover:bg-accent/50 hover:text-foreground">
       <ProfilePreviewCard pubkey={pubkey}>
-        <button type="button" className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <button type="button" className="relative shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <Avatar shape={getAvatarShape(metadata)} className="size-8 cursor-pointer transition-opacity hover:opacity-90">
             <AvatarImage src={metadata?.picture} alt={displayName} />
             <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
               {displayName[0]?.toUpperCase()}
             </AvatarFallback>
           </Avatar>
+          {presence && (
+            <span
+              aria-label={presence === "online" ? "Online" : "Away"}
+              className={cn(
+                "absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-[hsl(var(--chrome))]",
+                presence === "online" ? "bg-success" : "bg-amber-500",
+              )}
+            />
+          )}
         </button>
       </ProfilePreviewCard>
       <ProfilePreviewCard pubkey={pubkey}>
@@ -295,6 +310,21 @@ function MemberRow({
           <Shield className="size-3" aria-hidden />
           Mod
         </span>
+      ) : roleSet.has(ROLE_BOT) ? (
+        <span
+          title="Agent"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+        >
+          <Bot className="size-3" aria-hidden />
+          Agent
+        </span>
+      ) : roleSet.has(ROLE_GUEST) ? (
+        <span
+          title="Guest"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+        >
+          Guest
+        </span>
       ) : null}
       <BotPill metadata={metadata} />
       <DropdownMenu>
@@ -348,6 +378,10 @@ interface MemberListProps {
   onUnban?: (pubkey: string) => void;
   /** Concord: the set of currently-banned pubkeys (hex). */
   bannedPubkeys?: Set<string>;
+  /** Per-member role labels (Buzz: member/guest/bot) for badge rendering. */
+  memberRoles?: Record<string, string>;
+  /** Live presence (Buzz: ephemeral kind-20001 heartbeats). */
+  presence?: Record<string, "online" | "away">;
   /** Close the panel (mobile overlay close button). */
   onClose?: () => void;
   /** Open the per-server nickname/label editor for the current user. */
@@ -370,6 +404,8 @@ export function MemberList({
   banLabel,
   onUnban,
   bannedPubkeys,
+  memberRoles,
+  presence,
   onClose,
   onEditProfile,
   className,
@@ -418,6 +454,7 @@ export function MemberList({
               key={admin.pubkey}
               pubkey={admin.pubkey}
               roles={admin.roles}
+              presence={presence?.[admin.pubkey]}
               canModerate={canModerate}
               viewerIsAdmin={viewerIsAdmin}
               currentUserPubkey={currentUserPubkey}
@@ -446,6 +483,8 @@ export function MemberList({
           <MemberRow
             key={pubkey}
             pubkey={pubkey}
+            roles={memberRoles?.[pubkey] ? [memberRoles[pubkey]] : undefined}
+            presence={presence?.[pubkey]}
             canModerate={canModerate}
             viewerIsAdmin={viewerIsAdmin}
             currentUserPubkey={currentUserPubkey}

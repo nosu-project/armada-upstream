@@ -26,9 +26,10 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { readClipboardText } from "@/lib/clipboard";
+import { claimBuzzInvite, fetchBuzzJoinPolicy, parseBuzzInviteUrl, type BuzzInvite, type BuzzJoinPolicy } from "@/buzz/invite";
 import { classifyAddInput, type ConcordInvite } from "@/concord-v1/lib/concord";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
-import { PINNED_RAIL_RELAYS, relayToHttpUrl } from "@/lib/platform";
+import { PINNED_RAIL_RELAYS, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 interface AddDialogProps {
@@ -194,10 +195,13 @@ export function AddBody({ onDone }: { onDone: () => void }) {
 
 /**
  * The "I already have something" path. One field, one classifier — checked in
- * order: a Concord V2 invite (`…/invite/<naddr>#…` or bare `naddr#fragment`),
- * a Concord V1 invite (link or bare token), or a NIP-29 relay URL.
+ * order: a Buzz relay invite (`https://<host>/invite/<code>` with a dotted
+ * HMAC code), a Concord V2 invite (`…/invite/<naddr>#…` or bare
+ * `naddr#fragment`), a Concord V1 invite (link or bare token), or a NIP-29
+ * relay URL.
  */
 type Classified =
+  | { kind: "buzz"; invite: BuzzInvite; identity: string }
   | { kind: "concord2"; invite: ParsedInviteLink; identity: string }
   | { kind: "concord1"; invite: ConcordInvite; identity: string }
   | { kind: "nip29"; relay: string; identity: string }
@@ -206,6 +210,8 @@ type Classified =
 function classify(input: string): Classified {
   const trimmed = input.trim();
   if (!trimmed) return { kind: "unknown", identity: "" };
+  const buzz = parseBuzzInviteUrl(trimmed);
+  if (buzz) return { kind: "buzz", invite: buzz, identity: `buzz:${buzz.host}:${buzz.code}` };
   const v2 = parseInviteLink(trimmed);
   if (v2) return { kind: "concord2", invite: v2, identity: `c2:${v2.naddr}` };
   const v1 = classifyAddInput(trimmed);
@@ -216,6 +222,7 @@ function classify(input: string): Classified {
 
 /** What a resolved (validated + loaded) target looks like, for the preview card. */
 type Target =
+  | { kind: "buzz"; relay: string; name?: string; description?: string; policy?: BuzzJoinPolicy; origin: string }
   | { kind: "concord2"; name: string; channelCount: number; relays: string[] }
   | { kind: "concord1"; name: string; about?: string; channelCount: number; relays: string[] }
   | { kind: "nip29"; relay: string; name?: string; description?: string };
@@ -234,6 +241,9 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
   const [resolving, setResolving] = useState(false);
   const [target, setTarget] = useState<Target | null>(null);
   const [committing, setCommitting] = useState(false);
+  // Buzz join-policy acceptance (only rendered when the relay requires one).
+  const [policyAccepted, setPolicyAccepted] = useState(false);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
 
   const classified = useMemo(() => classify(value), [value]);
   const identity = classified.identity;
@@ -258,6 +268,8 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     setTarget(null);
     setError(null);
+    setPolicyAccepted(false);
+    setAgeConfirmed(false);
     if (!identity) {
       setResolving(false);
       return;
@@ -267,7 +279,31 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
     setResolving(true);
     const timer = setTimeout(async () => {
       try {
-        if (classified.kind === "concord2") {
+        if (classified.kind === "buzz") {
+          const relay = classified.invite.relayUrl;
+          const [info, policy] = await Promise.all([
+            fetch(relayToHttpUrl(relay), {
+              headers: { Accept: "application/nostr+json" },
+              signal: AbortSignal.timeout(8000),
+            })
+              .then((res) =>
+                res.ok
+                  ? (res.json() as Promise<{ name?: string; description?: string }>)
+                  : ({} as { name?: string; description?: string }),
+              )
+              .catch(() => ({}) as { name?: string; description?: string }),
+            fetchBuzzJoinPolicy(classified.invite.origin).catch(() => undefined),
+          ]);
+          if (cancelled) return;
+          setTarget({
+            kind: "buzz",
+            relay,
+            name: info.name,
+            description: info.description,
+            policy,
+            origin: classified.invite.origin,
+          });
+        } else if (classified.kind === "concord2") {
           const p = await v2.preview({ invite: classified.invite });
           if (cancelled) return;
           setTarget({ kind: "concord2", name: p.name, channelCount: p.channelCount, relays: p.relays });
@@ -323,6 +359,33 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
     setError(null);
     setCommitting(true);
     try {
+      if (target.kind === "buzz") {
+        if (classified.kind !== "buzz") return;
+        if (!user) {
+          throw new Error("Sign in first — a Buzz invite is claimed with your key.");
+        }
+        if (target.policy && !policyAccepted) {
+          throw new Error("Accept the server's terms to join.");
+        }
+        if (target.policy?.ageAttestationRequired && !ageConfirmed) {
+          throw new Error("This server requires an age confirmation to join.");
+        }
+        await claimBuzzInvite(user.signer, classified.invite, {
+          policy: target.policy,
+          ageConfirmed,
+        });
+        updateConfig((current) =>
+          current.addedRelays.includes(target.relay)
+            ? current
+            : { ...current, addedRelays: [...current.addedRelays, target.relay] },
+        );
+        updateList({ type: "add-server", url: target.relay }).catch((err) =>
+          console.warn("Failed to sync server to group list:", err));
+        onDone();
+        toast({ title: "Joined", description: target.name || target.relay });
+        navigate(`/s/${relayToRouteParam(target.relay)}`);
+        return;
+      }
       if (target.kind === "concord2") {
         if (classified.kind !== "concord2") return;
         const { communityId, name } = await v2.join({ invite: classified.invite });
@@ -429,15 +492,76 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           {target && !resolving && (
             <>
               <TargetPreview target={target} />
+              {/* Buzz join policy: operator-configured terms must be accepted
+                  before the claim; the receipt is bound to the invite code. */}
+              {target.kind === "buzz" && target.policy && (
+                <div className="mt-3 space-y-2 text-left text-xs text-muted-foreground">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={policyAccepted}
+                      onChange={(e) => setPolicyAccepted(e.target.checked)}
+                    />
+                    <span>
+                      I accept this server's{" "}
+                      {target.policy.termsMarkdown ? (
+                        <a
+                          href={`${target.origin}/api/join-policy/terms`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline hover:text-foreground"
+                        >
+                          Terms of Service
+                        </a>
+                      ) : (
+                        "terms"
+                      )}
+                      {target.policy.privacyMarkdown && (
+                        <>
+                          {" "}and{" "}
+                          <a
+                            href={`${target.origin}/api/join-policy/privacy`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline hover:text-foreground"
+                          >
+                            Privacy Policy
+                          </a>
+                        </>
+                      )}
+                      .
+                    </span>
+                  </label>
+                  {target.policy.ageAttestationRequired && (
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={ageConfirmed}
+                        onChange={(e) => setAgeConfirmed(e.target.checked)}
+                      />
+                      <span>I confirm I meet this server's minimum age requirement.</span>
+                    </label>
+                  )}
+                </div>
+              )}
               <Button
                 type="submit"
-                disabled={busy}
+                disabled={
+                  busy ||
+                  (target.kind === "buzz" && !user) ||
+                  (target.kind === "buzz" && Boolean(target.policy) && !policyAccepted) ||
+                  (target.kind === "buzz" && Boolean(target.policy?.ageAttestationRequired) && !ageConfirmed)
+                }
                 className="mt-3 w-full clip-corner-lg"
               >
                 {busy ? (
                   <><Loader2 className="size-4 mr-2 animate-spin" /> {target.kind === "nip29" ? "Adding..." : "Joining..."}</>
                 ) : target.kind === "nip29" ? (
                   "Add server"
+                ) : target.kind === "buzz" && !user ? (
+                  "Sign in to join"
                 ) : (
                   "Join"
                 )}
@@ -452,21 +576,23 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
 
 /** The "here's where you're going" card shown once a target resolves. */
 function TargetPreview({ target }: { target: Target }) {
-  const isConcord = target.kind !== "nip29";
+  const isConcord = target.kind === "concord1" || target.kind === "concord2";
   const Icon = isConcord ? ShieldCheck : Server;
-  const title = target.kind === "nip29" ? target.name || target.relay : target.name;
+  const title = target.kind === "nip29" || target.kind === "buzz" ? target.name || target.relay : target.name;
   const subtitle =
-    target.kind === "nip29"
-      ? target.description || target.relay
-      : (target.kind === "concord1" && target.about) ||
-        `Encrypted community · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`;
+    target.kind === "buzz"
+      ? target.description || `Buzz workspace · ${target.relay}`
+      : target.kind === "nip29"
+        ? target.description || target.relay
+        : (target.kind === "concord1" && target.about) ||
+          `Encrypted community · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`;
 
   return (
     <div className="mt-3 flex items-start gap-3 rounded-lg bg-secondary/50 p-3 text-left">
       <Icon className={cn("mt-0.5 size-5 shrink-0", isConcord ? "text-success" : "text-muted-foreground")} />
       <div className="min-w-0">
         <div className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">
-          {isConcord ? "You're joining" : "You're adding the server"}
+          {isConcord ? "You're joining" : target.kind === "buzz" ? "You're joining the workspace" : "You're adding the server"}
         </div>
         <div className="truncate font-medium">{title || "Untitled"}</div>
         <div className="truncate text-xs text-muted-foreground">{subtitle}</div>
