@@ -2,7 +2,7 @@ import { ChevronLeft, FolderGit2 } from "lucide-react";
 import { Navigate, useParams } from "react-router-dom";
 import { useState } from "react";
 
-import { BuzzProjectsList } from "@/buzz/BuzzProjects";
+import { BuzzProjectsView } from "@/buzz/BuzzProjects";
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
@@ -61,7 +61,7 @@ export function ProjectsPage() {
           </header>
 
           <div className="flex-1 min-h-0 overflow-y-auto">
-            <BuzzProjectsList relayUrl={relayUrl} />
+            <BuzzProjectsView relayUrl={relayUrl} />
           </div>
         </main>
       </SwipeReveal>

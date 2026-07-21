@@ -1,12 +1,9 @@
-import { useNostr } from "@nostrify/react";
-import { useQuery } from "@tanstack/react-query";
-import { BookMarked, Check, ChevronDown, CircleDot, Copy, ExternalLink, GitBranch, GitMerge, GitPullRequest, Users } from "lucide-react";
+import { CircleDot, Copy, ExternalLink, FolderGit2, GitMerge, GitPullRequest, LayoutGrid, List, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -16,149 +13,43 @@ import { relativeTime } from "@/lib/formatTime";
 import { toast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import {
+  activityByDay,
+  type BuzzRepo,
+  type BuzzRepoSummary,
+  type BuzzWorkItem,
+  type BuzzWorkKind,
+  projectPeople,
+  repoSummaries,
+  useBuzzRepos,
+  useBuzzWorkItems,
+} from "@/buzz/useBuzzProjects";
 
-/** Compact recognition form for a pubkey: `abcd1234…wxyz` (never identity proof). */
-function truncatePubkey(pubkey: string): string {
-  return pubkey.length <= 12 ? pubkey : `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
+type Filter = "all" | "repositories" | "prs" | "issues";
+type ViewMode = "grid" | "list";
+
+// ---------------------------------------------------------------------------
+// People
+// ---------------------------------------------------------------------------
+
+/** Resolve a pubkey to its scoped display name. */
+function useName(pubkey: string): string {
+  const author = useAuthor(pubkey);
+  return useScopedDisplayName(pubkey, author.data?.metadata);
 }
 
-/** NIP-34 kinds (Buzz projects = git repos hosted on the relay). */
-const KIND_REPO = 30617;
-const KIND_PATCH = 1617;
-const KIND_PR = 1618;
-const KIND_ISSUE = 1621;
-const STATUS_KINDS = [1630, 1631, 1632, 1633];
-
-interface BuzzRepo {
-  coord: string;
-  owner: string;
-  id: string;
-  name: string;
-  description?: string;
-  cloneUrls: string[];
-  webUrl?: string;
-  contributors: string[];
-  createdAt: number;
-  event: NostrEvent;
+function AuthorName({ pubkey }: { pubkey: string }) {
+  return <span className="font-medium text-foreground/80">{useName(pubkey)}</span>;
 }
 
-function parseRepo(event: NostrEvent): BuzzRepo | undefined {
-  const d = event.tags.find(([n]) => n === "d")?.[1];
-  if (!d) return undefined;
-  const cloneTag = event.tags.find(([n]) => n === "clone");
-  return {
-    coord: `${KIND_REPO}:${event.pubkey}:${d}`,
-    owner: event.pubkey,
-    id: d,
-    name: event.tags.find(([n]) => n === "name")?.[1] || d,
-    description: event.tags.find(([n]) => n === "description")?.[1],
-    cloneUrls: cloneTag ? cloneTag.slice(1).filter(Boolean) : [],
-    webUrl: event.tags.find(([n]) => n === "web")?.[1],
-    contributors: event.tags.filter(([n]) => n === "p").map(([, v]) => v).filter(Boolean),
-    createdAt: event.created_at,
-    event,
-  };
-}
-
-/** The relay's repo announcements (kind 30617), newest per (owner, d). */
-function useBuzzRepos(relayUrl: string | undefined, enabled: boolean) {
-  const { nostr } = useNostr();
-  return useQuery<BuzzRepo[]>({
-    queryKey: ["buzz", "repos", relayUrl],
-    enabled: Boolean(relayUrl) && enabled,
-    staleTime: 60_000,
-    queryFn: async ({ signal }) => {
-      const events = await nostr.relay(relayUrl!).query(
-        [{ kinds: [KIND_REPO], limit: 100 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-      );
-      const newest = new Map<string, NostrEvent>();
-      for (const ev of events) {
-        const d = ev.tags.find(([n]) => n === "d")?.[1] ?? "";
-        const key = `${ev.pubkey}:${d}`;
-        const prev = newest.get(key);
-        if (!prev || ev.created_at > prev.created_at) newest.set(key, ev);
-      }
-      return [...newest.values()]
-        .map(parseRepo)
-        .filter((r): r is BuzzRepo => Boolean(r))
-        .sort((a, b) => b.createdAt - a.createdAt);
-    },
-  });
-}
-
-type GitItemStatus = "open" | "merged" | "closed" | "draft";
-
-interface GitItem {
-  event: NostrEvent;
-  kind: "issue" | "pr" | "patch";
-  subject: string;
-  status: GitItemStatus;
-}
-
-/** Issues + patches/PRs (with resolved statuses) for one repo coordinate. */
-function useBuzzRepoItems(relayUrl: string | undefined, coord: string | undefined) {
-  const { nostr } = useNostr();
-  return useQuery<GitItem[]>({
-    queryKey: ["buzz", "repo-items", relayUrl, coord],
-    enabled: Boolean(relayUrl && coord),
-    staleTime: 60_000,
-    queryFn: async ({ signal }) => {
-      const roots = await nostr.relay(relayUrl!).query(
-        [{ kinds: [KIND_PATCH, KIND_PR, KIND_ISSUE], "#a": [coord!], limit: 200 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-      );
-      const ids = roots.map((r) => r.id);
-      const statuses = ids.length
-        ? await nostr
-            .relay(relayUrl!)
-            .query([{ kinds: STATUS_KINDS, "#e": ids, limit: 500 }], {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-            })
-            .catch(() => [] as NostrEvent[])
-        : [];
-      // Latest status per root wins (the relay validates who may set it).
-      const statusByRoot = new Map<string, NostrEvent>();
-      for (const s of statuses) {
-        for (const [n, v] of s.tags) {
-          if (n !== "e" || !v) continue;
-          const prev = statusByRoot.get(v);
-          if (!prev || s.created_at > prev.created_at) statusByRoot.set(v, s);
-        }
-      }
-      const toStatus = (kind: number | undefined): GitItemStatus => {
-        switch (kind) {
-          case 1631: return "merged";
-          case 1632: return "closed";
-          case 1633: return "draft";
-          default: return "open";
-        }
-      };
-      return roots
-        .sort((a, b) => b.created_at - a.created_at)
-        .map((ev) => ({
-          event: ev,
-          kind: ev.kind === KIND_ISSUE ? "issue" as const : ev.kind === KIND_PR ? "pr" as const : "patch" as const,
-          subject:
-            ev.tags.find(([n]) => n === "subject")?.[1] ||
-            ev.content.split("\n").find((l) => l.trim()) ||
-            "(untitled)",
-          status: toStatus(statusByRoot.get(ev.id)?.kind),
-        }));
-    },
-  });
-}
-
-/** An author's avatar with a name tooltip (Buzz's People roster item). */
-function PubkeyAvatar({ pubkey }: { pubkey: string }) {
+function PersonAvatar({ pubkey, size = "size-7" }: { pubkey: string; size?: string }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
   const picture = author.data?.metadata?.picture;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Avatar className="size-8 border border-border/60">
+        <Avatar className={cn(size, "border border-border/60")}>
           <AvatarImage src={picture} alt={name} />
           <AvatarFallback className="text-[10px]">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
         </Avatar>
@@ -168,324 +59,635 @@ function PubkeyAvatar({ pubkey }: { pubkey: string }) {
   );
 }
 
-/** A clone URL in a bordered box with a click-to-copy affordance. */
-function CopyableUrl({ url }: { url: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
-    writeClipboardText(url).then(
-      () => {
-        setCopied(true);
-        toast({ title: "Clone URL copied" });
-        setTimeout(() => setCopied(false), 2000);
-      },
-      () => undefined,
-    );
-  };
+function PeopleStack({ pubkeys }: { pubkeys: string[] }) {
+  const visible = pubkeys.slice(0, 5);
+  const remaining = pubkeys.length - visible.length;
+  if (visible.length === 0) return null;
   return (
-    <div className="flex items-center gap-2 clip-corner-lg border border-border/60 bg-secondary/40 px-3 py-2">
-      <code className="min-w-0 flex-1 truncate text-sm text-foreground">{url}</code>
-      <button
-        type="button"
-        onClick={handleCopy}
-        className="shrink-0 text-muted-foreground hover:text-foreground"
-        aria-label="Copy clone URL"
-      >
-        {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
-      </button>
+    <div className="flex items-center -space-x-1.5">
+      {visible.map((pk, i) => (
+        <span key={pk} className="relative inline-flex ring-2 ring-card rounded-full" style={{ zIndex: visible.length - i }}>
+          <PersonAvatar pubkey={pk} size="size-6" />
+        </span>
+      ))}
+      {remaining > 0 && (
+        <span className="relative z-0 flex h-6 min-w-6 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-semibold text-muted-foreground ring-2 ring-card">
+          +{remaining}
+        </span>
+      )}
     </div>
   );
 }
 
-function StatusChip({ status }: { status: GitItemStatus }) {
-  const styles: Record<GitItemStatus, string> = {
-    open: "bg-success/15 text-success",
-    merged: "bg-primary/15 text-primary",
-    closed: "bg-destructive/15 text-destructive",
-    draft: "bg-muted text-muted-foreground",
-  };
+// ---------------------------------------------------------------------------
+// Contribution graph (GitHub-style activity heatmap for the last 26 weeks)
+// ---------------------------------------------------------------------------
+
+const DAYS_PER_WEEK = 7;
+const LEVEL_CLASSES = [
+  "bg-muted/40",
+  "bg-primary/25",
+  "bg-primary/50",
+  "bg-primary/75",
+  "bg-primary",
+];
+const LEVEL_LABELS = ["No activity", "1–2 events", "3–5 events", "6–9 events", "10+ events"];
+
+function graphDayKey(date: Date) {
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function levelFor(count: number) {
+  if (count <= 0) return 0;
+  if (count <= 2) return 1;
+  if (count <= 5) return 2;
+  if (count <= 9) return 3;
+  return 4;
+}
+
+function buildWeeks(today: Date, weekCount: number) {
+  const start = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - today.getDay() - (weekCount - 1) * DAYS_PER_WEEK,
+  );
+  return Array.from({ length: weekCount }, (_, w) =>
+    Array.from({ length: DAYS_PER_WEEK }, (_, d) => {
+      const date = new Date(start);
+      date.setDate(start.getDate() + w * DAYS_PER_WEEK + d);
+      return date;
+    }),
+  );
+}
+
+const MIN_LABEL_GAP = 3;
+function monthLabels(weeks: Date[][]) {
+  let lastLabeled = -MIN_LABEL_GAP;
+  return weeks.map((week, index) => {
+    const isNewMonth = index === 0 || week[0].getMonth() !== weeks[index - 1][0].getMonth();
+    if (!isNewMonth || index - lastLabeled < MIN_LABEL_GAP) return "";
+    lastLabeled = index;
+    return week[0].toLocaleDateString(undefined, { month: "short" });
+  });
+}
+
+function ContributionLegend() {
   return (
-    <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium", styles[status])}>
+    <div className="flex items-center gap-1.5">
+      <span className="text-[10px] text-muted-foreground">Less</span>
+      {LEVEL_CLASSES.map((levelClass, level) => (
+        <Tooltip key={levelClass}>
+          <TooltipTrigger asChild>
+            <span className={cn("size-2.5 rounded", levelClass)} />
+          </TooltipTrigger>
+          <TooltipContent>{LEVEL_LABELS[level]}</TooltipContent>
+        </Tooltip>
+      ))}
+      <span className="text-[10px] text-muted-foreground">More</span>
+    </div>
+  );
+}
+
+function ContributionGraph({ data }: { data: Record<string, number> }) {
+  const today = new Date();
+  const weeks = buildWeeks(today, 26);
+  const labels = monthLabels(weeks);
+  const gridTemplateColumns = `repeat(${weeks.length}, minmax(0, 1fr))`;
+  const todayKey = graphDayKey(today);
+  return (
+    <div className="space-y-2">
+      <div className="grid gap-1" style={{ gridTemplateColumns }}>
+        {labels.map((label, index) => (
+          <span
+            className="overflow-visible whitespace-nowrap text-[10px] font-medium text-muted-foreground"
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed-size grid
+            key={index}
+          >
+            {label}
+          </span>
+        ))}
+      </div>
+      <div className="grid grid-flow-col grid-rows-7 gap-1" style={{ gridTemplateColumns }}>
+        {weeks.map((week) =>
+          week.map((day) => {
+            const key = graphDayKey(day);
+            if (key > todayKey) {
+              return <span aria-hidden key={key} className="aspect-square rounded-[22%] border border-border/40" />;
+            }
+            const count = data[key] ?? 0;
+            const dateLabel = day.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+            return (
+              <Tooltip key={key}>
+                <TooltipTrigger asChild>
+                  <span className={cn("aspect-square w-full rounded-[22%]", LEVEL_CLASSES[levelFor(count)])} />
+                </TooltipTrigger>
+                <TooltipContent>
+                  {count > 0 ? `${count} ${count === 1 ? "event" : "events"} · ${dateLabel}` : `No activity · ${dateLabel}`}
+                </TooltipContent>
+              </Tooltip>
+            );
+          }),
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Work-item visuals
+// ---------------------------------------------------------------------------
+
+const WORK_VISUALS: Record<BuzzWorkKind, { icon: typeof CircleDot; badge: string; icclass: string }> = {
+  issue: { icon: CircleDot, badge: "bg-orange-500/10", icclass: "text-orange-500" },
+  pr: { icon: GitPullRequest, badge: "bg-success/10", icclass: "text-success" },
+  patch: { icon: GitMerge, badge: "bg-primary/10", icclass: "text-primary" },
+};
+
+function WorkItemIcon({ kind, className }: { kind: BuzzWorkKind; className?: string }) {
+  const v = WORK_VISUALS[kind];
+  const Icon = v.icon;
+  return (
+    <span className={cn("inline-flex size-6 shrink-0 items-center justify-center rounded-full ring-1 ring-border/60", v.badge, className)}>
+      <Icon className={cn("size-3", v.icclass)} />
+    </span>
+  );
+}
+
+const STATUS_STYLES: Record<BuzzWorkItem["status"], string> = {
+  open: "bg-success/15 text-success",
+  merged: "bg-primary/15 text-primary",
+  closed: "bg-destructive/15 text-destructive",
+  draft: "bg-muted text-muted-foreground",
+};
+
+function StatusChip({ status }: { status: BuzzWorkItem["status"] }) {
+  return (
+    <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize", STATUS_STYLES[status])}>
       {status}
     </span>
   );
 }
 
-function GitItemRow({ item }: { item: GitItem }) {
-  const author = useAuthor(item.event.pubkey);
-  const name = useScopedDisplayName(item.event.pubkey, author.data?.metadata);
-  const Icon = item.kind === "issue" ? CircleDot : item.kind === "pr" ? GitPullRequest : GitMerge;
+/** A feed/list row for a single issue / patch / PR. */
+function WorkItemRow({ item, repoName }: { item: BuzzWorkItem; repoName?: string }) {
   return (
-    <div className="flex items-center gap-2 py-1.5 text-sm">
-      <Icon className="size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate">{item.subject}</span>
-      <span className="shrink-0 text-xs text-muted-foreground truncate max-w-24">{name}</span>
+    <article className="flex min-w-0 items-center justify-between gap-3 p-3 transition-colors hover:bg-foreground/[0.03]">
+      <div className="flex min-w-0 flex-1 items-start gap-2.5">
+        <WorkItemIcon kind={item.kind} />
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="truncate text-sm font-semibold leading-5 text-foreground">{item.title}</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs leading-4 text-muted-foreground">
+            {repoName && <span className="truncate">{repoName}</span>}
+            {repoName && <span aria-hidden>·</span>}
+            <span>{relativeTime(item.createdAt)}</span>
+            <span aria-hidden>·</span>
+            <span>by <AuthorName pubkey={item.author} /></span>
+          </div>
+        </div>
+      </div>
       <StatusChip status={item.status} />
+    </article>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Repository card / row
+// ---------------------------------------------------------------------------
+
+function RepoIcon() {
+  return (
+    <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40">
+      <FolderGit2 className="size-[1.125rem] text-muted-foreground" />
+    </span>
+  );
+}
+
+function CloneButton({ url }: { url: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 text-muted-foreground hover:text-foreground"
+          aria-label="Copy clone URL"
+          onClick={() =>
+            writeClipboardText(url).then(() => toast({ title: "Clone URL copied" }), () => undefined)}
+        >
+          <Copy className="size-3.5" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>Copy clone URL</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function safeWeb(webUrl?: string): string | null {
+  if (!webUrl) return null;
+  try {
+    return /^https?:$/.test(new URL(webUrl).protocol) ? webUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Segmented PRs/issues distribution bar. */
+function ActivityBar({ summary }: { summary: BuzzRepoSummary }) {
+  const items = [
+    { count: summary.prCount, bar: "bg-primary", label: summary.prCount === 1 ? "PR" : "PRs" },
+    { count: summary.issueCount, bar: "bg-orange-500", label: summary.issueCount === 1 ? "issue" : "issues" },
+  ];
+  const total = items.reduce((s, i) => s + i.count, 0);
+  return (
+    <div className="flex h-1.5 w-full gap-px overflow-hidden rounded-full bg-muted/60">
+      {total > 0
+        ? items.filter((i) => i.count > 0).map((i) => (
+            <Tooltip key={i.bar}>
+              <TooltipTrigger asChild>
+                <div className={cn("h-full", i.bar)} style={{ width: `${(i.count / total) * 100}%` }} />
+              </TooltipTrigger>
+              <TooltipContent>
+                <span className="flex items-center gap-1.5">
+                  <span className={cn("size-2 rounded-full", i.bar)} />
+                  {i.count} {i.label}
+                </span>
+              </TooltipContent>
+            </Tooltip>
+          ))
+        : null}
     </div>
   );
 }
 
-/**
- * A repository row (Buzz's RepoListItem): icon + name + "Public" badge, a
- * two-line description, then owner + updated-time metadata. Expands in place to
- * reveal clone URLs, an optional web link and the repo's issues/patches/PRs —
- * Armada has no HTTP git browser, so the NIP-34 activity stands in for Buzz's
- * code/commits detail tabs.
- */
-function RepoListItem({ relayUrl, repo }: { relayUrl: string; repo: BuzzRepo }) {
-  const [open, setOpen] = useState(false);
-  const { data: items, isLoading } = useBuzzRepoItems(relayUrl, open ? repo.coord : undefined);
-  const issues = useMemo(() => (items ?? []).filter((i) => i.kind === "issue"), [items]);
-  const changes = useMemo(() => (items ?? []).filter((i) => i.kind !== "issue"), [items]);
+function StatsRow({ summary }: { summary: BuzzRepoSummary }) {
+  return (
+    <div className="flex items-center gap-x-3 text-xs leading-4 text-muted-foreground">
+      <span className="flex items-center gap-1">
+        <GitPullRequest className="size-3.5 shrink-0 text-primary" />
+        <span className="font-medium text-foreground">{summary.prCount}</span> {summary.prCount === 1 ? "PR" : "PRs"}
+      </span>
+      <span className="flex items-center gap-1">
+        <CircleDot className="size-3.5 shrink-0 text-orange-500" />
+        <span className="font-medium text-foreground">{summary.issueCount}</span> {summary.issueCount === 1 ? "issue" : "issues"}
+      </span>
+    </div>
+  );
+}
 
-  // Validate the web link scheme to prevent javascript: URLs.
-  const safeWebUrl = useMemo(() => {
-    if (!repo.webUrl) return null;
-    try {
-      return /^https?:$/.test(new URL(repo.webUrl).protocol) ? repo.webUrl : null;
-    } catch {
-      return null;
-    }
-  }, [repo.webUrl]);
+function RepoCard({ repo, summary, people }: { repo: BuzzRepo; summary: BuzzRepoSummary; people: string[] }) {
+  const web = safeWeb(repo.webUrl);
+  return (
+    <Card className="relative flex min-h-44 flex-col overflow-hidden border-border/60 bg-card shadow-none transition-colors hover:bg-foreground/[0.02]">
+      <div className="flex min-w-0 items-center justify-between gap-3 px-4 pt-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <RepoIcon />
+          <span className="min-w-0 truncate text-sm font-semibold text-foreground">{repo.name}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <span className="whitespace-nowrap text-xs text-muted-foreground/70">{relativeTime(repo.createdAt)}</span>
+          {web && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground" asChild>
+                  <a href={web} target="_blank" rel="noopener noreferrer" aria-label="View on web">
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>View on web</TooltipContent>
+            </Tooltip>
+          )}
+          {repo.cloneUrls[0] && <CloneButton url={repo.cloneUrls[0]} />}
+        </div>
+      </div>
+
+      <p className="line-clamp-2 min-h-10 px-4 py-2 text-sm text-muted-foreground">
+        {repo.description || "A shared space for git work."}
+      </p>
+
+      <div className="flex items-center px-4 pb-1">
+        <PeopleStack pubkeys={people} />
+      </div>
+
+      <div className="mt-auto">
+        <div className="flex min-w-0 items-center px-4 pb-2 pt-1">
+          <StatsRow summary={summary} />
+        </div>
+        <div className="px-4 pb-3">
+          <ActivityBar summary={summary} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function RepoRow({ repo, summary, people }: { repo: BuzzRepo; summary: BuzzRepoSummary; people: string[] }) {
+  const web = safeWeb(repo.webUrl);
+  return (
+    <div className="flex min-w-0 items-center gap-2.5 px-3 py-3 transition-colors hover:bg-foreground/[0.03]">
+      <RepoIcon />
+      <div className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold text-foreground">{repo.name}</span>
+        <p className="truncate text-xs text-muted-foreground">{repo.description || "A shared space for git work."}</p>
+      </div>
+      <div className="hidden items-center gap-4 sm:flex">
+        <StatsRow summary={summary} />
+        <div className="w-20"><ActivityBar summary={summary} /></div>
+      </div>
+      <div className="hidden w-24 justify-end lg:flex"><PeopleStack pubkeys={people} /></div>
+      <span className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground/70 md:block">{relativeTime(repo.createdAt)}</span>
+      <div className="flex shrink-0 items-center">
+        {web && (
+          <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground" asChild>
+            <a href={web} target="_blank" rel="noopener noreferrer" aria-label="View on web">
+              <ExternalLink className="size-3.5" />
+            </a>
+          </Button>
+        )}
+        {repo.cloneUrls[0] && <CloneButton url={repo.cloneUrls[0]} />}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tabs, stat pills, overview
+// ---------------------------------------------------------------------------
+
+const TABS: Array<{ label: string; value: Filter }> = [
+  { label: "Overview", value: "all" },
+  { label: "Repositories", value: "repositories" },
+  { label: "Pull Requests", value: "prs" },
+  { label: "Issues", value: "issues" },
+];
+
+function Tabs({ filter, onChange }: { filter: Filter; onChange: (f: Filter) => void }) {
+  return (
+    <div className="flex h-[3.25rem] items-stretch gap-1 overflow-x-auto border-b border-border/60 scrollbar-none [&::-webkit-scrollbar]:hidden">
+      {TABS.map((tab) => {
+        const active = filter === tab.value;
+        return (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => onChange(tab.value)}
+            aria-pressed={active}
+            className={cn(
+              "relative shrink-0 px-3 text-base leading-5 tracking-tight transition-colors",
+              "after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:bg-current after:transition-opacity after:content-['']",
+              active
+                ? "font-semibold text-foreground after:opacity-100"
+                : "text-muted-foreground hover:text-foreground after:opacity-0 hover:after:opacity-100",
+            )}
+          >
+            {tab.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function StatPill({ count, icon: Icon, label, onClick }: {
+  count: number;
+  icon: typeof FolderGit2;
+  label: string;
+  onClick?: () => void;
+}) {
+  const Comp = onClick ? "button" : "div";
+  return (
+    <Comp
+      {...(onClick ? { type: "button" as const, onClick } : {})}
+      className={cn(
+        "flex flex-col clip-corner-lg border border-border/60 bg-card px-3.5 py-3 text-left",
+        onClick && "transition-colors hover:bg-foreground/[0.03]",
+      )}
+    >
+      <span className="flex w-full items-center justify-between gap-2">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <Icon className="size-3.5 text-muted-foreground/70" />
+      </span>
+      <span className="mt-auto pt-4 text-4xl font-semibold leading-none tracking-tight text-foreground">{count}</span>
+    </Comp>
+  );
+}
+
+function Overview({
+  repos,
+  items,
+  people,
+  onSelect,
+}: {
+  repos: BuzzRepo[];
+  items: BuzzWorkItem[];
+  people: string[];
+  onSelect: (f: Filter) => void;
+}) {
+  const graph = useMemo(() => activityByDay(repos, items), [repos, items]);
+  const prCount = items.filter((i) => i.kind !== "issue").length;
+  const issueCount = items.filter((i) => i.kind === "issue").length;
+  const repoNameByCoord = useMemo(() => new Map(repos.map((r) => [r.coord, r.name])), [repos]);
+  const feed = useMemo(() => items.slice(0, 20), [items]);
 
   return (
-    <div className="py-5">
-      {/* Row 1: icon + name (toggles expand) + badge + chevron */}
-      <div className="flex items-center gap-2">
-        <BookMarked className="size-4 shrink-0 text-muted-foreground" />
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="text-lg font-semibold text-foreground underline-offset-4 hover:text-foreground/70 hover:underline"
-        >
-          {repo.name}
-        </button>
-        <Badge variant="outline" className="ml-1 border-border/60 text-muted-foreground">
-          Public
-        </Badge>
-        <ChevronDown
-          className={cn(
-            "ml-auto size-4 shrink-0 text-muted-foreground transition-transform",
-            open && "rotate-180",
-          )}
-        />
+    <div className="space-y-6">
+      {/* Stat pills */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatPill count={repos.length} icon={FolderGit2} label="Repositories" onClick={() => onSelect("repositories")} />
+        <StatPill count={prCount} icon={GitPullRequest} label="Pull requests" onClick={() => onSelect("prs")} />
+        <StatPill count={issueCount} icon={CircleDot} label="Issues" onClick={() => onSelect("issues")} />
+        <StatPill count={people.length} icon={Users} label="People" />
       </div>
 
-      {/* Row 2: description */}
-      {repo.description && (
-        <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{repo.description}</p>
-      )}
-
-      {/* Row 3: metadata */}
-      <div className="mt-2 flex items-center gap-4 text-xs text-muted-foreground">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="cursor-default font-mono">{truncatePubkey(repo.owner)}</span>
-          </TooltipTrigger>
-          <TooltipContent>{repo.owner}</TooltipContent>
-        </Tooltip>
-        <span>Updated {relativeTime(repo.createdAt)}</span>
-      </div>
-
-      {/* Expanded: clone + web + activity */}
-      {open && (
-        <div className="mt-4 space-y-5">
-          {repo.cloneUrls.length > 0 && (
-            <div>
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Clone
-              </h3>
-              <div className="space-y-2">
-                {repo.cloneUrls.map((url) => <CopyableUrl key={url} url={url} />)}
-              </div>
-            </div>
-          )}
-
-          {safeWebUrl && (
-            <Button variant="outline" size="sm" className="gap-2" asChild>
-              <a href={safeWebUrl} target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="size-4" />
-                View on web
-              </a>
-            </Button>
-          )}
-
-          {isLoading ? (
-            <div className="space-y-1.5">
-              <Skeleton className="h-5 w-full" />
-              <Skeleton className="h-5 w-2/3" />
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        {/* Activity feed */}
+        <section className="space-y-3">
+          <h3 className="text-base font-semibold text-foreground">Recent activity</h3>
+          {feed.length > 0 ? (
+            <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
+              {feed.map((item) => (
+                <WorkItemRow key={item.id} item={item} repoName={item.repoCoord ? repoNameByCoord.get(item.repoCoord) : undefined} />
+              ))}
             </div>
           ) : (
-            <>
-              {issues.length > 0 && (
-                <div>
-                  <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Issues · {issues.length}
-                  </h3>
-                  <div className="divide-y divide-border/60">
-                    {issues.map((item) => <GitItemRow key={item.event.id} item={item} />)}
-                  </div>
-                </div>
-              )}
-              {changes.length > 0 && (
-                <div>
-                  <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Patches &amp; PRs · {changes.length}
-                  </h3>
-                  <div className="divide-y divide-border/60">
-                    {changes.map((item) => <GitItemRow key={item.event.id} item={item} />)}
-                  </div>
-                </div>
-              )}
-              {issues.length === 0 && changes.length === 0 && (
-                <p className="text-xs text-muted-foreground">No issues or patches yet.</p>
-              )}
-            </>
+            <p className="clip-corner-lg border border-dashed border-border/60 px-4 py-10 text-center text-sm text-muted-foreground">
+              No activity yet.
+            </p>
           )}
+        </section>
+
+        {/* Rail: people + contribution graph */}
+        <div className="space-y-6">
+          <section className="space-y-3">
+            <h3 className="text-base font-semibold text-foreground">People</h3>
+            {people.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {people.slice(0, 18).map((pk) => <PersonAvatar key={pk} pubkey={pk} />)}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No people yet.</p>
+            )}
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-base font-semibold text-foreground">Contribution activity</h3>
+            <ContributionGraph data={graph} />
+            <ContributionLegend />
+          </section>
         </div>
-      )}
-    </div>
-  );
-}
-
-/** Right-hand roster of everyone who owns or contributes to a repo here. */
-function PeopleSidebar({ repos }: { repos: BuzzRepo[] }) {
-  const pubkeys = useMemo(() => {
-    const set = new Set<string>();
-    for (const repo of repos) {
-      set.add(repo.owner);
-      for (const c of repo.contributors) set.add(c);
-    }
-    return [...set];
-  }, [repos]);
-
-  if (pubkeys.length === 0) return null;
-
-  const visible = pubkeys.slice(0, 20);
-  const overflow = pubkeys.length - visible.length;
-
-  return (
-    <aside className="hidden w-64 shrink-0 border-l border-border/60 pl-8 lg:block">
-      <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-        <Users className="size-4" />
-        People
-      </h3>
-      <div className="flex flex-wrap gap-2">
-        {visible.map((pk) => <PubkeyAvatar key={pk} pubkey={pk} />)}
-      </div>
-      {overflow > 0 && (
-        <span className="mt-2 block text-xs text-muted-foreground">{pubkeys.length} people</span>
-      )}
-    </aside>
-  );
-}
-
-function ListItemSkeleton() {
-  return (
-    <div className="py-5">
-      <div className="flex items-center gap-2">
-        <Skeleton className="size-4 shrink-0" />
-        <Skeleton className="h-5 w-48" />
-        <Skeleton className="h-5 w-14" />
-      </div>
-      <Skeleton className="mt-2 h-4 w-3/4" />
-      <div className="mt-2 flex gap-4">
-        <Skeleton className="h-3 w-24" />
-        <Skeleton className="h-3 w-20" />
       </div>
     </div>
   );
 }
 
-type SortOrder = "newest" | "oldest" | "name";
+// ---------------------------------------------------------------------------
+// Loading / empty
+// ---------------------------------------------------------------------------
+
+function CardsSkeleton() {
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {["a", "b", "c", "d"].map((k) => <Skeleton key={k} className="h-44 w-full" />)}
+    </div>
+  );
+}
+
+function EmptyState({ icon: Icon, title, hint }: { icon: typeof FolderGit2; title: string; hint: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 px-4 py-20 text-center">
+      <Icon className="size-10 text-muted-foreground/40" />
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-foreground">{title}</p>
+        <p className="text-sm text-muted-foreground">{hint}</p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main view
+// ---------------------------------------------------------------------------
 
 /**
- * Read-only view of a Buzz workspace's projects: the relay's NIP-34 repo
- * announcements (kind 30617) with their issues (1621), patches (1617) and
- * PRs (1618), each resolved to its latest status (1630–1633). Modeled on the
- * Buzz web client's Repositories page — a searchable/sortable list with a
- * People roster — using Armada's theme tokens.
+ * A Buzz workspace's Projects view — modeled on the Buzz desktop app: tabbed
+ * Overview / Repositories / Pull Requests / Issues, a stat-pill summary, a
+ * GitHub-style contribution graph, a people roster and an activity feed, all
+ * driven by the relay's NIP-34 events (repos 30617, issues 1621, patches 1617,
+ * PRs 1618, statuses 1630–1633).
  */
-export function BuzzProjectsList({ relayUrl }: { relayUrl: string }) {
-  const { data: repos, isLoading } = useBuzzRepos(relayUrl, true);
-  const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<SortOrder>("newest");
+export function BuzzProjectsView({ relayUrl }: { relayUrl: string }) {
+  const { data: repos, isLoading: reposLoading } = useBuzzRepos(relayUrl);
+  const { data: workItems, isLoading: itemsLoading } = useBuzzWorkItems(relayUrl);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [sort, setSort] = useState<"updated" | "name">("updated");
 
-  const filtered = useMemo(() => {
-    if (!repos) return [];
-    const term = search.toLowerCase();
-    const result = repos.filter(
-      (r) =>
-        r.name.toLowerCase().includes(term) ||
-        (r.description ?? "").toLowerCase().includes(term),
-    );
-    switch (sort) {
-      case "newest":
-        return result.sort((a, b) => b.createdAt - a.createdAt);
-      case "oldest":
-        return result.sort((a, b) => a.createdAt - b.createdAt);
-      case "name":
-        return result.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-    }
-  }, [repos, search, sort]);
+  const items = useMemo(() => workItems ?? [], [workItems]);
+  const summaries = useMemo(() => repoSummaries(items), [items]);
+  const people = useMemo(() => projectPeople(repos ?? [], items), [repos, items]);
+  const repoNameByCoord = useMemo(() => new Map((repos ?? []).map((r) => [r.coord, r.name])), [repos]);
+
+  const sortedRepos = useMemo(() => {
+    const list = [...(repos ?? [])];
+    return sort === "name"
+      ? list.sort((a, b) => a.name.localeCompare(b.name))
+      : list.sort((a, b) => b.createdAt - a.createdAt);
+  }, [repos, sort]);
+
+  const prs = useMemo(() => items.filter((i) => i.kind !== "issue"), [items]);
+  const issues = useMemo(() => items.filter((i) => i.kind === "issue"), [items]);
+  const summaryOf = (coord: string): BuzzRepoSummary => summaries.get(coord) ?? { prCount: 0, issueCount: 0 };
+  const peopleOf = (repo: BuzzRepo): string[] => [...new Set([repo.owner, ...repo.contributors])];
+
+  const loading = reposLoading || itemsLoading;
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-1 gap-8 px-4 py-6">
-      <div className="min-w-0 flex-1">
-        <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-foreground">
-          <BookMarked className="size-4" /> Repositories
-        </h2>
+    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
+      <p className="mb-4 text-sm text-muted-foreground">Browse this workspace's repositories and activity.</p>
 
-        {/* Search + sort */}
-        <div className="mb-4 flex gap-3">
-          <Input
-            placeholder="Find a repository…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="flex-1"
-          />
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortOrder)}
-            aria-label="Sort repositories"
-            className="clip-corner-lg border border-input bg-background px-3 py-1 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-            <option value="name">Name</option>
-          </select>
-        </div>
-
-        {isLoading ? (
-          <div className="divide-y divide-border/60">
-            {["a", "b", "c", "d", "e"].map((k) => <ListItemSkeleton key={k} />)}
-          </div>
-        ) : filtered.length > 0 ? (
-          <div className="divide-y divide-border/60">
-            {filtered.map((repo) => <RepoListItem key={repo.coord} relayUrl={relayUrl} repo={repo} />)}
-          </div>
-        ) : (repos?.length ?? 0) > 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="flex size-14 items-center justify-center rounded-full bg-secondary">
-              <GitBranch className="size-7 text-muted-foreground" />
+      {/* Tabs + controls */}
+      <div className="flex items-end justify-between gap-3">
+        <Tabs filter={filter} onChange={setFilter} />
+        {filter !== "all" && (
+          <div className="mb-2 flex items-center gap-2">
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as "updated" | "name")}
+              aria-label="Sort"
+              className="h-8 clip-corner-lg bg-transparent px-2 text-xs text-foreground outline-none hover:bg-foreground/5 focus:ring-1 focus:ring-ring"
+            >
+              <option value="updated">Recent</option>
+              <option value="name">Name</option>
+            </select>
+            <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
+              <Button
+                variant={viewMode === "grid" ? "secondary" : "ghost"}
+                size="icon"
+                className="size-7"
+                aria-label="Grid layout"
+                aria-pressed={viewMode === "grid"}
+                onClick={() => setViewMode("grid")}
+              >
+                <LayoutGrid className="size-3.5" />
+              </Button>
+              <Button
+                variant={viewMode === "list" ? "secondary" : "ghost"}
+                size="icon"
+                className="size-7"
+                aria-label="List layout"
+                aria-pressed={viewMode === "list"}
+                onClick={() => setViewMode("list")}
+              >
+                <List className="size-3.5" />
+              </Button>
             </div>
-            <h2 className="mt-4 text-lg font-semibold text-foreground">No matching repositories</h2>
-            <p className="mt-1 max-w-sm text-sm text-muted-foreground">Try adjusting your search term.</p>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="flex size-14 items-center justify-center rounded-full bg-secondary">
-              <BookMarked className="size-7 text-muted-foreground" />
-            </div>
-            <h2 className="mt-4 text-lg font-semibold text-foreground">This workspace is empty</h2>
-            <p className="mt-1 max-w-md text-sm text-muted-foreground">
-              Repositories pushed to this workspace will show up here.
-            </p>
           </div>
         )}
       </div>
 
-      {repos && repos.length > 0 && <PeopleSidebar repos={repos} />}
+      <div className="pt-6">
+        {loading ? (
+          <CardsSkeleton />
+        ) : (repos?.length ?? 0) === 0 ? (
+          <EmptyState icon={FolderGit2} title="No projects yet" hint="Repositories pushed to this workspace will appear here." />
+        ) : filter === "all" ? (
+          <Overview repos={repos ?? []} items={items} people={people} onSelect={setFilter} />
+        ) : filter === "repositories" ? (
+          viewMode === "grid" ? (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {sortedRepos.map((repo) => (
+                <RepoCard key={repo.coord} repo={repo} summary={summaryOf(repo.coord)} people={peopleOf(repo)} />
+              ))}
+            </div>
+          ) : (
+            <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
+              {sortedRepos.map((repo) => (
+                <RepoRow key={repo.coord} repo={repo} summary={summaryOf(repo.coord)} people={peopleOf(repo)} />
+              ))}
+            </div>
+          )
+        ) : filter === "prs" ? (
+          prs.length > 0 ? (
+            <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
+              {prs.map((item) => (
+                <WorkItemRow key={item.id} item={item} repoName={item.repoCoord ? repoNameByCoord.get(item.repoCoord) : undefined} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState icon={GitPullRequest} title="No pull requests" hint="Patches and PRs opened on this workspace will appear here." />
+          )
+        ) : issues.length > 0 ? (
+          <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
+            {issues.map((item) => (
+              <WorkItemRow key={item.id} item={item} repoName={item.repoCoord ? repoNameByCoord.get(item.repoCoord) : undefined} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState icon={CircleDot} title="No issues" hint="Issues opened on this workspace will appear here." />
+        )}
+      </div>
     </div>
   );
 }
