@@ -349,19 +349,20 @@ function RaisedHandBadge({ pubkey }: { pubkey: string }) {
 }
 
 /**
- * A small deterministic horizontal jitter (−20..20px) keyed off the reaction
+ * A small deterministic horizontal jitter (−16..16px) keyed off the reaction
  * nonce, so simultaneous emoji from one participant don't stack exactly and
  * read as a little burst.
  */
 function reactionOffset(nonce: string): number {
   let h = 0;
   for (let i = 0; i < nonce.length; i++) h = (h * 31 + nonce.charCodeAt(i)) | 0;
-  return (h % 41) - 20;
+  return (h % 33) - 16;
 }
 
 /**
- * The transient emoji reactions floating up from a participant's tile (à la
- * Zoom/Signal). Each fades and drifts upward on its own (~4s, matching the
+ * The transient emoji reactions floating up a participant's tile (à la
+ * Zoom/Signal). They rise up the CENTRE of the tile — deliberately clear of the
+ * bottom-left nameplate — fading and drifting on their own (~4s, matching the
  * reaction TTL), keyed by nonce so React mounts/unmounts each independently.
  */
 function TileReactions({ pubkey }: { pubkey: string }) {
@@ -369,11 +370,11 @@ function TileReactions({ pubkey }: { pubkey: string }) {
   const mine = reactions.filter((r) => r.author === pubkey);
   if (mine.length === 0) return null;
   return (
-    <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden" aria-hidden>
+    <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden" aria-hidden>
       {mine.map((r) => (
         <span
           key={r.nonce}
-          className="absolute bottom-2 left-1/2 font-emoji text-3xl leading-none animate-reaction-float drop-shadow"
+          className="absolute bottom-[28%] left-1/2 font-emoji text-3xl leading-none animate-reaction-float drop-shadow"
           style={{ marginLeft: reactionOffset(r.nonce) }}
         >
           {r.emoji}
@@ -674,20 +675,22 @@ const supportsScreenShare =
   typeof navigator.mediaDevices?.getDisplayMedia === "function";
 
 /**
- * The compact media controls shown in the floating window: mute/unmute,
- * camera on/off, screen share, and leave. Rendered inside the LiveKit room
+ * The compact media controls shown inside the call stage: mute/unmute, camera
+ * on/off, screen share, reactions, and leave. Used by the floating window and
+ * by theater mode (where the fixed call bar is hidden behind the overlay, so
+ * this is the only way to control the call). Rendered inside the LiveKit room
  * context (it's part of the reparented CallStage), so it reuses the room's
  * existing local participant + publish state via `useLocalParticipant` — no
  * duplicate media state is created. Mirrors the VoiceBar's control behavior
  * (sounds, screen-share picker/cancellation + error handling) so the two stay
  * consistent.
  */
-function FloatingControls() {
+function StageControls({ className }: { className?: string }) {
   const { leaveCall } = useCall();
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } =
     useLocalParticipant();
   return (
-    <div className="flex items-center justify-center gap-1.5 px-2 py-1.5 shrink-0 border-t border-white/10">
+    <div className={cn("flex items-center justify-center gap-1.5 px-2 py-1.5 shrink-0 border-t border-white/10", className)}>
       <button
         type="button"
         aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}
@@ -773,6 +776,41 @@ function FloatingControls() {
       </DisconnectButton>
     </div>
   );
+}
+
+/** localStorage key + bounds for the drag-resizable docked stage height (px). */
+const DOCKED_HEIGHT_KEY = "armada:call-stage:docked-height";
+const DOCKED_MIN = 220;
+
+/** The docked pane's max height: most of the viewport, leaving chat visible. */
+function dockedMax(): number {
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  return Math.max(DOCKED_MIN, Math.round(vh * 0.85));
+}
+
+function clampDocked(px: number): number {
+  return Math.min(Math.max(px, DOCKED_MIN), dockedMax());
+}
+
+function loadDockedHeight(): number {
+  try {
+    const raw = localStorage.getItem(DOCKED_HEIGHT_KEY);
+    const n = raw ? parseFloat(raw) : NaN;
+    if (Number.isFinite(n)) return clampDocked(n);
+  } catch {
+    // ignore malformed/blocked storage
+  }
+  // Default ~42vh, matching the pane's previous fixed height.
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  return clampDocked(Math.round(vh * 0.42));
+}
+
+function saveDockedHeight(px: number): void {
+  try {
+    localStorage.setItem(DOCKED_HEIGHT_KEY, String(Math.round(px)));
+  } catch {
+    // ignore quota/private-mode failures
+  }
 }
 
 /**
@@ -1001,6 +1039,51 @@ export function CallStage({
   );
   const selectedShareParticipant = selectedShareTrackRef?.participant ?? null;
 
+  // Drag-resizable height for the docked pane (persisted). A thin handle at the
+  // pane's bottom edge drives it; clamped to [DOCKED_MIN, ~85vh].
+  const [dockedHeight, setDockedHeight] = useState(() => loadDockedHeight());
+  const dockedResize = useRef<{ startY: number; startH: number; pointerId: number } | null>(null);
+  const onDockedResizeMove = useCallback((e: PointerEvent) => {
+    const a = dockedResize.current;
+    if (!a || e.pointerId !== a.pointerId) return;
+    setDockedHeight(clampDocked(a.startH + (e.clientY - a.startY)));
+  }, []);
+  const endDockedResize = useCallback(
+    (e: PointerEvent) => {
+      const a = dockedResize.current;
+      if (!a || e.pointerId !== a.pointerId) return;
+      dockedResize.current = null;
+      window.removeEventListener("pointermove", onDockedResizeMove);
+      window.removeEventListener("pointerup", endDockedResize);
+      window.removeEventListener("pointercancel", endDockedResize);
+      setDockedHeight((h) => {
+        saveDockedHeight(h);
+        return h;
+      });
+    },
+    [onDockedResizeMove],
+  );
+  const beginDockedResize = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      dockedResize.current = { startY: e.clientY, startH: dockedHeight, pointerId: e.pointerId };
+      window.addEventListener("pointermove", onDockedResizeMove);
+      window.addEventListener("pointerup", endDockedResize);
+      window.addEventListener("pointercancel", endDockedResize);
+      e.preventDefault();
+    },
+    [dockedHeight, onDockedResizeMove, endDockedResize],
+  );
+  // Clean up global listeners if we unmount mid-resize.
+  useEffect(
+    () => () => {
+      window.removeEventListener("pointermove", onDockedResizeMove);
+      window.removeEventListener("pointerup", endDockedResize);
+      window.removeEventListener("pointercancel", endDockedResize);
+    },
+    [onDockedResizeMove, endDockedResize],
+  );
+
   // Theater mode: detach the stage into a full-viewport overlay.
   const [theater, setTheater] = useState(false);
   // Leaving the call / closing the stage also exits theater.
@@ -1045,6 +1128,7 @@ export function CallStage({
       <span className="text-xs text-muted-foreground tabular-nums shrink-0">
         {participants.length} in call
       </span>
+      <ReactionsMenu floating />
       <button
         type="button"
         aria-label={theater ? "Exit theater mode" : "Theater mode"}
@@ -1109,6 +1193,9 @@ export function CallStage({
       <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in-0 duration-150">
         {header}
         {body}
+        {/* The fixed call bar is behind this overlay, so theater carries its own
+            control row (mic/camera/screen/reactions/leave). */}
+        <StageControls className="pb-[max(0.375rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]" />
       </div>,
       document.body,
     );
@@ -1186,7 +1273,7 @@ export function CallStage({
         {/* Media controls: only in the desktop floating window. On mobile the
             fixed MobileCallBar already carries mic/camera/screen-share/leave, so
             duplicating them here would be redundant. */}
-        {!isMobileFloating && <FloatingControls />}
+        {!isMobileFloating && <StageControls />}
       </div>
     );
   }
@@ -1194,13 +1281,32 @@ export function CallStage({
   return (
     <div
       className={cn(
-        "shrink-0 mx-2 overflow-hidden transition-all duration-200 ease-out",
-        open ? "mt-2 max-h-[66vh] opacity-100" : "mt-0 max-h-0 opacity-0",
+        "shrink-0 mx-2 overflow-hidden ease-out",
+        // Don't animate max-height while dragging the resize handle (the
+        // transition would lag the pointer); animate only the open/close toggle.
+        dockedResize.current ? "" : "transition-all duration-200",
+        open ? "mt-2 opacity-100" : "mt-0 max-h-0 opacity-0",
       )}
+      // When open, the wrapper's max-height must clear the (resizable) inner box
+      // plus its top margin, or a tall pane would be clipped.
+      style={open ? { maxHeight: dockedHeight + 16 } : undefined}
     >
-      <div className="clip-corner-lg bg-chrome-deep shadow-lg flex flex-col h-[42vh] max-h-[60vh]">
+      <div
+        className="clip-corner-lg bg-chrome-deep shadow-lg flex flex-col"
+        style={{ height: dockedHeight }}
+      >
         {header}
         {body}
+        {/* Drag the bottom edge to resize the pane taller/shorter (persisted). */}
+        <div
+          onPointerDown={beginDockedResize}
+          role="separator"
+          aria-label="Resize call pane"
+          aria-orientation="horizontal"
+          className="group/resize shrink-0 h-2.5 flex items-center justify-center cursor-ns-resize touch-none"
+        >
+          <div className="h-1 w-10 rounded-full bg-foreground/20 group-hover/resize:bg-foreground/40 transition-colors" />
+        </div>
       </div>
     </div>
   );

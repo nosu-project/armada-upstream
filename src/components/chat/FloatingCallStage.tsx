@@ -1,4 +1,4 @@
-import { GripHorizontal, Maximize2, X } from "lucide-react";
+import { Expand, GripHorizontal, Maximize2, Shrink, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useIsDesktop } from "@/hooks/useIsDesktop";
@@ -18,8 +18,9 @@ const SIZE_KEY = "armada:floating-call:width";
  *  - `MIN_WIDTH` (~280) keeps the header (grips + return/hide) and the
  *    media-control row (mic/cam/share/leave) usable and the video legible.
  *  - `DEFAULT_WIDTH` (320) matches the previous fixed panel width.
- *  - `MAX_WIDTH_CAP` (640) is an absolute ceiling so the panel never grows to
- *    cover nearly the whole viewport on a large monitor.
+ *  - `MAX_WIDTH_CAP` (960) is an absolute ceiling so the panel never grows to
+ *    cover nearly the whole viewport on a large monitor. The expand button snaps
+ *    to the effective max (this cap, further bounded by the viewport).
  *
  * The effective maximum is the smaller of `MAX_WIDTH_CAP` and the largest width
  * whose full panel (header + 16:9 body + controls) still fits the current
@@ -27,7 +28,7 @@ const SIZE_KEY = "armada:floating-call:width";
  */
 const MIN_WIDTH = 280;
 const DEFAULT_WIDTH = 320;
-const MAX_WIDTH_CAP = 640;
+const MAX_WIDTH_CAP = 960;
 
 /** The 16:9 media aspect ratio; media-area height = width * 9/16. */
 const BODY_RATIO = 9 / 16;
@@ -412,6 +413,27 @@ export function FloatingCallStage({
     [onPointerMove, endGesture],
   );
 
+  // "Expand" toggle: snap to the effective max width (a one-tap enlarge), and
+  // restore the prior width on the next tap. Remembers the pre-expand width so
+  // restore returns exactly there. Re-clamps the position for the new (taller)
+  // panel using the width-derived height estimate; the ResizeObserver corrects
+  // any drift once the real height settles.
+  const prevWidth = useRef<number | null>(null);
+  const toggleExpand = useCallback(() => {
+    setWidth((w) => {
+      const max = clampWidth(MAX_WIDTH_CAP);
+      const expanding = w < max - 1;
+      const next = expanding ? max : clampWidth(prevWidth.current ?? DEFAULT_WIDTH);
+      prevWidth.current = expanding ? w : null;
+      widthRef.current = next;
+      saveWidth(next);
+      const height = estPanelHeight(next);
+      setPos((cur) => (cur ? clampToViewport(cur, next, height) : cur));
+      return next;
+    });
+  }, []);
+  const atMax = width >= clampWidth(MAX_WIDTH_CAP) - 1;
+
   // Swallow the synthetic click that follows a moving gesture, so a drag/resize
   // that ends over a button or the video tile can't trigger it.
   const swallowClick = useCallback((e: React.MouseEvent) => {
@@ -511,6 +533,17 @@ export function FloatingCallStage({
           <GripHorizontal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <span className="text-xs font-medium text-muted-foreground truncate">Call</span>
         </div>
+        <button
+          type="button"
+          aria-label={atMax ? "Restore window size" : "Expand window"}
+          title={atMax ? "Restore size" : "Expand"}
+          // Stop the drag area (its sibling) from ever seeing this gesture.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={toggleExpand}
+          className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+        >
+          {atMax ? <Shrink className="size-4" /> : <Expand className="size-4" />}
+        </button>
         {onExpand && (
           <button
             type="button"
