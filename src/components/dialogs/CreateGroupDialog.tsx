@@ -1,7 +1,8 @@
-import { Globe, Hash, Loader2, Lock, Mail } from "lucide-react";
+import { Globe, Hash, Loader2, Lock, Mail, MessagesSquare } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { useIsBuzzRelay } from "@/buzz/detect";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +32,16 @@ function randomGroupId(): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Random UUID v4 (Buzz channel ids MUST be lowercase UUIDs). */
+function randomUuid(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const hex = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 /** Normalize a freeform name into a channel-style slug for preview. */
 function toChannelSlug(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9_-]/g, "");
@@ -40,20 +51,28 @@ function toChannelSlug(name: string): string {
  * Create a NIP-29 group on the server: kind 9007 (create-group) followed by
  * kind 9002 (edit-metadata) with the chosen name/visibility, then remember it
  * in the user's kind 10009 list.
+ *
+ * Buzz relays create in ONE kind-9007 event instead (their handler REQUIRES a
+ * `name` tag and takes `visibility`/`channel_type`/`about` inline), the id
+ * must be a UUID, and a forum-channel toggle appears.
  */
 export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupDialogProps) {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
+  const { isBuzz } = useIsBuzzRelay(relayUrl);
   const [name, setName] = useState("");
   const [about, setAbout] = useState("");
   const [isPrivate, setIsPrivate] = useState(false);
   const [isClosed, setIsClosed] = useState(false);
+  const [isForum, setIsForum] = useState(false);
   const [groupId] = useState(randomGroupId);
+  const [buzzId] = useState(randomUuid);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const effectiveId = isBuzz ? buzzId : groupId;
   const { mutateAsync: createGroup } = useCreateGroup(relayUrl);
-  const { editMetadata } = useGroupModeration(relayUrl, groupId);
+  const { editMetadata } = useGroupModeration(relayUrl, effectiveId);
   const { mutateAsync: updateList } = useUpdateUserGroupList();
 
   const slug = toChannelSlug(name);
@@ -63,19 +82,28 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
     setPending(true);
     setError(null);
     try {
-      await createGroup({ groupId });
-      await editMetadata.mutateAsync({
-        name: name.trim(),
-        about: about.trim() || undefined,
-        isPrivate,
-        isClosed,
-      });
+      if (isBuzz) {
+        // One-shot Buzz create: name/visibility/type/about ride the 9007.
+        const extraTags: string[][] = [["name", name.trim()]];
+        extraTags.push(["visibility", isPrivate ? "private" : "open"]);
+        if (isForum) extraTags.push(["channel_type", "forum"]);
+        if (about.trim()) extraTags.push(["about", about.trim()]);
+        await createGroup({ groupId: effectiveId, extraTags });
+      } else {
+        await createGroup({ groupId: effectiveId });
+        await editMetadata.mutateAsync({
+          name: name.trim(),
+          about: about.trim() || undefined,
+          isPrivate,
+          isClosed,
+        });
+      }
       // Best-effort: remember the group in the user's NIP-51 list.
-      updateList({ type: "add-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
+      updateList({ type: "add-group", ref: { id: effectiveId, relay: relayUrl } }).catch(() => undefined);
 
       toast({ title: "Channel created", description: name.trim() });
       onOpenChange(false);
-      navigate(`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(groupId)}`);
+      navigate(`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(effectiveId)}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create the channel.");
     } finally {
@@ -155,14 +183,25 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
               checked={isPrivate}
               onCheckedChange={setIsPrivate}
             />
-            <PrivacyToggle
-              id="group-closed"
-              icon={<Mail className="size-4" />}
-              title="Invite only"
-              description="People need an invite code to join."
-              checked={isClosed}
-              onCheckedChange={setIsClosed}
-            />
+            {isBuzz ? (
+              <PrivacyToggle
+                id="group-forum"
+                icon={<MessagesSquare className="size-4" />}
+                title="Forum"
+                description="Threaded posts with votes instead of a chat stream."
+                checked={isForum}
+                onCheckedChange={setIsForum}
+              />
+            ) : (
+              <PrivacyToggle
+                id="group-closed"
+                icon={<Mail className="size-4" />}
+                title="Invite only"
+                description="People need an invite code to join."
+                checked={isClosed}
+                onCheckedChange={setIsClosed}
+              />
+            )}
           </div>
 
           {error && (

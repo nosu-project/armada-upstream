@@ -1,4 +1,4 @@
-import { ArrowBigDown, ArrowBigUp, Hash, Loader2, Search } from "lucide-react";
+import { ArrowBigDown, ArrowBigUp, Bot as BotIcon, Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -93,6 +93,8 @@ interface BuzzChatMessageProps {
   /** Forum vote bar (forum channels only). */
   votes?: { up: number; down: number; mine?: "+" | "-" };
   onVote?: (event: ChatMsg, value: "+" | "-") => void;
+  /** Whether the author holds the `bot` role in this channel (agent badge). */
+  isAgent?: boolean;
 }
 
 /**
@@ -116,6 +118,7 @@ function BuzzChatMessage({
   onReply,
   votes,
   onVote,
+  isAgent,
 }: BuzzChatMessageProps) {
   const { config } = useAppContext();
   const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
@@ -139,6 +142,14 @@ function BuzzChatMessage({
           replyToId
             ? <ReplyContext eventId={replyToId} relayUrl={relayUrl} onJump={onJumpToReply} />
             : undefined
+        }
+        nameBadge={
+          isAgent ? (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-[10px] font-medium text-primary align-middle">
+              <BotIcon className="size-2.5" aria-hidden />
+              Agent
+            </span>
+          ) : undefined
         }
         onRetry={() => transport.retry?.(event)}
         onDiscard={() => transport.discard?.(event.id)}
@@ -220,6 +231,7 @@ export function BuzzChat({
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { data: groupDetails } = useGroup(relayUrl, channelId);
   const channelName = groupDetails?.group?.name;
+  const memberRoles = groupDetails?.memberRoles;
   const forum = channelType === "forum";
   const workflow = channelType === "workflow";
 
@@ -577,6 +589,7 @@ export function BuzzChat({
           event={msg}
           relayUrl={relayUrl}
           transport={transport}
+          isAgent={memberRoles?.[msg.pubkey] === "bot"}
           isEditing={editingId === msg.id}
           highlight={highlight}
           active={activeId === msg.id}
@@ -598,6 +611,7 @@ export function BuzzChat({
       voteTallies,
       relayUrl,
       transport,
+      memberRoles,
       editingId,
       activeId,
       toggleActive,

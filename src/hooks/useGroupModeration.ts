@@ -26,7 +26,13 @@ function metadataTags(patch: GroupMetadataPatch): string[][] {
   if (patch.name !== undefined) tags.push(["name", patch.name]);
   if (patch.about !== undefined) tags.push(["about", patch.about]);
   if (patch.picture !== undefined) tags.push(["picture", patch.picture]);
-  if (patch.isPrivate !== undefined) tags.push([patch.isPrivate ? "private" : "public"]);
+  if (patch.isPrivate !== undefined) {
+    tags.push([patch.isPrivate ? "private" : "public"]);
+    // Buzz relays take visibility as a `visibility` tag on the 9002 (the bare
+    // NIP-29 marker tags aren't in their recognized set); NIP-29 relays
+    // ignore the extra tag.
+    tags.push(["visibility", patch.isPrivate ? "private" : "open"]);
+  }
   if (patch.isClosed !== undefined) tags.push([patch.isClosed ? "closed" : "open"]);
   // `restricted`/`hidden` have no documented antonym tags; only assert them.
   if (patch.isRestricted) tags.push(["restricted"]);
@@ -53,7 +59,14 @@ export function useGroupModeration(relayUrl: string, groupId: string) {
       publishEvent({
         kind: KIND_PUT_USER,
         content: "",
-        tags: [["h", groupId], ["p", pubkey, ...roles]],
+        // Roles ride BOTH shapes: NIP-29 relays read them from the `p` tag's
+        // trailing slots; Buzz relays read a separate `["role", …]` tag (and
+        // ignore the p-tag extras). Each side ignores the other's shape.
+        tags: [
+          ["h", groupId],
+          ["p", pubkey, ...roles],
+          ...(roles.length > 0 ? [["role", roles[0]]] : []),
+        ],
         relay: relayUrl,
       }),
     onSuccess: invalidate,
@@ -124,11 +137,14 @@ export function useCreateGroup(relayUrl: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ groupId }: { groupId: string }) => {
+    mutationFn: async ({ groupId, extraTags }: { groupId: string; extraTags?: string[][] }) => {
       return publishEvent({
         kind: KIND_CREATE_GROUP,
         content: "",
-        tags: [["h", groupId]],
+        // Buzz relays take the channel metadata inline on the 9007 (`name` is
+        // REQUIRED there, plus optional visibility/channel_type/about tags);
+        // plain NIP-29 relays ignore the extras and take a follow-up 9002.
+        tags: [["h", groupId], ...(extraTags ?? [])],
         relay: relayUrl,
       });
     },
