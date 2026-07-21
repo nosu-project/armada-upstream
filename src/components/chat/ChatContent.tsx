@@ -15,6 +15,7 @@ import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { XdcAttachment } from "@/components/chat/XdcAttachment";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelNav } from "@/hooks/useChannelNav";
+import { type MentionNameMap, useMentionNameMap } from "@/hooks/useMentionNameMap";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { buildEmojiMap } from "@/lib/customEmoji";
@@ -96,6 +97,7 @@ type ContentToken =
   | { type: "invite-embed"; url: string }
   | { type: "inline-link"; url: string }
   | { type: "mention"; pubkey: string }
+  | { type: "text-mention"; pubkey: string; raw: string }
   | { type: "nevent-embed"; eventId: string; relays?: string[]; author?: string }
   | { type: "naddr-embed"; addr: AddrCoords; url?: string }
   | { type: "nostr-link"; id: string; raw: string }
@@ -105,6 +107,52 @@ type ContentToken =
   | { type: "code-block"; code: string; lang?: string }
   | { type: "inline-code"; code: string }
   | { type: "quote"; tokens: ContentToken[] };
+
+/**
+ * Split a plain-text leaf into text + `text-mention` tokens by matching known
+ * `@name` aliases (Buzz/legacy-style mentions, where the body carries the
+ * literal `@displayName` and the pubkey lives in a `p` tag). Only aliases in
+ * `mentions.byName` match, so an arbitrary `@word` stays plain text.
+ */
+function splitTextToken(value: string, mentions: MentionNameMap): ContentToken[] {
+  const { regex, byName } = mentions;
+  if (!regex || !value) return value ? [{ type: "text", value }] : [];
+  const out: ContentToken[] = [];
+  let last = 0;
+  regex.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(value)) !== null) {
+    const pubkey = byName.get(match[1].toLowerCase());
+    // Unknown alias (shouldn't happen — regex is built from the map): leave the
+    // text alone and let exec advance past it on the next iteration.
+    if (!pubkey) continue;
+    const at = match.index;
+    if (at > last) out.push({ type: "text", value: value.slice(last, at) });
+    out.push({ type: "text-mention", pubkey, raw: match[0] });
+    last = at + match[0].length;
+  }
+  if (last < value.length) out.push({ type: "text", value: value.slice(last) });
+  return out;
+}
+
+/**
+ * Walk a token list splitting `@name` mentions out of plain-text leaves
+ * (recursing into quote blocks). No-op when the event tags resolve no names.
+ */
+function applyTextMentions(tokens: ContentToken[], mentions: MentionNameMap): ContentToken[] {
+  if (!mentions.regex) return tokens;
+  const out: ContentToken[] = [];
+  for (const token of tokens) {
+    if (token.type === "text") {
+      out.push(...splitTextToken(token.value, mentions));
+    } else if (token.type === "quote") {
+      out.push({ type: "quote", tokens: applyTextMentions(token.tokens, mentions) });
+    } else {
+      out.push(token);
+    }
+  }
+  return out;
+}
 
 /**
  * Render text with a highlighted search term, after custom-emoji replacement.
@@ -222,7 +270,7 @@ function usableMime(m: string | undefined): string | undefined {
  * NIP-30 custom emoji, and lightning invoices.
  */
 export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines }: ChatContentProps) {
-  const tokens = useMemo(() => {
+  const rawTokens = useMemo(() => {
     const text = contentOverride ?? event.content;
 
     // Parse imeta tags for media URLs declared out-of-band. Vector/0xChat send
@@ -562,6 +610,15 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     return result.filter((t) => !(t.type === "text" && t.value === ""));
   }, [event, contentOverride]);
 
+  // Resolve `@name` mentions carried as plain text + `p` tags (Buzz/legacy
+  // style) back to pubkeys, then split them out of the text leaves. NIP-27
+  // `nostr:` mentions are already handled inline by the tokenizer above.
+  const mentions = useMentionNameMap(event);
+  const tokens = useMemo(
+    () => applyTextMentions(rawTokens, mentions),
+    [rawTokens, mentions],
+  );
+
   // Build emoji map for NIP-30 custom emoji rendering. Merge the event's own
   // emoji tags with the viewer's collection so shortcodes still render when
   // the published event omitted the tag.
@@ -657,6 +714,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
   // honor `clampLines` when every token is inline text-ish.
   const clampSafe = clampLines != null && !isEmojiOnly && groupedTokens.every((t) =>
     t.type === "text" || t.type === "inline-code" || t.type === "quote"
+    || t.type === "text-mention"
     || t.type === "nevent-embed" || t.type === "naddr-embed"
   );
   const clampClass = clampSafe
@@ -841,6 +899,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         );
       }
       case "mention":
+      case "text-mention":
         return <NostrMention key={key} pubkey={token.pubkey} noAtPrefix={noMentionAtPrefix} />;
       case "nostr-link":
         return (

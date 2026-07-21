@@ -7,6 +7,77 @@ import { useEventStore } from '@/hooks/useEventStore';
 
 export type AuthorResult = { event?: NostrEvent; metadata?: NostrMetadata };
 
+type Nostr = ReturnType<typeof useNostr>['nostr'];
+type EventStore = ReturnType<typeof useEventStore>;
+
+/**
+ * The shared TanStack Query options for resolving a pubkey's kind-0 profile.
+ * Extracted so both {@link useAuthor} (single) and batched resolvers
+ * ({@link useQueries}) hit the exact same `['author', pubkey]` cache with
+ * identical fetch/retry semantics — newest-wins, event-store fallback on miss,
+ * relaxed background re-check while a profile is missing.
+ */
+export function authorQueryOptions(
+  nostr: Nostr,
+  queryClient: QueryClient,
+  eventStore: EventStore,
+  pubkey: string | undefined,
+) {
+  return {
+    queryKey: ['author', pubkey ?? ''] as [string, string],
+    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<AuthorResult> => {
+      if (!pubkey) {
+        return {};
+      }
+
+      const store = await eventStore;
+
+      const [event] = await nostr.query(
+        [{ kinds: [0], authors: [pubkey], limit: 1 }],
+        { signal },
+      );
+
+      if (!event) {
+        // Relay returned nothing — a kind-0 miss is almost always transient
+        // (the relay didn't have it, or the query timed out). Never discard a
+        // profile we already have: fall back to the locally cached event so a
+        // name/avatar already on screen doesn't blank out.
+        const existing = queryClient.getQueryData<AuthorResult>(['author', pubkey]);
+        if (existing?.event) {
+          return existing;
+        }
+        const [cached] = await store.query([{ kinds: [0], authors: [pubkey] }]);
+        if (cached) {
+          return parseAuthorEvent(cached);
+        }
+        return {};
+      }
+
+      // Persist the fresh event to the local store (fire-and-forget).
+      void store.event(event);
+
+      return parseAuthorEvent(event);
+    },
+    enabled: !!pubkey,
+    // A FOUND profile is cached long (5 min); a MISS is kept only briefly so a
+    // profile that was cut off by the relay EOSE race (or simply hadn't synced
+    // yet) is re-checked soon instead of staying blank for 5 minutes. Authors
+    // with no kind 0 at all just re-check cheaply (batched) on the next access
+    // and keep showing their fallback — no spinner, no tight retry loop.
+    staleTime: (query: { state: { data?: AuthorResult } }) =>
+      query.state.data?.event ? 5 * 60 * 1000 : 30 * 1000,
+    gcTime: 10 * 60 * 1000,
+    // While a profile is missing AND the component is mounted, retry in the
+    // background at a relaxed cadence so it fills in without a manual reload.
+    // Found profiles never poll. Bounded + batched, so a profileless author is
+    // a cheap periodic no-op, not a hammer.
+    refetchInterval: (query: { state: { data?: AuthorResult } }) =>
+      query.state.data?.event ? false : 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  };
+}
+
 /** The TanStack Query key holding a pubkey's parsed kind-0 profile. */
 export function authorQueryKey(pubkey: string): [string, string] {
   return ['author', pubkey];
@@ -53,55 +124,5 @@ export function useAuthor(pubkey: string | undefined) {
     getEvent: (data) => data.event,
   });
 
-  return useQuery<AuthorResult>({
-    queryKey: ['author', pubkey ?? ''],
-    queryFn: async ({ signal }) => {
-      if (!pubkey) {
-        return {};
-      }
-
-      const store = await eventStore;
-
-      const [event] = await nostr.query(
-        [{ kinds: [0], authors: [pubkey], limit: 1 }],
-        { signal },
-      );
-
-      if (!event) {
-        // Relay returned nothing — a kind-0 miss is almost always transient
-        // (the relay didn't have it, or the query timed out). Never discard a
-        // profile we already have: fall back to the locally cached event so a
-        // name/avatar already on screen doesn't blank out.
-        const existing = queryClient.getQueryData<AuthorResult>(['author', pubkey]);
-        if (existing?.event) {
-          return existing;
-        }
-        const [cached] = await store.query([{ kinds: [0], authors: [pubkey] }]);
-        if (cached) {
-          return parseAuthorEvent(cached);
-        }
-        return {};
-      }
-
-      // Persist the fresh event to the local store (fire-and-forget).
-      void store.event(event);
-
-      return parseAuthorEvent(event);
-    },
-    enabled: !!pubkey,
-    // A FOUND profile is cached long (5 min); a MISS is kept only briefly so a
-    // profile that was cut off by the relay EOSE race (or simply hadn't synced
-    // yet) is re-checked soon instead of staying blank for 5 minutes. Authors
-    // with no kind 0 at all just re-check cheaply (batched) on the next access
-    // and keep showing their fallback — no spinner, no tight retry loop.
-    staleTime: (query) => (query.state.data?.event ? 5 * 60 * 1000 : 30 * 1000),
-    gcTime: 10 * 60 * 1000,
-    // While a profile is missing AND the component is mounted, retry in the
-    // background at a relaxed cadence so it fills in without a manual reload.
-    // Found profiles never poll. Bounded + batched, so a profileless author is
-    // a cheap periodic no-op, not a hammer.
-    refetchInterval: (query) => (query.state.data?.event ? false : 60 * 1000),
-    refetchOnWindowFocus: false,
-    retry: 1,
-  });
+  return useQuery<AuthorResult>(authorQueryOptions(nostr, queryClient, eventStore, pubkey));
 }
