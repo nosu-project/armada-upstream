@@ -378,17 +378,33 @@ export function MessageTimeline({
 
   const itemContent = useCallback(
     (_index: number, item: TimelineItem) => {
+      // The horizontal gutter (`px-3`) lives on each row, NOT the Virtuoso
+      // scroller: virtuoso's viewport/list is absolutely positioned and
+      // `width: 100%`, so a scroller `px-*` only honors the LEFT side (the
+      // list's static x sits inside the left padding) while the right padding
+      // is spanned over — content would hug the right edge (and the sliver of
+      // overflow gets silently eaten by `overflow-x-clip`). Padding the rows
+      // themselves restores the symmetric gutter the pre-virtualized scroll
+      // container had.
       switch (item.type) {
         case "date":
-          return <DateSeparator ts={item.ts} />;
+          return (
+            <div className="px-3">
+              <DateSeparator ts={item.ts} />
+            </div>
+          );
         case "unread":
-          return <NewMessagesDivider />;
+          return (
+            <div className="px-3">
+              <NewMessagesDivider />
+            </div>
+          );
         case "message":
           // `hover:z-10` lifts the hovered row above its siblings so the
           // floating action toolbar (which overhangs the row's top edge) isn't
           // painted under the row above.
           return (
-            <div className="relative hover:z-10 focus-within:z-10">
+            <div className="px-3 relative hover:z-10 focus-within:z-10">
               {renderMessage(item.msg, item.continuation)}
             </div>
           );
@@ -421,7 +437,7 @@ export function MessageTimeline({
             key={epoch}
             ref={virtuosoRef}
             scrollerRef={scrollerRefCallback}
-            className="flex-1 min-h-0 overflow-x-clip overscroll-contain scrollbar-stable px-3"
+            className="flex-1 min-h-0 overflow-x-clip overscroll-contain scrollbar-stable"
             data={items}
             context={{ isLoadingOlder: Boolean(isLoadingOlder) }}
             components={TIMELINE_COMPONENTS}
