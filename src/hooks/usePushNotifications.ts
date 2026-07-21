@@ -4,7 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNotifLevels } from "@/hooks/useNotifLevels";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { normalizeRelayUrl, PLATFORM_RELAYS, relayToHttpUrl } from "@/lib/platform";
+import {
+  normalizeRelayUrl,
+  nostrPushConfigured,
+  PLATFORM_RELAYS,
+  relayToHttpUrl,
+} from "@/lib/platform";
 
 import type { NostrSigner } from "@nostrify/types";
 
@@ -175,6 +180,10 @@ export function usePushNotifications(): UsePushNotificationsReturn {
   const { data: groupList } = useUserGroupList();
 
   const supported =
+    // When a content-blind nostr-push gateway is configured, that path owns
+    // web push (see useNostrPush); this legacy relay-gateway path stands down
+    // so the two don't both subscribe/register against different VAPID keys.
+    !nostrPushConfigured() &&
     typeof window !== "undefined" &&
     "serviceWorker" in navigator &&
     "PushManager" in window &&

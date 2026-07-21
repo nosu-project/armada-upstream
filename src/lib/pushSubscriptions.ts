@@ -47,6 +47,8 @@ export interface PushNotifData {
   scope: PushScope;
   /** Relays the SW can fetch the event id from. */
   relays: string[];
+  /** Opaque, JSON-serialised to the wire alongside the server's own fields. */
+  [key: string]: unknown;
 }
 
 /**

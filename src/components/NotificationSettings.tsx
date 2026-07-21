@@ -4,6 +4,7 @@ import { AlertTriangle } from "lucide-react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useForegroundNotificationSettings } from "@/hooks/useForegroundNotificationSettings";
 import { useNativeNotifications } from "@/hooks/useNativeNotifications";
+import { useNostrPush } from "@/hooks/useNostrPush";
 import { usePushNotifications, type PushPrefs } from "@/hooks/usePushNotifications";
 import {
   isIgnoringBatteryOptimizations,
@@ -115,8 +116,12 @@ function BatteryOptimizationWarning() {
 }
 
 function WebPushSettings() {
+  // Both web-push hooks self-gate on `supported`; use whichever is active — the
+  // content-blind nostr-push path when configured, else the legacy gateway.
+  const legacy = usePushNotifications();
+  const nostrPush = useNostrPush();
   const { supported, permission, enabled, busy, prefs, enable, disable, setPrefs } =
-    usePushNotifications();
+    nostrPush.supported ? nostrPush : legacy;
 
   // Browsers where Web Push is unavailable (Brave with Google push services
   // off, or no configured push gateway) still get FOREGROUND OS notifications
