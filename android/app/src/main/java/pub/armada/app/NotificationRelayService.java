@@ -1642,9 +1642,12 @@ public class NotificationRelayService extends Service {
         // WebView's inbox sync to surface.
         final long rtsFloor = rumor.optLong("created_at", 0);
         if (rtsFloor > 0 && rtsFloor < dm17FloorSec) return;
-        // A DM is inherently directed at the user; treat it as a mention for the
-        // active-room break-through, matching the WebView notifier.
-        if (isActivelyViewed("dm:" + peer, null, /*mention=*/true)) return;
+        // Suppress when the user is already viewing this peer's DM thread — the
+        // live feed already paints the message there, matching the WebView
+        // notifier (an unconditional isRoomActive("dm:<peer>")). Unlike a group
+        // @-mention, a DM does NOT break through active-room suppression: the
+        // whole conversation is what's on screen, so mention=false here.
+        if (isActivelyViewed("dm:" + peer, null, /*mention=*/false)) return;
         final String preview = truncate(
                 rumorKind == 15 ? "Sent a file" : rumor.optString("content"));
         final long rts = rumor.optLong("created_at", 0);
@@ -1655,7 +1658,7 @@ public class NotificationRelayService extends Service {
             String line = preview.isEmpty() ? "Sent you a direct message" : preview;
             if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 from=" + name);
             enqueueRoomMessage("dm:" + peer, name, url, /*isGroup=*/false,
-                    author, name, picture, line, fTs, /*mention=*/true);
+                    author, name, picture, line, fTs, /*mention=*/false);
         });
     }
 
@@ -1731,8 +1734,12 @@ public class NotificationRelayService extends Service {
                             String picture = profile != null ? profile.picture : null;
                             String line = preview.isEmpty() ? "Sent you a direct message" : preview;
                             if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (signer) from=" + name);
+                            // mention=false: a DM is suppressed while its own
+                            // thread is on screen (the peer isn't known until
+                            // decrypt, so enqueueRoomMessage's active-room gate
+                            // does it here rather than a synchronous pre-check).
                             enqueueRoomMessage("dm:" + peer, name, "/dms/" + peer, /*isGroup=*/false,
-                                    peer, name, picture, line, fTs, /*mention=*/true);
+                                    peer, name, picture, line, fTs, /*mention=*/false);
                         });
                     } catch (Exception ignored) {
                         // Malformed rumor JSON — silent.
@@ -2107,10 +2114,12 @@ public class NotificationRelayService extends Service {
             if (nip29GroupId == null) {
                 // DM: the conversation is 1:1 with the sender, so the sender's
                 // name is the room title and it's not a "group" conversation.
+                // mention=false so it's suppressed while this peer's thread is on
+                // screen — a DM's `p` tag naming us isn't a break-through @-ping.
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm from=" + fName);
                 enqueueRoomMessage(
                         "dm:" + author, fName, fUrl, /*isGroup=*/false,
-                        author, fName, picture, fLine, fTs, mention);
+                        author, fName, picture, fLine, fTs, /*mention=*/false);
                 return;
             }
             // Resolve the group's display name; it becomes the conversation title.
