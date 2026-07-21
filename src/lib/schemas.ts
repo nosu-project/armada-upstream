@@ -60,6 +60,7 @@ export const AppConfigSchema = z.object({
   railOpenFolders: z.array(z.string()).catch([]),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
+  useAppDmRelays: z.boolean().catch(defaultConfig.useAppDmRelays),
   useOwnDmRelays: z.boolean().catch(defaultConfig.useOwnDmRelays),
   dmRelays: z.array(z.string()).catch(defaultConfig.dmRelays),
   blossomServerMetadata: BlossomServerMetadataSchema.catch(defaultConfig.blossomServerMetadata),
@@ -98,9 +99,11 @@ export const EncryptedSettingsSchema = z.looseObject({
   appRelays: z.array(z.string()).optional(),
   /** NIP-50 search relays. */
   searchRelays: z.array(z.string()).optional(),
-  /** Whether DMs use the user's own relays instead of the app relays. */
+  /** Whether DMs use the app's default DM relays. */
+  useAppDmRelays: z.boolean().optional(),
+  /** Whether DMs also use the user's own relays. */
   useOwnDmRelays: z.boolean().optional(),
-  /** The user's custom DM relays. */
+  /** The user's own DM relays (personal only, never the app defaults). */
   dmRelays: z.array(z.string()).optional(),
   /** The user's Blossom server list (canonical source: kind 10063). */
   blossomServerMetadata: BlossomServerMetadataSchema.optional(),

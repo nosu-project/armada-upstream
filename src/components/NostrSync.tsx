@@ -8,6 +8,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   getLastSettingsWrite,
   getLocalSettingsSync,
+  setLastSettingsWrite,
   setLocalSettingsSync,
   useEncryptedSettings,
 } from "@/hooks/useEncryptedSettings";
@@ -293,6 +294,13 @@ export function NostrSync() {
       return;
     }
     if (snapshot === lastSyncedSnapshot.current) return;
+
+    // A genuine user edit was just observed. Stamp the local-write clock NOW,
+    // before the debounce, so section 1's `remoteTs > localTs` guard protects
+    // this edit against a stale relay copy that lands during the debounce
+    // window (the "my change reverted" race). `updateSettings` re-stamps it at
+    // actual publish time; this only closes the gap in between.
+    setLastSettingsWrite(Date.now());
 
     // Never publish while we lack a known-good remote base to merge over —
     // doing so would replace the user's real settings event with only the

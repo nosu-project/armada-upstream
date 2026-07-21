@@ -45,6 +45,7 @@ import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
+import { effectiveDmRelays } from "@/contexts/AppContext";
 import { APP_RELAYS, PINNED_RAIL_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import { addServerTombstone, clearServerTombstone } from "@/lib/serverTombstone";
 import {
@@ -171,33 +172,39 @@ export function SettingsPage() {
   };
 
   /**
-   * Persist the user's DM relays. Updates local config (the encrypted-settings
-   * push is handled centrally by NostrSync) and — since kind 10050 is the
-   * canonical, discoverable "where to send me DMs" list — republishes it so
-   * other clients stay in sync. `publish: false` skips the republish when we
-   * just seeded the editor from an already-published 10050 (no edit to write
-   * back).
+   * Toggle the app's default DM relays in/out of THIS client's DM relay set.
+   *
+   * App DM relays are a purely client-side helper (`effectiveDmRelays`): the
+   * relays this client also reads/writes DMs on for reliability + push. They are
+   * NEVER part of the user's published kind-10050 inbox — that's the user's own
+   * event and must not carry app defaults. So this is local-only and publishes
+   * nothing. Config syncs across the user's devices via NostrSync.
    */
-  const setDmRelays = (relays: string[], opts: { publish?: boolean } = {}) => {
-    updateConfig((current) => ({ ...current, dmRelays: relays }));
-    if (opts.publish !== false && user) {
-      dmRelayList.publish(relays).catch((err) =>
-        console.warn("DM relay list (kind 10050) publish failed:", err));
-    }
+  const setUseAppDmRelays = (value: boolean) => {
+    updateConfig((current) => ({ ...current, useAppDmRelays: value }));
   };
 
-  /** Toggle whether DMs use the user's own relays. */
+  /**
+   * Toggle whether this client also uses the user's own DM relays. Local-only:
+   * the published kind-10050 reflects the personal list itself (`setDmRelays`),
+   * not whether this client currently reads from it.
+   */
   const setUseOwnDmRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useOwnDmRelays: value }));
-    // On opt-in, seed from the user's published NIP-17 DM relay list (kind
-    // 10050) if they have one, so the editor — and the relays DMs actually use
-    // (effectiveDmRelays) — reflect their canonical, discoverable list rather
-    // than the app-relay default.
-    if (value) {
-      dmRelayList.refetch().then((res) => {
-        const fetched = res.data ?? [];
-        if (fetched.length > 0) setDmRelays(fetched, { publish: false });
-      });
+  };
+
+  /**
+   * Persist the user's own DM relays. kind-10050 is the user's canonical,
+   * discoverable inbox and holds ONLY their personal relays — never the app
+   * defaults. So publish exactly the edited list (a direct edit to their own
+   * relay list is the one legitimate reason to write their 10050). No async
+   * refetch/seed, so an in-flight fetch can't clobber a fresh edit.
+   */
+  const setDmRelays = (relays: string[]) => {
+    updateConfig((current) => ({ ...current, dmRelays: relays }));
+    if (user) {
+      dmRelayList.publish(relays).catch((err) =>
+        console.warn("DM relay list (kind 10050) publish failed:", err));
     }
   };
 
@@ -324,12 +331,19 @@ export function SettingsPage() {
             />
           </SettingsRow>
         );
-      case "dms":
+      case "dms": {
+        const effective = effectiveDmRelays(config);
         return (
           <>
             <SettingsRow
+              label="Use app DM relays"
+              description="Send and receive DMs on Armada's default DM relays."
+            >
+              <Switch checked={config.useAppDmRelays} onCheckedChange={setUseAppDmRelays} />
+            </SettingsRow>
+            <SettingsRow
               label="Use my own DM relays"
-              description="Store and read DMs on your own relays instead of the app relays."
+              description="Also send and receive DMs on your own relays (listed below)."
             >
               <Switch checked={config.useOwnDmRelays} onCheckedChange={setUseOwnDmRelays} />
             </SettingsRow>
@@ -338,14 +352,27 @@ export function SettingsPage() {
                 <RelayListEditor
                   relays={config.dmRelays}
                   onChange={setDmRelays}
-                  onReset={() => setDmRelays([...APP_RELAYS])}
-                  emptyText="No DM relays — add at least one, or DMs fall back to your app relays."
+                  emptyText="No personal DM relays yet — add at least one."
                   placeholder="wss://dm-relay.example.com"
                 />
               </SettingsRow>
             )}
+            {effective.length > 0 ? (
+              <SettingsRow
+                label="DMs currently use"
+                description={effective.join(", ")}
+              />
+            ) : (
+              <SettingsRow>
+                <p className="text-sm text-destructive">
+                  No DM relays selected — you can't send or receive direct
+                  messages. Turn on at least one option above.
+                </p>
+              </SettingsRow>
+            )}
           </>
         );
+      }
       case "media":
         return (
           <>

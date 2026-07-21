@@ -38,6 +38,18 @@ function deserializeConfig(raw: string): AppConfig {
     }
   }
 
+  // Migration: the DM-relay model split the single `useOwnDmRelays` boolean into
+  // two independent toggles (`useAppDmRelays` + `useOwnDmRelays`). For a config
+  // predating `useAppDmRelays`, preserve the old XOR behavior: "use own" meant
+  // "own relays ONLY" (app off); anything else meant "app defaults".
+  if (!("useAppDmRelays" in source)) {
+    const storedOwn = source.useOwnDmRelays === true;
+    const storedDm = Array.isArray(source.dmRelays) ? source.dmRelays : [];
+    const ownOnly = storedOwn && storedDm.length > 0;
+    result.useAppDmRelays = !ownOnly;
+    result.useOwnDmRelays = ownOnly;
+  }
+
   return result as unknown as AppConfig;
 }
 

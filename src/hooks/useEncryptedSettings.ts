@@ -44,6 +44,15 @@ let lastWriteTs = 0;
 export function getLastSettingsWrite(): number {
   return lastWriteTs;
 }
+/**
+ * Mark "now" as a local edit time. Called the moment a synced-config edit is
+ * detected — BEFORE the debounced publish actually runs — so NostrSync's
+ * `remoteTs > localTs` guard protects the fresh edit during the debounce window
+ * (otherwise a stale relay copy landing in that window can revert it).
+ */
+export function setLastSettingsWrite(ts: number = Date.now()): void {
+  lastWriteTs = ts;
+}
 
 /** Persist the synced timestamp per-pubkey so reloads can trust localStorage. */
 export function getLocalSettingsSync(pubkey: string): number {

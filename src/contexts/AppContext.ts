@@ -87,14 +87,21 @@ export interface AppConfig {
    */
   searchRelays: string[];
   /**
-   * Whether to use the user's own DM relays (`dmRelays`) instead of the
-   * default app relays for direct messages. Off by default — DMs use the
-   * app relay unless the user opts in.
+   * Whether to include the app's default DM relays (`appRelays` ∪ the platform
+   * `DM_RELAYS`) in the direct-message relay set. On by default. Independent of
+   * `useOwnDmRelays`: the two toggles combine (app / mine / both / neither) —
+   * see `effectiveDmRelays`.
+   */
+  useAppDmRelays: boolean;
+  /**
+   * Whether to include the user's own DM relays (`dmRelays`) in the
+   * direct-message relay set. Off by default. Combines with `useAppDmRelays`.
    */
   useOwnDmRelays: boolean;
   /**
-   * The user's custom direct-message relays, used only when
-   * `useOwnDmRelays` is true. Seeded from the app relays.
+   * The user's own direct-message relays — ONLY their personal relays, never
+   * the app defaults (those come from `useAppDmRelays`). Used when
+   * `useOwnDmRelays` is on. Empty by default.
    */
   dmRelays: string[];
   /**
@@ -226,6 +233,7 @@ export const SYNCED_CONFIG_KEYS = [
   "railLayout",
   "appRelays",
   "searchRelays",
+  "useAppDmRelays",
   "useOwnDmRelays",
   "dmRelays",
   "blossomServerMetadata",
@@ -251,8 +259,9 @@ export const defaultConfig: AppConfig = {
   railOpenFolders: [],
   appRelays: [...APP_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
+  useAppDmRelays: true,
   useOwnDmRelays: false,
-  dmRelays: [...APP_RELAYS],
+  dmRelays: [],
   blossomServerMetadata: { servers: [], updatedAt: 0 },
   useAppBlossomServers: true,
   lastChannelByServer: {},
@@ -270,16 +279,33 @@ export const defaultConfig: AppConfig = {
 export const AppContext = createContext<AppContextType | undefined>(undefined);
 
 /**
- * The relays direct messages read from and write to. When the user opts into
- * their own DM relays (and has configured at least one), those are used
- * verbatim. Otherwise the default is the app relays plus the platform default
- * DM relay(s) (`DM_RELAYS`) — the latter gives gift-wrapped DMs a dependable
- * home for the push/native watch sets, while the app relays keep legacy NIP-04
- * (kind 4) DMs working (the default DM relay is gift-wrap-only).
+ * The relays direct messages read from and write to — the union of the two
+ * independently-toggleable sources:
+ *
+ *   - app DM relays (`useAppDmRelays`): the general app relays plus the
+ *     platform default DM relay(s) (`DM_RELAYS`). The app relays keep legacy
+ *     NIP-04 (kind 4) DMs working; `DM_RELAYS` gives gift-wrapped (NIP-17) DMs
+ *     a dependable home the push/native watch sets follow.
+ *   - the user's own DM relays (`useOwnDmRelays` + `dmRelays`).
+ *
+ * Both on ⇒ both sets; one on ⇒ that set; neither ⇒ empty (the user has opted
+ * out of DMs entirely — the settings UI warns about this).
+ *
+ * This is a CLIENT-SIDE helper only. The app DM relays are never written into
+ * the user's published kind-10050 inbox (that event holds only the user's own
+ * relays); they're just where this client also reads/writes DMs and points the
+ * push/native watch sets. Because an Armada sender publishes the recipient's
+ * gift wrap to its own effective set too (see useDm17), Armada↔Armada delivery
+ * and push work over the shared app relays without touching anyone's 10050.
  */
 export function effectiveDmRelays(config: AppConfig): string[] {
-  if (config.useOwnDmRelays && config.dmRelays.length > 0) {
-    return config.dmRelays;
+  const out = new Set<string>();
+  if (config.useAppDmRelays) {
+    for (const url of config.appRelays) out.add(url);
+    for (const url of DM_RELAYS) out.add(url);
   }
-  return [...new Set([...config.appRelays, ...DM_RELAYS])];
+  if (config.useOwnDmRelays) {
+    for (const url of config.dmRelays) out.add(url);
+  }
+  return [...out];
 }
