@@ -119,6 +119,18 @@ export const KIND_RELAY_INVITE = 28935;
 /** User: ephemeral request to leave the *relay*. */
 export const KIND_RELAY_LEAVE = 28936;
 
+/**
+ * NIP-43 relay-level membership snapshot (Buzz "community" roster). Relay-signed
+ * and replaceable, ONE per relay — it carries no `d` scope, so a community's
+ * whole roster of owner/admin/member lives in a single event keyed only by the
+ * relay's own key. This is DISTINCT from per-channel NIP-29 membership
+ * (39001/39002): a community owner/admin holds authority in *every* channel of
+ * the community, whereas 39001/39002 are per-group. Each member is either a
+ * `["member", pubkey, role]` tag or the NIP-29-style `["p", pubkey, relay_url,
+ * role]`. https://github.com/nostr-protocol/nips (NIP-43, Buzz extension).
+ */
+export const KIND_RELAY_MEMBERS = 13534;
+
 /** Relay-signed: group metadata (addressable, `d` = group id). */
 export const KIND_GROUP_METADATA = 39000;
 /** Relay-signed: group admins. */
@@ -569,6 +581,29 @@ export function parseGroupMemberRoles(event: NostrEvent): Record<string, string>
     if (n !== "p" || !HEX64.test(pubkey ?? "")) continue;
     const role = rest.filter(Boolean).pop();
     if (role) out[pubkey] = role;
+  }
+  return out;
+}
+
+/**
+ * Parse a kind 13534 NIP-43 membership snapshot into a `pubkey → role` map of
+ * community-level roles (`owner`/`admin`/`member`). Each member is either a
+ * `["member", pk, role]` tag or the NIP-29-style `["p", pk, relay_url, role]`,
+ * so the role sits in a different slot per tag. A missing/unknown role defaults
+ * to `member` (Buzz convention). Case-insensitive; first tag per pubkey wins.
+ */
+export function parseRelayMemberRoles(event: NostrEvent): Record<string, string> {
+  if (event.kind !== KIND_RELAY_MEMBERS) return {};
+  const out: Record<string, string> = {};
+  for (const tag of event.tags) {
+    const [name] = tag;
+    if (name !== "member" && name !== "p") continue;
+    const pubkey = (tag[1] ?? "").toLowerCase();
+    if (!HEX64.test(pubkey) || out[pubkey]) continue;
+    // NIP-43 `member` tags carry the role at index 2; NIP-29-shaped `p` tags
+    // put an (often empty) relay_url at index 2 and the role at index 3.
+    const raw = (name === "member" ? tag[2] : tag[3])?.toLowerCase();
+    out[pubkey] = raw === "owner" || raw === "admin" ? raw : "member";
   }
   return out;
 }

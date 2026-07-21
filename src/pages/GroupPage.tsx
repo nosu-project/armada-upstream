@@ -43,6 +43,7 @@ import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useGroup } from "@/hooks/useGroup";
 import { useGroupMembership, useJoinGroup, useLeaveGroup } from "@/hooks/useGroupMembership";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
+import { useRelayMembers } from "@/hooks/useRelayMembers";
 import { useHeaderOverflow } from "@/hooks/useHeaderOverflow";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
@@ -53,7 +54,7 @@ import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupLi
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
-import { relayRejectionMessage } from "@/lib/nip29";
+import { relayRejectionMessage, type Nip29Admin } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
 
 function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId: string; isClosed: boolean }) {
@@ -121,6 +122,10 @@ export function GroupPage() {
   const { updateConfig } = useAppContext();
   const navigate = useNavigate();
   const { data: details, isLoading } = useGroup(relayUrl, groupId);
+  // Community-level (NIP-43, kind 13534) roster. On Buzz relays a member's
+  // owner/admin role is granted for the whole community and applies in every
+  // channel — separate from the per-channel NIP-29 admin list in `details`.
+  const { data: relayMemberRoles } = useRelayMembers(relayUrl);
   const { data: membership, isLoading: membershipLoading } = useGroupMembership(relayUrl, groupId);
   const { data: relayHasLivekit } = useRelayLivekitSupport(relayUrl);
   // Buzz relays (NIP-29-based, detected via NIP-11) swap the chat surface for
@@ -178,10 +183,32 @@ export function GroupPage() {
   const [createEventOpen, setCreateEventOpen] = useState(false);
   const [serverProfileOpen, setServerProfileOpen] = useState(false);
 
-  const isAdmin = useMemo(
-    () => Boolean(user && details?.admins.some((a) => a.pubkey === user.pubkey)),
-    [user, details?.admins],
-  );
+  const isAdmin = useMemo(() => {
+    if (!user) return false;
+    // Per-channel NIP-29 admin (39001), OR a community-wide owner/admin (NIP-43
+    // kind 13534) — the relay authorizes the latter to moderate every channel.
+    if (details?.admins.some((a) => a.pubkey === user.pubkey)) return true;
+    const communityRole = relayMemberRoles?.[user.pubkey.toLowerCase()];
+    return communityRole === "owner" || communityRole === "admin";
+  }, [user, details?.admins, relayMemberRoles]);
+
+  // Roster shown in the member panel: fold the community owner/admins (NIP-43)
+  // into the per-channel admins (39001) so a community admin surfaces with the
+  // right badge even when they aren't in this channel's admin event. A role
+  // present in both wins the higher rank (owner > admin).
+  const mergedAdmins = useMemo<Nip29Admin[]>(() => {
+    const roles = new Map<string, Set<string>>();
+    for (const a of details?.admins ?? []) {
+      roles.set(a.pubkey, new Set(a.roles.map((r) => r.toLowerCase())));
+    }
+    for (const [pubkey, role] of Object.entries(relayMemberRoles ?? {})) {
+      if (role !== "owner" && role !== "admin") continue;
+      const set = roles.get(pubkey) ?? new Set<string>();
+      set.add(role);
+      roles.set(pubkey, set);
+    }
+    return [...roles.entries()].map(([pubkey, set]) => ({ pubkey, roles: [...set] }));
+  }, [details?.admins, relayMemberRoles]);
 
   // Let `#channel-name` hashtags in chat jump to that channel on this server.
   const { data: relayGroups } = useRelayGroups(relayUrl);
@@ -824,7 +851,7 @@ export function GroupPage() {
               )}
             >
               <MemberList
-                admins={details?.admins ?? []}
+                admins={mergedAdmins}
                 members={details?.members ?? []}
                 memberRoles={details?.memberRoles}
                 presence={isBuzz ? buzzPresence : undefined}
