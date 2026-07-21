@@ -18,10 +18,15 @@ import type { NostrSigner } from "@nostrify/types";
  *
  * Flow:
  *   1. Register the service worker (done in main.tsx).
- *   2. enable(): request Notification permission, fetch the relay's VAPID
- *      public key, `pushManager.subscribe()`, then PUT the subscription +
- *      preferences to the relay (NIP-98 signed).
- *   3. disable(): unsubscribe the browser and DELETE the server record.
+ *   2. enable(): request Notification permission, then syncSubscription() —
+ *      fetch the relay's VAPID public key, `pushManager.subscribe()`, and PUT
+ *      the subscription + preferences to the relay (NIP-98 signed).
+ *   3. On every load (and whenever the SW reports a rotated subscription),
+ *      re-run syncSubscription() silently. The PUT is idempotent; without the
+ *      deterministic re-register, a relay that lost/pruned the record, a
+ *      rotated VAPID key, or a browser-rotated push endpoint each kill push
+ *      silently until the user toggles it by hand.
+ *   4. disable(): unsubscribe the browser and DELETE the server record.
  */
 
 /** NIP-98 HTTP Auth event kind. */
@@ -111,6 +116,22 @@ function urlBase64ToBuffer(base64String: string): ArrayBuffer {
   const view = new Uint8Array(buffer);
   for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
   return buffer;
+}
+
+/**
+ * Whether an existing subscription was created against `vapidKey`. A
+ * subscription made under an old key can't receive pushes signed with the
+ * current one. Browsers that don't expose `options.applicationServerKey`
+ * can't be checked — treat those as matching rather than churn the
+ * subscription on every load.
+ */
+function matchesServerKey(sub: PushSubscription, vapidKey: ArrayBuffer): boolean {
+  const current = sub.options?.applicationServerKey;
+  if (!current) return true;
+  const a = new Uint8Array(current);
+  const b = new Uint8Array(vapidKey);
+  if (a.length !== b.length) return false;
+  return a.every((byte, i) => byte === b[i]);
 }
 
 /** Sign a NIP-98 Authorization header value for a request to `url`. */
@@ -245,6 +266,51 @@ export function usePushNotifications(): UsePushNotificationsReturn {
     [user, mutedGroups, mentionOnlyGroups],
   );
 
+  /**
+   * Make the browser subscription real and current, then PUT it to the relay:
+   * fetch the relay's VAPID key, drop a subscription made against a stale key,
+   * subscribe if none exists, and (re-)register the result. Idempotent — safe
+   * to run on every load.
+   */
+  const syncSubscription = useCallback(
+    async (p: PushPrefs) => {
+      const reg = swRef.current ?? (await navigator.serviceWorker.ready);
+      swRef.current = reg;
+
+      const base = pushBaseUrl()!;
+      const vapidRes = await fetch(`${base}/vapid`);
+      if (!vapidRes.ok) throw new Error(`VAPID key fetch failed: HTTP ${vapidRes.status}`);
+      const { vapid_public_key: vapidPublicKey } = await vapidRes.json();
+      if (!vapidPublicKey) throw new Error("Relay did not return a VAPID key");
+      const key = urlBase64ToBuffer(vapidPublicKey);
+
+      let sub = await reg.pushManager.getSubscription();
+      if (sub && !matchesServerKey(sub, key)) {
+        // The relay's VAPID key rotated since this subscription was made:
+        // pushes signed with the current key would be rejected by the push
+        // service. Start over.
+        try {
+          await sub.unsubscribe();
+        } catch {
+          // ignore — subscribe() below surfaces a real failure
+        }
+        sub = null;
+      }
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: key,
+        });
+      }
+
+      await register(sub, p);
+    },
+    [register],
+  );
+
+  /** Pubkey whose server record was synced this session (skip re-PUTs). */
+  const syncedFor = useRef<string | null>(null);
+
   const enable = useCallback(async () => {
     if (!supported || !user) return;
     setBusy(true);
@@ -253,47 +319,73 @@ export function usePushNotifications(): UsePushNotificationsReturn {
       setPermission(perm);
       if (perm !== "granted") return;
 
-      const reg = swRef.current ?? (await navigator.serviceWorker.ready);
-      swRef.current = reg;
-
-      // Fetch the relay's VAPID public key.
-      const base = pushBaseUrl()!;
-      const vapidRes = await fetch(`${base}/vapid`);
-      if (!vapidRes.ok) throw new Error(`VAPID key fetch failed: HTTP ${vapidRes.status}`);
-      const { vapid_public_key: vapidPublicKey } = await vapidRes.json();
-      if (!vapidPublicKey) throw new Error("Relay did not return a VAPID key");
-
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToBuffer(vapidPublicKey),
-        });
-      }
-
-      await register(sub, prefs);
+      await syncSubscription(prefs);
       saveIntent(true);
+      syncedFor.current = user.pubkey;
       setEnabled(true);
     } finally {
       setBusy(false);
     }
-  }, [supported, user, prefs, register]);
+  }, [supported, user, prefs, syncSubscription]);
 
-  // Auto-enable: push is on by default (opt-out). When the user intends push,
-  // permission is already granted, and they're logged in, subscribe + register
-  // silently — no user gesture needed because permission already exists. (A
-  // brand-new user with permission "default" still has to click once to grant;
-  // we can't prompt without a gesture. Their intent stays on, so once granted
-  // it sticks across reloads and devices.)
-  const autoTried = useRef(false);
+  // Auto-(re)sync: push is on by default (opt-out). Whenever the user intends
+  // push, permission is already granted, and they're logged in, silently
+  // ensure a current browser subscription exists and re-PUT it to the relay —
+  // on every load, not just the first enable. The relay may have pruned the
+  // server record (stale endpoint, data loss) and the browser may have rotated
+  // the subscription (see the SW's pushsubscriptionchange handler); without a
+  // deterministic re-register, either kills push silently until the user
+  // toggles it by hand. Transient failures retry with backoff, then give up
+  // until the next load. (A brand-new user with permission "default" still has
+  // to click once to grant — we can't prompt without a gesture. Their intent
+  // stays on, so once granted it sticks across reloads.)
+  const retryCount = useRef(0);
+  const [syncNonce, setSyncNonce] = useState(0);
   useEffect(() => {
     if (!supported || !user) return;
-    if (enabled || busy || autoTried.current) return;
     if (Notification.permission !== "granted") return;
     if (!loadIntent()) return;
-    autoTried.current = true;
-    enable();
-  }, [supported, user, enabled, busy, enable]);
+    if (syncedFor.current === user.pubkey) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    (async () => {
+      try {
+        await syncSubscription(prefs);
+        if (cancelled) return;
+        syncedFor.current = user.pubkey;
+        retryCount.current = 0;
+        setEnabled(true);
+      } catch (err) {
+        if (cancelled) return;
+        console.warn("[push] subscription sync failed:", err);
+        if (retryCount.current < 3) {
+          const delay = 10_000 * 2 ** retryCount.current;
+          retryCount.current += 1;
+          retryTimer = setTimeout(() => setSyncNonce((n) => n + 1), delay);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [supported, user, syncNonce, prefs, syncSubscription]);
+
+  // The SW posts armada-push-changed when the browser rotated the push
+  // subscription (pushsubscriptionchange): the new subscription must be
+  // re-registered with the relay or pushes keep going to the dead endpoint,
+  // and only the page can do that (the PUT needs a NIP-98 signature).
+  useEffect(() => {
+    if (!supported) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type !== "armada-push-changed") return;
+      syncedFor.current = null;
+      retryCount.current = 0;
+      setSyncNonce((n) => n + 1);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [supported]);
 
   // Re-sync the server record whenever the per-group level sets change while
   // push is active, so a level change reaches the gateway immediately (it
@@ -347,6 +439,7 @@ export function usePushNotifications(): UsePushNotificationsReturn {
         }
       }
       saveIntent(false);
+      syncedFor.current = null;
       setEnabled(false);
     } finally {
       setBusy(false);

@@ -73,6 +73,38 @@ self.addEventListener("push", (event) => {
   event.waitUntil(self.registration.showNotification(payload.title ?? "Armada", options));
 });
 
+self.addEventListener("pushsubscriptionchange", (event) => {
+  // The browser invalidated or rotated the push subscription (endpoint expiry,
+  // push-service key rotation). Until a new subscription is registered with
+  // the relay, every push goes to a dead endpoint. Resubscribe with the same
+  // server key so a live subscription exists again, then tell open pages to
+  // re-register it — the registration PUT needs a NIP-98 signature that only
+  // the page's signer can produce. With no page open, the page-load sync in
+  // usePushNotifications re-registers on the next visit.
+  const key = event.oldSubscription?.options?.applicationServerKey;
+  event.waitUntil(
+    (async () => {
+      if (!event.newSubscription && key) {
+        try {
+          await self.registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: key,
+          });
+        } catch {
+          // Permission revoked or push service unreachable — nothing to do.
+        }
+      }
+      const clientList = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      for (const client of clientList) {
+        client.postMessage({ type: "armada-push-changed" });
+      }
+    })(),
+  );
+});
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
