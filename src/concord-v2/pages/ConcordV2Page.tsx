@@ -316,6 +316,12 @@ function ChannelRow2({
     ? isConcordChannelMuted("c2", community.idHex, channel.idHex)
     : false;
   const foldedParticipants = useMemo(() => fold.present.map((p) => p.author), [fold]);
+  // Raised hands (Armada client feature) read straight off the presence fold,
+  // so the roster shows them even for a call you haven't joined.
+  const raisedVoice = useMemo(
+    () => new Set(fold.present.filter((p) => p.hand).map((p) => p.author)),
+    [fold],
+  );
   // While YOU are in this call, the connected room's live LiveKit roster is
   // authoritative — presence heartbeats lag (30s cadence, 90s staleness) and
   // desync. Folded presence remains the source for calls you're not in.
@@ -403,7 +409,14 @@ function ChannelRow2({
           {/* Discord-style nested voice roster: who's in the call, under the row
               (with live speaking rings while you're in it). Shown whenever a
               call is live in the channel. */}
-          {occupied && <VoiceParticipantList participants={participants} speaking={speaking} muted={mutedVoice} />}
+          {occupied && (
+            <VoiceParticipantList
+              participants={participants}
+              speaking={speaking}
+              muted={mutedVoice}
+              raised={raisedVoice}
+            />
+          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">

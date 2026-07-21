@@ -11,6 +11,9 @@ import {
   KIND_HTTP_AUTH,
   orderBrokers,
   parsePresence,
+  parseReaction,
+  presenceTags,
+  reactionTag,
   rendezvousCandidates,
   signAvGrant,
   verifiedAuthorOf,
@@ -97,9 +100,20 @@ describe("parsePresence (§4)", () => {
       status: "joined",
       identity: "id-1",
       broker: "https://b.example",
+      hand: false,
       ms: 1_000_000,
       rumorId: "r".repeat(64),
     });
+  });
+
+  it("reads the raised-hand tag (client extension) only while joined", () => {
+    const withHand = openedPresence({
+      tags: [["identity", "id-1"], ["broker", "https://b.example"], ["hand", "1"]],
+    });
+    expect(parsePresence(withHand)?.hand).toBe(true);
+    // Absent tag → hand down; a `left` never carries a raised hand.
+    expect(parsePresence(openedPresence({}))?.hand).toBe(false);
+    expect(parsePresence(openedPresence({ content: "left", tags: [["hand", "1"]] }))?.hand).toBe(false);
   });
 
   it("parses a left (identity and broker omitted)", () => {
@@ -112,6 +126,34 @@ describe("parsePresence (§4)", () => {
     expect(parsePresence(openedPresence({ kind: 23311 }))).toBeNull();
     expect(parsePresence(openedPresence({ content: "join" }))).toBeNull();
     expect(parsePresence(openedPresence({ tags: [] }))).toBeNull();
+  });
+});
+
+describe("presence tags (client extensions)", () => {
+  it("emits the hand tag only for a raised, joined member", () => {
+    expect(presenceTags("joined", "id-1", "https://b.example", { hand: true })).toContainEqual(["hand", "1"]);
+    expect(presenceTags("joined", "id-1", "https://b.example", { hand: false })).not.toContainEqual(["hand", "1"]);
+    // A `left` never advertises a hand.
+    expect(presenceTags("left", undefined, undefined, { hand: true })).not.toContainEqual(["hand", "1"]);
+  });
+
+  it("builds a react tag as [react, emoji, nonce]", () => {
+    expect(reactionTag("🎉", "n1")).toEqual(["react", "🎉", "n1"]);
+  });
+});
+
+describe("parseReaction (client extension)", () => {
+  it("extracts a valid reaction, ignoring plain heartbeats", () => {
+    const r = parseReaction(openedPresence({ tags: [["identity", "id-1"], ["react", "🎉", "n1"]] }));
+    expect(r).toEqual({ author: "a".repeat(64), emoji: "🎉", nonce: "n1", ms: 1_000_000 });
+    // No react tag → not a reaction.
+    expect(parseReaction(openedPresence({}))).toBeNull();
+  });
+
+  it("rejects malformed reactions: wrong kind, missing nonce, oversize emoji", () => {
+    expect(parseReaction(openedPresence({ kind: 23311, tags: [["react", "🎉", "n1"]] }))).toBeNull();
+    expect(parseReaction(openedPresence({ tags: [["react", "🎉"]] }))).toBeNull();
+    expect(parseReaction(openedPresence({ tags: [["react", "x".repeat(65), "n1"]] }))).toBeNull();
   });
 });
 

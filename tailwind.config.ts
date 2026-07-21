@@ -159,6 +159,15 @@ export default {
 				// the back half of the cycle.
 				'0%, 44%, 100%': { transform: 'scale(1)', opacity: '0.35' },
 				'22%': { transform: 'scale(1.3)', opacity: '1' }
+			},
+			'reaction-float': {
+				// In-call emoji reaction (à la Zoom/Signal): pop in at the tile
+				// bottom, then drift up and fade over the reaction TTL. The
+				// -50% X keeps it centered on its jittered left offset.
+				'0%': { transform: 'translate(-50%, 0) scale(0.5)', opacity: '0' },
+				'12%': { transform: 'translate(-50%, -8px) scale(1.15)', opacity: '1' },
+				'30%': { transform: 'translate(-50%, -18px) scale(1)', opacity: '1' },
+				'100%': { transform: 'translate(-50%, -76px) scale(1)', opacity: '0' }
 			}
 			},
 			animation: {
@@ -174,7 +183,8 @@ export default {
 				'success-halo': 'success-halo 0.9s ease-out both',
 				'success-fade-up': 'success-fade-up 0.45s ease-out both',
 				'success-spark': 'success-spark 1.1s ease-out both',
-				'typing-dot': 'typing-dot 1.2s ease-in-out infinite'
+				'typing-dot': 'typing-dot 1.2s ease-in-out infinite',
+				'reaction-float': 'reaction-float 4s ease-out forwards'
 			}
 		}
 	},

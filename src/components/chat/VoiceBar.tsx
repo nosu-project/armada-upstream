@@ -37,6 +37,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ReactionsMenu } from "@/components/chat/ReactionsMenu";
 import { VolumeSliderRow } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -445,6 +446,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
           {micBtn}
           {cameraBtn}
           {supportsScreenShare && screenShareBtn}
+          <ReactionsMenu className="size-9" />
           <DeviceMenu className="size-9" />
           {hangupBtn}
         </div>
@@ -460,6 +462,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
           {micBtn}
           {cameraBtn}
           {supportsScreenShare && screenShareBtn}
+          <ReactionsMenu />
           <DeviceMenu />
         </div>
         <div className="flex-1" />

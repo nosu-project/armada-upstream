@@ -143,6 +143,15 @@ export interface CallContextType {
   /** Internal: the connected room reports its live muted set here. */
   setMutedPubkeys: (pubkeys: Set<string>) => void;
   /**
+   * Pubkeys with a raised hand in the ACTIVE call (an Armada client feature,
+   * Concord calls only — see CallSignalsContext). Surfaced here too, alongside
+   * muted/speaking, so UI outside the LiveKit room — the sidebar's nested voice
+   * roster — can show who has their hand up. Empty when not in a Concord call.
+   */
+  raisedHands: ReadonlySet<string>;
+  /** Internal: the connected Concord room reports its raised-hand set here. */
+  setRaisedHands: (pubkeys: Set<string>) => void;
+  /**
    * The ACTIVE call's live roster: every participant currently in the
    * connected LiveKit room (local + remote), resolved to pubkeys (deduped
    * across multiple sessions; unverified Concord identities excluded). Null

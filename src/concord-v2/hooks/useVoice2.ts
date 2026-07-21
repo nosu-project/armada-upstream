@@ -16,14 +16,17 @@ import {
   fetchAvToken,
   foldVoicePresence,
   parsePresence,
+  parseReaction,
   presenceTags,
   probeAvBroker,
+  reactionTag,
   rendezvousCandidates,
   VOICE_HEARTBEAT_MS,
   VOICE_STALE_MS,
   type AvToken,
   type VoicePresenceEntry,
   type VoicePresenceFold,
+  type VoiceReactionEntry,
 } from "@/concord-v2/lib/voice";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { CONCORD_AV_SERVERS } from "@/lib/platform";
@@ -104,7 +107,8 @@ export function useVoicePresence2(
             (p, i) =>
               p.author === next.present[i].author &&
               p.identity === next.present[i].identity &&
-              p.broker === next.present[i].broker,
+              p.broker === next.present[i].broker &&
+              p.hand === next.present[i].hand,
           )
         ) {
           return prev;
@@ -169,23 +173,47 @@ export function useVoicePresence2(
  * every 30s while `identity` is set, and a best-effort `left` on teardown — a
  * missed one heals by staleness. Sealed under the channel key like every Chat
  * rumor, with the channel/epoch binding.
+ *
+ * It also carries the two Armada client extensions (see voice.ts): the sticky
+ * `hand` state on every heartbeat, republished off-cycle the instant it
+ * toggles; and `sendReaction`, which fires a transient emoji on an off-cycle
+ * `joined` (doubling as a heartbeat). Both ride additive tags on the same
+ * kind-23313 rumor, so they inherit its blindness — brokers/relays never see
+ * them — with no new frozen kind (CORD-02 §6).
  */
 export function useVoiceHeartbeat2(
   community: CommunityV2 | undefined,
   channel: ChannelV2 | undefined,
   identity: string | undefined,
   broker: string | undefined,
-): void {
+  handRaised = false,
+): { sendReaction: (emoji: string) => void } {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
 
+  // The interval and reaction sender read the live hand state through a ref so a
+  // toggle doesn't tear down and re-arm the heartbeat (a transient `left` would
+  // flicker every remote roster). The dedicated effect below republishes on the
+  // toggle itself for immediacy.
+  const handRef = useRef(handRaised);
+  handRef.current = handRaised;
+
   const publish = useCallback(
-    async (status: "joined" | "left", id?: string, origin?: string) => {
+    async (
+      status: "joined" | "left",
+      id?: string,
+      origin?: string,
+      reaction?: { emoji: string; nonce: string },
+    ) => {
       if (!user || !community || !channel) return;
       const rumor = buildRumor({
         kind: KIND_VOICE_PRESENCE,
         content: status,
-        tags: [...channelBindingTags(channel.idHex, channel.current.epoch), ...presenceTags(status, id, origin)],
+        tags: [
+          ...channelBindingTags(channel.idHex, channel.current.epoch),
+          ...presenceTags(status, id, origin, { hand: handRef.current }),
+          ...(reaction ? [reactionTag(reaction.emoji, reaction.nonce)] : []),
+        ],
         pubkey: user.pubkey,
         ms: Date.now(),
       });
@@ -210,6 +238,119 @@ export function useVoiceHeartbeat2(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity, broker, user?.pubkey, community?.idHex, channel?.idHex]);
+
+  // Republish immediately when the hand toggles (while joined) so others see it
+  // without waiting up to 30s for the next heartbeat. Skips the initial mount —
+  // the join heartbeat above already carries the starting state.
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!identity || !broker) return;
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    void publish("joined", identity, broker).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handRaised, identity, broker]);
+
+  const sendReaction = useCallback(
+    (emoji: string) => {
+      if (!identity || !broker) return;
+      const nonce =
+        typeof crypto?.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      void publish("joined", identity, broker, { emoji, nonce }).catch(() => undefined);
+    },
+    [publish, identity, broker],
+  );
+
+  return { sendReaction };
+}
+
+/** How long a received reaction floats before it's aged out. */
+const REACTION_TTL_MS = 4000;
+
+/**
+ * Live in-call emoji reactions for one V2 channel (Armada client extension,
+ * see voice.ts): the `react` tag on ephemeral kind-23313 rumors. Like typing
+ * and presence, this is subscription-only (relays never store the wrap); a
+ * live `req()` per relay feeds a decaying list, fired once per unseen nonce.
+ * Own reactions echo back through the same subscription, so they animate too
+ * without a separate optimistic path.
+ */
+export function useVoiceReactions2(
+  community: CommunityV2 | undefined,
+  channel: ChannelV2 | undefined,
+): VoiceReactionEntry[] {
+  const { nostr } = useNostr();
+  const [reactions, setReactions] = useState<VoiceReactionEntry[]>([]);
+  const seen = useRef(new Set<string>());
+
+  const channelIdHex = channel?.idHex ?? null;
+  const currentPk = channel?.current.group.pk;
+
+  useEffect(() => {
+    seen.current = new Set();
+    setReactions([]);
+    if (!community || !channel || !channelIdHex || !currentPk) return;
+    const controller = new AbortController();
+    const group = channel.current.group;
+    const epoch = channel.current.epoch;
+
+    const decay = () => {
+      const cutoff = Date.now() - REACTION_TTL_MS;
+      setReactions((prev) => {
+        const live = prev.filter((r) => r.ms > cutoff);
+        return live.length === prev.length ? prev : live;
+      });
+    };
+
+    const apply = (event: NostrEvent) => {
+      try {
+        const opened = openWrap(event, group);
+        if (opened.kind !== KIND_VOICE_PRESENCE) return;
+        checkChannelBinding(opened, channelIdHex, epoch);
+        const entry = parseReaction(opened);
+        if (!entry) return;
+        // Fire once per nonce; drop replays and anything already expired.
+        if (seen.current.has(entry.nonce)) return;
+        if (Date.now() - entry.ms > REACTION_TTL_MS) return;
+        seen.current.add(entry.nonce);
+        // Bound the dedup memory over a long call.
+        if (seen.current.size > 512) {
+          seen.current = new Set([...seen.current].slice(-256));
+        }
+        setReactions((prev) => [...prev, entry]);
+      } catch {
+        // not ours / malformed / a plain heartbeat
+      }
+    };
+
+    for (const url of community.relays) {
+      void (async () => {
+        try {
+          for await (const msg of nostr.relay(url).req(
+            [{ kinds: [KIND_WRAP_EPHEMERAL], authors: [currentPk] }],
+            { signal: controller.signal },
+          )) {
+            if (msg[0] === "EVENT") apply(msg[2] as NostrEvent);
+          }
+        } catch {
+          // subscription ended
+        }
+      })();
+    }
+
+    const timer = setInterval(decay, REACTION_TTL_MS / 2);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nostr, community?.idHex, channelIdHex, currentPk]);
+
+  return reactions;
 }
 
 /**

@@ -14,6 +14,7 @@ import { Track } from "livekit-client";
 import {
   ChevronLeft,
   ChevronRight,
+  Hand,
   Maximize2,
   Mic,
   Minimize2,
@@ -38,10 +39,12 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ReactionsMenu } from "@/components/chat/ReactionsMenu";
 import { VoiceUserContextMenu, VolumeSliderRow } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useUserVolume } from "@/hooks/useUserVolume";
+import { useCallSignals } from "@/contexts/CallSignalsContext";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { playScreenShareSound, playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
@@ -327,6 +330,59 @@ function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
   );
 }
 
+/**
+ * A small amber badge pinned to a tile's top-left corner while that
+ * participant's hand is raised (Armada client feature; Concord calls only). The
+ * raised-hand set is surfaced on the app-level call context by the Concord room.
+ */
+function RaisedHandBadge({ pubkey }: { pubkey: string }) {
+  const { raisedHands } = useCall();
+  if (!raisedHands.has(pubkey)) return null;
+  return (
+    <div
+      className="absolute top-1.5 left-1.5 z-10 flex items-center justify-center rounded-md bg-amber-500 text-white size-6 shadow-md animate-in fade-in-0 zoom-in-75"
+      aria-label="Hand raised"
+    >
+      <Hand className="size-3.5" />
+    </div>
+  );
+}
+
+/**
+ * A small deterministic horizontal jitter (−20..20px) keyed off the reaction
+ * nonce, so simultaneous emoji from one participant don't stack exactly and
+ * read as a little burst.
+ */
+function reactionOffset(nonce: string): number {
+  let h = 0;
+  for (let i = 0; i < nonce.length; i++) h = (h * 31 + nonce.charCodeAt(i)) | 0;
+  return (h % 41) - 20;
+}
+
+/**
+ * The transient emoji reactions floating up from a participant's tile (à la
+ * Zoom/Signal). Each fades and drifts upward on its own (~4s, matching the
+ * reaction TTL), keyed by nonce so React mounts/unmounts each independently.
+ */
+function TileReactions({ pubkey }: { pubkey: string }) {
+  const { reactions } = useCallSignals();
+  const mine = reactions.filter((r) => r.author === pubkey);
+  if (mine.length === 0) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden" aria-hidden>
+      {mine.map((r) => (
+        <span
+          key={r.nonce}
+          className="absolute bottom-2 left-1/2 font-emoji text-3xl leading-none animate-reaction-float drop-shadow"
+          style={{ marginLeft: reactionOffset(r.nonce) }}
+        >
+          {r.emoji}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** A single video tile (camera or screenshare) for one participant track. */
 function VideoTile({
   trackRef,
@@ -401,6 +457,8 @@ function VideoTile({
         </>
       )}
       <FocusButton focused={focused} onClick={onToggleFocus} />
+      {!isScreenShare && <RaisedHandBadge pubkey={pubkey} />}
+      {!isScreenShare && <TileReactions pubkey={pubkey} />}
       {/* Remote (non-screenshare) nameplates open the per-user volume menu. */}
       {hasVolumeMenu ? (
         <VolumeMenu pubkey={pubkey} displayName={displayName}>
@@ -503,6 +561,8 @@ function AvatarTile({
         </Avatar>
       </div>
       <FocusButton focused={focused} onClick={onToggleFocus} />
+      <RaisedHandBadge pubkey={pubkey} />
+      <TileReactions pubkey={pubkey} />
       {/* Remote nameplates open the per-user volume menu. */}
       {!isLocal ? (
         <VolumeMenu pubkey={pubkey} displayName={displayName}>
@@ -696,6 +756,7 @@ function FloatingControls() {
           )}
         </button>
       )}
+      <ReactionsMenu floating />
       <DisconnectButton
         // Play the leave chirp inside the gesture, before the disconnect tears
         // down the room audio (same reasoning as the VoiceBar's hangup).

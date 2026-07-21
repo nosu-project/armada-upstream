@@ -85,6 +85,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // Live muted set (pubkeys), reported by the connected room so the sidebar
   // roster can show who has their mic off.
   const [mutedPubkeys, setMutedState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
+  // Live raised-hand set (pubkeys), reported by a connected Concord room so the
+  // sidebar roster can show who has their hand up (empty in NIP-29/DM calls).
+  const [raisedHands, setRaisedHandsState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
   // Live roster of the connected room (pubkeys), reported by the room so the
   // active call's occupancy renders from LiveKit truth instead of relay
   // presence events (which lag/desync). Null while not connected.
@@ -134,6 +137,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setFloatingHidden(false);
     setSpeakingState(NO_SPEAKERS);
     setMutedState(NO_SPEAKERS);
+    setRaisedHandsState(NO_SPEAKERS);
     setRosterState(null);
     if (exitTimer.current) clearTimeout(exitTimer.current);
     exitTimer.current = setTimeout(() => {
@@ -240,6 +244,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setMutedState((prev) => (sameSet(prev, next) ? prev : next));
   }, []);
 
+  // Equality-guarded so the Concord room's presence-fold reports only re-render
+  // context consumers when the raised-hand set actually changed.
+  const setRaisedHands = useCallback((next: Set<string>) => {
+    setRaisedHandsState((prev) => (sameSet(prev, next) ? prev : next));
+  }, []);
+
   // Equality-guarded so the room's participant reports only re-render context
   // consumers when the roster actually changed.
   const setVoiceRoomPubkeys = useCallback((next: readonly string[] | null) => {
@@ -284,6 +294,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         setSpeakingPubkeys,
         mutedPubkeys,
         setMutedPubkeys,
+        raisedHands,
+        setRaisedHands,
         voiceRoomPubkeys,
         setVoiceRoomPubkeys,
       }}

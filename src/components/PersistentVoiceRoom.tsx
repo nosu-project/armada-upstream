@@ -22,7 +22,7 @@ import {
 } from "livekit-client";
 import { Capacitor } from "@capacitor/core";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 
@@ -43,7 +43,8 @@ import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { random32, voiceSenderKey } from "@/concord-v2/lib/derive";
 import { rendezvousCandidates, verifiedAuthorOf } from "@/concord-v2/lib/voice";
 import { useCallSync2 } from "@/concord-v2/hooks/useCallSync2";
-import { useAvToken2, useVoiceHeartbeat2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
+import { useAvToken2, useVoiceHeartbeat2, useVoicePresence2, useVoiceReactions2 } from "@/concord-v2/hooks/useVoice2";
+import { CallSignalsContext, type CallSignals } from "@/contexts/CallSignalsContext";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
@@ -672,9 +673,15 @@ function ConcordVoiceRoom({
 }) {
   const { community, channel, broker } = ctx;
   const { user } = useCurrentUser();
-  const { joinConcordCall, registerFocusActiveCall } = useCall();
+  const { joinConcordCall, registerFocusActiveCall, setRaisedHands } = useCall();
   const navigate = useNavigate();
   const { data: tokenData, error, isLoading } = useAvToken2(channel, broker, true);
+
+  // Raise-hand + emoji reactions (Armada client feature; Concord calls only —
+  // they ride additive tags on the encrypted presence rumor, so brokers stay
+  // blind). Own hand state is local; it feeds the heartbeat (below) and renders
+  // our own tile instantly without waiting for the presence echo.
+  const [handRaised, setHandRaised] = useState(false);
 
   // Live enforcement (CORD-07 §7): `ctx` is a join-time snapshot, so follow
   // the vault + Control fold while connected — rejoin the freshly-derived room
@@ -694,9 +701,46 @@ function ConcordVoiceRoom({
   }, [registerFocusActiveCall, navigate, community.idHex, channel.idHex]);
 
   // Live presence (§4): the identity→member verification input, the rendezvous
-  // hint stream (§5), and our own heartbeat (joined every 30s, left on leave).
+  // hint stream (§5), and our own heartbeat (joined every 30s, left on leave) —
+  // which also carries our sticky raised-hand state and, via `sendReaction`,
+  // fires transient emoji (both Armada client extensions on the same rumor).
   const fold = useVoicePresence2(community, channel);
-  useVoiceHeartbeat2(community, channel, tokenData?.identity, tokenData ? broker : undefined);
+  const { sendReaction } = useVoiceHeartbeat2(
+    community,
+    channel,
+    tokenData?.identity,
+    tokenData ? broker : undefined,
+    handRaised,
+  );
+  // Live in-call emoji reactions from every member (own reactions echo back).
+  const reactions = useVoiceReactions2(community, channel);
+
+  // Who has a hand up: the fresh presence fold, plus ourselves the instant we
+  // raise (before our own heartbeat echoes back). Pushed to the app-level call
+  // context so the sidebar voice roster can show it alongside muted/speaking.
+  const raisedHands = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of fold.present) if (p.hand) set.add(p.author);
+    if (handRaised && user) set.add(user.pubkey);
+    return set;
+  }, [fold, handRaised, user]);
+  useEffect(() => {
+    setRaisedHands(raisedHands);
+  }, [raisedHands, setRaisedHands]);
+  useEffect(() => () => setRaisedHands(new Set()), [setRaisedHands]);
+
+  // The raise-hand + reactions surface for the in-call controls and stage
+  // (portaled children of VoiceRoomShell, so this reaches them via the tree).
+  const signals = useMemo<CallSignals>(
+    () => ({
+      enabled: Boolean(tokenData),
+      myHandRaised: handRaised,
+      toggleHand: () => setHandRaised((h) => !h),
+      sendReaction,
+      reactions,
+    }),
+    [tokenData, handRaised, sendReaction, reactions],
+  );
 
   // Build the E2EE-enabled Room once (the component remounts per room/epoch/broker).
   const e2ee = useMemo(() => {
@@ -838,17 +882,19 @@ function ConcordVoiceRoom({
 
   return (
     <VoiceIdentityContext.Provider value={resolveIdentity}>
-      <VoiceRoomShell
-        serverUrl={tokenData.url}
-        token={tokenData.token}
-        options={{}}
-        room={e2ee.room}
-        onDisconnected={handleDisconnected}
-        placeBar={placeBar}
-        placeStage={placeStage}
-        stageOpen={stageOpen}
-        label={label}
-      />
+      <CallSignalsContext.Provider value={signals}>
+        <VoiceRoomShell
+          serverUrl={tokenData.url}
+          token={tokenData.token}
+          options={{}}
+          room={e2ee.room}
+          onDisconnected={handleDisconnected}
+          placeBar={placeBar}
+          placeStage={placeStage}
+          stageOpen={stageOpen}
+          label={label}
+        />
+      </CallSignalsContext.Provider>
     </VoiceIdentityContext.Provider>
   );
 }

@@ -1,4 +1,4 @@
-import { Headphones, MicOff } from "lucide-react";
+import { Hand, Headphones, MicOff } from "lucide-react";
 import type { CSSProperties } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -46,6 +46,7 @@ export function VoiceParticipantList({
   participants,
   speaking,
   muted,
+  raised,
   className,
 }: {
   participants: readonly string[];
@@ -53,6 +54,8 @@ export function VoiceParticipantList({
   speaking?: ReadonlySet<string>;
   /** Pubkeys currently muted (live, from the connected call), if known. */
   muted?: ReadonlySet<string>;
+  /** Pubkeys with a raised hand (Armada client feature; Concord calls only). */
+  raised?: ReadonlySet<string>;
   className?: string;
 }) {
   if (participants.length === 0) return null;
@@ -68,6 +71,7 @@ export function VoiceParticipantList({
           pubkey={pk}
           isSpeaking={speaking?.has(pk) ?? false}
           isMuted={muted?.has(pk) ?? false}
+          isRaised={raised?.has(pk) ?? false}
         />
       ))}
     </div>
@@ -84,10 +88,12 @@ function VoiceParticipantRow({
   pubkey,
   isSpeaking,
   isMuted,
+  isRaised,
 }: {
   pubkey: string;
   isSpeaking?: boolean;
   isMuted?: boolean;
+  isRaised?: boolean;
 }) {
   const author = useAuthor(pubkey);
   const { user } = useCurrentUser();
@@ -120,6 +126,12 @@ function VoiceParticipantRow({
           </Avatar>
         </div>
         <span className={cn("truncate flex-1 min-w-0", isSpeaking && "text-success")}>{name}</span>
+        {isRaised && (
+          <Hand
+            className="size-3.5 shrink-0 text-amber-500"
+            aria-label="Hand raised"
+          />
+        )}
         {isMuted && (
           <MicOff
             className="size-3.5 shrink-0 text-destructive"

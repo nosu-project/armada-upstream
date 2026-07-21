@@ -165,18 +165,87 @@ export interface VoicePresenceEntry {
   identity?: string;
   /** The broker origin hint, canonicalized (joined only). */
   broker?: string;
+  /**
+   * Whether this member has their hand raised (joined only) — an ARMADA CLIENT
+   * EXTENSION, not part of CORD-07. It rides as an additive `["hand","1"]` tag
+   * on the presence rumor; per CORD-02 §6 (additive change / unknown-field
+   * round-tripping) an old client simply ignores it, so no frozen kind is spent
+   * and brokers/relays stay blind (it's sealed like all presence). Sticky state:
+   * carried on every heartbeat and healed by the same staleness window.
+   */
+  hand?: boolean;
   /** Millisecond ordering basis (CORD-02 §4). */
   ms: number;
   /** The rumor id — the equal-ms tiebreak. */
   rumorId: string;
 }
 
-/** The presence tags a `joined` carries beyond the channel/epoch binding. */
-export function presenceTags(status: "joined" | "left", identity?: string, broker?: string): string[][] {
+/**
+ * The presence tags a `joined` carries beyond the channel/epoch binding. `hand`
+ * is an Armada client extension (see {@link VoicePresenceEntry.hand}); it's
+ * emitted only while joined and only when raised (its absence means lowered).
+ */
+export function presenceTags(
+  status: "joined" | "left",
+  identity?: string,
+  broker?: string,
+  opts?: { hand?: boolean },
+): string[][] {
   const tags: string[][] = [];
   if (status === "joined" && identity) tags.push(["identity", identity]);
   if (status === "joined" && broker) tags.push(["broker", broker]);
+  if (status === "joined" && opts?.hand) tags.push(["hand", "1"]);
   return tags;
+}
+
+/**
+ * The max byte length of a reaction's emoji payload. Bounds a hostile member's
+ * ability to bloat the transient reaction list; comfortably fits any single
+ * emoji (incl. ZWJ sequences) or a short custom shortcode.
+ */
+const MAX_REACTION_LEN = 64;
+
+/** A transient in-call emoji reaction, as opened from the Channel's stream. */
+export interface VoiceReactionEntry {
+  /** The verified real author (the presence rumor's seal signer). */
+  author: string;
+  /** The emoji (or shortcode) to float. */
+  emoji: string;
+  /** The sender-chosen nonce — the fire-once/dedup key. */
+  nonce: string;
+  /** Millisecond stamp (CORD-02 §4) — the decay basis. */
+  ms: number;
+}
+
+/**
+ * The reaction tag an in-call emoji rides — an ARMADA CLIENT EXTENSION, not
+ * part of CORD-07. A reaction is a transient, fire-and-forget event, so it
+ * rides as an additive `["react", emoji, nonce]` tag on an off-cycle `joined`
+ * presence rumor (which doubles as a heartbeat). Receivers fire the emoji once
+ * per unseen nonce and never fold it into state. Spec-legal via CORD-02 §6
+ * (additive tag on an existing kind); an old client ignores it.
+ */
+export function reactionTag(emoji: string, nonce: string): string[] {
+  return ["react", emoji, nonce];
+}
+
+/**
+ * Parse an opened kind-23313 rumor's reaction tag into a reaction entry, or
+ * null when it carries none (a plain presence heartbeat) or a malformed one.
+ * The channel/epoch binding is checked by the caller, like every Chat rumor.
+ */
+export function parseReaction(opened: OpenedEvent): VoiceReactionEntry | null {
+  if (opened.kind !== KIND_VOICE_PRESENCE) return null;
+  const tag = opened.tags.find((t) => t[0] === "react");
+  if (!tag) return null;
+  const emoji = tag[1];
+  const nonce = tag[2];
+  if (typeof emoji !== "string" || emoji.length === 0) return null;
+  // Bound the payload (untrusted member input) — reject rather than truncate,
+  // so two clients never disagree on what floated.
+  if (new TextEncoder().encode(emoji).length > MAX_REACTION_LEN) return null;
+  if (typeof nonce !== "string" || nonce.length === 0 || nonce.length > 128) return null;
+  return { author: opened.author, emoji, nonce, ms: opened.ms };
 }
 
 /**
@@ -201,7 +270,8 @@ export function parsePresence(opened: OpenedEvent): VoicePresenceEntry | null {
     status === "joined" && typeof rawBroker === "string" && rawBroker.length <= 512
       ? canonicalOrigin(rawBroker) ?? undefined
       : undefined;
-  return { author: opened.author, status, identity, broker, ms: opened.ms, rumorId: opened.rumorId };
+  const hand = status === "joined" && opened.tags.some((t) => t[0] === "hand" && t[1] === "1");
+  return { author: opened.author, status, identity, broker, hand, ms: opened.ms, rumorId: opened.rumorId };
 }
 
 /** A verified-present participant: one fresh `joined` per author. */
@@ -209,6 +279,8 @@ export interface VoicePresent {
   author: string;
   identity: string;
   broker?: string;
+  /** Whether this member's latest presence has their hand raised (client ext). */
+  hand: boolean;
   ms: number;
 }
 
@@ -241,7 +313,7 @@ export function foldVoicePresence(entries: VoicePresenceEntry[], nowMs: number):
   for (const e of latest.values()) {
     if (e.status !== "joined" || !e.identity) continue;
     if (nowMs - e.ms > VOICE_STALE_MS) continue;
-    present.push({ author: e.author, identity: e.identity, broker: e.broker, ms: e.ms });
+    present.push({ author: e.author, identity: e.identity, broker: e.broker, hand: e.hand ?? false, ms: e.ms });
     const list = claims.get(e.identity);
     if (list) list.push(e.author);
     else claims.set(e.identity, [e.author]);
