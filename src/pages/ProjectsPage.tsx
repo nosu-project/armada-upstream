@@ -60,10 +60,8 @@ export function ProjectsPage() {
             </div>
           </header>
 
-          <div className="flex-1 min-h-0 overflow-y-auto p-4">
-            <div className="max-w-3xl mx-auto">
-              <BuzzProjectsList relayUrl={relayUrl} />
-            </div>
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <BuzzProjectsList relayUrl={relayUrl} />
           </div>
         </main>
       </SwipeReveal>

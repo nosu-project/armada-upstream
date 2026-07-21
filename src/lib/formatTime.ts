@@ -17,6 +17,23 @@ export function shortTimeAgo(timestamp: number): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
+/** Format a unix-seconds timestamp as a long relative string ("2 days ago"). */
+export function relativeTime(timestamp: number): string {
+  const seconds = Math.floor(Date.now() / 1000) - timestamp;
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 30) {
+    const months = Math.floor(days / 30);
+    return months === 1 ? "1 month ago" : `${months} months ago`;
+  }
+  if (days > 0) return days === 1 ? "1 day ago" : `${days} days ago`;
+  if (hours > 0) return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
+  if (minutes > 0) return minutes === 1 ? "1 minute ago" : `${minutes} minutes ago`;
+  return "just now";
+}
+
 /** Format a unix-seconds timestamp as a short local clock time ("3:07 PM"). */
 export function shortClockTime(timestamp: number): string {
   return new Date(timestamp * 1000).toLocaleTimeString([], {
