@@ -806,6 +806,8 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
 export interface Dm17Conversation {
   peer: string;
   latest: OpenedDm;
+  /** The viewer has authored at least one message in this conversation. */
+  mine: boolean;
 }
 
 /**
@@ -838,7 +840,7 @@ export function useDm17Conversations(opts?: { interactive?: boolean }): {
     queryKey,
     enabled: !!self && support,
     queryFn: async ({ signal }) => {
-      const rows = await queryDm17Conversations({ signal });
+      const rows = await queryDm17Conversations({ self, signal });
       if (ctx) void syncDm17Inbox(ctx, { interactive });
       return rows;
     },

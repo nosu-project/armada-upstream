@@ -594,13 +594,17 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   // user; only a true cold start (no cache + network in flight) actually waits.
   const conversations = useMemo(() => {
     if (!muteReady) return [];
-    const byPeer = new Map<string, { peer: string; latest: NostrEvent }>();
+    const byPeer = new Map<string, { peer: string; latest: NostrEvent; mine: boolean }>();
     for (const event of query.data ?? []) {
       const peer = dmCounterparty(event, self);
       if (!peer || mutedPubkeys.has(peer)) continue;
+      const sent = event.pubkey === self;
       const existing = byPeer.get(peer);
-      if (!existing || event.created_at > existing.latest.created_at) {
-        byPeer.set(peer, { peer, latest: event });
+      if (!existing) {
+        byPeer.set(peer, { peer, latest: event, mine: sent });
+      } else {
+        if (event.created_at > existing.latest.created_at) existing.latest = event;
+        if (sent) existing.mine = true;
       }
     }
     return [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
@@ -670,9 +674,10 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
  * conversation (kind-4 or NIP-17) is from the peer and newer than the thread's
  * last-read stamp. Drives the unread dot on the DMs button in the server rail.
  *
- * NIP-17 conversations are additionally narrowed to followed peers, matching
- * the kind-4 plane's relay-level friends-only scoping — a stranger's gift wrap
- * must not light a dot for a conversation the list would never show.
+ * NIP-17 conversations are additionally narrowed to followed peers (or ones the
+ * viewer has messaged), matching the kind-4 plane's relay-level friends-only
+ * scoping — an unsolicited stranger's gift wrap must not light a dot for a
+ * conversation the list would never show.
  */
 export function useHasUnreadDMs(): boolean {
   const { user } = useCurrentUser();
@@ -695,7 +700,7 @@ export function useHasUnreadDMs(): boolean {
     const follows = new Set(followData?.pubkeys ?? []);
     return dm17Conversations.some(
       (c) =>
-        follows.has(c.peer) &&
+        (follows.has(c.peer) || c.mine) &&
         c.latest.author !== user.pubkey &&
         c.latest.createdAt > getLastRead(dmReadKey(c.peer)),
     );

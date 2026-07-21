@@ -71,6 +71,17 @@ describe("dm17Store", () => {
     expect(convos[1].latest.content).toBe("hi back");
   });
 
+  it("marks conversations the viewer has messaged as `mine`", async () => {
+    const convos = await queryDm17Conversations({ self });
+    const byPeer = new Map(convos.map((c) => [c.peer, c]));
+    // alice's thread has a self-authored "hi back"; bob only messaged us.
+    expect(byPeer.get(alice)?.mine).toBe(true);
+    expect(byPeer.get(bob)?.mine).toBe(false);
+    // Without `self`, participation can't be determined — always false.
+    const anon = await queryDm17Conversations();
+    expect(anon.every((c) => c.mine === false)).toBe(true);
+  });
+
   it("applies a kind-5 delete rumor to the author's own target only", async () => {
     const target = opened({ author: alice, peer: alice, content: "to be deleted" });
     const reaction = opened({

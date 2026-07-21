@@ -1459,7 +1459,7 @@ function ConversationList({
           </div>
         ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground p-3">
-            No conversations with people you follow yet. Start one with the + button.
+            No conversations yet. Start one with the + button.
           </p>
         ) : (
           <>
@@ -1531,9 +1531,9 @@ export function DMsPage() {
   useEnsureDmInbox();
   const { data: followData } = useFollowList();
   const [composing, setComposing] = useState(false);
-  // The conversation list is always narrowed to people the user follows (kind
-  // 3) — DMs from strangers are never shown. Muted people are also excluded
-  // upstream in useDMConversations.
+  // The conversation list is narrowed to people the user follows (kind 3) plus
+  // anyone the user has messaged — unsolicited DMs from strangers are never
+  // shown. Muted people are also excluded upstream in useDMConversations.
   const followedPubkeys = useMemo(
     () => new Set(followData?.pubkeys ?? []),
     [followData?.pubkeys],
@@ -1570,14 +1570,26 @@ export function DMsPage() {
   // Conversations plus the active peer if it's a brand-new thread. Kind-4 and
   // NIP-17 conversations merge per peer (newest message wins; a NIP-17 rumor
   // is already plaintext, so it carries its own preview text). The list is
-  // always narrowed to followed peers — but always keep the peer whose thread
-  // is currently open so the row you're reading never vanishes.
+  // narrowed to followed peers and threads the viewer has messaged — but always
+  // keep the peer whose thread is currently open so the row you're reading never
+  // vanishes.
   const rows = useMemo(() => {
-    const byPeer = new Map<string, { peer: string; latest: NostrEvent; plaintext?: string }>();
-    for (const c of conversations) byPeer.set(c.peer, { peer: c.peer, latest: c.latest });
+    const byPeer = new Map<
+      string,
+      { peer: string; latest: NostrEvent; plaintext?: string; mine: boolean }
+    >();
+    for (const c of conversations) {
+      byPeer.set(c.peer, { peer: c.peer, latest: c.latest, mine: c.mine });
+    }
     for (const c of dm17Conversations) {
       const existing = byPeer.get(c.peer);
-      if (existing && existing.latest.created_at >= c.latest.createdAt) continue;
+      // Participation is sticky across planes: either plane having a
+      // viewer-authored message keeps the row visible below.
+      const mine = (existing?.mine ?? false) || c.mine;
+      if (existing && existing.latest.created_at >= c.latest.createdAt) {
+        existing.mine = mine;
+        continue;
+      }
       byPeer.set(c.peer, {
         peer: c.peer,
         latest: {
@@ -1590,12 +1602,16 @@ export function DMsPage() {
           sig: "",
         },
         plaintext: c.latest.content,
+        mine,
       });
     }
     let list = [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
-    list = list.filter((c) => followedPubkeys.has(c.peer) || c.peer === activePeer);
+    // Followed peers, conversations the viewer started (so a thread you opened
+    // with someone you don't follow doesn't vanish when you close it), and the
+    // open peer are kept; unsolicited stranger DMs stay hidden.
+    list = list.filter((c) => followedPubkeys.has(c.peer) || c.mine || c.peer === activePeer);
     if (activePeer && !list.some((c) => c.peer === activePeer)) {
-      list.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent });
+      list.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent, mine: false });
     }
     return list;
   }, [conversations, dm17Conversations, activePeer, followedPubkeys]);

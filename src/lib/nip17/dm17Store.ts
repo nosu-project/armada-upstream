@@ -133,23 +133,29 @@ export async function queryDm17Thread(
  * The newest chat/file rumor per conversation partner — the NIP-17 side of
  * the conversation list. Reads the newest `limit` message rumors and groups
  * client-side (fine at DM scale; reactions/deletes never surface a peer).
+ *
+ * `mine` marks conversations the viewer has participated in (authored at least
+ * one message to), so the list can keep a thread you started with someone you
+ * don't follow — pass `self` to populate it (omitted, it's always false).
  */
 export async function queryDm17Conversations(
-  opts: { limit?: number; signal?: AbortSignal } = {},
-): Promise<Array<{ peer: string; latest: OpenedDm }>> {
+  opts: { self?: string; limit?: number; signal?: AbortSignal } = {},
+): Promise<Array<{ peer: string; latest: OpenedDm; mine: boolean }>> {
   const events = await dm17Store().query(
     [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], limit: opts.limit ?? 500 }],
     { signal: opts.signal },
   );
   const byPeer = new Map<string, OpenedDm>();
+  const mine = new Set<string>();
   for (const ev of events) {
     const opened = storedToDm17(ev);
     if (!opened.peer) continue;
+    if (opts.self && opened.author === opts.self) mine.add(opened.peer);
     const cur = byPeer.get(opened.peer);
     if (!cur || opened.createdAt > cur.createdAt) byPeer.set(opened.peer, opened);
   }
   return [...byPeer.entries()]
-    .map(([peer, latest]) => ({ peer, latest }))
+    .map(([peer, latest]) => ({ peer, latest, mine: mine.has(peer) }))
     .sort((a, b) => b.latest.createdAt - a.latest.createdAt);
 }
 

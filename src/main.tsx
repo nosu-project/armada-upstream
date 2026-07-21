@@ -26,6 +26,20 @@ if (document.documentElement.classList.contains("standalone")) {
   });
 }
 
+// Ask the browser to keep our site storage DURABLE. Without a persistence
+// grant, WebKit (notably iOS home-screen PWAs) treats IndexedDB as best-effort
+// and may evict it when the app is terminated — silently dropping the decrypted
+// NIP-17 rumor store (armada-dm17-rumors) and the kind-4 snapshots. A received
+// conversation then reads fine in-session but vanishes on the next cold launch.
+// Installed PWAs are typically granted automatically; this is a no-op on the
+// native (Capacitor) runtime, whose storage already survives across launches.
+if (!Capacitor.isNativePlatform() && navigator.storage?.persist) {
+  void navigator.storage
+    .persisted()
+    .then((already) => (already ? undefined : navigator.storage.persist()))
+    .catch(() => {});
+}
+
 createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
     <App />
