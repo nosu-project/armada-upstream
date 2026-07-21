@@ -143,47 +143,48 @@ export function AddBody({ onDone }: { onDone: () => void }) {
           </Alert>
         )}
 
-        <Button
-          type="button"
-          size="lg"
-          onClick={handleCreate}
-          disabled={isCreating || !name.trim()}
-          className="h-12 w-full clip-corner-lg text-base font-medium"
-        >
-          {isCreating ? (
-            <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</>
-          ) : (
-            <><ShieldCheck className="size-4 mr-2" /> Create encrypted community</>
-          )}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            size="lg"
+            onClick={handleCreate}
+            disabled={isCreating || !name.trim()}
+            className="h-12 flex-1 clip-corner-lg text-base font-medium"
+          >
+            {isCreating ? (
+              <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</>
+            ) : (
+              <><ShieldCheck className="size-4 mr-2" /> Create encrypted community</>
+            )}
+          </Button>
 
-        <Popover open={advancedOpen} onOpenChange={setAdvancedOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <Server className="size-3.5" />
-              Relays
-              {effectiveRelays.length > 0 && (
-                <span className="tabular-nums opacity-70">· {effectiveRelays.length}</span>
-              )}
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="center" className="w-80">
-            <p className="mb-2 text-left text-xs text-muted-foreground">
-              Where this community lives. Members read and write here, so pick
-              relays that accept your writes. An auth-only or DM-only relay can
-              reject the genesis and strand the create.
-            </p>
-            <RelayListEditor
-              relays={effectiveRelays}
-              onChange={setRelays}
-              onReset={candidates ? () => setRelays(candidates) : undefined}
-              emptyText="Add at least one relay to host this community."
-            />
-          </PopoverContent>
-        </Popover>
+          <Popover open={advancedOpen} onOpenChange={setAdvancedOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label="Choose relays"
+                className="h-12 w-12 shrink-0 clip-corner-lg"
+              >
+                <ChevronDown className={cn("size-5 transition-transform", advancedOpen && "rotate-180")} />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80">
+              <p className="mb-2 text-left text-xs text-muted-foreground">
+                Where this community lives. Members read and write here, so pick
+                relays that accept your writes. An auth-only or DM-only relay can
+                reject the genesis and strand the create.
+              </p>
+              <RelayListEditor
+                relays={effectiveRelays}
+                onChange={setRelays}
+                onReset={candidates ? () => setRelays(candidates) : undefined}
+                emptyText="Add at least one relay to host this community."
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
 
       <EscapeHatch onDone={onDone} />
