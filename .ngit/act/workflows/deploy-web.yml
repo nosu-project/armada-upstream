@@ -37,6 +37,10 @@ jobs:
       # provisioned) leaves the tracker uninitialized — no telemetry.
       VITE_PLAUSIBLE_DOMAIN: ${{ secrets.VITE_PLAUSIBLE_DOMAIN }}
       VITE_PLAUSIBLE_ENDPOINT: ${{ secrets.VITE_PLAUSIBLE_ENDPOINT }}
+      # Content-blind nostr-push gateway (NIP-PUSH). Empty (secrets not
+      # provisioned) leaves web push on the legacy relay-gateway path.
+      VITE_NOSTR_PUSH_PUBKEY: ${{ secrets.VITE_NOSTR_PUSH_PUBKEY }}
+      VITE_NOSTR_PUSH_RELAYS: ${{ secrets.VITE_NOSTR_PUSH_RELAYS }}
     steps:
       - uses: actions/checkout@v4
 
