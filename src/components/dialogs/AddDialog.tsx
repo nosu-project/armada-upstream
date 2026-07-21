@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/collapsible";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Tooltip,
   TooltipContent,
@@ -143,48 +142,49 @@ export function AddBody({ onDone }: { onDone: () => void }) {
           </Alert>
         )}
 
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            size="lg"
-            onClick={handleCreate}
-            disabled={isCreating || !name.trim()}
-            className="h-12 flex-1 clip-corner-lg text-base font-medium"
-          >
-            {isCreating ? (
-              <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</>
-            ) : (
-              <><ShieldCheck className="size-4 mr-2" /> Create encrypted community</>
-            )}
-          </Button>
+        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="lg"
+              onClick={handleCreate}
+              disabled={isCreating || !name.trim()}
+              className="h-12 flex-1 clip-corner-lg text-base font-medium"
+            >
+              {isCreating ? (
+                <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</>
+              ) : (
+                <><ShieldCheck className="size-4 mr-2" /> Create encrypted community</>
+              )}
+            </Button>
 
-          <Popover open={advancedOpen} onOpenChange={setAdvancedOpen}>
-            <PopoverTrigger asChild>
+            <CollapsibleTrigger asChild>
               <Button
                 type="button"
-                variant="outline"
+                variant="ghost"
                 size="icon"
                 aria-label="Choose relays"
-                className="h-12 w-12 shrink-0 clip-corner-lg"
+                className="h-12 w-12 shrink-0"
               >
                 <ChevronDown className={cn("size-5 transition-transform", advancedOpen && "rotate-180")} />
               </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-80">
-              <p className="mb-2 text-left text-xs text-muted-foreground">
-                Where this community lives. Members read and write here, so pick
-                relays that accept your writes. An auth-only or DM-only relay can
-                reject the genesis and strand the create.
-              </p>
-              <RelayListEditor
-                relays={effectiveRelays}
-                onChange={setRelays}
-                onReset={candidates ? () => setRelays(candidates) : undefined}
-                emptyText="Add at least one relay to host this community."
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
+            </CollapsibleTrigger>
+          </div>
+
+          <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+            <p className="mb-2 mt-3 text-left text-xs text-muted-foreground">
+              Where this community lives. Members read and write here, so pick
+              relays that accept your writes. An auth-only or DM-only relay can
+              reject the genesis and strand the create.
+            </p>
+            <RelayListEditor
+              relays={effectiveRelays}
+              onChange={setRelays}
+              onReset={candidates ? () => setRelays(candidates) : undefined}
+              emptyText="Add at least one relay to host this community."
+            />
+          </CollapsibleContent>
+        </Collapsible>
       </div>
 
       <EscapeHatch onDone={onDone} />
