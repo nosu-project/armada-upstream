@@ -34,6 +34,7 @@ const ConcordPage = lazy(lazyWithReload(() => import("@/concord-v1/pages/Concord
 const ConcordV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page }))));
 const DMsPage = lazy(lazyWithReload(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage }))));
 const GroupPage = lazy(lazyWithReload(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage }))));
+const InboxPage = lazy(lazyWithReload(() => import("@/pages/InboxPage").then((m) => ({ default: m.InboxPage }))));
 const InvitePage = lazy(lazyWithReload(() => import("@/concord-v1/pages/InvitePage")));
 const InviteV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/InviteV2Page")));
 const MeshPage = lazy(lazyWithReload(() => import("@/pages/MeshPage")));
@@ -256,9 +257,10 @@ export function AppRouter() {
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/s/:server" element={<ServerPage />} />
-            {/* Static `projects` outranks the `:groupId` param, so a Buzz
-                workspace's Projects view resolves here, not as a channel. */}
+            {/* Static segments outrank the `:groupId` param, so the Projects
+                and Inbox views resolve here, not as a channel. */}
             <Route path="/s/:server/projects" element={<ProjectsPage />} />
+            <Route path="/s/:server/inbox" element={<RequireAuth><InboxPage /></RequireAuth>} />
             <Route path="/s/:server/:groupId" element={<GroupPage />} />
             <Route path="/c1/:communityId" element={<ConcordPage />} />
             <Route path="/c1/:communityId/:channelId" element={<ConcordPage />} />

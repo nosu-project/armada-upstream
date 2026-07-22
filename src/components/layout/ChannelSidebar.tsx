@@ -1,4 +1,4 @@
-import { Bell, BellOff, CheckCheck, ChevronDown, FolderGit2, Hash, Headphones, IdCard, Link as LinkIcon, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
+import { Bell, BellOff, CheckCheck, ChevronDown, FolderGit2, Hash, Headphones, IdCard, Inbox, Link as LinkIcon, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
@@ -31,6 +31,7 @@ import { useLivekitParticipants, useRelayLivekitSupport } from "@/hooks/useLivek
 import { useNotifLevels, channelScopeKey } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
+import { useRelayInbox } from "@/hooks/useRelayInbox";
 import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
 import { useServerActions } from "@/hooks/useServerActions";
 import { relayToRouteParam } from "@/lib/platform";
@@ -257,6 +258,8 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
 
   const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
   const { byGroup } = useRelayUnread(relayUrl, groupIds);
+  // Unread mentions across this server's channels — drives the Inbox badge.
+  const { unreadCount: inboxUnread } = useRelayInbox(relayUrl, groupIds);
 
   // Register this sidebar's slot so the persistent call bar portals above the
   // account pill. Every instance (desktop pane + mobile drawer) registers; the
@@ -373,22 +376,54 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       addChannelLabel={user ? "Create channel" : undefined}
       onAddChannel={user ? () => setCreateOpen(true) : undefined}
       preChannels={
-        isBuzz ? (
-          <NavLink
-            to={`/s/${relayToRouteParam(relayUrl)}/projects`}
-            onClick={onNavigate}
-            className={({ isActive }) =>
-              cn(
-                "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors clip-corner-lg",
-                isActive
-                  ? "bg-primary text-primary-foreground font-medium"
-                  : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
-              )
-            }
-          >
-            <FolderGit2 className="size-4 shrink-0" />
-            <span className="truncate flex-1 min-w-0">Projects</span>
-          </NavLink>
+        user || isBuzz ? (
+          <>
+            {/* Inbox: messages across this server's channels that mention you.
+                Not Buzz-specific — shown on any NIP-29 server for a signed-in
+                user. */}
+            {user && (
+              <NavLink
+                to={`/s/${relayToRouteParam(relayUrl)}/inbox`}
+                onClick={onNavigate}
+                className={({ isActive }) =>
+                  cn(
+                    "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors clip-corner-lg",
+                    isActive
+                      ? "bg-primary text-primary-foreground font-medium"
+                      : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+                  )
+                }
+              >
+                <Inbox className="size-4 shrink-0" />
+                <span className="truncate flex-1 min-w-0">Inbox</span>
+                {inboxUnread > 0 && (
+                  <span
+                    className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                    aria-label={`${inboxUnread} unread mentions`}
+                  >
+                    {Math.min(inboxUnread, 99)}
+                  </span>
+                )}
+              </NavLink>
+            )}
+            {isBuzz && (
+              <NavLink
+                to={`/s/${relayToRouteParam(relayUrl)}/projects`}
+                onClick={onNavigate}
+                className={({ isActive }) =>
+                  cn(
+                    "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors clip-corner-lg",
+                    isActive
+                      ? "bg-primary text-primary-foreground font-medium"
+                      : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+                  )
+                }
+              >
+                <FolderGit2 className="size-4 shrink-0" />
+                <span className="truncate flex-1 min-w-0">Projects</span>
+              </NavLink>
+            )}
+          </>
         ) : undefined
       }
       postChannels={
