@@ -1,4 +1,4 @@
-import { Bell, BellOff, CheckCheck, ChevronDown, FolderGit2, Hash, Headphones, IdCard, Link as LinkIcon, Loader2, Lock, MessageSquareText, MessagesSquare, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
+import { Bell, BellOff, CheckCheck, ChevronDown, FolderGit2, Hash, Headphones, IdCard, Link as LinkIcon, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
@@ -442,8 +442,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           ))}
           {buzzSections.forums.length > 0 && (
             <>
-              <div className="flex items-center gap-1.5 pl-4 pr-2 pt-3 pb-1">
-                <MessagesSquare className="size-3 text-muted-foreground" />
+              <div className="pl-4 pr-2 pt-6 pb-1">
                 <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Forums
                 </span>

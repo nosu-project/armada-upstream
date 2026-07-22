@@ -134,8 +134,14 @@ export const BUZZ_TIMELINE_CONTENT_KINDS = [
   KIND_HUDDLE_STARTED,
 ] as const;
 
-/** Content kinds a forum channel's timeline renders (posts only; comments thread). */
-export const BUZZ_FORUM_CONTENT_KINDS = [KIND_FORUM_POST] as const;
+/**
+ * Content kinds a forum channel's window loads. Posts (45001) render as
+ * timeline rows; comments (45003) carry NIP-10 marked reply tags, so the fold
+ * partitions them out of the timeline into per-root thread buckets (and a
+ * `#e` thread backfill can find them). Both must be in the set — omitting
+ * comments would drop them from the window entirely, so threads couldn't load.
+ */
+export const BUZZ_FORUM_CONTENT_KINDS = [KIND_FORUM_POST, KIND_FORUM_COMMENT] as const;
 
 /**
  * Auxiliary (non-row) kinds that overlay onto or hide an existing message:

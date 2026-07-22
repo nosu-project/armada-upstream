@@ -340,6 +340,14 @@ interface ChatComposerProps {
    * semantics — a bare marked reply would be thread-only there).
    */
   replyExtraTags?: string[][];
+  /**
+   * The event kind the group-publish path signs. Defaults to NIP-29 group
+   * chat (kind 9). Buzz forum channels override this to publish forum posts
+   * (kind 45001) instead, so the message lands in the forum's content set and
+   * actually renders (a kind-9 post is filtered out of the forum timeline).
+   * Ignored on the `sendOverride` path, where the caller owns the kind.
+   */
+  messageKind?: number;
 }
 
 /**
@@ -352,7 +360,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, replyExtraTags }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, replyExtraTags, messageKind = KIND_GROUP_CHAT }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -1012,7 +1020,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           let signedId: string | undefined;
           try {
             await createEvent({
-              kind: KIND_GROUP_CHAT,
+              kind: messageKind,
               content: finalText,
               tags,
               relay: relayUrl,
@@ -1039,7 +1047,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         })();
       } else {
         await createEvent({
-          kind: KIND_GROUP_CHAT,
+          kind: messageKind,
           content: finalText,
           tags,
           relay: relayUrl,
@@ -1054,7 +1062,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         variant: "destructive",
       });
     }
-  }, [user, isSending, sendOverride, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed]);
+  }, [user, isSending, sendOverride, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, messageKind]);
 
   /** Execute a parsed slash command's result (run action / send rewritten text). */
   const executeSlash = useCallback(async (command: SlashCommand, arg: string) => {
@@ -1325,7 +1333,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         await sendOverride(audioUrl, tags);
       } else {
         await createEvent({
-          kind: KIND_GROUP_CHAT,
+          kind: messageKind,
           content: audioUrl,
           tags,
           relay: relayUrl,
@@ -1339,7 +1347,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } finally {
       setIsPublishingVoice(false);
     }
-  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, encryptAttachments, onCancelReply, onSent, toast]);
+  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, encryptAttachments, onCancelReply, onSent, toast, messageKind]);
 
   const handleStartRecording = useCallback(async () => {
     try {

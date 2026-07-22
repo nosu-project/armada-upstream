@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { BuzzDiffRow, BuzzHuddleRow, BuzzJobRow, BuzzSystemRow, BuzzWorkflowDefinitionRow, BuzzWorkflowEventRow } from "@/buzz/BuzzRows";
 import {
+  KIND_FORUM_COMMENT,
   KIND_FORUM_POST,
   KIND_FORUM_VOTE,
   KIND_HUDDLE_ENDED,
@@ -281,7 +282,11 @@ export function BuzzChat({
     return [...set];
   }, [timeline, searchResults]);
 
-  const sendThreadReply = useSendBuzzThreadReply(relayUrl, channelId);
+  const sendThreadReply = useSendBuzzThreadReply(
+    relayUrl,
+    channelId,
+    forum ? KIND_FORUM_COMMENT : undefined,
+  );
 
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
   const toggleActive = useCallback(
@@ -679,6 +684,7 @@ export function BuzzChat({
             replyTo={replyTo}
             replyMarker="buzz"
             replyExtraTags={BROADCAST_TAGS}
+            messageKind={forum ? KIND_FORUM_POST : undefined}
             pollsEnabled={false}
             placeholder={channelName ? `Message ${channelName}` : undefined}
             onCancelReply={() => setReplyTo(undefined)}

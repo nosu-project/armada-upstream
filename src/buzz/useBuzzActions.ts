@@ -41,13 +41,20 @@ export function useBuzzEditMessage(relayUrl: string, channelId: string) {
 }
 
 /**
- * Post a Buzz thread reply: an ordinary kind-9 stream message with NIP-10
- * MARKED `root`/`reply` tags (Buzz's thread model — no kind-1111 comments).
- * `composerTags` are the content-derived tags (mentions/emoji/imeta/hashtags)
- * the shared composer built; its own `h`/`e` structure is replaced by the
- * thread pointers.
+ * Post a Buzz thread reply with NIP-10 MARKED `root`/`reply` tags (Buzz's
+ * thread model — no kind-1111 comments). `composerTags` are the content-derived
+ * tags (mentions/emoji/imeta/hashtags) the shared composer built; its own
+ * `h`/`e` structure is replaced by the thread pointers.
+ *
+ * `replyKind` is the event kind to publish: a stream channel's threads are
+ * kind-9 stream messages (the default); a forum channel's threads are kind
+ * 45003 forum comments.
  */
-export function useSendBuzzThreadReply(relayUrl: string, channelId: string) {
+export function useSendBuzzThreadReply(
+  relayUrl: string,
+  channelId: string,
+  replyKind: number = KIND_STREAM_MESSAGE,
+) {
   const { mutateAsync: publish } = useNostrPublish();
   return useCallback(
     async (root: NostrEvent, content: string, composerTags: string[][] = []) => {
@@ -63,13 +70,13 @@ export function useSendBuzzThreadReply(relayUrl: string, channelId: string) {
         tags.push(tag);
       }
       await publish({
-        kind: KIND_STREAM_MESSAGE,
+        kind: replyKind,
         content,
         tags,
         relay: relayUrl,
       });
     },
-    [publish, relayUrl, channelId],
+    [publish, relayUrl, channelId, replyKind],
   );
 }
 
