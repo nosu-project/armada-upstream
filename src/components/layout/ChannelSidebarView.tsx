@@ -41,9 +41,19 @@ interface ChannelSidebarViewProps {
   addChannelDisabled?: boolean;
   /**
    * Content rendered ABOVE the "Channels" section label (e.g. Concord's
-   * "@ Mentions" nav item). Sits at the top of the scroll region.
+   * "@ Mentions" / "Threads" nav items). Wrapped as its own section, so the
+   * items inside stay tight together and the group is separated from the
+   * "Channels" section by the standard section gap.
    */
   preChannels?: ReactNode;
+  /**
+   * Trailing sections rendered BELOW the "Channels" section (e.g. Buzz's
+   * Forums / Direct messages / Archived groups). Each child section should be
+   * its own wrapper (`<div className="space-y-0.5">…`) so it lands as a
+   * gap-separated sibling in the scroll column, matching the spacing between
+   * the pre-channels group and the "Channels" section.
+   */
+  postChannels?: ReactNode;
   /**
    * Inline content under the "Channels" label (e.g. a create-channel form).
    * Concord renders its add form here; NIP-29 leaves it empty (it uses a dialog).
@@ -75,6 +85,7 @@ export function ChannelSidebarView({
   addChannelOpen,
   addChannelDisabled,
   preChannels,
+  postChannels,
   channelsHeaderExtra,
   children,
   footer,
@@ -189,25 +200,32 @@ export function ChannelSidebarView({
       {/* Divider between the header and the channel list. */}
       <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
 
-      {/* Channels */}
-      <div className="flex-1 overflow-y-auto px-1 pt-[11px] pb-2 space-y-0.5">
-        {preChannels}
-        <div className="flex items-center justify-between pl-4 pr-2 py-1">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Channels
-          </span>
-          {addLabel ? (
-            <Tooltip>
-              <TooltipTrigger asChild>{addButton}</TooltipTrigger>
-              <TooltipContent>{addLabel}</TooltipContent>
-            </Tooltip>
-          ) : (
-            addButton
-          )}
+      {/* Channels. The scroll column is a set of sections (pre-channels group,
+          the "Channels" list, then any trailing groups) separated by one
+          consistent gap; rows WITHIN a section stay tight (space-y-0.5). */}
+      <div className="flex-1 overflow-y-auto px-1 pt-[11px] pb-2 flex flex-col gap-5">
+        {preChannels && <div className="space-y-0.5">{preChannels}</div>}
+
+        <div className="space-y-0.5">
+          <div className="flex items-center justify-between pl-4 pr-2 py-1">
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Channels
+            </span>
+            {addLabel ? (
+              <Tooltip>
+                <TooltipTrigger asChild>{addButton}</TooltipTrigger>
+                <TooltipContent>{addLabel}</TooltipContent>
+              </Tooltip>
+            ) : (
+              addButton
+            )}
+          </div>
+
+          {channelsHeaderExtra}
+          {children}
         </div>
 
-        {channelsHeaderExtra}
-        {children}
+        {postChannels}
       </div>
 
       {footer}

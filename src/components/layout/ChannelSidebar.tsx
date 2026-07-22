@@ -391,6 +391,49 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           </NavLink>
         ) : undefined
       }
+      postChannels={
+        buzzSections ? (
+          <>
+            {buzzSections.forums.length > 0 && (
+              <div className="space-y-0.5">
+                <div className="pl-4 pr-2 py-1">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Forums
+                  </span>
+                </div>
+                {buzzSections.forums.map((group) => (
+                  <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
+                ))}
+              </div>
+            )}
+            {buzzSections.dms.length > 0 && (
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-1.5 pl-4 pr-2 py-1">
+                  <MessageSquareText className="size-3 text-muted-foreground" />
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Direct messages
+                  </span>
+                </div>
+                {buzzSections.dms.map((group) => (
+                  <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} buzzDm />
+                ))}
+              </div>
+            )}
+            {buzzSections.archived.length > 0 && (
+              <div className="space-y-0.5">
+                <div className="pl-4 pr-2 py-1">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    Archived
+                  </span>
+                </div>
+                {buzzSections.archived.map((group) => (
+                  <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} dimmed />
+                ))}
+              </div>
+            )}
+          </>
+        ) : undefined
+      }
       footer={
         <>
           {/* Voice call bar slot — the persistent call UI portals here. */}
@@ -440,43 +483,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           {buzzSections.streams.map((group) => (
             <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
           ))}
-          {buzzSections.forums.length > 0 && (
-            <>
-              <div className="pl-4 pr-2 pt-6 pb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Forums
-                </span>
-              </div>
-              {buzzSections.forums.map((group) => (
-                <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
-              ))}
-            </>
-          )}
-          {buzzSections.dms.length > 0 && (
-            <>
-              <div className="flex items-center gap-1.5 pl-4 pr-2 pt-3 pb-1">
-                <MessageSquareText className="size-3 text-muted-foreground" />
-                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Direct messages
-                </span>
-              </div>
-              {buzzSections.dms.map((group) => (
-                <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} buzzDm />
-              ))}
-            </>
-          )}
-          {buzzSections.archived.length > 0 && (
-            <>
-              <div className="pl-4 pr-2 pt-3 pb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  Archived
-                </span>
-              </div>
-              {buzzSections.archived.map((group) => (
-                <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} dimmed />
-              ))}
-            </>
-          )}
           {buzzSections.streams.length + buzzSections.forums.length + buzzSections.dms.length + buzzSections.archived.length === 0 && (
             <div className="px-2 py-8 text-center text-sm text-muted-foreground">
               No channels yet.

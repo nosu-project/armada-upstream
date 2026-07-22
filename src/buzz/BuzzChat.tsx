@@ -1,4 +1,5 @@
-import { ArrowBigDown, ArrowBigUp, Bot as BotIcon, Hash, Loader2, Search } from "lucide-react";
+import { ArrowBigDown, ArrowBigUp, Bot as BotIcon, Copy, Hash, Link2, Loader2, MessagesSquare, MoreHorizontal, Search, Trash2 } from "lucide-react";
+import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -24,11 +25,20 @@ import { tallyForumVotes, collectDeletedIds } from "@/buzz/protocol";
 import { buzzMessagesKey, useBuzzMessages } from "@/buzz/useBuzzMessages";
 import { useBuzzEditMessage, useBuzzTyping, useSendBuzzThreadReply } from "@/buzz/useBuzzActions";
 import { ChatComposer } from "@/components/chat/ChatComposer";
+import { ChatContent } from "@/components/chat/ChatContent";
 import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { firstImageRef, getReplyToId } from "@/components/chat/messageHelpers";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -46,6 +56,9 @@ import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useEvent } from "@/hooks/useEvent";
+import { getAvatarShape } from "@/lib/avatarShape";
+import { writeClipboardText } from "@/lib/clipboard";
+import { shortTimeAgo } from "@/lib/formatTime";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
@@ -194,6 +207,170 @@ function BuzzChatMessage({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+interface BuzzForumPostProps {
+  event: ChatMsg;
+  transport: ChatTransport;
+  /** Vote tally for this post (forum channels always pass one). */
+  votes?: { up: number; down: number; mine?: "+" | "-" };
+  onVote?: (event: ChatMsg, value: "+" | "-") => void;
+  /** Whether the author holds the `bot` role in this channel (agent badge). */
+  isAgent?: boolean;
+}
+
+/**
+ * A forum post rendered as a Reddit-style card: a left vote rail (upvote /
+ * score / downvote), then a byline (avatar · author · relative time · overflow
+ * menu), the post body, and a comment-count action that opens the thread. The
+ * card body is click-to-open (ignoring clicks that land on links/buttons), so
+ * the whole post behaves like a Reddit listing row.
+ */
+function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPostProps) {
+  const { user } = useCurrentUser();
+  const author = useAuthor(event.pubkey);
+  const metadata = author.data?.metadata;
+  const displayName = useScopedDisplayName(event.pubkey, metadata);
+  const replyCount = transport.replyCountFor?.(event.id) ?? 0;
+  const up = votes?.up ?? 0;
+  const down = votes?.down ?? 0;
+  const score = up - down;
+  const mine = votes?.mine;
+  const isOwn = user?.pubkey === event.pubkey;
+  const canDelete = Boolean(transport.deleteMessage) && (isOwn || transport.canModerate);
+
+  const openThread = useCallback(
+    (focusReply = false) => transport.openThread?.(event, focusReply),
+    [transport, event],
+  );
+
+  // Reddit-style: clicking the post opens it, but clicks on links/buttons/media
+  // inside the body act normally instead of being swallowed by the open.
+  const handleBodyClick = useCallback(
+    (e: React.MouseEvent) => {
+      if ((e.target as HTMLElement).closest("a, button, input, textarea, [role='button']")) return;
+      openThread();
+    },
+    [openThread],
+  );
+
+  const copyId = useCallback(() => {
+    try {
+      writeClipboardText(`nostr:${nip19.neventEncode({ id: event.id, author: event.pubkey })}`).catch(
+        () => undefined,
+      );
+    } catch {
+      writeClipboardText(event.id).catch(() => undefined);
+    }
+  }, [event.id, event.pubkey]);
+
+  return (
+    <div className="px-2 py-1">
+      <div className="flex overflow-hidden clip-corner-lg border border-border bg-card transition-colors hover:border-muted-foreground/30">
+        {/* Vote rail */}
+        <div className="flex shrink-0 flex-col items-center gap-0.5 bg-secondary/40 px-1 py-2">
+          <button
+            type="button"
+            aria-label="Upvote"
+            aria-pressed={mine === "+"}
+            onClick={() => onVote?.(event, "+")}
+            className={cn(
+              "rounded p-1 transition-colors touch:p-1.5",
+              mine === "+" ? "text-success" : "text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
+            )}
+          >
+            <ArrowBigUp className="size-5" />
+          </button>
+          <span
+            className={cn(
+              "text-xs font-bold tabular-nums",
+              mine === "+" ? "text-success" : mine === "-" ? "text-destructive" : "text-foreground",
+            )}
+          >
+            {score}
+          </span>
+          <button
+            type="button"
+            aria-label="Downvote"
+            aria-pressed={mine === "-"}
+            onClick={() => onVote?.(event, "-")}
+            className={cn(
+              "rounded p-1 transition-colors touch:p-1.5",
+              mine === "-" ? "text-destructive" : "text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
+            )}
+          >
+            <ArrowBigDown className="size-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="min-w-0 flex-1 cursor-pointer px-3 py-2" onClick={handleBodyClick}>
+          <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
+              <AvatarImage src={metadata?.picture} alt={displayName} />
+              <AvatarFallback className="bg-primary/20 text-primary text-[8px] font-semibold">
+                {displayName[0]?.toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+            <span className="truncate font-medium text-foreground">{displayName}</span>
+            {isAgent && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-[10px] font-medium text-primary">
+                <BotIcon className="size-2.5" aria-hidden />
+                Agent
+              </span>
+            )}
+            <span aria-hidden>·</span>
+            <span className="shrink-0">{shortTimeAgo(event.created_at)}</span>
+            <div className="ml-auto shrink-0">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Post actions"
+                    className="flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground touch:p-1.5"
+                  >
+                    <MoreHorizontal className="size-4" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem onSelect={() => writeClipboardText(event.content).catch(() => undefined)}>
+                    <Copy className="mr-2 size-4" /> Copy text
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={copyId}>
+                    <Link2 className="mr-2 size-4" /> Copy post ID
+                  </DropdownMenuItem>
+                  {canDelete && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onSelect={() => transport.deleteMessage?.(event)}
+                      >
+                        <Trash2 className="mr-2 size-4" /> Delete post
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+
+          <ChatContent event={event} className="text-sm" />
+
+          <div className="mt-2 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+            <button
+              type="button"
+              onClick={() => openThread(true)}
+              className="inline-flex items-center gap-1.5 rounded px-2 py-1 transition-colors hover:bg-foreground/10 hover:text-foreground touch:py-2"
+            >
+              <MessagesSquare className="size-4" />
+              {replyCount > 0 ? `${replyCount} ${replyCount === 1 ? "comment" : "comments"}` : "Comment"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -588,6 +765,20 @@ export function BuzzChat({
       }
       if (!isChatRow(msg.kind)) return <BuzzSystemRow key={msg.id} event={msg} />;
       const votes = forum ? voteTallies?.get(msg.id) ?? { up: 0, down: 0 } : undefined;
+      // Forum posts render as Reddit-style cards (vote rail + byline + body +
+      // comment count); stream messages render through the chat row.
+      if (forum) {
+        return (
+          <BuzzForumPost
+            key={msg.id}
+            event={msg}
+            transport={transport}
+            isAgent={memberRoles?.[msg.pubkey] === "bot"}
+            votes={votes ? { up: votes.up, down: votes.down, mine: votes.mine?.value } : undefined}
+            onVote={handleVote}
+          />
+        );
+      }
       return (
         <BuzzChatMessage
           key={msg.id}
