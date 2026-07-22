@@ -1,4 +1,4 @@
-import { AtSign, Ban, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -35,6 +35,12 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -1775,6 +1781,9 @@ export function ConcordV2Page() {
             </button>
             </div>
             <div className="ml-auto flex items-center gap-0.5">
+              {/* Voice — the primary channel action, inline at every width
+                  (mirrors the DM header's Call). The secondary actions below
+                  stay inline on desktop but fold into the … menu on mobile. */}
               {user && view === "channel" && channel && !dissolved && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1795,7 +1804,7 @@ export function ConcordV2Page() {
               {user && !dissolved && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" className="size-8 touch:size-11" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
+                    <Button variant="ghost" size="icon" className="size-8 hidden sidebar:inline-flex text-muted-foreground" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
                       <UserPlus className="size-4" />
                     </Button>
                   </TooltipTrigger>
@@ -1810,7 +1819,7 @@ export function ConcordV2Page() {
                       size="icon"
                       aria-label="Search messages"
                       aria-pressed={searchOpen}
-                      className={cn("size-8 touch:size-11 text-muted-foreground", searchOpen && "text-foreground")}
+                      className={cn("size-8 hidden sidebar:inline-flex text-muted-foreground", searchOpen && "text-foreground")}
                       onClick={() => setSearchOpen(true)}
                     >
                       <Search className="size-4" />
@@ -1819,16 +1828,6 @@ export function ConcordV2Page() {
                   <TooltipContent>Search messages</TooltipContent>
                 </Tooltip>
               )}
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Members"
-                aria-pressed={membersOpen}
-                className="size-8 touch:size-11 sidebar:hidden"
-                onClick={() => setMembersOpen((v) => !v)}
-              >
-                <Users className="size-4" />
-              </Button>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -1850,7 +1849,7 @@ export function ConcordV2Page() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="size-8 touch:size-11"
+                      className="size-8 hidden sidebar:inline-flex text-muted-foreground"
                       disabled={!channel}
                       aria-label={channelMuted ? "Unmute channel" : "Mute channel"}
                       onClick={() => {
@@ -1863,6 +1862,49 @@ export function ConcordV2Page() {
                   <TooltipContent>{channelMuted ? "Unmute channel" : "Mute channel"}</TooltipContent>
                 </Tooltip>
               )}
+
+              {/* Mobile overflow: the secondary actions fold into a … menu to
+                  keep the bar uncluttered (like the DM header). Hidden once the
+                  sidebar layout has room to show them inline. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="More options"
+                    className="size-8 touch:size-11 shrink-0 text-muted-foreground sidebar:hidden"
+                  >
+                    <MoreVertical className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52 p-1.5">
+                  {view === "channel" && channel && (
+                    <DropdownMenuItem className="px-3 py-2" onClick={() => setSearchOpen(true)}>
+                      <Search className="size-4" />
+                      Search messages
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem className="px-3 py-2" onClick={() => setMembersOpen(true)}>
+                    <Users className="size-4" />
+                    Members
+                  </DropdownMenuItem>
+                  {user && !dissolved && (
+                    <DropdownMenuItem className="px-3 py-2" onClick={() => setInviteOpen(true)}>
+                      <UserPlus className="size-4" />
+                      Invite people
+                    </DropdownMenuItem>
+                  )}
+                  {user && community && channel && (
+                    <DropdownMenuItem
+                      className="px-3 py-2"
+                      onClick={() => toggleConcordChannelMute("c2", community.idHex, channel.idHex)}
+                    >
+                      {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                      {channelMuted ? "Unmute channel" : "Mute channel"}
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
 
             {/* Inline search bar: slides in over the header when open, covering
