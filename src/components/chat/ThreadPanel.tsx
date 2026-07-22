@@ -10,7 +10,6 @@ import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import { ZapButton } from "@/components/chat/ZapButton";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
-import { DittoIcon } from "@/components/brand/DittoIcon";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +35,6 @@ import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsR
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime } from "@/lib/formatTime";
 import { writeClipboardText } from "@/lib/clipboard";
-import { dittoEventUrl } from "@/lib/dittoUrl";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, ChatTransport, MessageReactions, MessageZaps, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
@@ -109,9 +107,9 @@ function ThreadMessage({
   /** Whether the current user may delete others' messages (moderation). */
   canModerate?: boolean;
   /**
-   * Whether this message is an unsigned rumor (Concord sealed chat event). Drives
-   * the right-click context menu: rumors offer "View event JSON" (a dialog with
-   * the rumor, pretty-printed), signed events offer the relay off-ramps.
+   * Whether this message is an unsigned rumor (Concord sealed chat event).
+   * Drives the "View event JSON" dialog wording and suppresses "Copy message
+   * ID" (a rumor has no relay-addressable event id).
    */
   isRumor?: boolean;
   /**
@@ -142,9 +140,12 @@ function ThreadMessage({
   const [zapOpen, setZapOpen] = useState(false);
   // A rumor has no signature; strip the synthetic empty `sig` the transport
   // adds for rendering so the JSON view reflects the true rumor shape.
-  const rumorJson = isRumor
+  // Raw event source for the "View event JSON" menu item: a rumor has no
+  // signature, so strip the synthetic empty `sig` the transport adds for
+  // rendering; a signed event (NIP-29) is shown as-is.
+  const sourceJson = isRumor
     ? JSON.stringify((({ sig: _sig, ...rest }) => rest)(event), null, 2)
-    : null;
+    : JSON.stringify(event, null, 2);
 
   // The author can delete their own message; moderators can delete anyone's
   // (mirrors ChatMessage's gating). The transport decides how.
@@ -293,21 +294,9 @@ function ThreadMessage({
             <Link2 className="mr-2 size-4" /> Copy message ID
           </ContextMenuItem>
         )}
-        {!isRumor && dittoEventUrl(event) && (
-          <ContextMenuItem
-            onSelect={() => {
-              const href = dittoEventUrl(event);
-              if (href) window.open(href, "_blank", "noopener,noreferrer");
-            }}
-          >
-            <DittoIcon className="mr-2 size-4" /> View on Ditto
-          </ContextMenuItem>
-        )}
-        {rumorJson !== null && (
-          <ContextMenuItem onSelect={() => setJsonOpen(true)}>
-            <Braces className="mr-2 size-4" /> View event JSON
-          </ContextMenuItem>
-        )}
+        <ContextMenuItem onSelect={() => setJsonOpen(true)}>
+          <Braces className="mr-2 size-4" /> View event JSON
+        </ContextMenuItem>
         {canDelete && (
           <>
             <ContextMenuSeparator />
@@ -332,30 +321,30 @@ function ThreadMessage({
     {zapOpen && (
       <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} sendOnchainZap={onSendOnchainZap} />
     )}
-    {rumorJson !== null && (
-      <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Event JSON</DialogTitle>
-            <DialogDescription>
-              The raw, unsigned rumor for this message.
-            </DialogDescription>
-          </DialogHeader>
-          <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
-            {rumorJson}
-          </pre>
-          <div className="flex justify-end">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => writeClipboardText(rumorJson).catch(() => undefined)}
-            >
-              <Copy className="mr-2 size-4" /> Copy JSON
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    )}
+    <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Event JSON</DialogTitle>
+          <DialogDescription>
+            {isRumor
+              ? "The raw, unsigned rumor for this message."
+              : "The raw signed event for this message."}
+          </DialogDescription>
+        </DialogHeader>
+        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
+          {sourceJson}
+        </pre>
+        <div className="flex justify-end">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => writeClipboardText(sourceJson).catch(() => undefined)}
+          >
+            <Copy className="mr-2 size-4" /> Copy JSON
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
     </>
   );
 }
