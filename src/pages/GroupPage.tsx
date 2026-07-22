@@ -299,10 +299,10 @@ export function GroupPage() {
   // user following its invite/server link, not by build-time fiat. Only relays
   // that are already auto-pinned (`PINNED_RAIL_RELAYS`, opt-in and empty by
   // default) skip this. Write the local cache immediately (works logged-out,
-  // instant rail visibility). The cross-device 10009 sync is deliberately NOT
-  // done here — see the membership-gated effect below.
+  // instant rail visibility). This is LOCAL-ONLY: the kind 10009 list is never
+  // published from a passive visit — the server rides into the list only via
+  // an explicit action (joining a channel, adding a server in Settings/Add).
   const addedServerRef = useRef<string | null>(null);
-  const syncedServerRef = useRef<string | null>(null);
   useEffect(() => {
     if (!relayUrl || PINNED_RAIL_RELAYS.includes(relayUrl)) return;
     if (addedServerRef.current !== relayUrl) {
@@ -352,24 +352,13 @@ export function GroupPage() {
   // logged-in user is in this ambiguous window, the composer area shows a
   // skeleton instead of the join prompt.
   const membershipPending = Boolean(user) && !isMember && (isLoading || membershipLoading);
-  // Cross-device persistence: sync the server to the user's kind 10009 list —
-  // but ONLY once we have a positive membership signal, never on a mere passive
-  // visit. Auto-adding on every visit resurrected servers the user had
-  // *removed* on another device: a lingering deep link / last-channel restore
-  // would silently re-publish `add-server`. Gating on actual membership means a
-  // removed server stays removed unless the user genuinely (re)joins a channel
-  // on it. `isMember` may resolve after the first render, so this re-runs and
-  // fires once when it flips true. `joinedLocally` (presence in the user's own
-  // list) is one of the signals, so a normal join both writes the group and
-  // brings the server along.
-  useEffect(() => {
-    if (!user || !relayUrl || PINNED_RAIL_RELAYS.includes(relayUrl)) return;
-    if (!isMember) return;
-    if (syncedServerRef.current === relayUrl) return;
-    syncedServerRef.current = relayUrl;
-    updateList({ type: "add-server", url: relayUrl }).catch((err) =>
-      console.warn("Failed to sync server to group list:", err));
-  }, [user, relayUrl, isMember, updateList]);
+  // NOTE: there is deliberately NO automatic `add-server` publish here. The
+  // kind 10009 list is only ever written by an explicit user action (joining a
+  // channel — `add-group` carries the server along — or adding a server in
+  // Settings/Add/invite accept). A membership-gated auto-sync used to live
+  // here and twice destroyed users' lists: it fired on passive visits (deep
+  // links, last-channel restore) and its read-modify-write could race a cold
+  // relay pool into rebuilding the list from empty.
 
   if (!relayUrl || !groupId) {
     return <Navigate to="/" replace />;

@@ -98,50 +98,32 @@ export function useDm17Support(): boolean {
   return !!user?.signer.nip44;
 }
 
-/** One inbox-announce attempt per (session, pubkey) — see useEnsureDmInbox. */
-const inboxAnnounced = new Set<string>();
-/** One DM-relay auto-adopt attempt per (session, pubkey) — see useEnsureDmInbox. */
+/** One DM-relay auto-adopt attempt per (session, pubkey) — see useAdoptDmInbox. */
 const dmRelaysAdopted = new Set<string>();
 
 /**
- * Ensure the viewer is REACHABLE over NIP-17 and reads/writes DMs where they
- * declared:
+ * Read/write DMs where the viewer DECLARED: when they HAVE a published
+ * kind-10050 list but "use my own DM relays" is off and they've never
+ * customized the DM-relay set, adopt the published list into local config and
+ * flip the toggle on. The user's declared inbox is the canonical place their
+ * DMs live, so it should be the default read/write set — otherwise DMs land on
+ * their 10050 relays but we read from the app relays. A deliberate later
+ * toggle-off / custom list is preserved (we only auto-adopt the untouched
+ * default, once per session).
  *
- *   - No published kind-10050 list → publish one (their effective DM relays).
- *     NIP-17 senders MUST only deliver to a recipient's 10050 relays; no list
- *     means "not ready to receive" and compliant clients won't even try.
- *   - HAS a published list but "use my own DM relays" is off and they've never
- *     customized the DM-relay set → adopt the published list and flip the
- *     toggle on. The user's declared inbox is the canonical place their DMs
- *     live, so it should be the default read/write set — otherwise DMs land on
- *     their 10050 relays but we read from the app relays. A deliberate later
- *     toggle-off / custom list is preserved (we only auto-adopt the untouched
- *     default, once per session).
- *
- * Called from the DMs page (an interactive surface, so a signer prompt is in
- * context); once per session, best-effort, and never overwrites an existing
- * list.
+ * This hook NEVER publishes anything. The client must not write a user's
+ * kind-10050 list without an explicit action: the read that would gate an
+ * auto-publish can come back empty on a cold pool / wrong relay set / timeout,
+ * and publishing a "first" list then REPLACES the user's real one everywhere
+ * (10050 is a replaceable event). A user with no published list stays
+ * unpublished until they save DM relays in Settings; NIP-17 senders fall back
+ * to kind-4 for them.
  */
-export function useEnsureDmInbox(): void {
+export function useAdoptDmInbox(): void {
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
-  const support = useDm17Support();
-  const { hasList, isLoading, relays: publishedRelays, publish } = useDmRelayList();
-  const relays = effectiveDmRelays(config);
-  const relayKey = relays.join(",");
+  const { hasList, isLoading, relays: publishedRelays } = useDmRelayList();
   const publishedKey = publishedRelays.join(",");
-
-  useEffect(() => {
-    const self = user?.pubkey;
-    if (!self || !support || isLoading || hasList || relays.length === 0) return;
-    if (inboxAnnounced.has(self)) return;
-    inboxAnnounced.add(self);
-    void publish(relays).catch(() => {
-      // Declined or offline — retry next session; senders fall back to kind-4.
-      inboxAnnounced.delete(self);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.pubkey, support, isLoading, hasList, relayKey]);
 
   // Adopt a published 10050 as the user's own DM relays when they haven't
   // opted in and haven't customized the (app-relay-default) list.

@@ -55,7 +55,7 @@ import {
   useDMSupport,
 } from "@/hooks/useDirectMessages";
 import { useBotManifests } from "@/hooks/useBotManifests";
-import { useDm17Conversations, useDm17Support, useEnsureDmInbox } from "@/hooks/useDm17";
+import { useAdoptDmInbox, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
 import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
@@ -1525,10 +1525,10 @@ export function DMsPage() {
   // opening the DMs page is where the one-time decrypt-consent prompt may
   // legitimately appear (same moment the kind-4 previews could open it).
   const { conversations: dm17Conversations } = useDm17Conversations({ interactive: true });
-  // Make the viewer reachable over NIP-17: publish their kind-10050 inbox
-  // list (once, if absent) so other clients know where — and that — they can
-  // deliver gift-wrapped DMs.
-  useEnsureDmInbox();
+  // Adopt the viewer's published kind-10050 inbox as the local DM relay set
+  // (local config only — NEVER publishes; a 10050 list is only ever written by
+  // an explicit save in Settings).
+  useAdoptDmInbox();
   const { data: followData } = useFollowList();
   const [composing, setComposing] = useState(false);
   // The conversation list is narrowed to people the user follows (kind 3) plus

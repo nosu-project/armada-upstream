@@ -206,7 +206,13 @@ function applyAction(list: UserGroupList, action: GroupListAction): UserGroupLis
       const without = list.groups.filter(
         (g) => !(g.id === action.ref.id && g.relay === action.ref.relay),
       );
-      return { ...list, groups: [...without, action.ref] };
+      // Joining a channel is the explicit action that brings its server into
+      // the cross-device list too (there is no passive-visit server sync).
+      const relay = normalizeRelayUrl(action.ref.relay) ?? action.ref.relay;
+      const servers = list.servers.some((s) => (normalizeRelayUrl(s) ?? s) === relay)
+        ? list.servers
+        : [...list.servers, relay];
+      return { ...list, groups: [...without, action.ref], servers };
     }
     case "remove-group":
       return {
@@ -227,11 +233,11 @@ function applyAction(list: UserGroupList, action: GroupListAction): UserGroupLis
       // the raw tag) is still dropped, rather than surviving to re-hydrate the
       // rail on the next boot.
       //
-      // Also drop every joined `group` on this server. Otherwise a removed
-      // server "comes back": another device still has the server's channels in
-      // its list, restores/deep-links into one, and GroupPage re-publishes
-      // `add-server` — resurrecting the `r` tag. Purging the groups here leaves
-      // nothing on this server to trigger that re-add.
+      // Also drop every joined `group` on this server: removing a server means
+      // leaving its channels, and a surviving `group` tag would keep
+      // re-hydrating them on other devices. The server only comes back if the
+      // user explicitly (re)joins a channel on it (`add-group` carries the
+      // server) or re-adds it.
       return {
         ...list,
         servers: list.servers.filter((s) => (normalizeRelayUrl(s) ?? s) !== url),
@@ -263,8 +269,10 @@ function applyAction(list: UserGroupList, action: GroupListAction): UserGroupLis
 
 /**
  * Mutate the user's kind 10009 list (add/remove a group or a server) with a
- * read-modify-write against fresh relay state. Items are stored as NIP-44
- * private items (encrypted to self) in `.content`, matching NIP-51.
+ * read-modify-write against fresh relay state. New lists store items as
+ * NIP-44 private items (encrypted to self) in `.content`, matching NIP-51;
+ * an existing list keeps whichever format (public tags vs encrypted content)
+ * it already uses.
  */
 export function useUpdateUserGroupList() {
   const { nostr } = useNostr();
@@ -275,41 +283,82 @@ export function useUpdateUserGroupList() {
   return useMutation({
     mutationFn: async (action: GroupListAction) => {
       if (!user) throw new Error("User is not logged in");
-      if (!user.signer.nip44) {
-        throw new Error("NIP-44 encryption not supported by this signer");
-      }
 
       // Read-modify-write against fresh relay state, never the query cache.
       const events = await nostr.query(
         [{ kinds: [KIND_USER_GROUPS], authors: [user.pubkey], limit: 1 }],
         { signal: AbortSignal.timeout(8000) },
       );
-      const prev = events.sort((a, b) => b.created_at - a.created_at)[0];
-      const current = await readGroupListEvent(prev ?? null, user.signer);
-      // Refuse to read-modify-write on top of a list we couldn't decrypt: the
-      // private items (servers + joined groups) would read as empty and we'd
-      // publish a list that wipes everything the user has. Better to fail the
-      // action than to silently destroy their server/group list.
-      if (current.decryptFailed) {
-        throw new Error("Couldn't read your existing list (decryption failed); not saving to avoid data loss.");
+      const fetched = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+
+      // The locally-persisted DECRYPTED list is the safety net for two relay
+      // failure modes that a bare network read can't distinguish from "the
+      // user has no list yet":
+      //
+      //  1. The read returns NOTHING (cold pool, AUTH-gated relay, wrong relay
+      //     set) but this device has seen a list before. Building on "empty"
+      //     would publish a list that wipes every server and joined group the
+      //     user has. Refuse the write instead — no publish is always
+      //     recoverable; a wiped replaceable event is not.
+      //  2. The read returns an event OLDER than one this device already holds
+      //     (stale replaceable-event propagation). Base the edit on the newer
+      //     persisted copy so the publish doesn't silently revert the user's
+      //     recent changes.
+      const persisted = await readFolded<PersistedGroupList>(`nip29-grouplist:${user.pubkey}`);
+      if (!fetched && persisted?.event) {
+        throw new Error("Couldn't load your current server list from the network; not saving to avoid wiping it.");
+      }
+
+      let prev: NostrEvent | null = fetched;
+      let current: UserGroupList;
+      if (persisted?.event && fetched && persisted.event.created_at > fetched.created_at) {
+        prev = persisted.event;
+        current = { groups: persisted.groups, servers: persisted.servers };
+      } else {
+        const read = await readGroupListEvent(fetched, user.signer);
+        // Refuse to read-modify-write on top of a list we couldn't decrypt: the
+        // private items (servers + joined groups) would read as empty and we'd
+        // publish a list that wipes everything the user has. Better to fail the
+        // action than to silently destroy their server/group list.
+        if (read.decryptFailed) {
+          throw new Error("Couldn't read your existing list (decryption failed); not saving to avoid data loss.");
+        }
+        current = read;
       }
       const next = applyAction(current, action);
 
-      // Preserve any unrelated tags (title, etc.) from the previous event, but
-      // drop the public group/r items — those now live encrypted in .content.
+      // Preserve any unrelated tags (title, etc.) from the previous event; the
+      // group/r items are re-emitted below in whichever format the list uses.
       const otherTags =
         prev?.tags.filter(([name]) => name !== "group" && name !== "r") ?? [];
 
-      const privateTags = buildGroupListTags(next);
-      const content = await user.signer.nip44.encrypt(
-        user.pubkey,
-        JSON.stringify(privateTags),
-      );
+      // Preserve the FORMAT the existing list already uses. A list published
+      // unencrypted (public `group`/`r` tags — e.g. by Flotilla/Coracle) stays
+      // public: silently re-encrypting it into `.content` blanks the list for
+      // every other client that reads the public tags. An encrypted list stays
+      // encrypted (never downgrade private items to public — that would leak
+      // them). Only a brand-new list defaults to Armada's native
+      // encrypted-private-items format.
+      const writePrivate = prev ? Boolean(prev.content) : true;
+      const itemTags = buildGroupListTags(next);
+      let content = "";
+      let tags = otherTags;
+      if (writePrivate) {
+        if (!user.signer.nip44) {
+          throw new Error("NIP-44 encryption not supported by this signer");
+        }
+        content = await user.signer.nip44.encrypt(
+          user.pubkey,
+          JSON.stringify(itemTags),
+        );
+      } else {
+        tags = [...otherTags, ...itemTags];
+      }
 
       const published = await publishEvent({
         kind: KIND_USER_GROUPS,
         content,
-        tags: otherTags,
+        tags,
         prev: prev ?? undefined,
       });
       // Persist the decrypted result (we have `next` in the clear here) so the
