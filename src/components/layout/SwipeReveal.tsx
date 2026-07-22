@@ -169,6 +169,12 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
         className={cn(
           "absolute inset-0 flex [contain:layout_paint]",
           dragging || snap ? "" : "transition-transform duration-200 ease-out",
+          // Reserve the fixed mobile call bar's height (same as the chat overlay
+          // below) so it never covers the bottom of the revealed list — notably
+          // the server rail's pinned Settings footer. Being `absolute inset-0`,
+          // this underlay ignores the shell's padding box, so the reservation
+          // has to live here. Unset (no active call) falls back to 0.
+          "max-sidebar:pb-[var(--call-bar-h,0px)]",
         )}
         style={{
           transform: `translateX(${underlayShift}%)`,
