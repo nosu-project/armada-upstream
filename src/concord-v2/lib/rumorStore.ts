@@ -272,6 +272,48 @@ export async function countChannelRumors(channelIdHex: string): Promise<number> 
   return count;
 }
 
+/** Message kinds whose content is user-searchable: chat + NIP-22 thread comments. */
+const SEARCHABLE_KINDS = [9, 1111];
+
+/**
+ * Upper bound on rumors scanned per channel search. The store has NO content
+ * index (only tags are indexed), so a content search is a scan of the channel's
+ * cached messages — this caps that scan at the newest N so a very deep channel
+ * can't stall the search.
+ */
+const SEARCH_SCAN_LIMIT = 5000;
+
+/**
+ * Substring-search a channel's cached message rumors by content
+ * (case-insensitive), newest-first up to `limit`. Purely local: V2 chat is
+ * end-to-end encrypted at the channel's stream address, so — unlike NIP-29's
+ * relay NIP-50 search — the decrypted rumor store is the ONLY searchable
+ * corpus. Scans the newest {@link SEARCH_SCAN_LIMIT} chat / thread-comment
+ * rumors and filters in memory (`#channel` is index-backed, content is not).
+ */
+export async function searchChannelRumors(
+  channelIdHex: string,
+  query: string,
+  opts: { limit: number; signal?: AbortSignal },
+): Promise<OpenedChat[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const events = await rumorStore().query(
+    [{ kinds: SEARCHABLE_KINDS, "#channel": [channelIdHex], limit: SEARCH_SCAN_LIMIT }],
+    { signal: opts.signal },
+  );
+  // `query` returns newest-first, so iterating and stopping at `limit` yields
+  // the newest matches.
+  const out: OpenedChat[] = [];
+  for (const ev of events) {
+    if (ev.content.toLowerCase().includes(q)) {
+      out.push(storedToOpenedChat(ev, channelIdHex));
+      if (out.length >= opts.limit) break;
+    }
+  }
+  return out;
+}
+
 /**
  * Read every cached opened event published to one of `streamPks` (a plane's
  * stream addresses across held epochs). Used by the control / guestbook / rekey

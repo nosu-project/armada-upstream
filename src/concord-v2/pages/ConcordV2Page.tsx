@@ -1,4 +1,4 @@
-import { AtSign, Ban, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, ScrollText, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
+import { AtSign, Ban, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, Phone, Plus, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -70,6 +70,7 @@ import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
 import { useConcord2Unread, type Concord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
 import { useConcord2Mentions } from "@/concord-v2/hooks/useConcord2Mentions";
+import { useConcordSearch2 } from "@/concord-v2/hooks/useConcordSearch2";
 import { useConcord2Threads, type Concord2Thread } from "@/concord-v2/hooks/useConcord2Threads";
 import { useTyping2, useTypingPublisher2 } from "@/concord-v2/hooks/useTyping2";
 import { resolveVoiceBroker, useVoiceBroker2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
@@ -172,6 +173,8 @@ interface ChatMessage2Props {
   onEdit: ((event: ChatMsg) => void) | undefined;
   onEditSubmit: ((event: ChatMsg, content: string) => Promise<void>) | undefined;
   onEditCancel: () => void;
+  /** Search term to highlight within the message content (search results). */
+  highlight?: string;
 }
 
 /** Memoized per-message binding (mirrors V1's ConcordChatMessage). A normal
@@ -200,6 +203,7 @@ const ChatMessage2 = memo(function ChatMessage2({
   onEdit,
   onEditSubmit,
   onEditCancel,
+  highlight,
 }: ChatMessage2Props) {
   const threadInfo = threadSummary(replies);
   // Concord V2 messages are unsigned rumors sealed at the channel's stream
@@ -218,6 +222,7 @@ const ChatMessage2 = memo(function ChatMessage2({
       canWrite={canWrite}
       canModerate={canModerate}
       reactions={reactions}
+      highlight={highlight}
       zapEnabled={Boolean(onSendZap)}
       zaps={zaps}
       onSendZap={onSendZap}
@@ -1014,6 +1019,11 @@ export function ConcordV2Page() {
    * openable from the header toggle. On real desktop it stays on. */
   const [membersVisible, setMembersVisible] = useState(() => !isTouchDevice);
   const [membersOpen, setMembersOpen] = useState(false);
+  // Header message search: expands inline over the header (like NIP-29), and
+  // swaps the timeline for local rumor-store results while active.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   // Mobile: landing on the community root (no channel in the URL) shows the
   // channel list, not a chat pane — selecting a community should let you pick a
   // channel, not auto-dive into one. A deep link with a channel opens chat
@@ -1047,6 +1057,9 @@ export function ConcordV2Page() {
   const [threadChannelKey, setThreadChannelKey] = useState(threadScopeKey);
   if (threadChannelKey !== threadScopeKey) {
     setThreadChannelKey(threadScopeKey);
+    // Switching channel/community clears any open search.
+    setSearchOpen(false);
+    setSearchQuery("");
     if (!pendingThread) {
       setThreadRoot(undefined);
       setLastThreadRoot(undefined);
@@ -1125,6 +1138,24 @@ export function ConcordV2Page() {
   const jumpWithinChannel = useCallback((id: string) => {
     timelineRef.current?.scrollToMessage(id);
   }, []);
+
+  // Focus the search field when it expands. `preventScroll` matters: the input
+  // starts off-screen (translated right) and slides in, so a default focus()
+  // would scroll the page to reveal it — a visible jolt.
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
+  }, [searchOpen]);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+  }, []);
+  // Local-only message search over the channel's decrypted rumor store. The
+  // query is only fed in while the bar is open, so closing it stops searching.
+  const {
+    results: searchResults,
+    isLoading: searchLoading,
+    active: searching,
+  } = useConcordSearch2(channel, searchOpen ? searchQuery : "");
 
   // Fulfil a pending Threads-tab open: once its channel is active and the
   // transport has loaded the root, open the thread panel with the freshly
@@ -1771,6 +1802,23 @@ export function ConcordV2Page() {
                   <TooltipContent>Invite people</TooltipContent>
                 </Tooltip>
               )}
+              {view === "channel" && channel && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Search messages"
+                      aria-pressed={searchOpen}
+                      className={cn("size-8 touch:size-11 text-muted-foreground", searchOpen && "text-foreground")}
+                      onClick={() => setSearchOpen(true)}
+                    >
+                      <Search className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Search messages</TooltipContent>
+                </Tooltip>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
@@ -1816,6 +1864,44 @@ export function ConcordV2Page() {
                 </Tooltip>
               )}
             </div>
+
+            {/* Inline search bar: slides in over the header when open, covering
+                the title + actions (leaves the mobile back button visible; on
+                desktop it covers the full bar). Slides via a GPU-composited
+                transform so it never forces a per-frame reflow. Mirrors NIP-29. */}
+            {view === "channel" && channel && (
+              <div
+                className={cn(
+                  "absolute inset-y-0 right-0 left-10 sidebar:left-0 z-10 flex items-center gap-1.5 px-2 sidebar:px-3",
+                  "bg-chrome clip-corner-lg overflow-hidden",
+                  "transition-transform duration-300 ease-in-out",
+                  searchOpen
+                    ? "translate-x-0 pointer-events-auto"
+                    : "translate-x-full pointer-events-none",
+                )}
+              >
+                <Search className="size-4 text-muted-foreground shrink-0" />
+                <Input
+                  ref={searchInputRef}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") closeSearch();
+                  }}
+                  placeholder="Search this channel…"
+                  className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Close search"
+                  className="size-8 touch:size-10 shrink-0 text-muted-foreground"
+                  onClick={closeSearch}
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+            )}
           </header>
 
           {/* Top-of-chat call stage portal target (active when this channel is
@@ -1867,6 +1953,56 @@ export function ConcordV2Page() {
                     isLoading={threadsLoading}
                     onOpen={openThreadFromList}
                   />
+                </div>
+              ) : searching ? (
+                /* Search results replace the timeline + composer in-place. */
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4">
+                  {searchLoading ? (
+                    <div className="flex justify-center py-10">
+                      <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : searchResults.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-center">
+                      <Search className="size-9 text-muted-foreground/40 mb-3" />
+                      <p className="text-sm text-muted-foreground">No messages found</p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="px-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                        {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
+                      </p>
+                      {[...searchResults]
+                        .sort((a, b) => a.created_at - b.created_at)
+                        .map((msg) => (
+                          <ChatMessage2
+                            key={msg.id}
+                            event={msg}
+                            reactions={reactionsFor(msg.id)}
+                            zaps={transport.zapsFor?.(msg.id)}
+                            onSendZap={undefined}
+                            onSendOnchainZap={undefined}
+                            replies={EMPTY_REPLIES}
+                            continuation={false}
+                            canWrite={false}
+                            canModerate={false}
+                            sendStatus={undefined}
+                            active={activeId === msg.id}
+                            onToggleActive={toggleActive}
+                            onOpenThread={undefined}
+                            onReply={undefined}
+                            replyContext={undefined}
+                            onDelete={undefined}
+                            onRetry={undefined}
+                            onDiscard={undefined}
+                            isEditing={false}
+                            onEdit={undefined}
+                            onEditSubmit={undefined}
+                            onEditCancel={() => setEditingId(undefined)}
+                            highlight={searchQuery}
+                          />
+                        ))}
+                    </>
+                  )}
                 </div>
               ) : (
                 <>
