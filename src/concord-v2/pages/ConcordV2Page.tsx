@@ -1789,8 +1789,9 @@ export function ConcordV2Page() {
             </div>
             <div className="ml-auto flex items-center gap-0.5">
               {/* Voice — the primary channel action, inline at every width
-                  (mirrors the DM header's Call). The secondary actions below
-                  stay inline on desktop but fold into the … menu on mobile. */}
+                  (mirrors the DM header's Call). Search + the members toggle
+                  stay inline on desktop; Invite and Mute always live in the …
+                  menu, and on mobile Search + Members join them there. */}
               {user && view === "channel" && channel && !dissolved && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1806,16 +1807,6 @@ export function ConcordV2Page() {
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>{inThisVoice ? "In voice" : "Join voice"}</TooltipContent>
-                </Tooltip>
-              )}
-              {user && !dissolved && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" className="size-8 hidden sidebar:inline-flex text-muted-foreground" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
-                      <UserPlus className="size-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Invite people</TooltipContent>
                 </Tooltip>
               )}
               {view === "channel" && channel && (
@@ -1850,48 +1841,30 @@ export function ConcordV2Page() {
                 </TooltipTrigger>
                 <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
               </Tooltip>
-              {user && community && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 hidden sidebar:inline-flex text-muted-foreground"
-                      disabled={!channel}
-                      aria-label={channelMuted ? "Unmute channel" : "Mute channel"}
-                      onClick={() => {
-                        if (channel) toggleConcordChannelMute("c2", community.idHex, channel.idHex);
-                      }}
-                    >
-                      {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{channelMuted ? "Unmute channel" : "Mute channel"}</TooltipContent>
-                </Tooltip>
-              )}
 
-              {/* Mobile overflow: the secondary actions fold into a … menu to
-                  keep the bar uncluttered (like the DM header). Hidden once the
-                  sidebar layout has room to show them inline. */}
+              {/* Overflow … menu — shown at every width. Invite and Mute always
+                  live here (they were the least-used inline buttons cluttering
+                  the desktop bar); Search + Members are here only on mobile,
+                  where they aren't already inline. */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
                     aria-label="More options"
-                    className="size-8 touch:size-11 shrink-0 text-muted-foreground sidebar:hidden"
+                    className="size-8 touch:size-11 shrink-0 text-muted-foreground"
                   >
                     <MoreVertical className="size-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52 p-1.5">
                   {view === "channel" && channel && (
-                    <DropdownMenuItem className="px-3 py-2" onClick={() => setSearchOpen(true)}>
+                    <DropdownMenuItem className="px-3 py-2 sidebar:hidden" onClick={() => setSearchOpen(true)}>
                       <Search className="size-4" />
                       Search messages
                     </DropdownMenuItem>
                   )}
-                  <DropdownMenuItem className="px-3 py-2" onClick={() => setMembersOpen(true)}>
+                  <DropdownMenuItem className="px-3 py-2 sidebar:hidden" onClick={() => setMembersOpen(true)}>
                     <Users className="size-4" />
                     Members
                   </DropdownMenuItem>
