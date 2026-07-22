@@ -1651,8 +1651,15 @@ export function ServerRail({
         className={cn(
           // The scroll region: fills the space above the pinned footer and
           // scrolls internally. `min-h-0` lets it shrink below its content so
-          // the flex parent can actually clip + scroll it.
-          "flex flex-col items-center gap-4 sidebar:gap-5 w-full flex-1 min-h-0 overflow-y-auto",
+          // the flex parent can actually clip + scroll it. `overflow-x-clip`
+          // is required: bare `overflow-y-auto` makes the browser compute
+          // overflow-x to `auto` too, which — once a vertical scrollbar eats
+          // into the narrow rail — produces an unwanted horizontal scrollbar.
+          // Hide the scrollbar entirely (Discord-style icon rail): it still
+          // scrolls by wheel/touch/drag. Touch/native already hide it globally
+          // (see index.css); these cover desktop web.
+          "flex flex-col items-center gap-4 sidebar:gap-5 w-full flex-1 min-h-0",
+          "overflow-y-auto overflow-x-clip [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
           "pb-2",
           // Lock scrolling while dragging so the rail doesn't fight the gesture.
