@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.37.0] - 2026-07-21
+
+Adds support for Buzz communities — a richer relay-based mode with forum-style discussions shown as cards and a dedicated Projects workspace with a contribution graph. Also adds a per-server Inbox that collects your mentions and opens each thread inline, clickable profile mentions, and member roles in the member list.
+
+### Added
+- Buzz community support: connect to Buzz relays with forum posts and comments rendered as card-style discussions
+- Projects workspace for Buzz communities, with a tabbed layout and a contribution graph
+- Per-server Inbox of your mentions, shown above Projects in the channel sidebar; opening a mention shows its thread inline
+- Member roles shown in the member list
+- Clickable @name mentions that open the person's profile popover
+- Right-click a server to remove it
+- Copy-ID button on embedded posts
+- View event JSON option on messages
+
+### Changed
+- Server actions are now available from the channel-sidebar header menu on mobile
+
 ## [0.36.1] - 2026-07-21
 
 Adds a relay picker to the community creation flow (pre-seeded with sensible defaults) and tightens invite controls: public invite links now require the CREATE_INVITE permission and direct invites are capped at 3 days.
