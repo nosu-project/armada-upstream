@@ -43,6 +43,7 @@ import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useRelayUnread } from "@/hooks/useRelayUnread";
+import { useServerActions } from "@/hooks/useServerActions";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { impact } from "@/lib/haptics";
 import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
@@ -466,6 +467,7 @@ function ServerButton({
   const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
   const { anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
   const { communityLevel, setLevel: setNotifLevel } = useNotifLevels();
+  const { isRemovable, removeServer } = useServerActions(url);
   const host = relayHost(url);
   const name = info?.name || host;
   const initial = name.trim().charAt(0).toUpperCase() || "?";
@@ -495,8 +497,10 @@ function ServerButton({
         <Avatar
           className={cn(
             "size-12 clip-corner-lg transition-all duration-150",
-            !isActive && !highlight &&
-              "opacity-50 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
+            // Idle-dim + brighten-on-hover, matched to the Concord buttons so
+            // NIP-29 servers and encrypted communities share one rail feel.
+            "opacity-60 saturate-75 group-hover:opacity-100 group-hover:saturate-100",
+            (isActive || highlight) && "opacity-100 saturate-100",
           )}
         >
           <AvatarImage src={info?.icon} alt={name} />
@@ -599,6 +603,14 @@ function ServerButton({
           level={communityLevel(url)}
           onChange={(lvl) => setNotifLevel(communityScopeKey(url), lvl)}
         />
+        {isRemovable && (
+          <ContextMenuItem
+            className="text-destructive focus:text-destructive"
+            onSelect={removeServer}
+          >
+            Remove server
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );
