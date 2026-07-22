@@ -1625,207 +1625,224 @@ export function ServerRail({
   };
 
   return (
-    <nav
-      ref={navRef}
-      aria-label="Servers"
-      // Suppress the browser's native HTML5 drag (images and <a>/NavLink are
-      // draggable by default). Without this, a press-and-drag on a community
-      // icon starts a native image/link drag that hijacks our custom
-      // reorder gesture.
-      onDragStart={(e) => e.preventDefault()}
+    <div
       className={cn(
-        // Chrome plane — deepest part of the recessed frame. The rail reaches
-        // both screen edges on mobile, so it owns the top/bottom safe-area
-        // insets (status bar above, gesture/nav bar below) on top of its base
-        // padding. On desktop the env() insets are 0, so this is a no-op there.
+        // Chrome plane — deepest part of the recessed frame. Owns the rail's
+        // width and background. A flex column so the community list can scroll
+        // on its own while the Settings footer below stays pinned and reachable
+        // no matter how many communities push the list into overflow. The rail
+        // reaches both screen edges on mobile: the scroll region takes the top
+        // safe-area inset (status bar) and the footer takes the bottom inset.
         // Slimmer + tighter on the mobile drill-down (where it shares the width
         // with the channel/DM list) so it doesn't read as a squeezed desktop
         // rail; widens to the full desktop rail at the `sidebar:` breakpoint.
-        "flex flex-col items-center gap-4 sidebar:gap-5 w-[60px] sidebar:w-[72px] shrink-0 overflow-y-auto bg-chrome-deep select-none",
-        "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
-        // Match the ChannelSidebar account switcher, which sits inside pb-safe
-        // AND adds an extra pb-2 (0.5rem) so it ends at the same line above the
-        // safe-area inset. Fold that same 0.5rem into the rail's base padding so
-        // the settings icon lines up with the switcher instead of sitting lower.
-        "pb-[calc(var(--safe-area-pad-bottom,0.75rem)+0.5rem)] sidebar:pb-[calc(var(--safe-area-pad-bottom-tight,0.25rem)+0.5rem)]",
-        // Lock scrolling while dragging so the rail doesn't fight the gesture.
-        reordering && "overflow-hidden",
+        "flex flex-col items-center w-[60px] sidebar:w-[72px] shrink-0 overflow-hidden bg-chrome-deep select-none",
         className,
       )}
     >
-      {/* Nearby Bluetooth mesh chat — peer-to-peer, above DMs. Only shown when
-          the platform can actually run it (Android with BLE hardware): a rail
-          entry that leads to a permanent "unavailable here" page on web/desktop
-          is dead weight. Hidden while the availability probe resolves; still
-          shown when supported-but-off (the page hosts the opt-in toggle). */}
-      {user && mesh.available && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <NavLink
-              to="/mesh"
-              aria-label="Nearby mesh"
-              onClick={onNavigate}
-              className="group relative flex items-center justify-center shrink-0"
-            >
-              {/* Active marker: the same neon blade the community buttons use
-                  (see `inner`), so DMs/Mesh signal the active route identically.
-                  Driven by aria-current=page rather than an isActive prop. */}
-              <span
-                className={cn(
-                  "absolute -left-2 w-[3px] bg-primary transition-all",
-                  "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
-                  "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
-                )}
-              />
-              <span
-                className={cn(
-                  "relative block size-12 transition-all duration-150",
-                  "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
-                )}
+      <nav
+        ref={navRef}
+        aria-label="Servers"
+        // Suppress the browser's native HTML5 drag (images and <a>/NavLink are
+        // draggable by default). Without this, a press-and-drag on a community
+        // icon starts a native image/link drag that hijacks our custom
+        // reorder gesture.
+        onDragStart={(e) => e.preventDefault()}
+        className={cn(
+          // The scroll region: fills the space above the pinned footer and
+          // scrolls internally. `min-h-0` lets it shrink below its content so
+          // the flex parent can actually clip + scroll it.
+          "flex flex-col items-center gap-4 sidebar:gap-5 w-full flex-1 min-h-0 overflow-y-auto",
+          "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
+          "pb-2",
+          // Lock scrolling while dragging so the rail doesn't fight the gesture.
+          reordering && "overflow-hidden",
+        )}
+      >
+        {/* Nearby Bluetooth mesh chat — peer-to-peer, above DMs. Only shown when
+            the platform can actually run it (Android with BLE hardware): a rail
+            entry that leads to a permanent "unavailable here" page on web/desktop
+            is dead weight. Hidden while the availability probe resolves; still
+            shown when supported-but-off (the page hosts the opt-in toggle). */}
+        {user && mesh.available && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <NavLink
+                to="/mesh"
+                aria-label="Nearby mesh"
+                onClick={onNavigate}
+                className="group relative flex items-center justify-center shrink-0"
               >
+                {/* Active marker: the same neon blade the community buttons use
+                    (see `inner`), so DMs/Mesh signal the active route identically.
+                    Driven by aria-current=page rather than an isActive prop. */}
                 <span
                   className={cn(
-                    "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
-                    "bg-muted text-primary opacity-50 saturate-50",
-                    "group-hover:opacity-100 group-hover:saturate-100",
-                    "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                    "absolute -left-2 w-[3px] bg-primary transition-all",
+                    "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                    "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
                   )}
-                >
-                  <Bluetooth className="size-5" />
-                </span>
-              </span>
-            </NavLink>
-          </TooltipTrigger>
-          <RailTooltipContent side="right" className="font-medium">
-            Nearby mesh
-          </RailTooltipContent>
-        </Tooltip>
-      )}
-
-      {/* Direct messages — account-level, above the servers (Discord-style).
-          Only shown when signed in (DMs require an account). */}
-      {user && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <NavLink
-              to="/dms"
-              aria-label="Direct messages"
-              onClick={onNavigate}
-              className="group relative flex items-center justify-center shrink-0"
-            >
-              {/* Active marker: the same neon blade the community buttons use
-                  (see `inner`), so DMs/Mesh signal the active route identically.
-                  Driven by aria-current=page rather than an isActive prop. */}
-              <span
-                className={cn(
-                  "absolute -left-2 w-[3px] bg-primary transition-all",
-                  "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
-                  "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
-                )}
-              />
-              <span
-                className={cn(
-                  "relative block size-12 transition-all duration-150",
-                  "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
-                )}
-              >
+                />
                 <span
                   className={cn(
-                    "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
-                    "bg-muted text-primary opacity-50 saturate-50",
-                    "group-hover:opacity-100 group-hover:saturate-100",
-                    "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                    "relative block size-12 transition-all duration-150",
+                    "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
                   )}
                 >
-                  <MessageSquare className="size-5" />
-                </span>
-                {/* Voice indicator: a headphones badge when a DM call is live. */}
-                {activeCall?.dmPeer && (
-                  <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
-                    <Headphones className="size-2.5" />
-                  </span>
-                )}
-                {/* Unread DM indicator (hidden on the active DMs view). */}
-                {hasUnreadDMs && (
                   <span
-                    className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-primary ring-2 ring-background group-aria-[current=page]:hidden"
-                    aria-label="Unread direct messages"
-                  />
-                )}
-              </span>
-            </NavLink>
+                    className={cn(
+                      "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                      "bg-muted text-primary opacity-50 saturate-50",
+                      "group-hover:opacity-100 group-hover:saturate-100",
+                      "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                    )}
+                  >
+                    <Bluetooth className="size-5" />
+                  </span>
+                </span>
+              </NavLink>
+            </TooltipTrigger>
+            <RailTooltipContent side="right" className="font-medium">
+              Nearby mesh
+            </RailTooltipContent>
+          </Tooltip>
+        )}
+
+        {/* Direct messages — account-level, above the servers (Discord-style).
+            Only shown when signed in (DMs require an account). */}
+        {user && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <NavLink
+                to="/dms"
+                aria-label="Direct messages"
+                onClick={onNavigate}
+                className="group relative flex items-center justify-center shrink-0"
+              >
+                {/* Active marker: the same neon blade the community buttons use
+                    (see `inner`), so DMs/Mesh signal the active route identically.
+                    Driven by aria-current=page rather than an isActive prop. */}
+                <span
+                  className={cn(
+                    "absolute -left-2 w-[3px] bg-primary transition-all",
+                    "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                    "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "relative block size-12 transition-all duration-150",
+                    "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                      "bg-muted text-primary opacity-50 saturate-50",
+                      "group-hover:opacity-100 group-hover:saturate-100",
+                      "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                    )}
+                  >
+                    <MessageSquare className="size-5" />
+                  </span>
+                  {/* Voice indicator: a headphones badge when a DM call is live. */}
+                  {activeCall?.dmPeer && (
+                    <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
+                      <Headphones className="size-2.5" />
+                    </span>
+                  )}
+                  {/* Unread DM indicator (hidden on the active DMs view). */}
+                  {hasUnreadDMs && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-primary ring-2 ring-background group-aria-[current=page]:hidden"
+                      aria-label="Unread direct messages"
+                    />
+                  )}
+                </span>
+              </NavLink>
+            </TooltipTrigger>
+            <RailTooltipContent side="right" className="font-medium">
+              Direct messages
+            </RailTooltipContent>
+          </Tooltip>
+        )}
+
+        {/* One unified, user-arranged community list: NIP-29 servers and Concord
+            (V1/V2) communities intermixed, with Discord-style folders. */}
+        {renderNodes.map((node) =>
+          node.type === "item" ? (
+            renderItem(node.item)
+          ) : (
+            <RailFolder
+              key={node.id}
+              id={node.id}
+              name={node.name}
+              items={node.items}
+              open={openFolders.has(node.id)}
+              active={node.items.some(isItemActive)}
+              onToggle={() => toggleFolder(node.id)}
+              onRenameRequest={() => requestRename(node.id)}
+              onDissolve={() => persistLayout(dissolveFolder(layoutRef.current, node.id))}
+              draggable={draggable}
+              dragging={dragSource?.kind === "folder" && dragSource.id === node.id}
+              reordering={reordering}
+              highlight={dropPlan?.highlightAnchor === folderAnchor(node.id)}
+              onDragPointerDown={(e) => handleDragPointerDown({ kind: "folder", id: node.id }, e)}
+              shouldSuppressClick={shouldSuppressClick}
+            >
+              {node.items.map((item) => renderItem(item, node.id))}
+            </RailFolder>
+          ),
+        )}
+
+        {/* Separates the community list from the add action below. */}
+        {renderNodes.length > 0 && <div className="w-7 h-px bg-chrome-divider shrink-0" />}
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="secondary"
+              size="icon"
+              aria-label="Add a server or encrypted chat"
+              className="size-12 shrink-0 clip-corner-lg transition-all text-success hover:bg-success hover:text-success-foreground"
+              onClick={() => setAddOpen(true)}
+            >
+              <Plus className="size-5" />
+            </Button>
           </TooltipTrigger>
-          <RailTooltipContent side="right" className="font-medium">
-            Direct messages
-          </RailTooltipContent>
+          <RailTooltipContent side="right">Add a server or chat</RailTooltipContent>
         </Tooltip>
-      )}
+      </nav>
 
-      {/* One unified, user-arranged community list: NIP-29 servers and Concord
-          (V1/V2) communities intermixed, with Discord-style folders. */}
-      {renderNodes.map((node) =>
-        node.type === "item" ? (
-          renderItem(node.item)
-        ) : (
-          <RailFolder
-            key={node.id}
-            id={node.id}
-            name={node.name}
-            items={node.items}
-            open={openFolders.has(node.id)}
-            active={node.items.some(isItemActive)}
-            onToggle={() => toggleFolder(node.id)}
-            onRenameRequest={() => requestRename(node.id)}
-            onDissolve={() => persistLayout(dissolveFolder(layoutRef.current, node.id))}
-            draggable={draggable}
-            dragging={dragSource?.kind === "folder" && dragSource.id === node.id}
-            reordering={reordering}
-            highlight={dropPlan?.highlightAnchor === folderAnchor(node.id)}
-            onDragPointerDown={(e) => handleDragPointerDown({ kind: "folder", id: node.id }, e)}
-            shouldSuppressClick={shouldSuppressClick}
-          >
-            {node.items.map((item) => renderItem(item, node.id))}
-          </RailFolder>
-        ),
-      )}
-
-      {/* Separates the community list from the add/settings actions below. */}
-      {renderNodes.length > 0 && <div className="w-7 h-px bg-chrome-divider shrink-0" />}
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="secondary"
-            size="icon"
-            aria-label="Add a server or encrypted chat"
-            className="size-12 shrink-0 clip-corner-lg transition-all text-success hover:bg-success hover:text-success-foreground"
-            onClick={() => setAddOpen(true)}
-          >
-            <Plus className="size-5" />
-          </Button>
-        </TooltipTrigger>
-        <RailTooltipContent side="right">Add a server or chat</RailTooltipContent>
-      </Tooltip>
-
-      <div className="flex-1 min-h-2" />
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="secondary"
-            size="icon"
-            aria-label="Settings"
-            className="size-12 shrink-0 clip-corner-lg transition-all"
-            onClick={() => {
-              onNavigate?.();
-              navigate("/settings");
-            }}
-          >
-            <Settings className="size-5" />
-          </Button>
-        </TooltipTrigger>
-        <RailTooltipContent side="right">Settings</RailTooltipContent>
-      </Tooltip>
+      {/* Pinned footer: Settings stays visible regardless of how many
+          communities push the list into overflow — it lives outside the scroll
+          region above. The bottom safe-area padding lives here (not the scroll
+          region) so the icon lines up with the ChannelSidebar account switcher,
+          which sits inside pb-safe plus an extra 0.5rem. */}
+      <div
+        className={cn(
+          "flex flex-col items-center shrink-0 w-full border-t border-chrome-divider pt-3 sidebar:pt-4",
+          "pb-[calc(var(--safe-area-pad-bottom,0.75rem)+0.5rem)] sidebar:pb-[calc(var(--safe-area-pad-bottom-tight,0.25rem)+0.5rem)]",
+        )}
+      >
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="secondary"
+              size="icon"
+              aria-label="Settings"
+              className="size-12 shrink-0 clip-corner-lg transition-all"
+              onClick={() => {
+                onNavigate?.();
+                navigate("/settings");
+              }}
+            >
+              <Settings className="size-5" />
+            </Button>
+          </TooltipTrigger>
+          <RailTooltipContent side="right">Settings</RailTooltipContent>
+        </Tooltip>
+      </div>
 
       <AddDialog open={addOpen} onOpenChange={setAddOpen} />
 
@@ -1892,6 +1909,6 @@ export function ServerRail({
           }}
         />
       )}
-    </nav>
+    </div>
   );
 }
