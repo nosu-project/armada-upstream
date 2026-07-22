@@ -37,6 +37,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { resolveMs, type OpenedEvent } from "@/concord-v2/lib/stream";
+import { messageMatchesMedia, type SearchMedia2 } from "@/concord-v2/lib/search";
 import { emitWireScopes } from "@/wire/bus";
 import type { OpenedChat } from "@/concord-v2/lib/chat";
 
@@ -276,40 +277,55 @@ export async function countChannelRumors(channelIdHex: string): Promise<number> 
 const SEARCHABLE_KINDS = [9, 1111];
 
 /**
- * Upper bound on rumors scanned per channel search. The store has NO content
- * index (only tags are indexed), so a content search is a scan of the channel's
- * cached messages — this caps that scan at the newest N so a very deep channel
- * can't stall the search.
+ * Upper bound on rumors scanned per search. The store has NO content index
+ * (only tags are indexed), so a content/media search is a scan of the cached
+ * messages — this caps the newest-first scan so a very deep community can't
+ * stall the search. `#channel` and `authors` ARE index-backed, so those
+ * facets narrow the scan cheaply before the in-memory predicates run.
  */
 const SEARCH_SCAN_LIMIT = 5000;
 
 /**
- * Substring-search a channel's cached message rumors by content
- * (case-insensitive), newest-first up to `limit`. Purely local: V2 chat is
- * end-to-end encrypted at the channel's stream address, so — unlike NIP-29's
+ * Search cached message rumors across one or more channels, newest-first up to
+ * `limit`. Purely local: V2 chat is end-to-end encrypted, so — unlike NIP-29's
  * relay NIP-50 search — the decrypted rumor store is the ONLY searchable
- * corpus. Scans the newest {@link SEARCH_SCAN_LIMIT} chat / thread-comment
- * rumors and filters in memory (`#channel` is index-backed, content is not).
+ * corpus. The `#channel` allow-list and `authors` are pushed into the indexed
+ * store filter; the free-text `query` (case-insensitive substring) and `media`
+ * facet are applied in memory over the scan. Each result recovers its own
+ * channel id from its `channel` binding tag.
  */
-export async function searchChannelRumors(
-  channelIdHex: string,
-  query: string,
-  opts: { limit: number; signal?: AbortSignal },
+export async function searchRumors(
+  channelIdsHex: string[],
+  opts: {
+    query: string;
+    authors?: string[];
+    media?: SearchMedia2;
+    limit: number;
+    signal?: AbortSignal;
+  },
 ): Promise<OpenedChat[]> {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
-  const events = await rumorStore().query(
-    [{ kinds: SEARCHABLE_KINDS, "#channel": [channelIdHex], limit: SEARCH_SCAN_LIMIT }],
-    { signal: opts.signal },
-  );
-  // `query` returns newest-first, so iterating and stopping at `limit` yields
-  // the newest matches.
+  if (channelIdsHex.length === 0) return [];
+  const filter: {
+    kinds: number[];
+    "#channel": string[];
+    authors?: string[];
+    limit: number;
+  } = { kinds: SEARCHABLE_KINDS, "#channel": channelIdsHex, limit: SEARCH_SCAN_LIMIT };
+  if (opts.authors && opts.authors.length > 0) filter.authors = opts.authors;
+
+  const events = await rumorStore().query([filter], { signal: opts.signal });
+  const q = opts.query.trim().toLowerCase();
+  const media = opts.media ?? "all";
+
+  // `query` returns newest-first, so iterate and stop at `limit` for the newest
+  // matches across the whole scanned window.
   const out: OpenedChat[] = [];
   for (const ev of events) {
-    if (ev.content.toLowerCase().includes(q)) {
-      out.push(storedToOpenedChat(ev, channelIdHex));
-      if (out.length >= opts.limit) break;
-    }
+    if (q && !ev.content.toLowerCase().includes(q)) continue;
+    if (!messageMatchesMedia(ev.content, ev.tags, media)) continue;
+    const idHex = ev.tags.find((t) => t[0] === "channel")?.[1] ?? "";
+    out.push(storedToOpenedChat(ev, idHex));
+    if (out.length >= opts.limit) break;
   }
   return out;
 }

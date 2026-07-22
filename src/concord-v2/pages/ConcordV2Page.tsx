@@ -77,6 +77,8 @@ import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
 import { useConcord2Unread, type Concord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
 import { useConcord2Mentions } from "@/concord-v2/hooks/useConcord2Mentions";
 import { useConcordSearch2 } from "@/concord-v2/hooks/useConcordSearch2";
+import { SearchFiltersPopover, SearchResultsView } from "@/concord-v2/components/Search2";
+import { EMPTY_SEARCH_FILTERS, type SearchFilters2 } from "@/concord-v2/lib/search";
 import { useConcord2Threads, type Concord2Thread } from "@/concord-v2/hooks/useConcord2Threads";
 import { useTyping2, useTypingPublisher2 } from "@/concord-v2/hooks/useTyping2";
 import { resolveVoiceBroker, useVoiceBroker2, useVoicePresence2 } from "@/concord-v2/hooks/useVoice2";
@@ -179,8 +181,6 @@ interface ChatMessage2Props {
   onEdit: ((event: ChatMsg) => void) | undefined;
   onEditSubmit: ((event: ChatMsg, content: string) => Promise<void>) | undefined;
   onEditCancel: () => void;
-  /** Search term to highlight within the message content (search results). */
-  highlight?: string;
 }
 
 /** Memoized per-message binding (mirrors V1's ConcordChatMessage). A normal
@@ -209,7 +209,6 @@ const ChatMessage2 = memo(function ChatMessage2({
   onEdit,
   onEditSubmit,
   onEditCancel,
-  highlight,
 }: ChatMessage2Props) {
   const threadInfo = threadSummary(replies);
   // Concord V2 messages are unsigned rumors sealed at the channel's stream
@@ -228,7 +227,6 @@ const ChatMessage2 = memo(function ChatMessage2({
       canWrite={canWrite}
       canModerate={canModerate}
       reactions={reactions}
-      highlight={highlight}
       zapEnabled={Boolean(onSendZap)}
       zaps={zaps}
       onSendZap={onSendZap}
@@ -1025,10 +1023,11 @@ export function ConcordV2Page() {
    * openable from the header toggle. On real desktop it stays on. */
   const [membersVisible, setMembersVisible] = useState(() => !isTouchDevice);
   const [membersOpen, setMembersOpen] = useState(false);
-  // Header message search: expands inline over the header (like NIP-29), and
-  // swaps the timeline for local rumor-store results while active.
+  // Header message search: expands inline over the header, swapping the timeline
+  // for community-wide (cross-channel) results while active. `searchFilters`
+  // holds the structured query (text + channels + authors + media facet).
   const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchFilters, setSearchFilters] = useState<SearchFilters2>(EMPTY_SEARCH_FILTERS);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Mobile: landing on the community root (no channel in the URL) shows the
   // channel list, not a chat pane — selecting a community should let you pick a
@@ -1063,13 +1062,18 @@ export function ConcordV2Page() {
   const [threadChannelKey, setThreadChannelKey] = useState(threadScopeKey);
   if (threadChannelKey !== threadScopeKey) {
     setThreadChannelKey(threadScopeKey);
-    // Switching channel/community clears any open search.
-    setSearchOpen(false);
-    setSearchQuery("");
     if (!pendingThread) {
       setThreadRoot(undefined);
       setLastThreadRoot(undefined);
     }
+  }
+  // Search is community-wide, so it survives channel switches but resets when
+  // the community changes.
+  const [searchCommunityKey, setSearchCommunityKey] = useState(communityId);
+  if (searchCommunityKey !== communityId) {
+    setSearchCommunityKey(communityId);
+    setSearchOpen(false);
+    setSearchFilters(EMPTY_SEARCH_FILTERS);
   }
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
@@ -1153,15 +1157,18 @@ export function ConcordV2Page() {
   }, [searchOpen]);
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
-    setSearchQuery("");
+    setSearchFilters(EMPTY_SEARCH_FILTERS);
   }, []);
-  // Local-only message search over the channel's decrypted rumor store. The
-  // query is only fed in while the bar is open, so closing it stops searching.
+  // Every channel in the community — the default search scope when the filter
+  // picks no specific channels.
+  const allChannelIds = useMemo(() => channels.map((c) => c.idHex), [channels]);
+  // Community-wide message search over the local decrypted rumor store. The
+  // filters are only fed in while the bar is open, so closing it stops search.
   const {
     results: searchResults,
     isLoading: searchLoading,
     active: searching,
-  } = useConcordSearch2(channel, searchOpen ? searchQuery : "");
+  } = useConcordSearch2(allChannelIds, searchOpen ? searchFilters : EMPTY_SEARCH_FILTERS);
 
   // Fulfil a pending Threads-tab open: once its channel is active and the
   // transport has loaded the root, open the thread panel with the freshly
@@ -1925,13 +1932,19 @@ export function ConcordV2Page() {
                 <Search className="size-4 text-muted-foreground shrink-0" />
                 <Input
                   ref={searchInputRef}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  value={searchFilters.query}
+                  onChange={(e) => setSearchFilters((f) => ({ ...f, query: e.target.value }))}
                   onKeyDown={(e) => {
                     if (e.key === "Escape") closeSearch();
                   }}
-                  placeholder="Search this channel…"
+                  placeholder="Search all channels…"
                   className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                />
+                <SearchFiltersPopover
+                  channels={channels}
+                  members={memberPubkeys}
+                  filters={searchFilters}
+                  onChange={setSearchFilters}
                 />
                 <Button
                   variant="ghost"
@@ -1997,54 +2010,19 @@ export function ConcordV2Page() {
                   />
                 </div>
               ) : searching ? (
-                /* Search results replace the timeline + composer in-place. */
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4">
-                  {searchLoading ? (
-                    <div className="flex justify-center py-10">
-                      <Loader2 className="size-5 animate-spin text-muted-foreground" />
-                    </div>
-                  ) : searchResults.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-center">
-                      <Search className="size-9 text-muted-foreground/40 mb-3" />
-                      <p className="text-sm text-muted-foreground">No messages found</p>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="px-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
-                        {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
-                      </p>
-                      {[...searchResults]
-                        .sort((a, b) => a.created_at - b.created_at)
-                        .map((msg) => (
-                          <ChatMessage2
-                            key={msg.id}
-                            event={msg}
-                            reactions={reactionsFor(msg.id)}
-                            zaps={transport.zapsFor?.(msg.id)}
-                            onSendZap={undefined}
-                            onSendOnchainZap={undefined}
-                            replies={EMPTY_REPLIES}
-                            continuation={false}
-                            canWrite={false}
-                            canModerate={false}
-                            sendStatus={undefined}
-                            active={activeId === msg.id}
-                            onToggleActive={toggleActive}
-                            onOpenThread={undefined}
-                            onReply={undefined}
-                            replyContext={undefined}
-                            onDelete={undefined}
-                            onRetry={undefined}
-                            onDiscard={undefined}
-                            isEditing={false}
-                            onEdit={undefined}
-                            onEditSubmit={undefined}
-                            onEditCancel={() => setEditingId(undefined)}
-                            highlight={searchQuery}
-                          />
-                        ))}
-                    </>
-                  )}
+                /* Community-wide search results replace the timeline + composer
+                   in-place. Clicking a result jumps to its channel. */
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
+                  <SearchResultsView
+                    channels={channels}
+                    results={searchResults}
+                    isLoading={searchLoading}
+                    query={searchFilters.query}
+                    onJump={(channelIdHex, messageId) => {
+                      closeSearch();
+                      jumpToMention(channelIdHex, messageId);
+                    }}
+                  />
                 </div>
               ) : (
                 <>
