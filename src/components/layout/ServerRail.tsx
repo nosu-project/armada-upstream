@@ -1,4 +1,4 @@
-import { Bluetooth, FolderOpen, Headphones, Lock, MessageSquare, Plus, Settings } from "lucide-react";
+import { Bluetooth, FolderOpen, Headphones, Lock, LogOut, MessageSquare, Plus, Settings, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
@@ -26,6 +26,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCall } from "@/hooks/useCall";
 import { useConcordList, useConcordCommunity } from "@/concord-v1/hooks/useConcordList";
+import { useConcordCommunityActions } from "@/concord-v1/hooks/useConcordCommunityActions";
+import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useConcord1Unread } from "@/concord-v1/hooks/useConcord1Unread";
 import { useConcordMetadata } from "@/concord-v1/hooks/useConcordMetadata";
 import { useCommunityImageDescriptors } from "@/concord-v1/hooks/useCommunityImageDescriptors";
@@ -44,6 +46,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useRelayUnread } from "@/hooks/useRelayUnread";
 import { useServerActions } from "@/hooks/useServerActions";
+import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { impact } from "@/lib/haptics";
 import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
@@ -499,8 +502,10 @@ function ServerButton({
             "size-12 clip-corner-lg transition-all duration-150",
             // Idle-dim + brighten-on-hover, matched to the Concord buttons so
             // NIP-29 servers and encrypted communities share one rail feel.
-            "opacity-60 saturate-75 group-hover:opacity-100 group-hover:saturate-100",
+            // (saturate-50, not -75: 75 isn't on Tailwind's saturate scale.)
+            "opacity-60 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
             (isActive || highlight) && "opacity-100 saturate-100",
+            isActive && "is-active",
           )}
         >
           <AvatarImage src={info?.icon} alt={name} />
@@ -584,7 +589,12 @@ function ServerButton({
                   }
                   onNavigate?.();
                 }}
-                className={({ isActive }) => cn(triggerClass, dragClass, isActive && "is-active")}
+                // A STRING, not a function: this NavLink is cloned by the
+                // wrapping ContextMenuTrigger/TooltipTrigger (Radix Slot), which
+                // stringifies a function className into its source text — leaving
+                // the anchor with no `group`/layout classes, so hover did nothing.
+                // `isActive` still drives the icon via the render-prop children.
+                className={cn(triggerClass, dragClass)}
                 {...interactionProps}
               >
                 {({ isActive }) => <DragSlot dragging={dragging}>{inner(isActive)}</DragSlot>}
@@ -605,9 +615,10 @@ function ServerButton({
         />
         {isRemovable && (
           <ContextMenuItem
-            className="text-destructive focus:text-destructive"
+            className="gap-2 text-destructive focus:text-destructive"
             onSelect={removeServer}
           >
+            <Trash2 className="size-4" />
             Remove server
           </ContextMenuItem>
         )}
@@ -656,6 +667,23 @@ function ConcordButton({
   // carries it lands asynchronously, which is what made the avatar flicker).
   const { icon } = useCommunityImageDescriptors(community, folded);
   const iconUrl = useDecryptedCommunityImage(icon);
+
+  // Leave from the rail's right-click menu. Pass the raw id as a fallback so a
+  // room whose bundle can't be rehydrated can still be removed. Go home after.
+  const navigate = useNavigate();
+  const { leave } = useConcordCommunityActions(community, communityId);
+  const handleLeave = async () => {
+    try {
+      await leave();
+      navigate("/");
+    } catch (e) {
+      toast({
+        title: "Couldn't leave",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    }
+  };
 
   // Per-channel unread from the wire-fed event store (same model as V2).
   const { byChannel: c1ByChannel } = useConcord1Unread(community);
@@ -710,7 +738,7 @@ function ConcordButton({
                       <span
                         className={cn(
                           "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
-                          "bg-muted text-success opacity-60 saturate-75",
+                          "bg-muted text-success opacity-60 saturate-50",
                           "group-hover:opacity-100 group-hover:saturate-100",
                           (isActive || highlight) && "opacity-100 saturate-100",
                           isActive && "is-active",
@@ -754,6 +782,13 @@ function ConcordButton({
           onChange={(lvl) => setNotifLevel(concord1Key(communityId), lvl)}
           allowMentions={false}
         />
+        <ContextMenuItem
+          className="gap-2 text-destructive focus:text-destructive"
+          onSelect={handleLeave}
+        >
+          <LogOut className="size-4" />
+          Leave community
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -810,6 +845,23 @@ function Concord2Button({
   );
   const anyMention = Object.values(byChannel).some((u) => u.mention);
 
+  // Leave from the rail's right-click menu (best-effort Guestbook leave, then
+  // tombstone it locally), then go home.
+  const navigate = useNavigate();
+  const { leave } = useCommunityManagement2(community);
+  const handleLeave = async () => {
+    try {
+      await leave();
+      navigate("/");
+    } catch (e) {
+      toast({
+        title: "Couldn't leave",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <ContextMenu>
       <Tooltip>
@@ -855,7 +907,7 @@ function Concord2Button({
                   <span
                     className={cn(
                       "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
-                      "bg-muted text-success opacity-60 saturate-75",
+                      "bg-muted text-success opacity-60 saturate-50",
                       "group-hover:opacity-100 group-hover:saturate-100",
                       (isActive || highlight) && "opacity-100 saturate-100",
                       isActive && "is-active",
@@ -909,6 +961,13 @@ function Concord2Button({
           level={communityLevel(concord2Key(communityId))}
           onChange={(lvl) => setNotifLevel(concord2Key(communityId), lvl)}
         />
+        <ContextMenuItem
+          className="gap-2 text-destructive focus:text-destructive"
+          onSelect={handleLeave}
+        >
+          <LogOut className="size-4" />
+          {excluded ? "Leave (no access)" : "Leave community"}
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -1023,7 +1082,7 @@ function RailFolder({
                     className={cn(
                       "block size-12 transition-all duration-150",
                       !open && !active && !highlight &&
-                        "opacity-70 saturate-75 group-hover:opacity-100 group-hover:saturate-100",
+                        "opacity-70 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
                     )}
                   >
                     {open ? (
