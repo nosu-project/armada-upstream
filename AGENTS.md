@@ -108,6 +108,19 @@ the new cert fingerprint to the array.
 
 ## Conventions
 
+- **Never publish a user's Nostr lists without an explicit user action.** This
+  covers every user-owned replaceable/list event: kind 10050 DM relays, kind
+  10009 servers/groups, follow/mute lists, NIP-65, Concord membership lists.
+  No publish-on-mount, publish-on-visit, publish-on-sync, or "publish a
+  default because the read came back empty" — an empty read is
+  indistinguishable from a failed one (cold pool, AUTH, wrong relay set), and
+  replaceable events make such a publish destroy the user's real list
+  everywhere. List writes must be read-modify-write and must refuse to build
+  on an empty/failed read when local persisted state says a non-empty list
+  existed. Preserve the existing event's format: a list stored as public tags
+  (e.g. by Flotilla) stays public; encrypted private items stay encrypted.
+  This rule has been violated twice with user-visible data loss — do not
+  reintroduce any automatic list publish, however well-intentioned.
 - Commit messages: concise, imperative, sentence case (see `git log`).
   Describe the technical change only — what was changed. Don't embed a
   confident problem diagnosis, root-cause narrative, or prescribed "this fixes
