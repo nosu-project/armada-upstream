@@ -4,6 +4,16 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.37.1] - 2026-07-22
+
+Buzz community invite links now open directly in the Armada app, and several fixes protect your saved servers, DM relays, and mute list from being accidentally overwritten when they can't be loaded.
+
+### Changed
+- Buzz community invite links now open directly in the app instead of a web page
+
+### Fixed
+- Protect your saved servers, DM relays, and mute list from being lost if the list fails to load before a change is saved
+
 ## [0.37.0] - 2026-07-21
 
 Adds support for Buzz communities — a richer relay-based mode with forum-style discussions shown as cards and a dedicated Projects workspace with a contribution graph. Also adds a per-server Inbox that collects your mentions and opens each thread inline, clickable profile mentions, and member roles in the member list.
