@@ -241,6 +241,17 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
       );
       const prev = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
 
+      // An empty read is indistinguishable from a failed one (cold pool, AUTH,
+      // wrong relay set). If this device has seen a non-empty mute list before,
+      // refuse to rebuild from nothing — publishing would replace the user's
+      // real list everywhere (kind 10000 is a replaceable event).
+      if (!prev) {
+        const cached = await readFolded<string[]>(muteFoldKey(user.pubkey));
+        if (cached && cached.length > 0) {
+          throw new Error("Couldn't load your existing mute list — not muting to avoid losing it.");
+        }
+      }
+
       const { publicTags, privateTags, privateReadable } = await readMuteTags(prev, user.signer);
       if (!privateReadable) {
         throw new Error("Couldn't read your existing mute list — not muting to avoid losing it.");
