@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
@@ -37,6 +37,7 @@ const GroupPage = lazy(lazyWithReload(() => import("@/pages/GroupPage").then((m)
 const InboxPage = lazy(lazyWithReload(() => import("@/pages/InboxPage").then((m) => ({ default: m.InboxPage }))));
 const InvitePage = lazy(lazyWithReload(() => import("@/concord-v1/pages/InvitePage")));
 const InviteV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/InviteV2Page")));
+const BuzzInvitePage = lazy(lazyWithReload(() => import("@/buzz/BuzzInvitePage")));
 const MeshPage = lazy(lazyWithReload(() => import("@/pages/MeshPage")));
 const ChangelogPage = lazy(lazyWithReload(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage }))));
 const NotFound = lazy(lazyWithReload(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound }))));
@@ -48,6 +49,17 @@ const SettingsPage = lazy(lazyWithReload(() => import("@/pages/SettingsPage").th
 const SharePage = lazy(lazyWithReload(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage }))));
 const TermsPage = lazy(lazyWithReload(() => import("@/pages/TermsPage").then((m) => ({ default: m.TermsPage }))));
 const WelcomePage = lazy(lazyWithReload(() => import("@/pages/WelcomePage").then((m) => ({ default: m.WelcomePage }))));
+
+/**
+ * Dispatch `/invite/<segment>` to the right landing page. A Concord V2 invite's
+ * segment is a bech32 `naddr`; a Buzz relay invite's is a dotted HMAC token
+ * (contains `.`, never bech32), so the shapes never collide.
+ */
+function InviteRoute() {
+  const { naddr } = useParams<{ naddr: string }>();
+  const isBuzz = !!naddr && !/^naddr1/i.test(naddr) && naddr.includes(".");
+  return isBuzz ? <BuzzInvitePage /> : <InviteV2Page />;
+}
 
 /**
  * Land the user somewhere sensible.
@@ -267,9 +279,11 @@ export function AppRouter() {
             <Route path="/c/:communityId" element={<ConcordV2Page />} />
             <Route path="/c/:communityId/:channelId" element={<ConcordV2Page />} />
             {/* V1 invite links carry the token at /invite#…; V2 links carry an
-                naddr path segment at /invite/<naddr>#… (CORD-05). */}
+                naddr path segment at /invite/<naddr>#… (CORD-05). A Buzz relay
+                invite shares the same `/invite/<code>` path (its code is a
+                dotted HMAC token, never an naddr), dispatched by InviteRoute. */}
             <Route path="/invite" element={<InvitePage />} />
-            <Route path="/invite/:naddr" element={<InviteV2Page />} />
+            <Route path="/invite/:naddr" element={<InviteRoute />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/changelog" element={<ChangelogPage />} />
             <Route path="/privacy" element={<PrivacyPolicyPage />} />

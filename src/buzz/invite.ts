@@ -10,7 +10,7 @@
  */
 
 import { buzzHttpPost } from "@/buzz/http";
-import { normalizeRelayUrl } from "@/lib/platform";
+import { normalizeRelayUrl, relayToHttpUrl } from "@/lib/platform";
 
 import type { NostrSigner } from "@nostrify/nostrify";
 
@@ -26,10 +26,43 @@ export interface BuzzInvite {
 }
 
 /**
+ * Build a BuzzInvite from a code + the relay it lives on. `relay` may be a
+ * bare host (`team.communities.buzz.xyz`) or a full ws(s)/http(s) URL.
+ */
+export function buzzInviteFromRelay(code: string, relay: string): BuzzInvite | undefined {
+  const asWs = /^wss?:\/\//i.test(relay)
+    ? relay
+    : /^https?:\/\//i.test(relay)
+      ? relay.replace(/^http/i, "ws")
+      : `wss://${relay}`;
+  const relayUrl = normalizeRelayUrl(asWs);
+  if (!relayUrl) return undefined;
+  const http = new URL(relayToHttpUrl(relayUrl));
+  return { host: http.host, code, relayUrl, origin: http.origin };
+}
+
+/**
+ * Build a shareable Buzz invite URL on `base` — the Armada host (armada.buzz),
+ * which is the app's verified App Links domain, so the link opens directly in
+ * the app instead of the relay's own web page. The relay host rides along in
+ * `?r=` because the code itself doesn't encode it; the claim needs it to find
+ * the relay.
+ */
+export function buildBuzzInviteUrl(base: string, relayUrl: string, code: string): string {
+  const host = new URL(relayToHttpUrl(relayUrl)).host;
+  const b = base.replace(/\/$/, "");
+  return `${b}/invite/${encodeURIComponent(code)}?r=${encodeURIComponent(host)}`;
+}
+
+/**
  * Parse a Buzz invite landing URL (`https://<host>/invite/<code>`). Returns
  * undefined for anything else — including Armada's own `/invite/<naddr>`
  * Concord links, whose path segment is bech32 (`naddr1…`); Buzz codes are
  * dot-separated base64url HMAC tokens, so the shapes never collide.
+ *
+ * An Armada-hosted link (`https://armada.buzz/invite/<code>?r=<relay-host>`)
+ * carries the true relay in `?r=` — its own host is only a deep-link façade.
+ * A legacy relay-hosted link has no `?r=`; the landing host IS the relay.
  */
 export function parseBuzzInviteUrl(input: string): BuzzInvite | undefined {
   let url: URL;
@@ -46,6 +79,8 @@ export function parseBuzzInviteUrl(input: string): BuzzInvite | undefined {
   // (HMAC token separator) and is never bech32.
   if (/^naddr1[023456789acdefghjklmnpqrstuvwxyz]+$/i.test(code)) return undefined;
   if (!code.includes(".")) return undefined;
+  const relayParam = url.searchParams.get("r")?.trim();
+  if (relayParam) return buzzInviteFromRelay(code, relayParam);
   const scheme = url.protocol === "https:" ? "wss" : "ws";
   const relayUrl = normalizeRelayUrl(`${scheme}://${url.host}`);
   if (!relayUrl) return undefined;

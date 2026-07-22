@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useIsBuzzRelay } from "@/buzz/detect";
 import { buzzHttpPost } from "@/buzz/http";
+import { buildBuzzInviteUrl } from "@/buzz/invite";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -47,14 +48,11 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
   const { mutateAsync: fetchRelayClaim } = useRelayClaim();
   const { isBuzz } = useIsBuzzRelay(relayUrl);
   const [url, setUrl] = useState<string | null>(null);
-  const [code, setCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);
-  const [generating, setGenerating] = useState(false);
 
   const generate = useCallback(async () => {
     setError(false);
-    setGenerating(true);
     try {
       // Buzz relays mint invites over HTTP (NIP-98-signed POST /api/invites,
       // owner/admin only — kind 9009 is a stored no-op there). The response
@@ -68,8 +66,10 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
           `${origin}/api/invites`,
           {},
         );
-        setCode(res.code);
-        setUrl(res.url);
+        // The relay returns a landing URL on its own host; rebuild it on the
+        // Armada host (armada.buzz) so the link deep-links into the app, and
+        // carry the relay in `?r=` so the claim still targets it.
+        setUrl(buildBuzzInviteUrl(shareOrigin(), relayUrl, res.code));
         return;
       }
       // On community relays that gate access at the relay level (zooid/Coracle),
@@ -83,12 +83,9 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
         inviteCode = randomInviteCode();
         await createInvite.mutateAsync({ code: inviteCode });
       }
-      setCode(inviteCode);
       setUrl(buildInviteUrl(relayUrl, group.id, inviteCode));
     } catch {
       setError(true);
-    } finally {
-      setGenerating(false);
     }
   }, [createInvite, fetchRelayClaim, relayUrl, group.id, isBuzz, user]);
 
@@ -96,7 +93,6 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
   useEffect(() => {
     if (open) {
       setUrl(null);
-      setCode(null);
       setCopied(false);
       setError(false);
       void generate();
@@ -179,20 +175,6 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
                     <Share2 className="size-4" />
                   </Button>
                 )}
-              </div>
-
-              <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-                <span>Invite code:</span>
-                <code className="font-mono text-foreground">{code}</code>
-                <button
-                  type="button"
-                  className="hover:text-foreground inline-flex items-center gap-1"
-                  onClick={generate}
-                  disabled={generating}
-                >
-                  <RefreshCw className={generating ? "size-3 animate-spin" : "size-3"} />
-                  New
-                </button>
               </div>
             </>
           )}

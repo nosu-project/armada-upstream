@@ -14,7 +14,7 @@ import {
   tallyForumVotes,
 } from "@/buzz/protocol";
 import { BUZZ_TIMELINE_CONTENT_KINDS } from "@/buzz/kinds";
-import { parseBuzzInviteUrl } from "@/buzz/invite";
+import { buildBuzzInviteUrl, parseBuzzInviteUrl } from "@/buzz/invite";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -216,6 +216,32 @@ describe("parseBuzzInviteUrl", () => {
     expect(invite?.host).toBe("soapbox.communities.buzz.xyz");
     expect(invite?.relayUrl).toBe("wss://soapbox.communities.buzz.xyz");
     expect(invite?.origin).toBe("https://soapbox.communities.buzz.xyz");
+    expect(invite?.code).toBe("eyJjIjoiNjU2YzcxNmIifQ.92Tdbmlf38m");
+  });
+
+  it("resolves the relay from ?r= on an Armada-hosted link", () => {
+    const invite = parseBuzzInviteUrl(
+      "https://armada.buzz/invite/eyJjIjoiNjU2YzcxNmIifQ.92Tdbmlf38m?r=soapbox.communities.buzz.xyz",
+    );
+    expect(invite).toBeDefined();
+    // The relay is the ?r= host, not the (façade) armada.buzz link host.
+    expect(invite?.host).toBe("soapbox.communities.buzz.xyz");
+    expect(invite?.relayUrl).toBe("wss://soapbox.communities.buzz.xyz");
+    expect(invite?.origin).toBe("https://soapbox.communities.buzz.xyz");
+    expect(invite?.code).toBe("eyJjIjoiNjU2YzcxNmIifQ.92Tdbmlf38m");
+  });
+
+  it("round-trips buildBuzzInviteUrl through parseBuzzInviteUrl", () => {
+    const url = buildBuzzInviteUrl(
+      "https://armada.buzz",
+      "wss://soapbox.communities.buzz.xyz",
+      "eyJjIjoiNjU2YzcxNmIifQ.92Tdbmlf38m",
+    );
+    expect(url).toBe(
+      "https://armada.buzz/invite/eyJjIjoiNjU2YzcxNmIifQ.92Tdbmlf38m?r=soapbox.communities.buzz.xyz",
+    );
+    const invite = parseBuzzInviteUrl(url);
+    expect(invite?.relayUrl).toBe("wss://soapbox.communities.buzz.xyz");
     expect(invite?.code).toBe("eyJjIjoiNjU2YzcxNmIifQ.92Tdbmlf38m");
   });
 
