@@ -222,6 +222,9 @@ export interface AppContextType {
  * event. Everything here is cross-device meaningful; `meshEnabled` and
  * `meshIncognito` are deliberately excluded — they gate a per-device Bluetooth
  * foreground service and must never be flipped on remotely.
+ * `lastChannelByServer` is excluded too: which channel you're viewing is
+ * per-device navigation state — syncing it makes two open clients yank each
+ * other's channel selection around.
  */
 export const SYNCED_CONFIG_KEYS = [
   "theme",
@@ -238,7 +241,6 @@ export const SYNCED_CONFIG_KEYS = [
   "dmRelays",
   "blossomServerMetadata",
   "useAppBlossomServers",
-  "lastChannelByServer",
   "mutedCommunities",
   "mutedChannels",
   "notifLevels",
