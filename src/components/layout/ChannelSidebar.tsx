@@ -1,5 +1,5 @@
 import { Bell, BellOff, CheckCheck, ChevronDown, FolderGit2, Hash, Headphones, IdCard, Inbox, Link as LinkIcon, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { BuzzDmName } from "@/buzz/BuzzDmName";
@@ -261,6 +261,16 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   // Unread mentions across this server's channels — drives the Inbox badge.
   const { unreadCount: inboxUnread } = useRelayInbox(relayUrl, groupIds);
 
+  // "Mark all as read": stamp every unread channel to its newest unread
+  // message (monotonic, so already-read channels no-op).
+  const { markRead } = useReadState();
+  const hasUnread = Object.keys(byGroup).length > 0;
+  const markAllRead = useCallback(() => {
+    for (const [groupId, unread] of Object.entries(byGroup)) {
+      markRead(channelReadKey(relayUrl, groupId), unread.latest);
+    }
+  }, [byGroup, markRead, relayUrl]);
+
   // Register this sidebar's slot so the persistent call bar portals above the
   // account pill. Every instance (desktop pane + mobile drawer) registers; the
   // hidden panes simply don't show their copy.
@@ -300,6 +310,12 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
             <div className="mx-2 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
               {([
+                {
+                  show: !!user && hasUnread,
+                  icon: <CheckCheck className="size-4" />,
+                  label: "Mark all as read",
+                  onClick: markAllRead,
+                },
                 {
                   show: !!user,
                   icon: <Plus className="size-4" />,

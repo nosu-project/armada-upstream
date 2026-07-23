@@ -1,4 +1,4 @@
-import { AtSign, Bell, BellOff, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Plus, Search, ShieldCheck, Sparkles, UserCheck, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Plus, Search, ShieldCheck, Sparkles, UserCheck, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -53,6 +53,7 @@ import { useActiveRoom } from "@/hooks/useActiveRoom";
 import {
   useDMConversations,
   useDMSupport,
+  useHasUnreadDMs,
 } from "@/hooks/useDirectMessages";
 import { useBotManifests } from "@/hooks/useBotManifests";
 import { useAdoptDmInbox, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
@@ -1270,6 +1271,8 @@ function ConversationList({
   activePeer,
   dmSupported,
   isLoading,
+  hasUnread,
+  onMarkAllRead,
   onCompose,
   openPeer,
   loadMore,
@@ -1283,6 +1286,8 @@ function ConversationList({
   activePeer: string | undefined;
   dmSupported: boolean;
   isLoading: boolean;
+  hasUnread: boolean;
+  onMarkAllRead: () => void;
   onCompose: () => void;
   openPeer: (pubkey: string) => void;
   loadMore: () => Promise<number>;
@@ -1378,6 +1383,22 @@ function ConversationList({
               Messages
             </span>
             <div className="flex items-center gap-2">
+              {hasUnread && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
+                      aria-label="Mark all as read"
+                      onClick={onMarkAllRead}
+                    >
+                      <CheckCheck className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Mark all as read</TooltipContent>
+                </Tooltip>
+              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -1630,6 +1651,21 @@ export function DMsPage() {
     [navigate],
   );
 
+  // "Mark all as read": stamp every conversation whose latest message is from
+  // the peer (monotonic stamps, so already-read conversations no-op). Covers
+  // both DM planes — the same set the rail's unread dot checks.
+  const { markRead } = useReadState();
+  const hasUnreadDms = useHasUnreadDMs();
+  const markAllDmsRead = useCallback(() => {
+    if (!user) return;
+    for (const c of conversations) {
+      if (c.latest.pubkey !== user.pubkey) markRead(dmReadKey(c.peer), c.latest.created_at);
+    }
+    for (const c of dm17Conversations) {
+      if (c.latest.author !== user.pubkey) markRead(dmReadKey(c.peer), c.latest.createdAt);
+    }
+  }, [user, conversations, dm17Conversations, markRead]);
+
   if (!user) {
     return <Navigate to="/" replace />;
   }
@@ -1671,6 +1707,8 @@ export function DMsPage() {
             activePeer={activePeer}
             dmSupported={dmSupported || dm17Supported}
             isLoading={isLoading}
+            hasUnread={hasUnreadDms}
+            onMarkAllRead={markAllDmsRead}
             onCompose={startComposing}
             openPeer={openPeer}
             loadMore={loadMore}
