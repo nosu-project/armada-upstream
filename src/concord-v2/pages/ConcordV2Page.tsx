@@ -1,4 +1,4 @@
-import { AtSign, Ban, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -701,6 +701,14 @@ export function ConcordV2Page() {
   // (which the wire keeps fed for every channel of every community).
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels);
 
+  // "Mark all as read": stamp every unread channel to its newest unread
+  // message (monotonic stamps, so already-read channels no-op).
+  const markAllChannelsRead = useCallback(() => {
+    for (const [idHex, unread] of Object.entries(unreadByChannel)) {
+      markChannelRead(idHex, unread.latest);
+    }
+  }, [unreadByChannel, markChannelRead]);
+
   // Community-wide "@ Mentions" — every cached kind-9 that p-tags the user,
   // across all channels, served from the local rumor cache only. Its unread
   // indicator has its OWN read state (not the channel read state), so opening
@@ -1390,6 +1398,12 @@ export function ConcordV2Page() {
             <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
               <div className="mx-2 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
                 {[
+                  {
+                    show: Object.keys(unreadByChannel).length > 0,
+                    icon: <CheckCheck className="size-4" />,
+                    label: "Mark all as read",
+                    onClick: markAllChannelsRead,
+                  },
                   {
                     show: true,
                     icon: <Settings className="size-4" />,

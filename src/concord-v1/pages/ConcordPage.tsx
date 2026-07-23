@@ -1,5 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { ChevronDown, ChevronLeft, Bell, BellOff, Hash, Loader2, LogOut, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
+import { ChevronDown, ChevronLeft, Bell, BellOff, CheckCheck, Hash, Loader2, LogOut, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -431,6 +431,14 @@ export function ConcordPage() {
   // (which the wire keeps fed with every channel's sealed outers).
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord1Unread(community);
 
+  // "Mark all as read": stamp every unread channel to its newest unread
+  // message (monotonic stamps, so already-read channels no-op).
+  const markAllChannelsRead = useCallback(() => {
+    for (const [idHex, unread] of Object.entries(unreadByChannel)) {
+      markChannelRead(idHex, unread.latest);
+    }
+  }, [unreadByChannel, markChannelRead]);
+
   // Mark the open channel read up to its newest message while it's on screen —
   // immediately and again on tab refocus (mirrors the NIP-29/V2 behavior).
   const channelIdForRead = channel ? bytesToHex(channel.id) : undefined;
@@ -737,6 +745,12 @@ export function ConcordPage() {
             <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
               <div className="mx-2 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
                 {[
+                  {
+                    show: Object.keys(unreadByChannel).length > 0,
+                    icon: <CheckCheck className="size-4" />,
+                    label: "Mark all as read",
+                    onClick: markAllChannelsRead,
+                  },
                   {
                     show: !!user,
                     icon: <UserPlus className="size-4" />,
