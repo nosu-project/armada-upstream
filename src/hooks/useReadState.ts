@@ -1,8 +1,8 @@
 import { useContext } from "react";
 
-import { ReadStateContext, channelReadKey, dmReadKey } from "@/contexts/ReadStateContext";
+import { ReadStateContext, channelReadKey, concord1ReadKey, concord2ReadKey, dmReadKey } from "@/contexts/ReadStateContext";
 
-export { channelReadKey, dmReadKey };
+export { channelReadKey, concord1ReadKey, concord2ReadKey, dmReadKey };
 
 /** Access per-conversation read-state (last-read timestamps). */
 export function useReadState() {

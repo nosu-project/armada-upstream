@@ -3,7 +3,8 @@
  *
  * The "@ Mentions" tab surfaces every cached message that p-tags the user
  * across all of a community's channels, as one flat newest-first list. Channel
- * read state ({@link readState2}) is the wrong granularity for it — a mention
+ * read state (the shared `c2:<channelIdHex>` keys in the app-wide read-state
+ * map) is the wrong granularity for it — a mention
  * only cleared once you opened the *channel* it came from, so mentions in busy
  * or muted channels lingered — so mentions get their own last-seen stamp,
  * independent of channel read state.

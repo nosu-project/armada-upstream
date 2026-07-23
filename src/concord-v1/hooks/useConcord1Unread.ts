@@ -6,13 +6,9 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { channelEpochKeyPairs, channelZs } from "@/concord-v1/lib/concordNotifications";
 import { openMemoizedBatch } from "@/concord-v1/lib/decodeCache";
 import { KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
-import {
-  loadConcord1ReadState,
-  markConcord1Read,
-  type Concord1ReadMap,
-} from "@/concord-v1/lib/readState1";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { concord1ReadKey, useReadState } from "@/hooks/useReadState";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { Community } from "@/concord-v1/lib/types";
@@ -30,8 +26,6 @@ const SCAN_LIMIT = 300;
 /** Cap on outers decrypted per channel per scan (decrypts are memoized). */
 const DECRYPT_LIMIT = 30;
 
-const readMapKey = (pubkey: string | undefined) => ["concord1-read-map", pubkey] as const;
-
 /**
  * Compute per-channel unread state for a Concord V1 community — purely from
  * the shared IndexedDB event store, which the wire keeps fed with every
@@ -43,6 +37,11 @@ const readMapKey = (pubkey: string | undefined) => ["concord1-read-map", pubkey]
  * Only outers newer than last-read are opened — via the channel hooks'
  * memoized decode cache, so a rescan never re-decrypts — to exclude
  * self-authored messages and detect `p`-tag mentions.
+ *
+ * Read state lives in the one shared read-state map ({@link useReadState}) at
+ * `c1:<channelIdHex>` keys — the same map NIP-29 channels, DMs, and V2
+ * channels use — so it persists locally and syncs across devices via the
+ * encrypted NIP-78 settings event.
  *
  * Re-derived when the wire bus announces a `c1:` change to a watched channel,
  * with a light poll as a backstop.
@@ -56,20 +55,26 @@ export function useConcord1Unread(community: Community | undefined): {
   const pubkey = user?.pubkey;
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
+  const {
+    readState,
+    getLastRead: sharedGetLastRead,
+    markRead: sharedMarkRead,
+  } = useReadState();
 
   const channels = useMemo(() => community?.channels ?? [], [community]);
   const channelIdsHex = useMemo(() => channels.map((c) => bytesToHex(c.id)), [channels]);
   const channelSig = channelIdsHex.join(",");
 
-  const { data: readMap = {} } = useQuery<Concord1ReadMap>({
-    queryKey: readMapKey(pubkey),
-    queryFn: () => loadConcord1ReadState(pubkey!),
-    enabled: !!pubkey,
-    staleTime: Infinity,
-  });
+  // The last-read stamps for just these channels; the unread query re-derives
+  // when any of them advances.
+  const lastReadByChannel = useMemo<Record<string, number>>(() => {
+    const next: Record<string, number> = {};
+    for (const idHex of channelIdsHex) next[idHex] = readState[concord1ReadKey(idHex)] ?? 0;
+    return next;
+  }, [channelIdsHex, readState]);
 
   const { data: byChannel = {} } = useQuery<Record<string, Concord1Unread>>({
-    queryKey: ["concord1-unread", pubkey, channelSig, readMap],
+    queryKey: ["concord1-unread", pubkey, channelSig, lastReadByChannel],
     queryFn: async () => {
       const store = await eventStore;
       const next: Record<string, Concord1Unread> = {};
@@ -77,7 +82,7 @@ export function useConcord1Unread(community: Community | undefined): {
       await Promise.all(
         channels.map(async (channel) => {
           const idHex = bytesToHex(channel.id);
-          const lastRead = readMap[idHex] ?? 0;
+          const lastRead = lastReadByChannel[idHex] ?? 0;
           const zs = channelZs(channel);
           if (zs.length === 0) return;
 
@@ -130,18 +135,16 @@ export function useConcord1Unread(community: Community | undefined): {
 
   const markRead = useCallback(
     (channelIdHex: string, timestamp: number) => {
-      if (!pubkey || timestamp <= 0) return;
-      queryClient.setQueryData<Concord1ReadMap>(readMapKey(pubkey), (prev = {}) =>
-        (prev[channelIdHex] ?? 0) >= timestamp ? prev : { ...prev, [channelIdHex]: timestamp },
-      );
-      void markConcord1Read(pubkey, channelIdHex, timestamp).then((map) => {
-        queryClient.setQueryData(readMapKey(pubkey), map);
-      });
+      if (timestamp <= 0) return;
+      sharedMarkRead(concord1ReadKey(channelIdHex), timestamp);
     },
-    [pubkey, queryClient],
+    [sharedMarkRead],
   );
 
-  const getLastRead = useCallback((channelIdHex: string) => readMap[channelIdHex] ?? 0, [readMap]);
+  const getLastRead = useCallback(
+    (channelIdHex: string) => sharedGetLastRead(concord1ReadKey(channelIdHex)),
+    [sharedGetLastRead],
+  );
 
   return useMemo(() => ({ byChannel, markRead, getLastRead }), [byChannel, markRead, getLastRead]);
 }

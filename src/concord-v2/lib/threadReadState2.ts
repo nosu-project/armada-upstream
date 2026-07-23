@@ -3,7 +3,8 @@
  *
  * The "@ Threads" tab surfaces threads the user has participated in (authored
  * the root or a reply) and lights up those with replies newer than the user
- * has seen. Channel read state ({@link readState2}) is too coarse for this —
+ * has seen. Channel read state (the shared `c2:<channelIdHex>` keys in the
+ * app-wide read-state map) is too coarse for this —
  * reading a channel would silence every thread in it — so threads get their
  * own last-seen map, keyed by the thread ROOT rumor id.
  *

@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import { emitWireScopes, resetWireBus } from "@/wire/bus";
+import { ReadStateProvider } from "@/components/ReadStateProvider";
 
 import { useConcord1Unread } from "./useConcord1Unread";
 
@@ -49,6 +50,13 @@ vi.mock("@/hooks/useEventStore", () => ({
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: { pubkey: USER } }),
+}));
+// The read-state provider's settings sync is inert here (no NIP-44 signer).
+vi.mock("@/hooks/useEncryptedSettings", () => ({
+  useEncryptedSettings: () => ({
+    updateSettings: async () => undefined,
+    hasNip44Support: false,
+  }),
 }));
 // The decode cache is exercised by the channel-hook tests; here we fake the
 // decrypt so the test controls authorship/mentions without real crypto.
@@ -121,11 +129,14 @@ async function fixtureZ(): Promise<string> {
 function setup() {
   h.store.events = [];
   h.opened.clear();
+  localStorage.clear(); // drop any persisted read state from a prior test
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
   const wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <ReadStateProvider>{children}</ReadStateProvider>
+    </QueryClientProvider>
   );
   return { queryClient, wrapper };
 }
