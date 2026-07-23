@@ -15,6 +15,7 @@ import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { GroupChat } from "@/components/chat/GroupChat";
 import { MemberList } from "@/components/chat/MemberList";
 import { PinnedMessagesBar } from "@/components/chat/PinnedMessagesBar";
+import { GroupBannerImage } from "@/components/GroupBannerImage";
 import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
 import { GroupSettingsDialog } from "@/components/dialogs/GroupSettingsDialog";
 import { InvitePeopleDialog } from "@/components/dialogs/InvitePeopleDialog";
@@ -61,8 +62,9 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   const join = useJoinGroup(relayUrl, groupId);
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const [searchParams] = useSearchParams();
-  // Accept both Armada's `?code=` and Flotilla/Coracle's `?c=` invite param.
-  const inviteCode = searchParams.get("code") ?? searchParams.get("c") ?? "";
+  // Accept Armada's `?code=`, Flotilla/Coracle's `?c=`, and the standardized
+  // NIP-29 `?invite=` (the naddr invite-code suffix, see buildGroupNaddr).
+  const inviteCode = searchParams.get("code") ?? searchParams.get("c") ?? searchParams.get("invite") ?? "";
   const [code, setCode] = useState(inviteCode);
   const autoJoined = useRef(false);
 
@@ -224,8 +226,8 @@ export function GroupPage() {
   );
   const channelNav = useChannelNavValue(navChannels);
 
-  const { pinnedIds, unpin } = usePinnedMessages(relayUrl, groupId);
-  const hasPins = pinnedIds.length > 0;
+  const { pinnedRefs, unpin } = usePinnedMessages(relayUrl, groupId);
+  const hasPins = pinnedRefs.length > 0;
 
   const { events: calendarEvents, remove: removeEvent } = useCalendarEvents(relayUrl, groupId);
   const hasEvents = calendarEvents.length > 0;
@@ -236,7 +238,7 @@ export function GroupPage() {
   // first, then pins. Measured (not breakpoint'd) because the action set is
   // conditional, so a fixed breakpoint would mis-collapse. Must be called
   // before any early return (rules-of-hooks).
-  // Buzz relays don't speak the pins (39041) or calendar (NIP-52) extensions,
+  // Buzz relays don't speak the pins (9010/39005) or calendar (NIP-52) extensions,
   // so those toggles are dropped there; the canvas panel takes their place.
   const showEvents = !isBuzz && (hasEvents || isAdmin);
   const showPins = !isBuzz && hasPins;
@@ -735,6 +737,14 @@ export function GroupPage() {
           </div>
         </header>
 
+        {/* Channel banner — the kind-39000 `banner` tag, a header image above
+            the group content (Discord-style community branding). */}
+        {group?.banner && (
+          <div className="mx-2 mt-2 h-24 shrink-0 overflow-hidden clip-corner-lg">
+            <GroupBannerImage src={group.banner} className="size-full object-cover" />
+          </div>
+        )}
+
         {/* Buzz canvas bar — the channel's shared document, below the header. */}
         {isBuzz && (
           <BuzzCanvasBar
@@ -748,7 +758,7 @@ export function GroupPage() {
         {/* Pinned messages bar — slides open below the header. */}
         <PinnedMessagesBar
           open={pinsOpen}
-          pinnedIds={pinnedIds}
+          pinnedRefs={pinnedRefs}
           relayUrl={relayUrl}
           canModerate={isAdmin}
           onJump={(id) => scrollToMessageRef.current?.(id)}

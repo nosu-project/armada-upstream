@@ -1,4 +1,4 @@
-import { ChevronDown, ClipboardPaste, Link2, Loader2, Server, ShieldCheck } from "lucide-react";
+import { ChevronDown, ClipboardPaste, Hash, Link2, Loader2, Server, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -29,7 +29,8 @@ import { readClipboardText } from "@/lib/clipboard";
 import { claimBuzzInvite, fetchBuzzJoinPolicy, parseBuzzInviteUrl, type BuzzInvite, type BuzzJoinPolicy } from "@/buzz/invite";
 import { classifyAddInput, type ConcordInvite } from "@/concord-v1/lib/concord";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
-import { PINNED_RAIL_RELAYS, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
+import { parseGroupNaddr } from "@/lib/nip29";
+import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 interface AddDialogProps {
@@ -195,21 +196,38 @@ export function AddBody({ onDone }: { onDone: () => void }) {
 
 /**
  * The "I already have something" path. One field, one classifier — checked in
- * order: a Buzz relay invite (`https://<host>/invite/<code>` with a dotted
- * HMAC code), a Concord V2 invite (`…/invite/<naddr>#…` or bare
- * `naddr#fragment`), a Concord V1 invite (link or bare token), or a NIP-29
- * relay URL.
+ * order: a NIP-29 group identifier (`naddr1...` for kind 39000, optionally with
+ * the standardized `?invite=<code>` suffix), a Buzz relay invite
+ * (`https://<host>/invite/<code>` with a dotted HMAC code), a Concord V2 invite
+ * (`…/invite/<naddr>#…` or bare `naddr#fragment`), a Concord V1 invite (link or
+ * bare token), or a NIP-29 relay URL.
  */
 type Classified =
   | { kind: "buzz"; invite: BuzzInvite; identity: string }
   | { kind: "concord2"; invite: ParsedInviteLink; identity: string }
   | { kind: "concord1"; invite: ConcordInvite; identity: string }
+  | { kind: "nip29-group"; group: { relay: string; groupId: string; inviteCode?: string }; identity: string }
   | { kind: "nip29"; relay: string; identity: string }
   | { kind: "unknown"; identity: "" };
 
 function classify(input: string): Classified {
   const trimmed = input.trim();
   if (!trimmed) return { kind: "unknown", identity: "" };
+  // A NIP-29 group naddr must be checked before the relay-URL fallback (inside
+  // classifyAddInput), which would otherwise swallow a bare naddr as a garbage
+  // hostname. Concord V2 bundle naddrs are a different kind (33301), so they
+  // fall through to the V2 check below.
+  const groupNaddr = parseGroupNaddr(trimmed);
+  if (groupNaddr?.relay) {
+    const relay = normalizeRelayUrl(groupNaddr.relay);
+    if (relay) {
+      return {
+        kind: "nip29-group",
+        group: { relay, groupId: groupNaddr.groupId, inviteCode: groupNaddr.inviteCode },
+        identity: `g:${relay}:${groupNaddr.groupId}:${groupNaddr.inviteCode ?? ""}`,
+      };
+    }
+  }
   const buzz = parseBuzzInviteUrl(trimmed);
   if (buzz) return { kind: "buzz", invite: buzz, identity: `buzz:${buzz.host}:${buzz.code}` };
   const v2 = parseInviteLink(trimmed);
@@ -225,6 +243,7 @@ type Target =
   | { kind: "buzz"; relay: string; name?: string; description?: string; policy?: BuzzJoinPolicy; origin: string }
   | { kind: "concord2"; name: string; channelCount: number; relays: string[] }
   | { kind: "concord1"; name: string; about?: string; channelCount: number; relays: string[] }
+  | { kind: "nip29-group"; relay: string; groupId: string; inviteCode?: string }
   | { kind: "nip29"; relay: string; name?: string; description?: string };
 
 function EscapeHatch({ onDone }: { onDone: () => void }) {
@@ -316,6 +335,16 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
             about: community.about,
             channelCount,
             relays: community.relays,
+          });
+        } else if (classified.kind === "nip29-group") {
+          // Nothing to fetch: the naddr itself carries the relay + group id,
+          // and the channel page resolves (and joins) the rest.
+          if (cancelled) return;
+          setTarget({
+            kind: "nip29-group",
+            relay: classified.group.relay,
+            groupId: classified.group.groupId,
+            inviteCode: classified.group.inviteCode,
           });
         } else if (classified.kind === "nip29") {
           const relay = classified.relay;
@@ -409,6 +438,15 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         onDone();
         toast({ title: "Encrypted chat joined", description: community.name });
         navigate(`/c1/${encodeURIComponent(community.communityId)}`);
+        return;
+      }
+      if (target.kind === "nip29-group") {
+        // Route to the channel page: it adds the server to the rail locally,
+        // and when the naddr carried an `?invite=` code the join banner
+        // auto-sends the kind-9021 join request with it pre-filled.
+        const query = target.inviteCode ? `?invite=${encodeURIComponent(target.inviteCode)}` : "";
+        onDone();
+        navigate(`/s/${relayToRouteParam(target.relay)}/${encodeURIComponent(target.groupId)}${query}`);
         return;
       }
       // nip29: already validated in the preview; persist + sync.
@@ -569,6 +607,8 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
                   <><Loader2 className="size-4 mr-2 animate-spin" /> {target.kind === "nip29" ? "Adding..." : "Joining..."}</>
                 ) : target.kind === "nip29" ? (
                   "Add server"
+                ) : target.kind === "nip29-group" ? (
+                  "Open channel"
                 ) : target.kind === "buzz" && !user ? (
                   "Sign in to join"
                 ) : (
@@ -586,22 +626,29 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
 /** The "here's where you're going" card shown once a target resolves. */
 function TargetPreview({ target }: { target: Target }) {
   const isConcord = target.kind === "concord1" || target.kind === "concord2";
-  const Icon = isConcord ? ShieldCheck : Server;
-  const title = target.kind === "nip29" || target.kind === "buzz" ? target.name || target.relay : target.name;
+  const Icon = isConcord ? ShieldCheck : target.kind === "nip29-group" ? Hash : Server;
+  const title =
+    target.kind === "nip29-group"
+      ? `#${target.groupId}`
+      : target.kind === "nip29" || target.kind === "buzz"
+        ? target.name || target.relay
+        : target.name;
   const subtitle =
-    target.kind === "buzz"
-      ? target.description || `Buzz workspace · ${target.relay}`
-      : target.kind === "nip29"
-        ? target.description || target.relay
-        : (target.kind === "concord1" && target.about) ||
-          `Encrypted community · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`;
+    target.kind === "nip29-group"
+      ? target.relay
+      : target.kind === "buzz"
+        ? target.description || `Buzz workspace · ${target.relay}`
+        : target.kind === "nip29"
+          ? target.description || target.relay
+          : (target.kind === "concord1" && target.about) ||
+            `Encrypted community · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`;
 
   return (
     <div className="mt-3 flex items-start gap-3 rounded-lg bg-secondary/50 p-3 text-left">
       <Icon className={cn("mt-0.5 size-5 shrink-0", isConcord ? "text-success" : "text-muted-foreground")} />
       <div className="min-w-0">
         <div className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">
-          {isConcord ? "You're joining" : target.kind === "buzz" ? "You're joining the workspace" : "You're adding the server"}
+          {isConcord ? "You're joining" : target.kind === "nip29-group" ? "You're opening the channel" : target.kind === "buzz" ? "You're joining the workspace" : "You're adding the server"}
         </div>
         <div className="truncate font-medium">{title || "Untitled"}</div>
         <div className="truncate text-xs text-muted-foreground">{subtitle}</div>

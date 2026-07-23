@@ -12,13 +12,13 @@ import {
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayClaim } from "@/hooks/useRelayMembership";
+import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
+import { buildGroupNaddr, type Nip29Group } from "@/lib/nip29";
 import { relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 import { canShare, share as nativeShare } from "@/lib/share";
 import { shareOrigin } from "@/lib/shareOrigin";
-
-import type { Nip29Group } from "@/lib/nip29";
 
 interface InvitePeopleDialogProps {
   relayUrl: string;
@@ -47,9 +47,22 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
   const { createInvite } = useGroupModeration(relayUrl, group.id);
   const { mutateAsync: fetchRelayClaim } = useRelayClaim();
   const { isBuzz } = useIsBuzzRelay(relayUrl);
+  const { data: relayInfo } = useRelayInfo(relayUrl);
   const [url, setUrl] = useState<string | null>(null);
+  /** The minted NIP-29 invite code (undefined on Buzz relays, which mint over HTTP). */
+  const [code, setCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [naddrCopied, setNaddrCopied] = useState(false);
   const [error, setError] = useState(false);
+
+  // The standardized cross-client identifier: the group's kind-39000 naddr
+  // with the `?invite=<code>` suffix. Needs the relay's `self` key (NIP-11);
+  // without it only the Armada web link is available.
+  const relaySelf = relayInfo?.self || relayInfo?.pubkey;
+  const naddr =
+    relaySelf && code
+      ? buildGroupNaddr({ relaySelf, groupId: group.id, relay: relayUrl, inviteCode: code })
+      : undefined;
 
   const generate = useCallback(async () => {
     setError(false);
@@ -69,6 +82,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
         // The relay returns a landing URL on its own host; rebuild it on the
         // Armada host (armada.buzz) so the link deep-links into the app, and
         // carry the relay in `?r=` so the claim still targets it.
+        setCode(null);
         setUrl(buildBuzzInviteUrl(shareOrigin(), relayUrl, res.code));
         return;
       }
@@ -83,6 +97,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
         inviteCode = randomInviteCode();
         await createInvite.mutateAsync({ code: inviteCode });
       }
+      setCode(inviteCode);
       setUrl(buildInviteUrl(relayUrl, group.id, inviteCode));
     } catch {
       setError(true);
@@ -93,7 +108,9 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
   useEffect(() => {
     if (open) {
       setUrl(null);
+      setCode(null);
       setCopied(false);
+      setNaddrCopied(false);
       setError(false);
       void generate();
     }
@@ -106,6 +123,17 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1800);
+      },
+      () => toast({ title: "Copy failed", variant: "destructive" }),
+    );
+  };
+
+  const copyNaddr = () => {
+    if (!naddr) return;
+    writeClipboardText(naddr).then(
+      () => {
+        setNaddrCopied(true);
+        setTimeout(() => setNaddrCopied(false), 1800);
       },
       () => toast({ title: "Copy failed", variant: "destructive" }),
     );
@@ -176,6 +204,22 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
                   </Button>
                 )}
               </div>
+
+              {/* The standardized NIP-29 group identifier — understood by other
+                  Nostr clients (they pre-fill the invite code on the kind-9021
+                  join request), unlike the Armada web link above. */}
+              {naddr && (
+                <button
+                  type="button"
+                  onClick={copyNaddr}
+                  className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {naddrCopied
+                    ? <Check className="size-3.5 text-primary" />
+                    : <Copy className="size-3.5" />}
+                  {naddrCopied ? "Copied naddr" : "Copy naddr for other Nostr apps"}
+                </button>
+              )}
             </>
           )}
         </div>
