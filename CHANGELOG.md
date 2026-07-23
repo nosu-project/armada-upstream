@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.39.0] - 2026-07-23
+
+Adds a key backup section to Settings and a much richer set of Android message notifications, grouped by community with a Mark read action and per-conversation avatars. The Android app also moves to a new identifier (buzz.armada.app), so it installs alongside an existing Armada install with fresh data — back up your key first, and sign in again after updating.
+
+### Added
+- Key backup section in Settings for saving and restoring your account key
+- Banner images for channels on relay-based servers, set by admins in channel settings
+- Share a channel with a standard Nostr link that other clients understand, and paste one in to join
+
+### Changed
+- The Android and desktop app identifier is now `buzz.armada.app`. On Android this installs as a separate app with its own data, so sign in again with your key backup; future updates come from the new listing
+- Android message notifications are grouped by community, show conversation avatars, post each channel and direct message separately, and offer a Mark read action
+- Your login is stored in the device's secure storage on mobile
+- Pinned messages on relay-based servers use the standard pinning format; the server must support it, and pins set with the previous format are no longer shown
+
+### Fixed
+- Background notifications verify every message's signature and discard anything that wasn't requested
+- Joining a relay-based server no longer fails when the server's info can't be fetched
+- Notification text resolves mentions to names and no longer shows raw media links
+
 ## [0.38.0] - 2026-07-22
 
 Adds community-wide message search to Concord communities — search every channel by keyword with channel, author, and media-type filters. Also tidies the channel header and server rail, and makes Android background notifications more reliable.
