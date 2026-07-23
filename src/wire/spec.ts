@@ -4,11 +4,12 @@ import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_REACTION, KIND_COMMUNITY_CONTROL } from "@/concord-v1/lib/kinds";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
+import { GIT_ISSUE_KIND, GIT_PULL_REQUEST_KIND, GIT_STATUS_KINDS, matchGitTicketRepository, NIP22_COMMENT_KIND, parseGitTicket, type GitRepositoryAttachment } from "@/lib/gitActivity";
 
 import type { ConcordControlSub, ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
-import type { NostrFilter } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /** NIP-88 poll kind (renders in NIP-29 group timelines). */
 const KIND_POLL = 1068;
@@ -23,6 +24,8 @@ const KIND_GIFT_WRAP = 1059;
 const WRAP_SINCE_SLACK_SECS = 3600;
 /** Stored-replay cap for the DM gift-wrap filter on each fresh REQ round. */
 const DM_WRAP_REPLAY_LIMIT = 100;
+/** Conservative relay-filter cardinality: keeps REQ frames comfortably small. */
+export const GIT_ROOT_FILTER_CHUNK_SIZE = 100;
 
 /**
  * Whether a filter is the wire's NIP-17 DM gift-wrap inbox filter
@@ -36,9 +39,11 @@ function isDmWrapInboxFilter(f: NostrFilter): boolean {
 /**
  * Stamp a round's filters with their resume `since`.
  *
- * Every filter gets the cursor-derived `since` — EXCEPT the NIP-17 gift-wrap
- * inbox filter. A gift wrap's `created_at` is backdated up to 2 days into the
- * past (NIP-59 `tweakedPast`), and relays apply `since` to LIVE streamed
+ * Every ordinary filter gets the cursor-derived `since`. The first round after
+ * a Git child filter is added preserves its explicit root timestamp so a
+ * relay-wide cursor cannot skip older comments. The NIP-17 gift-wrap inbox
+ * filter also gets special treatment: a gift wrap's `created_at` is backdated
+ * up to 2 days into the past (NIP-59 `tweakedPast`), and relays apply `since` to LIVE streamed
  * events too, so a cursor-derived `since` (≈ now − 60s) filters out virtually
  * every live wrap: only a backdate that randomly lands inside the overlap
  * window would pass (~0.03%). That deafness is exactly the "DMs only arrive on
@@ -51,10 +56,12 @@ function isDmWrapInboxFilter(f: NostrFilter): boolean {
  * (newest-first), and ingest dedupes re-deliveries by wrap id — deeper catch-up
  * is the DM inbox poll's job (which already rewinds the same window).
  */
-export function stampRoundSince(filters: NostrFilter[], since: number, now: number): NostrFilter[] {
+export function stampRoundSince(filters: NostrFilter[], since: number, now: number, preserveExplicitSince = false): NostrFilter[] {
   const wrapSince = Math.min(since, now - MAX_WRAP_BACKDATE_SECS - WRAP_SINCE_SLACK_SECS);
   return filters.map((f) =>
-    isDmWrapInboxFilter(f) ? { ...f, since: wrapSince, limit: DM_WRAP_REPLAY_LIMIT } : { ...f, since },
+    isDmWrapInboxFilter(f)
+      ? { ...f, since: wrapSince, limit: DM_WRAP_REPLAY_LIMIT }
+      : { ...f, since: preserveExplicitSince && f.since !== undefined ? f.since : since },
   );
 }
 
@@ -97,6 +104,18 @@ export interface WireInputs {
    * to post the first message).
    */
   concord2Control?: Array<{ relays: string[]; idHex: string; groups: GroupKey[] }>;
+  /** Repository activity planes attached through folded Concord V2 channel metadata. */
+  gitRepositories?: GitRepositoryWireInput[];
+  /** Cache/history-discovered NIP-34 issue and PR roots for dynamic child filters. */
+  gitTicketRoots?: NostrEvent[];
+}
+
+/** One canonical repository and every channel interval that references it. */
+export interface GitRepositoryWireInput {
+  address: string;
+  /** Activity relays from the repository announcement, persisted in attachment metadata. */
+  relays: string[];
+  attachments: Array<{ channelId: string; communityId?: string; attachment: GitRepositoryAttachment }>;
 }
 
 /** One relay's standing subscription. */
@@ -119,6 +138,12 @@ export interface WireSpec {
   v1ByZ: Map<string, string>;
   /** V1 CONTROL `#z` pseudonym → its community id hex, for the fold-wake scope. */
   v1CtlByZ: Map<string, string>;
+  /** Repository address → channels/intervals that reference it. */
+  gitByRepository: Map<string, Array<{ channelId: string; communityId?: string; attachment: GitRepositoryAttachment }>>;
+  /** Known ticket root id → repository address, for validating child activity. */
+  gitRootById: Map<string, string>;
+  /** Known ticket root id → author, for trusted ticket-author status activity. */
+  gitRootAuthorById: Map<string, string>;
   /** Deterministic signature of `subs` for cheap diffing/resubscribe. */
   sig: string;
 }
@@ -265,9 +290,72 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     add(relay, { kinds: [KIND_WRAP], authors: [...pks].sort() });
   }
 
+  // ── NIP-34 roots: one #a filter per repository activity relay ─────────────
+  // Detached intervals remain in gitByRepository for store/history filtering,
+  // but never keep a standing socket subscription alive.
+  const gitByRepository = new Map<string, Array<{ channelId: string; communityId?: string; attachment: GitRepositoryAttachment }>>();
+  const reposByRelay = new Map<string, Set<string>>();
+  for (const repository of inputs.gitRepositories ?? []) {
+    const attachments = repository.attachments
+      .filter(({ attachment }) => attachment.address.coordinate === repository.address)
+      .sort((a, b) => a.channelId.localeCompare(b.channelId) || a.attachment.attachedAt - b.attachment.attachedAt);
+    if (attachments.length === 0) continue;
+    gitByRepository.set(repository.address, attachments);
+    if (!attachments.some(({ attachment }) => attachment.detachedAt === undefined)) continue;
+    for (const url of repository.relays) {
+      const relay = normalizeRelayUrl(url);
+      if (!relay) continue;
+      let addresses = reposByRelay.get(relay);
+      if (!addresses) reposByRelay.set(relay, (addresses = new Set()));
+      addresses.add(repository.address);
+    }
+  }
+  for (const [relay, addresses] of reposByRelay) {
+    add(relay, { kinds: [GIT_PULL_REQUEST_KIND, GIT_ISSUE_KIND], "#a": [...addresses].sort() });
+  }
+
+  // ── NIP-22 comments + NIP-34 statuses: dynamic root-id filters ───────────
+  // Child events do not carry the repository announcement. Route them only to
+  // the repository's activity relays, never a discovery relay. NIP-22 uses
+  // uppercase `#E`; NIP-34 status uses lowercase `#e`.
+  const gitRootById = new Map<string, string>();
+  const gitRootAuthorById = new Map<string, string>();
+  const rootIdsByRelay = new Map<string, Set<string>>();
+  for (const root of inputs.gitTicketRoots ?? []) {
+    const ticket = parseGitTicket(root);
+    const matched = ticket ? matchGitTicketRepository(ticket, gitByRepository) : undefined;
+    if (!ticket || !matched) continue;
+    const address = matched.coordinate;
+    gitRootById.set(root.id, address);
+    gitRootAuthorById.set(root.id, ticket.author);
+    const repository = (inputs.gitRepositories ?? []).find((entry) => entry.address === address);
+    if (!repository?.attachments.some(({ attachment }) => attachment.detachedAt === undefined)) continue;
+    for (const url of repository.relays) {
+      if (url.includes("index.ngit.dev")) continue;
+      const relay = normalizeRelayUrl(url);
+      if (!relay) continue;
+      let ids = rootIdsByRelay.get(relay);
+      if (!ids) rootIdsByRelay.set(relay, (ids = new Set()));
+      ids.add(root.id);
+    }
+  }
+  for (const [relay, rootIds] of rootIdsByRelay) {
+    const ids = [...rootIds].sort();
+    for (let offset = 0; offset < ids.length; offset += GIT_ROOT_FILTER_CHUNK_SIZE) {
+      const chunk = ids.slice(offset, offset + GIT_ROOT_FILTER_CHUNK_SIZE);
+      // A relay cursor is shared by every filter on that relay. A root discovered
+      // after a newer chat event would otherwise install its child filter with a
+      // `since` beyond existing comments. Preserve this root-based bootstrap on
+      // the first subscription round; subsequent rotations use the live cursor.
+      const childSince = Math.min(...chunk.map((id) => inputs.gitTicketRoots?.find((root) => root.id === id)?.created_at ?? 0));
+      add(relay, { kinds: [NIP22_COMMENT_KIND], "#E": chunk, since: childSince, limit: 4_000 });
+      add(relay, { kinds: [...GIT_STATUS_KINDS], "#e": chunk, since: childSince, limit: 4_000 });
+    }
+  }
+
   const subs: WireSub[] = [...byRelay.entries()]
     .map(([relay, filters]) => ({ relay, filters }))
     .sort((a, b) => (a.relay < b.relay ? -1 : 1));
 
-  return { subs, v2ByPk, v2CommunityByChannel, v2CtlByPk, v1ByZ, v1CtlByZ, sig: JSON.stringify(subs) };
+  return { subs, v2ByPk, v2CommunityByChannel, v2CtlByPk, v1ByZ, v1CtlByZ, gitByRepository, gitRootById, gitRootAuthorById, sig: JSON.stringify(subs) };
 }

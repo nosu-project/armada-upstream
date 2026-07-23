@@ -540,6 +540,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         String dmFollowsRaw = arrayToString(call.getArray("dmFollows"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         String concord2SubsRaw = arrayToString(call.getArray("concord2Subs"));
+        String gitSubsRaw = arrayToString(call.getArray("gitSubs"));
         // prefs is a flat object of booleans; store its JSON verbatim.
         String prefsRaw = null;
         try {
@@ -587,6 +588,11 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("concord2Subs");
             if (signerSealed != null) editor.putString("signerSealed", signerSealed);
             else editor.remove("signerSealed");
+            if (gitSubsRaw != null) editor.putString("gitSubs", mergeGitRoots(prefs.getString("gitSubs", null), gitSubsRaw));
+            else editor.remove("gitSubs");
+            // Versioned only for the additive Git plane. Existing installations
+            // without this key retain their message/DM configuration unchanged.
+            editor.putInt("schemaVersion", 2);
             if (prefsRaw != null) editor.putString("prefs", prefsRaw);
             // Bump a revision so the running service's SharedPreferences
             // listener always fires even if the values look unchanged.
@@ -636,5 +642,30 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     private static String arrayToString(JSONArray arr) {
         return arr != null ? arr.toString() : null;
+    }
+
+    /** Keep roots dynamically learned by the service if a WebView config refresh
+     * races before IndexedDB has observed them. Attachments/relays always come
+     * from the fresh verified web config; only public ticket ids are merged. */
+    private static String mergeGitRoots(String oldJson, String nextJson) {
+        if (oldJson == null) return nextJson;
+        try {
+            JSONArray oldRepos = new JSONArray(oldJson), nextRepos = new JSONArray(nextJson);
+            for (int i = 0; i < nextRepos.length(); i++) {
+                org.json.JSONObject next = nextRepos.optJSONObject(i); if (next == null) continue;
+                String address = next.optString("address", "");
+                org.json.JSONObject old = null;
+                for (int j = 0; j < oldRepos.length(); j++) { org.json.JSONObject candidate = oldRepos.optJSONObject(j); if (candidate != null && address.equals(candidate.optString("address"))) { old = candidate; break; } }
+                if (old == null) continue;
+                JSONArray roots = next.optJSONArray("ticketRoots"); if (roots == null) next.put("ticketRoots", roots = new JSONArray());
+                JSONArray oldRoots = old.optJSONArray("ticketRoots"); if (oldRoots == null) continue;
+                for (int j = 0; j < oldRoots.length(); j++) {
+                    org.json.JSONObject root = oldRoots.optJSONObject(j); if (root == null) continue;
+                    boolean exists = false; for (int k = 0; k < roots.length(); k++) { org.json.JSONObject present = roots.optJSONObject(k); if (present != null && root.optString("id").equals(present.optString("id"))) exists = true; }
+                    if (!exists) roots.put(root);
+                }
+            }
+            return nextRepos.toString();
+        } catch (Exception ignored) { return nextJson; }
     }
 }

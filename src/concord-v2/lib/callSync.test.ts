@@ -42,7 +42,7 @@ function foldedWith(
 function fixture(): { community: CommunityV2; channel: ChannelV2; generalId: Uint8Array } {
   const { community, generalChannelId } = mintCommunity("Fleet", OWNER, ["wss://relay.example"]);
   const folded = foldedWith([
-    { channelIdHex: bytesToHex(generalChannelId), name: "general", isPrivate: false, deleted: false },
+    { channelIdHex: bytesToHex(generalChannelId), name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
   ]);
   const [channel] = channelsView(community, folded);
   return { community, channel, generalId: generalChannelId };
@@ -81,7 +81,7 @@ describe("decideCallSync", () => {
   it("stays when nothing has changed", () => {
     const { community, channel } = fixture();
     const folded = foldedWith([
-      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false },
+      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
     ]);
     const decision = decideCallSync({
       snapshot: snapOf(channel),
@@ -104,7 +104,7 @@ describe("decideCallSync", () => {
       heldRoots: [{ epoch: 1n, key: random32() }, ...community.heldRoots],
     };
     const folded = foldedWith([
-      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false },
+      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
     ]);
     const liveChannels = channelsView(rekeyed, folded);
 
@@ -129,7 +129,7 @@ describe("decideCallSync", () => {
   it("hangs up when a ban names this membership", () => {
     const { community, channel } = fixture();
     const folded = foldedWith([
-      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false },
+      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
     ]);
     const decision = decideCallSync({
       snapshot: snapOf(channel),
@@ -159,7 +159,7 @@ describe("decideCallSync", () => {
     const { community, channel } = fixture();
     // The fold is live (deleted flag set) but the channel is dropped from view.
     const folded = foldedWith([
-      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: true },
+      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: true, metadata: { name: "general", private: false } },
     ]);
     const decision = decideCallSync({
       snapshot: snapOf(channel),

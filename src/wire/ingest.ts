@@ -10,6 +10,7 @@ import { KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { emitWireScopes } from "@/wire/bus";
 import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
+import { isGitRepositoryAttachedAt, matchGitTicketRepository, parseGitComment, parseGitStatusEvent, parseGitTicket } from "@/lib/gitActivity";
 
 import type { OpenedChat } from "@/concord-v2/lib/chat";
 import type { WireSpec } from "@/wire/spec";
@@ -57,6 +58,19 @@ function tagValue(ev: NostrEvent, name: string): string | undefined {
 
 /** The bus scope a plaintext event belongs to, if any. */
 function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined {
+  const ticket = parseGitTicket(ev);
+  const ticketRepository = ticket && spec ? matchGitTicketRepository(ticket, spec.gitByRepository) : undefined;
+  if (ticketRepository) return `git:${ticketRepository.coordinate}`;
+  const comment = parseGitComment(ev);
+  if (comment) {
+    const address = spec?.gitRootById.get(comment.ticketId);
+    if (address) return `git:${address}`;
+  }
+  const status = parseGitStatusEvent(ev);
+  if (status) {
+    const address = spec?.gitRootById.get(status.ticketId);
+    if (address) return `git:${address}`;
+  }
   const h = tagValue(ev, "h");
   if (h) return `nip29:${h}`;
   if (ev.kind === 4) return "dm";
@@ -214,18 +228,26 @@ export async function ingestWireEvents(
   // emission below until the last one. See wire/ingestBatching.test.ts.
   if (plain.length > 0) {
     const store = await sinks.eventStore;
-    const writes = plain.map((ev) =>
+    // Only attached, well-formed NIP-34 roots belong to this plane: a broad or
+    // malicious relay delivery must neither land in the store nor wake every
+    // repository hook merely because it carries an `a` tag. Filtered up front
+    // so the writes below stay one batched burst (see the note above).
+    const storable = plain.filter(
+      (ev) =>
+        !(ev.kind === 1618 || ev.kind === 1621 || ev.kind === 1111 || (ev.kind >= 1630 && ev.kind <= 1633)) ||
+        scopeOf(ev, spec),
+    );
+    const writes = storable.map((ev) =>
       Promise.resolve()
         .then(() => store.event(ev))
         .catch(() => {
           // Duplicate or rejected — either way the store's state is authoritative.
         })
     );
-    for (const ev of plain) {
+    for (const ev of storable) {
       const scope = scopeOf(ev, spec);
       if (scope) scopes.add(scope);
-      const cand = plaintextCandidate(ev, spec, self);
-      if (cand) candidates.push(cand);
+      candidates.push(...plaintextCandidates(ev, spec, self));
     }
     // Await the shared flush so the bus only rings once the events are
     // durably readable — a doorbell before the commit would send hooks
@@ -295,23 +317,24 @@ function v2Candidates(
  * V1 outer). Returns undefined for events that shouldn't notify (self-authored,
  * non-activity kinds, deletions).
  */
-function plaintextCandidate(
+function plaintextCandidates(
   ev: NostrEvent,
   spec: WireSpec | undefined,
   self: string | undefined,
-): NotifyCandidate | undefined {
-  if (self && ev.pubkey === self) return undefined; // never notify on our own message
+): NotifyCandidate[] {
+  if (self && ev.pubkey === self) return []; // never notify on our own message
+
+  const git = gitCandidates(ev, spec);
+  if (git.length) return git;
 
   // NIP-29 group chat / poll (and a Buzz stream-message v2, which reads the
   // same as kind 9 — see src/buzz/kinds.ts).
   const h = tagValue(ev, "h");
   if (h) {
-    if (ev.kind !== KIND_GROUP_CHAT && ev.kind !== KIND_POLL && ev.kind !== KIND_STREAM_MESSAGE_V2) {
-      return undefined;
-    }
+    if (ev.kind !== KIND_GROUP_CHAT && ev.kind !== KIND_POLL && ev.kind !== KIND_STREAM_MESSAGE_V2) return [];
     // The relay URL isn't on the event; the notifier hook maps groupId → relay
     // (+ route + name) from the user's group list. Leave relayUrl unset here.
-    return {
+    return [{
       plane: "nip29",
       author: ev.pubkey,
       createdAt: ev.created_at,
@@ -322,14 +345,14 @@ function plaintextCandidate(
       readKey: "", // filled by the hook (needs the relay URL)
       path: "",
       groupId: h,
-    };
+    }];
   }
 
   // DM (kind 4): content is ciphertext here, so no body preview. A received DM
   // is authored by the peer; a sent DM (self) was filtered above.
   if (ev.kind === KIND_DM) {
     const peer = ev.pubkey;
-    return {
+    return [{
       plane: "dm",
       author: peer,
       createdAt: ev.created_at,
@@ -339,7 +362,7 @@ function plaintextCandidate(
       readKey: `dm:${peer}`,
       path: `/dms/${peer}`,
       peer,
-    };
+    }];
   }
 
   // Concord V1 sealed outer (kind-3300 with a `#z` pseudonym): content stays
@@ -351,7 +374,7 @@ function plaintextCandidate(
   const z = tagValue(ev, "z");
   if (z && ev.kind === KIND_COMMUNITY_MESSAGE && !spec?.v1CtlByZ.has(z)) {
     const channelId = spec?.v1ByZ.get(z) ?? z;
-    return {
+    return [{
       plane: "c1",
       author: "",
       createdAt: ev.created_at,
@@ -361,8 +384,56 @@ function plaintextCandidate(
       readKey: "", // filled by the hook (V1 read state)
       path: "",
       v1ChannelIdHex: channelId,
-    };
+    }];
   }
 
-  return undefined;
+  return [];
+}
+
+/** Route accepted Git activity to every independently-attached C2 channel. */
+function gitCandidates(ev: NostrEvent, spec: WireSpec | undefined): NotifyCandidate[] {
+  let repository: string | undefined;
+  let ticketId: string | undefined;
+  let ticketTitle: string | undefined;
+  let action: string | undefined;
+  const ticket = parseGitTicket(ev);
+  if (ticket?.repositoryAddress) {
+    repository = ticket.repositoryAddress.coordinate;
+    ticketId = ticket.id;
+    ticketTitle = ticket.subject;
+    action = ticket.type === "issue" ? "opened an issue" : "opened a pull request";
+  }
+  const comment = parseGitComment(ev);
+  if (comment) {
+    repository = spec?.gitRootById.get(comment.ticketId);
+    ticketId = comment.ticketId;
+    action = "commented on a ticket";
+  }
+  const status = parseGitStatusEvent(ev);
+  if (status) {
+    repository = spec?.gitRootById.get(status.ticketId);
+    ticketId = status.ticketId;
+    // Repository owners are always trusted. Ticket-author/maintainer validation
+    // is performed by the timeline once its root/announcement is available;
+    // never surface an untrusted status here.
+    if (!repository || (status.author !== repository.split(":")[1] && status.author !== spec?.gitRootAuthorById.get(status.ticketId))) return [];
+    action = "changed a ticket status";
+  }
+  if (!repository || !action) return [];
+  const attachments = spec?.gitByRepository.get(repository) ?? [];
+  return attachments
+    .filter((item): item is { channelId: string; communityId: string; attachment: import("@/lib/gitActivity").GitRepositoryAttachment } => Boolean(item.communityId) && isGitRepositoryAttachedAt(item.attachment, ev.created_at))
+    .map(({ channelId, communityId, attachment }) => ({
+      plane: "c2" as const,
+      author: ev.pubkey,
+      createdAt: ev.created_at,
+      mention: false,
+      kind: ev.kind,
+      roomKey: `c2:${channelId}`,
+      readKey: channelId,
+      path: `/c/${encodeURIComponent(communityId)}/${encodeURIComponent(channelId)}?ticket=${encodeURIComponent(ticketId ?? ev.id)}`,
+      channelIdHex: channelId,
+      git: { action, repository: attachment.address.identifier, ticketId, ticketTitle },
+      eventId: ev.id,
+    }));
 }

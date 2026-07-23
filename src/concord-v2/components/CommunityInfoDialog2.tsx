@@ -2,6 +2,7 @@ import {
   Check,
   Hash,
   ImagePlus,
+  Link2,
   Loader2,
   Lock,
   Pencil,
@@ -12,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -23,7 +25,7 @@ import { useNostr } from "@nostrify/react";
 
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
-import { useChannels2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { refreshInviteBundlesFor } from "@/concord-v2/hooks/useRekey2";
 import { useMetadataActions2 } from "@/concord-v2/hooks/useRoles2";
@@ -43,6 +45,9 @@ import {
   type ImagePointer,
 } from "@/concord-v2/lib/types";
 import { cn } from "@/lib/utils";
+import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
+import { fetchGitRepositoryAnnouncement, resolveGitRepositoryAnnouncement } from "@/lib/gitRepositoryResolver";
+import { parseGitRepositoryAddress } from "@/lib/gitActivity";
 
 /**
  * The single "community" surface: the same view is shown to everyone (icon,
@@ -331,6 +336,8 @@ function InfoBody({
 
         <ChannelsSection community={community} canManage={canManageChannels} />
 
+        <ConnectedRepositoriesSection community={community} canManage={canManageChannels} />
+
         <RelaysSection
           community={community}
           metadata={metadata}
@@ -363,6 +370,150 @@ function InfoBody({
       />
     </div>
   );
+}
+
+/** Active NIP-34 attachments across this community's channels. Historical, detached
+ * intervals remain in the control-plane metadata but intentionally aren't listed. */
+export function ConnectedRepositoriesSection({
+  community,
+  canManage,
+}: {
+  community: CommunityV2;
+  canManage: boolean;
+}) {
+  const { nostr } = useNostr();
+  const channels = useChannels2(community);
+  const { data: folded } = useControlFold2(community);
+  const { attachRepository, detachRepository } = useCommunityManagement2(community);
+  const [adding, setAdding] = useState(false);
+  const [input, setInput] = useState("");
+  const [channelId, setChannelId] = useState("");
+  const [resolving, setResolving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const repositories = channels.flatMap((channel) => {
+    const metadata = folded?.channels.get(channel.idHex)?.metadata;
+    return metadata
+      ? channelGitRepositoryAttachments(metadata)
+          .filter((attachment) => attachment.detachedAt === undefined)
+          .map((attachment) => ({ channel, attachment }))
+      : [];
+  });
+
+  const beginAdding = () => {
+    setError(null);
+    setChannelId(channels[0]?.idHex ?? "");
+    setAdding(true);
+  };
+
+  const attach = async () => {
+    if (!channelId) return;
+    setError(null);
+    setResolving(true);
+    try {
+      const resolved = await resolveGitRepositoryAnnouncement(nostr, input);
+      if (repositories.some(({ attachment }) => attachment.address.coordinate === resolved.address.coordinate)) {
+        setError("This repository is already connected.");
+        return;
+      }
+      await attachRepository({
+        channelIdHex: channelId,
+        address: resolved.address.coordinate,
+        // The announcement is authoritative for activity relays. Input naddr
+        // hints are retained only as useful additional discovery hints.
+        relayHints: resolved.relayHints,
+      });
+      toast({ title: "Repository connected", description: resolved.announcement.name });
+      setInput("");
+      setAdding(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't connect repository.");
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  const detach = async (channel: ChannelV2, address: string, name: string) => {
+    if (!confirm(`Disconnect ${name} from #${channel.name}? Historical activity remains attached to its original interval.`)) return;
+    try {
+      await detachRepository({ channelIdHex: channel.idHex, address });
+      toast({ title: "Repository disconnected", description: name });
+    } catch (e) {
+      toast({ title: "Couldn't disconnect repository", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Connected repositories</span>
+        {canManage && !adding && (
+          <Button type="button" size="icon" variant="ghost" className="size-6 shrink-0 text-muted-foreground" aria-label="Connect repository" onClick={beginAdding}>
+            <Plus className="size-3.5" />
+          </Button>
+        )}
+      </div>
+      <div className="space-y-1 rounded-lg bg-secondary/40 p-1">
+        {repositories.length === 0 && !adding && <p className="px-2 py-1.5 text-xs text-muted-foreground">No repositories connected.</p>}
+        {repositories.map(({ channel, attachment }) => (
+          <ConnectedRepositoryRow
+            key={`${channel.idHex}:${attachment.address.coordinate}`}
+            channel={channel}
+            address={attachment.address.coordinate}
+            relayHints={attachment.relayHints}
+            fallbackName={attachment.address.identifier}
+            canManage={canManage}
+            onDetach={() => detach(channel, attachment.address.coordinate, attachment.address.identifier)}
+          />
+        ))}
+        {adding && (
+          <form className="space-y-2 px-1 py-1" onSubmit={(event) => { event.preventDefault(); void attach(); }}>
+            <Input value={input} onChange={(event) => setInput(event.target.value)} placeholder="naddr or nostr://owner/repository" autoFocus disabled={resolving} />
+            <div className="flex gap-1.5">
+              <select aria-label="Channel for repository" value={channelId} onChange={(event) => setChannelId(event.target.value)} disabled={resolving} className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs">
+                {channels.map((channel) => <option key={channel.idHex} value={channel.idHex}>#{channel.name}</option>)}
+              </select>
+              <Button type="submit" size="sm" className="h-8" disabled={resolving || !input.trim() || !channelId}>
+                {resolving ? <Loader2 className="size-3.5 animate-spin" /> : "Connect"}
+              </Button>
+              <Button type="button" size="icon" variant="ghost" className="size-8" aria-label="Cancel repository connection" disabled={resolving} onClick={() => { setAdding(false); setError(null); }}><X className="size-3.5" /></Button>
+            </div>
+            {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ConnectedRepositoryRow({ channel, address, relayHints, fallbackName, canManage, onDetach }: {
+  channel: ChannelV2;
+  address: string;
+  relayHints: string[];
+  fallbackName: string;
+  canManage: boolean;
+  onDetach: () => void;
+}) {
+  const { nostr } = useNostr();
+  const { data } = useQuery({
+    queryKey: ["git-repository-announcement", address, relayHints],
+    queryFn: () => {
+      const parsed = parseGitRepositoryAddress(address);
+      if (!parsed) throw new Error("Invalid connected repository address.");
+      return fetchGitRepositoryAnnouncement(nostr, {
+        address: parsed,
+        relayHints,
+      });
+    },
+    staleTime: 60_000,
+  });
+  const name = data?.announcement.name || fallbackName;
+  return <div className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm">
+    <Link2 className="size-3.5 shrink-0 text-muted-foreground" />
+    <span className="min-w-0 flex-1 truncate">{name}</span>
+    <span className="shrink-0 text-[11px] text-muted-foreground">#{channel.name}</span>
+    {canManage && <Button type="button" size="icon" variant="ghost" className="size-6 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`Disconnect ${name}`} title={address} onClick={onDetach}><Trash2 className="size-3.5" /></Button>}
+  </div>;
 }
 
 /** An inline text/textarea editor with save + cancel, used for name & description. */

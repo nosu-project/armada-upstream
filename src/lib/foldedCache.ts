@@ -103,6 +103,23 @@ export async function readFolded<T>(key: string): Promise<T | undefined> {
   }
 }
 
+type FoldedWriteListener = (key: string) => void;
+const foldedWriteListeners = new Set<FoldedWriteListener>();
+
+/**
+ * Observe fold-snapshot writes. Consumers that build state from PERSISTED folds
+ * rather than a live one — the wire's subscription spec — have no other signal
+ * that a fold changed, so a control edition altering neither the epoch nor the
+ * channel count would go unnoticed until their next poll. Returns an
+ * unsubscribe.
+ */
+export function onFoldedWrite(listener: FoldedWriteListener): () => void {
+  foldedWriteListeners.add(listener);
+  return () => {
+    foldedWriteListeners.delete(listener);
+  };
+}
+
 /** Persist a folded value by key (best-effort; failures are swallowed). */
 export async function writeFolded(key: string, value: unknown): Promise<void> {
   try {
@@ -114,6 +131,13 @@ export async function writeFolded(key: string, value: unknown): Promise<void> {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
+    for (const listener of foldedWriteListeners) {
+      try {
+        listener(key);
+      } catch {
+        // A listener must never break the write path.
+      }
+    }
   } catch {
     // Best-effort cache.
   }

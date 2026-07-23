@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 
-import { buildWireSpec, stampRoundSince } from "./spec";
+import { GIT_ROOT_FILTER_CHUNK_SIZE, buildWireSpec, stampRoundSince } from "./spec";
 
 import type { ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import type { GroupKey } from "@/concord-v2/lib/derive";
@@ -210,6 +210,60 @@ describe("buildWireSpec", () => {
     const b = buildWireSpec({ ...base, groups: [{ id: "g2", relay: "wss://a" }, { id: "g1", relay: "wss://a" }] });
     expect(a.sig).toBe(b.sig);
   });
+
+  it("groups active attached repositories deterministically while detached history stays mapped but unsubscribed", () => {
+    const address = `30617:${"a".repeat(64)}:armada`;
+    const attachment = (attachedAt: number, detachedAt?: number) => ({
+      address: { kind: 30617 as const, owner: "a".repeat(64), identifier: "armada", coordinate: address }, relayHints: [], attachedAt, detachedAt,
+    });
+    const spec = buildWireSpec({
+      pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord1: [], concord2: [],
+      gitRepositories: [{
+        address,
+        relays: ["wss://b.relay/", "wss://a.relay"],
+        attachments: [
+          { channelId: "channel-b", attachment: attachment(20) },
+          { channelId: "channel-a", attachment: attachment(10, 15) },
+        ],
+      }],
+    });
+    expect(spec.subs.map((sub) => sub.relay)).toEqual(["wss://a.relay", "wss://b.relay"]);
+    expect(spec.subs[0].filters).toEqual([{ kinds: [1618, 1621], "#a": [address] }]);
+    expect(spec.gitByRepository.get(address)?.map((entry) => entry.channelId)).toEqual(["channel-a", "channel-b"]);
+
+    const detached = buildWireSpec({
+      pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord1: [], concord2: [],
+      gitRepositories: [{ address, relays: ["wss://a.relay"], attachments: [{ channelId: "channel-a", attachment: attachment(10, 15) }] }],
+    });
+    expect(detached.subs).toEqual([]);
+    expect(detached.gitByRepository.get(address)).toHaveLength(1);
+  });
+
+  it("adds deterministic chunked uppercase comment and lowercase status root filters", () => {
+    const address = `30617:${"a".repeat(64)}:armada`;
+    const attachment = { address: { kind: 30617 as const, owner: "a".repeat(64), identifier: "armada", coordinate: address }, relayHints: [], attachedAt: 10 };
+    const roots = Array.from({ length: GIT_ROOT_FILTER_CHUNK_SIZE + 1 }, (_, index) => ({
+      id: index.toString(16).padStart(64, "0"), kind: index % 2 ? 1618 : 1621, pubkey: "b".repeat(64), created_at: index, content: "", tags: [["a", address]], sig: "",
+    }));
+    const spec = buildWireSpec({ pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord1: [], concord2: [], gitRepositories: [{ address, relays: ["wss://repo.relay", "wss://index.ngit.dev"], attachments: [{ channelId: "channel", attachment }] }], gitTicketRoots: [...roots].reverse() });
+    const filters = spec.subs.find((sub) => sub.relay === "wss://repo.relay")!.filters;
+    expect(filters.filter((filter) => filter.kinds?.[0] === 1111).map((filter) => filter["#E"]?.length)).toEqual([GIT_ROOT_FILTER_CHUNK_SIZE, 1]);
+    expect(filters.filter((filter) => filter.kinds?.[0] === 1630).map((filter) => filter["#e"]?.length)).toEqual([GIT_ROOT_FILTER_CHUNK_SIZE, 1]);
+    expect(filters.find((filter) => filter.kinds?.[0] === 1111)?.["#E"]?.[0]).toBe(roots[0].id);
+    expect(spec.subs.find((sub) => sub.relay === "wss://index.ngit.dev")?.filters).toEqual([{ kinds: [1618, 1621], "#a": [address] }]);
+  });
+
+  it("changes the subscription signature when a root arrives after wire startup", () => {
+    const address = `30617:${"a".repeat(64)}:armada`;
+    const attachment = { address: { kind: 30617 as const, owner: "a".repeat(64), identifier: "armada", coordinate: address }, relayHints: [], attachedAt: 10 };
+    const input = { pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord1: [], concord2: [], gitRepositories: [{ address, relays: ["wss://repo.relay"], attachments: [{ channelId: "channel", attachment }] }] };
+    const before = buildWireSpec(input);
+    const root = { id: "1".repeat(64), kind: 1621, pubkey: "b".repeat(64), created_at: 20, content: "", tags: [["a", address]], sig: "" };
+    const after = buildWireSpec({ ...input, gitTicketRoots: [root] });
+    expect(after.sig).not.toBe(before.sig);
+    expect(after.subs[0].filters).toContainEqual({ kinds: [1111], "#E": [root.id], since: root.created_at, limit: 4_000 });
+    expect(after.gitRootById.get(root.id)).toBe(address);
+  });
 });
 
 describe("stampRoundSince", () => {
@@ -249,6 +303,12 @@ describe("stampRoundSince", () => {
     const stamped = stampRoundSince([{ kinds: [1059], authors: ["pkA1"] }], SINCE, NOW);
     expect(stamped[0].since).toBe(SINCE);
     expect(stamped[0].limit).toBeUndefined();
+  });
+
+  it("uses a Git child filter's root timestamp only for its bootstrap round", () => {
+    const child = { kinds: [1111], "#E": ["1".repeat(64)], since: 100, limit: 4_000 };
+    expect(stampRoundSince([child], 500, NOW, true)[0].since).toBe(100);
+    expect(stampRoundSince([child], 500, NOW)[0].since).toBe(500);
   });
 
   it("takes the deeper of cursor since and the backdate rewind for the wrap filter", () => {

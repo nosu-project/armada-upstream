@@ -445,7 +445,7 @@ export function BuzzChat({
 
   const newDividerId = useNewMessagesDivider(
     channelReadKey(relayUrl, channelId),
-    timeline,
+    timeline.map((message) => ({ id: message.id, createdAt: message.created_at, author: message.pubkey })),
     user?.pubkey,
   );
 

@@ -82,6 +82,9 @@ function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
     v2CtlByPk: new Map(),
     v1ByZ: new Map(),
     v1CtlByZ: new Map(),
+    gitByRepository: new Map(),
+    gitRootById: new Map(),
+    gitRootAuthorById: new Map(),
     sig: "",
     ...spec,
   };
@@ -132,6 +135,28 @@ describe("ingestWireEvents", () => {
     );
     expect(store.events).toHaveLength(1);
     expect(scopes.has("dm")).toBe(true);
+  });
+
+  it("stores attached issue roots and emits only their repository scope", async () => {
+    const address = `30617:${"b".repeat(64)}:armada`;
+    const { store, sinks } = makeSinks({ gitByRepository: new Map([[address, []]]) });
+    const issue = plainEvent(1621, [["a", address], ["subject", "Bug"]]);
+    const unrelated = plainEvent(1621, [["a", `30617:${"c".repeat(64)}:other`]]);
+    const scopes = await collectScopes(() => ingestWireEvents(sinks, [issue, unrelated]));
+    expect(store.events.map((event) => event.id)).toEqual([issue.id]);
+    expect(scopes).toEqual(new Set([`git:${address}`]));
+  });
+
+  it("stores only comments and statuses rooted in known tickets under the repository scope", async () => {
+    const address = `30617:${"b".repeat(64)}:armada`;
+    const root = "1".repeat(64);
+    const { store, sinks } = makeSinks({ gitByRepository: new Map([[address, []]]), gitRootById: new Map([[root, address]]) });
+    const comment = plainEvent(1111, [["E", root, "", "b".repeat(64)], ["K", "1621"], ["e", "2".repeat(64), "", "reply"]]);
+    const status = plainEvent(1632, [["e", root, "", "root"]]);
+    const unrelated = plainEvent(1111, [["E", "3".repeat(64), "", "b".repeat(64)], ["K", "1621"]]);
+    const scopes = await collectScopes(() => ingestWireEvents(sinks, [comment, status, unrelated]));
+    expect(store.events.map((event) => event.id)).toEqual([comment.id, status.id]);
+    expect(scopes).toEqual(new Set([`git:${address}`]));
   });
 
   it("routes sealed V1 outers to the store, scoped by the z → channel map", async () => {
@@ -363,6 +388,68 @@ describe("ingestWireEvents — foreground notify candidates", () => {
       body: "sealed hi",
       path: `/c/comm-hex/${idHex}`,
     });
+  });
+
+  it("routes every attached Git activity independently, honors intervals, and rejects spoofed statuses", async () => {
+    const owner = "b".repeat(64);
+    const address = `30617:${owner}:armada`;
+    const root = "1".repeat(64);
+    const active = { address: { kind: 30617 as const, owner, identifier: "armada", coordinate: address }, relayHints: [], attachedAt: 10 };
+    const detached = { ...active, detachedAt: 20 };
+    const attachments = [
+      { channelId: "one", communityId: "community-one", attachment: active },
+      { channelId: "two", communityId: "community-two", attachment: detached },
+    ];
+    const issue = plainEvent(1621, [["a", address], ["subject", "Fix unread"]]);
+    issue.pubkey = PEER;
+    issue.created_at = 15;
+    const comment = plainEvent(1111, [["E", root, "", PEER], ["K", "1621"]]);
+    comment.pubkey = PEER;
+    comment.created_at = 15;
+    const trustedStatus = plainEvent(1632, [["e", root, "", "root"]]);
+    trustedStatus.pubkey = owner;
+    trustedStatus.created_at = 15;
+    const spoofedStatus = plainEvent(1632, [["e", root, "", "root"]]);
+    spoofedStatus.pubkey = "c".repeat(64);
+    spoofedStatus.created_at = 15;
+    const { captured, off, sinks } = withSink({
+      gitByRepository: new Map([[address, attachments]]),
+      gitRootById: new Map([[root, address]]),
+    });
+    try {
+      await ingestWireEvents(sinks, [issue, comment, trustedStatus, spoofedStatus]);
+    } finally {
+      off();
+    }
+    // Issue, comment, and trusted status each fan out to both active intervals.
+    expect(captured).toHaveLength(6);
+    expect(captured.map((candidate) => candidate.path)).toContain(`/c/community-one/one?ticket=${issue.id}`);
+    expect(captured.map((candidate) => candidate.path)).toContain(`/c/community-two/two?ticket=${root}`);
+    expect(captured.every((candidate) => candidate.git?.repository === "armada")).toBe(true);
+    expect(captured.some((candidate) => candidate.author === spoofedStatus.pubkey)).toBe(false);
+
+    // A self-authored Git item remains stored but never reaches notifications.
+    const selfIssue = plainEvent(1621, [["a", address]]);
+    selfIssue.pubkey = SELF;
+    selfIssue.created_at = 15;
+    const selfRun = withSink({ gitByRepository: new Map([[address, attachments]]) }, SELF);
+    try {
+      await ingestWireEvents(selfRun.sinks, [selfIssue]);
+    } finally {
+      selfRun.off();
+    }
+    expect(selfRun.captured).toHaveLength(0);
+
+    // The half-open detach boundary excludes exactly the detached channel.
+    const afterDetach = plainEvent(1621, [["a", address]]);
+    afterDetach.created_at = 20;
+    const boundary = withSink({ gitByRepository: new Map([[address, attachments]]) });
+    try {
+      await ingestWireEvents(boundary.sinks, [afterDetach]);
+    } finally {
+      boundary.off();
+    }
+    expect(boundary.captured.map((candidate) => candidate.channelIdHex)).toEqual(["one"]);
   });
 
   it("never emits a DM candidate for a NIP-17 wrap (can't attribute without decrypting)", async () => {

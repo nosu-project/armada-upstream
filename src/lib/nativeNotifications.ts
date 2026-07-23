@@ -259,6 +259,17 @@ export interface ArmadaNotificationPlugin {
       | { type: "key"; sk: string }
       | { type: "amber"; packageName: string }
       | { type: "nip46"; clientSk: string; bunkerPk: string; relays: string[] };
+    /** Public NIP-34 activity attached to Concord V2 channels. Mapping an
+     * attachment to its private channel remains local to Android; relay filters
+     * contain only the public repository coordinate and ticket ids. */
+    gitSubs?: Array<{
+      address: string;
+      relays: string[];
+      owner: string;
+      maintainers?: string[];
+      attachments: Array<{ communityId: string; channelId: string; attachedAt: number; detachedAt?: number }>;
+      ticketRoots: Array<{ id: string; author: string; kind: 1618 | 1621 }>;
+    }>;
   }): Promise<void>;
 }
 

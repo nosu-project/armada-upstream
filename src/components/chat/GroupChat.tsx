@@ -253,7 +253,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   // stamps the channel below, frozen until the channel changes).
   const newDividerId = useNewMessagesDivider(
     channelReadKey(relayUrl, groupId),
-    messages,
+    messages.map((message) => ({ id: message.id, createdAt: message.created_at, author: message.pubkey })),
     user?.pubkey,
   );
   const { results: searchResults, isLoading: searchLoading, active: searching } = useGroupSearch(

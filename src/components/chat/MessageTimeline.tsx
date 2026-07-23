@@ -11,6 +11,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
+import { isGitContinuation, type ChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { ReactNode, RefObject } from "react";
 
@@ -102,7 +103,38 @@ function NewMessagesDivider() {
 type TimelineItem =
   | { type: "date"; ts: number; key: string }
   | { type: "unread"; key: string }
-  | { type: "message"; msg: ChatMsg; continuation: boolean; key: string };
+  | { type: "message"; msg: ChatMsg; continuation: boolean; key: string }
+  | { type: "entry"; entry: NonChatEntry; related?: readonly NonChatEntry[]; key: string };
+
+/** A generalized timeline entry that isn't a plain chat message (e.g. Git activity). */
+type NonChatEntry = Exclude<ChannelTimelineEntry, { type: "chat" }>;
+
+/**
+ * The run of Git entries a group-head row renders on behalf of: itself plus
+ * every immediately-following same-day continuation. Those followers emit no
+ * row of their own, so a comment burst collapses into one grouped block.
+ */
+function relatedGitEntries(
+  entries: readonly ChannelTimelineEntry[],
+  index: number,
+  entry: NonChatEntry,
+): readonly NonChatEntry[] | undefined {
+  if (entry.type !== "git-comment") return undefined;
+  const related: NonChatEntry[] = [entry];
+  for (let cursor = index + 1; cursor < entries.length; cursor++) {
+    const candidate = entries[cursor];
+    if (
+      !candidate ||
+      candidate.type !== "git-comment" ||
+      !isSameDay(entry.createdAt, candidate.createdAt) ||
+      !isGitContinuation(related[related.length - 1], candidate)
+    ) {
+      break;
+    }
+    related.push(candidate);
+  }
+  return related;
+}
 
 /** A row's identity plus its position relative to the viewport's top edge. */
 interface ScrollAnchor {
@@ -162,6 +194,13 @@ interface MessageTimelineProps {
    * `ChatMessage`. `continuation` is precomputed here from the shared rule.
    */
   renderMessage: (event: ChatMsg, continuation: boolean) => ReactNode;
+  /**
+   * Optional generalized channel entries. Leaving this unset preserves the
+   * legacy chat-only timeline used by NIP-29, V1, DMs, and mesh.
+   */
+  entries?: readonly ChannelTimelineEntry[];
+  /** Renderer for non-chat entries supplied through `entries`. */
+  renderEntry?: (entry: NonChatEntry, relatedEntries?: readonly NonChatEntry[]) => ReactNode;
   /**
    * Empty-state node shown when there are no messages and nothing is loading.
    */
@@ -298,6 +337,8 @@ function TimelineSkeleton() {
 export function MessageTimeline({
   transport,
   renderMessage,
+  entries,
+  renderEntry,
   emptyState,
   handleRef,
   paused = false,
@@ -306,6 +347,22 @@ export function MessageTimeline({
   className,
 }: MessageTimelineProps) {
   const { messages, isLoading, loadOlder, hasMore, isLoadingOlder } = transport;
+
+  // The row stream, generalized: callers that pass `entries` interleave non-chat
+  // rows (Git activity) chronologically; everyone else gets the chat-only view.
+  // Memoized because the row model and the prepend anchor both compare by
+  // identity — a fresh array each render would look like a new conversation.
+  const timelineEntries = useMemo<readonly ChannelTimelineEntry[]>(
+    () =>
+      entries ??
+      messages.map((message) => ({
+        type: "chat" as const,
+        id: `chat:${message.id}`,
+        createdAt: message.created_at,
+        message,
+      })),
+    [entries, messages],
+  );
 
   // Remember that we've shown a populated timeline. If `messages` then briefly
   // empties (a transient between a cache refresh and the merged result landing),
@@ -316,15 +373,15 @@ export function MessageTimeline({
   // state instead of a stale skeleton.
   const hadMessagesRef = useRef(false);
   if (isLoading) hadMessagesRef.current = false;
-  if (messages.length > 0) hadMessagesRef.current = true;
-  const transientEmpty = messages.length === 0 && hadMessagesRef.current;
+  if (timelineEntries.length > 0) hadMessagesRef.current = true;
+  const transientEmpty = timelineEntries.length === 0 && hadMessagesRef.current;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Live mirrors, so scroll/observer callbacks never close over stale props.
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
+  const entriesRef = useRef(timelineEntries);
+  entriesRef.current = timelineEntries;
 
   // How far the reader is from the newest message. Updated on every scroll and
   // after every programmatic move; the single input to stick-to-bottom.
@@ -345,7 +402,7 @@ export function MessageTimeline({
 
   // The scroller only exists once there's something to put in it; the skeleton
   // replaces it outright.
-  const listVisible = !isLoading && !transientEmpty && messages.length > 0;
+  const listVisible = !isLoading && !transientEmpty && timelineEntries.length > 0;
   // So while the skeleton is up there is no scroll position to preserve, and
   // the scroller will remount at `scrollTop: 0`: the next layout has to pin.
   // The opening pin is otherwise armed only at mount, and `messages` routinely
@@ -372,37 +429,58 @@ export function MessageTimeline({
   // arrive on the following frames, off the interaction's critical path.
   const [rampStep, setRampStep] = useState(0);
 
+  // The window is resolved over the ENTRY stream, not just chat: a channel
+  // whose recent history is mostly Git activity must still open with a full
+  // window, and the anchor id has to name a row that actually exists.
   const { startIndex, anchorLost } = useMemo(
-    () => resolveWindowStart(messages, windowStartId, OPENING_RAMP[rampStep]),
-    [messages, windowStartId, rampStep],
+    () => resolveWindowStart(timelineEntries, windowStartId, OPENING_RAMP[rampStep]),
+    [timelineEntries, windowStartId, rampStep],
   );
   const startIndexRef = useRef(startIndex);
   startIndexRef.current = startIndex;
 
-  // Flatten the windowed slice + injected separators into rows. Continuation is
-  // computed against the message *before* the window so the topmost row doesn't
-  // change shape as the window grows.
+  // Flatten the windowed slice + injected separators into rows, applying the
+  // shared continuation rule (same author, same day, small gap). Continuation
+  // is computed against the entry *before* the window so the topmost row
+  // doesn't change shape as the window grows.
   const items = useMemo<TimelineItem[]>(() => {
     const out: TimelineItem[] = [];
-    for (let i = startIndex; i < messages.length; i++) {
-      const msg = messages[i];
-      const prev = messages[i - 1];
+    for (let i = startIndex; i < timelineEntries.length; i++) {
+      const entry = timelineEntries[i];
+      const prev = timelineEntries[i - 1];
+      const newDay = !!prev && !isSameDay(prev.createdAt, entry.createdAt);
+      // A Git entry continuing the previous one is absorbed into that row's
+      // group (see relatedGitEntries) and emits no row of its own — unless it
+      // opens the window, where its group head sits outside the rendered slice
+      // and absorbing it would drop the row entirely.
+      if (i > startIndex && !newDay && isGitContinuation(prev, entry)) continue;
       // `renderKey` where the transport has one: an optimistic row's `id`
       // changes when it adopts the signed event id, and keying on that would
-      // remount the row (and its date separator) mid-send.
-      const rowKey = msg.renderKey ?? msg.id;
-      const newDay = !!prev && !isSameDay(prev.created_at, msg.created_at);
-      if (newDay) out.push({ type: "date", ts: msg.created_at, key: `date-${rowKey}` });
-      if (newDividerId === msg.id) out.push({ type: "unread", key: "unread-divider" });
-      const continuation =
-        !!prev &&
-        !newDay &&
-        prev.pubkey === msg.pubkey &&
-        msg.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
-      out.push({ type: "message", msg, continuation, key: rowKey });
+      // remount the row (and its date separator) mid-send. Git entries are
+      // never optimistic, so their own id is already stable.
+      const rowKey = entry.type === "chat" ? entry.message.renderKey ?? entry.message.id : entry.id;
+      if (newDay) out.push({ type: "date", ts: entry.createdAt, key: `date-${rowKey}` });
+      if (entry.type === "chat") {
+        if (newDividerId === entry.message.id) out.push({ type: "unread", key: "unread-divider" });
+        const continuation =
+          !!prev &&
+          prev.type === "chat" &&
+          !newDay &&
+          prev.message.pubkey === entry.message.pubkey &&
+          entry.createdAt - prev.createdAt < CONTINUATION_WINDOW_SECONDS;
+        out.push({ type: "message", msg: entry.message, continuation, key: rowKey });
+      } else {
+        if (newDividerId === entry.id) out.push({ type: "unread", key: "unread-divider" });
+        out.push({
+          type: "entry",
+          entry,
+          related: relatedGitEntries(timelineEntries, i, entry),
+          key: rowKey,
+        });
+      }
     }
     return out;
-  }, [messages, startIndex, newDividerId]);
+  }, [timelineEntries, startIndex, newDividerId]);
 
   // Rows are about to change at the top of the slice (a revealed batch, a
   // backfill prepend, a trim). Measure the reader's anchor row NOW, while the
@@ -550,7 +628,7 @@ export function MessageTimeline({
     const start = startIndexRef.current;
     if (start > 0) {
       if (el.scrollTop >= REVEAL_TRIGGER_PX) return;
-      const next = messagesRef.current[Math.max(0, start - WINDOW_STEP)];
+      const next = entriesRef.current[Math.max(0, start - WINDOW_STEP)];
       if (!next) return;
       extendLockRef.current = true;
       setWindowStart(next.id);
@@ -592,27 +670,29 @@ export function MessageTimeline({
   // Walk the opening ramp, a frame at a time. Rows land above a reader who is
   // pinned to the bottom, so nothing moves as the window fills out.
   useEffect(() => {
-    if (rampStep >= OPENING_RAMP.length - 1 || messages.length === 0) return;
+    if (rampStep >= OPENING_RAMP.length - 1 || timelineEntries.length === 0) return;
     const frame = requestAnimationFrame(() => setRampStep((step) => step + 1));
     return () => cancelAnimationFrame(frame);
-  }, [rampStep, messages.length]);
+  }, [rampStep, timelineEntries.length]);
 
   // Back at the bottom with a long window behind us: drop it back to the newest
   // messages. The rows removed are far above the viewport, so this is invisible
   // — and it's the only thing bounding a long session's DOM.
   useEffect(() => {
     if (distanceRef.current > AT_BOTTOM_PX) return;
-    if (messages.length - startIndex <= TRIM_ABOVE) return;
+    if (timelineEntries.length - startIndex <= TRIM_ABOVE) return;
     setWindowStart(null);
-  }, [messages, startIndex, setWindowStart]);
+  }, [timelineEntries, startIndex, setWindowStart]);
 
   // Scroll a message into view and briefly highlight it. No-op if it isn't in
   // the loaded history; if it's older than the rendered window, the window is
   // extended to cover it first and the jump happens in the same commit.
   const scrollToMessage = useCallback(
     (id: string) => {
-      const all = messagesRef.current;
-      const index = all.findIndex((m) => m.id === id);
+      // Indexes and the window anchor are entry-space; the row key stays the
+      // message id, which is what callers jump by.
+      const all = entriesRef.current;
+      const index = all.findIndex((entry) => entry.type === "chat" && entry.message.id === id);
       if (index === -1) return;
       if (index < startIndexRef.current) {
         pendingJumpRef.current = id;
@@ -639,9 +719,9 @@ export function MessageTimeline({
 
   return (
     <div className={cn("relative flex flex-col", className)}>
-      {isLoading || transientEmpty || (syncing && messages.length === 0) ? (
+      {isLoading || transientEmpty || (syncing && timelineEntries.length === 0) ? (
         <TimelineSkeleton />
-      ) : messages.length === 0 ? (
+      ) : timelineEntries.length === 0 ? (
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4">{emptyState ?? null}</div>
       ) : (
         <>
@@ -666,6 +746,8 @@ export function MessageTimeline({
                     <DateSeparator ts={item.ts} />
                   ) : item.type === "unread" ? (
                     <NewMessagesDivider />
+                  ) : item.type === "entry" ? (
+                    renderEntry?.(item.entry, item.related)
                   ) : (
                     renderMessage(item.msg, item.continuation)
                   )}

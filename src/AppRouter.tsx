@@ -36,6 +36,9 @@ const DiscoverPage = lazy(lazyWithReload(() => import("@/pages/DiscoverPage").th
 const DMsPage = lazy(lazyWithReload(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage }))));
 const GroupPage = lazy(lazyWithReload(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage }))));
 const InboxPage = lazy(lazyWithReload(() => import("@/pages/InboxPage").then((m) => ({ default: m.InboxPage }))));
+const GitMockupThreePage = lazy(lazyWithReload(() => import("@/pages/GitMockupThreePage").then((m) => ({ default: m.GitMockupThreePage }))));
+const GitMockupFourPage = lazy(lazyWithReload(() => import("@/pages/GitMockupFourPage").then((m) => ({ default: m.GitMockupFourPage }))));
+const GitMockupSixPage = lazy(lazyWithReload(() => import("@/pages/GitMockupSixPage").then((m) => ({ default: m.GitMockupSixPage }))));
 const InvitePage = lazy(lazyWithReload(() => import("@/concord-v1/pages/InvitePage")));
 const InviteV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/InviteV2Page")));
 const BuzzInvitePage = lazy(lazyWithReload(() => import("@/buzz/BuzzInvitePage")));
@@ -267,6 +270,9 @@ export function AppRouter() {
       <Suspense fallback={<BootSplash />}>
         <Routes>
           <Route element={<MainLayout />}>
+            <Route path="/git-mockup-3" element={<GitMockupThreePage />} />
+            <Route path="/git-mockup-4" element={<GitMockupFourPage />} />
+            <Route path="/git-mockup-6" element={<GitMockupSixPage />} />
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/s/:server" element={<ServerPage />} />

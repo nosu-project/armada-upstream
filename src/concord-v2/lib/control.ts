@@ -65,6 +65,7 @@ import {
   NAME_MAX_BYTES,
   capRelays,
   isImagePointer,
+  normalizeChannelMetadata,
   type ChannelMetadata,
   type CommunityMetadata,
   type CommunityV2,
@@ -219,6 +220,8 @@ export interface FoldedChannel {
   name: string;
   isPrivate: boolean;
   deleted: boolean;
+  /** Full normalized metadata, retained so mutations can round-trip extensions. */
+  metadata: ChannelMetadata;
 }
 
 /** The Control Plane replayed into current state. */
@@ -831,12 +834,13 @@ function foldOnce(
       }
     });
     if (!head) continue;
-    const meta = JSON.parse(head.content) as ChannelMetadata;
+    const meta = normalizeChannelMetadata(JSON.parse(head.content) as ChannelMetadata);
     channels.set(eid, {
       channelIdHex: eid,
       name: meta.name,
       isPrivate: meta.private === true,
       deleted: meta.deleted === true,
+      metadata: meta,
     });
   }
 

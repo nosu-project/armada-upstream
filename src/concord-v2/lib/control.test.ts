@@ -21,6 +21,15 @@ import { bytesToHex, communityIdOf, controlGroupKey, grantLocator, hex32, random
 import { rewrapSeal, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { adminRole, badgeOf, hasPermission, isAdmin, moderatorRole, Permissions, type Role } from "@/concord-v2/lib/roles";
+import {
+  ARMADA_GIT_CHANNEL_METADATA_KEY,
+  MAX_CHANNEL_GIT_ATTACHMENTS,
+  MAX_CHANNEL_GIT_RELAY_HINTS,
+  channelGitRepositoryAttachments,
+  normalizeChannelMetadata,
+  withChannelGitRepositoryAttachments,
+} from "@/concord-v2/lib/types";
+import { attachGitRepository, detachGitRepository, parseGitRepositoryAddress } from "@/lib/gitActivity";
 
 function signer(sk = generateSecretKey()) {
   return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
@@ -60,6 +69,96 @@ async function grindFork(
 }
 
 describe("control plane fold (CORD-04)", () => {
+  it("round-trips unknown channel/custom/Git fields while normalizing Git attachment intervals", () => {
+    const address = parseGitRepositoryAddress(`30617:${"a".repeat(64)}:armada`)!;
+    const metadata = normalizeChannelMetadata({
+      name: "engineering",
+      private: true,
+      deleted: false,
+      futureChannelField: { keep: true },
+      custom: {
+        anotherClient: { keep: true },
+        [ARMADA_GIT_CHANNEL_METADATA_KEY]: {
+          futureGitField: "keep",
+          repositories: [{
+            address: address.coordinate,
+            relayHints: ["wss://relay.example/", "wss://relay.example", "https://not-a-relay.example"],
+            attachedAt: 10,
+          }],
+        },
+      },
+    });
+
+    const updated = withChannelGitRepositoryAttachments(metadata, channelGitRepositoryAttachments(metadata));
+    expect(updated).toMatchObject({
+      name: "engineering",
+      private: true,
+      deleted: false,
+      futureChannelField: { keep: true },
+      custom: {
+        anotherClient: { keep: true },
+        [ARMADA_GIT_CHANNEL_METADATA_KEY]: { futureGitField: "keep" },
+      },
+    });
+    expect(channelGitRepositoryAttachments(updated)).toMatchObject([
+      { address: { coordinate: address.coordinate }, relayHints: ["wss://relay.example"], attachedAt: 10 },
+    ]);
+  });
+
+  it("keeps attachment history, makes an active attach idempotent, and bounds hostile extension data", () => {
+    const address = parseGitRepositoryAddress(`30617:${"b".repeat(64)}:armada`)!;
+    const attached = attachGitRepository([], address, Array.from({ length: MAX_CHANNEL_GIT_RELAY_HINTS + 3 }, (_, i) => `wss://relay-${i}.example`), 10);
+    const activeAgain = attached.some((item) => item.address.coordinate === address.coordinate && item.detachedAt === undefined)
+      ? attached
+      : attachGitRepository(attached, address, [], 11);
+    const reattached = attachGitRepository(detachGitRepository(activeAgain, address, 20), address, ["wss://new.example"], 30);
+    expect(reattached).toHaveLength(2);
+    expect(reattached[0]).toMatchObject({ attachedAt: 10, detachedAt: 20 });
+    expect(reattached[1]).toMatchObject({ attachedAt: 30, relayHints: ["wss://new.example"] });
+
+    const hostile = normalizeChannelMetadata({
+      name: "engineering",
+      private: false,
+      custom: {
+        [ARMADA_GIT_CHANNEL_METADATA_KEY]: {
+          repositories: [
+            ...Array.from({ length: MAX_CHANNEL_GIT_ATTACHMENTS + 5 }, (_, i) => ({ address: address.coordinate, relayHints: ["wss://relay.example"], attachedAt: i })),
+            { address: "not-a-coordinate", relayHints: [], attachedAt: 1 },
+            { address: address.coordinate, relayHints: "not-an-array", attachedAt: 1 },
+          ],
+        },
+      },
+    });
+    expect(channelGitRepositoryAttachments(hostile)).toHaveLength(MAX_CHANNEL_GIT_ATTACHMENTS);
+  });
+
+  it("ignores malformed Git custom metadata and rejects an unauthorized attachment update", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const attacker = signer();
+    const channelId = random32();
+    const address = parseGitRepositoryAddress(`30617:${"c".repeat(64)}:armada`)!;
+    const initial = {
+      name: "engineering",
+      private: false,
+      custom: { [ARMADA_GIT_CHANNEL_METADATA_KEY]: "malformed", unknown: { survive: true } },
+    };
+    const ownerMetadata = withChannelGitRepositoryAttachments(normalizeChannelMetadata(initial), attachGitRepository([], address, ["wss://relay.example"], 10));
+    const ownerWrap = await sealEdition(buildChannelEdition(channelId, ownerMetadata, { actorPubkey: owner.pubkey, version: 1n }), control, owner);
+    const forgedWrap = await sealEdition(
+      buildChannelEdition(channelId, withChannelGitRepositoryAttachments(ownerMetadata, detachGitRepository(channelGitRepositoryAttachments(ownerMetadata), address, 20)), {
+        actorPubkey: attacker.pubkey,
+        version: 2n,
+      }),
+      control,
+      attacker,
+    );
+
+    const folded = foldControlState(openControlWraps([ownerWrap, forgedWrap], [control]), communityId, owner.pubkey);
+    const channel = folded.channels.get(bytesToHex(channelId))!;
+    expect(channel.metadata.custom?.unknown).toEqual({ survive: true });
+    expect(channelGitRepositoryAttachments(channel.metadata)).toMatchObject([{ attachedAt: 10 }]);
+  });
+
   it("folds the genesis metadata + #general channel", async () => {
     const { owner, communityId, control } = await makeCommunity();
     const channelId = random32();

@@ -23,6 +23,7 @@
  *     drain the pending store
  *   - `c2ctl:<communityIdHex>` — a Concord V2 community's decrypted control
  *     plane changed (the background sweep stored new editions)
+ *   - `git:<repository-address>` — an attached NIP-34 issue/PR root changed
  *
  * Emissions are coalesced on a short window so a backfill writing hundreds of
  * events produces one notification burst, not hundreds of invalidations.
