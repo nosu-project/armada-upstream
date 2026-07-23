@@ -3,9 +3,15 @@ import { Pin, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useEvent } from "@/hooks/useEvent";
+import { useAddrEvent, useEvent } from "@/hooks/useEvent";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { parseAddrPinRef, type PinAddr } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
+
+/** Strip URLs to a paperclip for a compact one-line-ish preview. */
+function previewText(content: string): string {
+  return content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
+}
 
 /** One row in the pinned-messages bar: a clickable preview + optional unpin. */
 function PinnedRow({
@@ -19,15 +25,13 @@ function PinnedRow({
   relayUrl: string;
   canModerate: boolean;
   onJump: (id: string) => void;
-  onUnpin: (id: string) => void;
+  onUnpin: (ref: string) => void;
 }) {
   const { data: event } = useEvent(eventId, [relayUrl]);
   const author = useAuthor(event?.pubkey);
   const scopedName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
   const displayName = event ? scopedName : "";
-  const preview = event
-    ? event.content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎"
-    : "Pinned message";
+  const preview = event ? previewText(event.content) : "Pinned message";
 
   return (
     <div className="group/pin flex items-start gap-2 min-w-0 rounded-md px-2 py-1.5 hover:bg-secondary/60">
@@ -78,33 +82,110 @@ function PinnedRow({
   );
 }
 
+/** Human-readable label for an addressable pin's kind. */
+function addrPinLabel(kind: number): string {
+  switch (kind) {
+    case 30023:
+      return "Article";
+    case 30818:
+      return "Wiki page";
+    case 31922:
+    case 31923:
+      return "Calendar event";
+    default:
+      return `Kind ${kind}`;
+  }
+}
+
+/**
+ * One row for an addressable (`a`-tag) pin — e.g. a long-form post or wiki
+ * page pinned by another client. Not a timeline message, so there's no jump;
+ * it's a labeled preview with an optional unpin.
+ */
+function PinnedAddrRow({
+  pinRef,
+  addr,
+  relayUrl,
+  canModerate,
+  onUnpin,
+}: {
+  pinRef: string;
+  addr: PinAddr;
+  relayUrl: string;
+  canModerate: boolean;
+  onUnpin: (ref: string) => void;
+}) {
+  const { data: event } = useAddrEvent(addr, [relayUrl]);
+  const author = useAuthor(event?.pubkey);
+  const scopedName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
+  const title = event?.tags.find(([n]) => n === "title")?.[1];
+  const preview = event ? title || previewText(event.content) : "Pinned event";
+
+  return (
+    <div className="group/pin flex items-start gap-2 min-w-0 rounded-md px-2 py-1.5 hover:bg-secondary/60">
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+        <span className="flex max-w-full items-center gap-1.5">
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-500/90">
+            {addrPinLabel(addr.kind)}
+          </span>
+          {event && (
+            <span className="text-[11px] font-semibold text-primary truncate">
+              {scopedName}
+            </span>
+          )}
+        </span>
+        <span className="text-[12px] text-muted-foreground line-clamp-2 break-words">
+          {preview}
+        </span>
+      </div>
+      {canModerate && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Unpin event"
+              className="size-6 touch:size-10 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
+              onClick={() => onUnpin(pinRef)}
+            >
+              <X className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Unpin</TooltipContent>
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
 interface PinnedMessagesBarProps {
   open: boolean;
-  pinnedIds: string[];
+  /** Pin references in display order: event ids and address coordinates. */
+  pinnedRefs: string[];
   relayUrl: string;
   canModerate: boolean;
   /** Scroll a message into view in the timeline (provided by GroupChat). */
   onJump: (id: string) => void;
-  onUnpin: (id: string) => void;
+  onUnpin: (ref: string) => void;
   onClose: () => void;
 }
 
 /**
  * A bar that slides open below the channel header to browse the group's pinned
- * messages. Each row links to jump to the message; admins/mods can unpin.
- * Animates its height open/closed; collapses to zero when there's nothing to
- * show.
+ * messages. Each message row links to jump to the message; admins/mods can
+ * unpin. Animates its height open/closed; collapses to zero when there's
+ * nothing to show.
  */
 export function PinnedMessagesBar({
   open,
-  pinnedIds,
+  pinnedRefs,
   relayUrl,
   canModerate,
   onJump,
   onUnpin,
   onClose,
 }: PinnedMessagesBarProps) {
-  const expanded = open && pinnedIds.length > 0;
+  const expanded = open && pinnedRefs.length > 0;
 
   return (
     <div
@@ -131,16 +212,28 @@ export function PinnedMessagesBar({
           </Button>
         </div>
         <div className="max-h-56 overflow-y-auto space-y-0.5 pr-0.5">
-          {pinnedIds.map((id) => (
-            <PinnedRow
-              key={id}
-              eventId={id}
-              relayUrl={relayUrl}
-              canModerate={canModerate}
-              onJump={onJump}
-              onUnpin={onUnpin}
-            />
-          ))}
+          {pinnedRefs.map((ref) => {
+            const addr = parseAddrPinRef(ref);
+            return addr ? (
+              <PinnedAddrRow
+                key={ref}
+                pinRef={ref}
+                addr={addr}
+                relayUrl={relayUrl}
+                canModerate={canModerate}
+                onUnpin={onUnpin}
+              />
+            ) : (
+              <PinnedRow
+                key={ref}
+                eventId={ref}
+                relayUrl={relayUrl}
+                canModerate={canModerate}
+                onJump={onJump}
+                onUnpin={onUnpin}
+              />
+            );
+          })}
         </div>
       </div>
     </div>

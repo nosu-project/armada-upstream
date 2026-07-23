@@ -226,8 +226,8 @@ export function GroupPage() {
   );
   const channelNav = useChannelNavValue(navChannels);
 
-  const { pinnedIds, unpin } = usePinnedMessages(relayUrl, groupId);
-  const hasPins = pinnedIds.length > 0;
+  const { pinnedRefs, unpin } = usePinnedMessages(relayUrl, groupId);
+  const hasPins = pinnedRefs.length > 0;
 
   const { events: calendarEvents, remove: removeEvent } = useCalendarEvents(relayUrl, groupId);
   const hasEvents = calendarEvents.length > 0;
@@ -238,7 +238,7 @@ export function GroupPage() {
   // first, then pins. Measured (not breakpoint'd) because the action set is
   // conditional, so a fixed breakpoint would mis-collapse. Must be called
   // before any early return (rules-of-hooks).
-  // Buzz relays don't speak the pins (39041) or calendar (NIP-52) extensions,
+  // Buzz relays don't speak the pins (9010/39005) or calendar (NIP-52) extensions,
   // so those toggles are dropped there; the canvas panel takes their place.
   const showEvents = !isBuzz && (hasEvents || isAdmin);
   const showPins = !isBuzz && hasPins;
@@ -758,7 +758,7 @@ export function GroupPage() {
         {/* Pinned messages bar — slides open below the header. */}
         <PinnedMessagesBar
           open={pinsOpen}
-          pinnedIds={pinnedIds}
+          pinnedRefs={pinnedRefs}
           relayUrl={relayUrl}
           canModerate={isAdmin}
           onJump={(id) => scrollToMessageRef.current?.(id)}
