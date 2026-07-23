@@ -23,18 +23,22 @@
     <meta name="build" content="__BUILD_STAMP__" />
     <meta name="description" content="A sovereign harbor on the open relays — NIP-29 servers, channels, and voice. Your keys, your fleet." />
 
-    <!-- Open Graph / social -->
+    <!-- Open Graph / social. og:image/twitter:image MUST be absolute URLs on
+         the canonical host — most crawlers (X, Discord, Slack, iMessage) do
+         not resolve relative URLs and the card renders with no image. -->
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Armada" />
     <meta property="og:description" content="A sovereign harbor on the open relays — NIP-29 servers, channels, and voice. Your keys, your fleet." />
-    <meta property="og:image" content="/og.png" />
+    <meta property="og:image" content="https://armada.buzz/og.png" />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
+    <meta property="og:url" content="https://armada.buzz" />
+    <meta property="og:site_name" content="Armada" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Armada" />
     <meta name="twitter:description" content="A sovereign harbor on the open relays. Your keys, your fleet." />
-    <meta name="twitter:image" content="/og.png" />
+    <meta name="twitter:image" content="https://armada.buzz/og.png" />
 
     <script>
       // Mark home-screen (standalone PWA) launches on <html> before first
