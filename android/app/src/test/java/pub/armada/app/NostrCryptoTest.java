@@ -2,9 +2,12 @@ package pub.armada.app;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
 import org.junit.Test;
 
 /**
@@ -64,6 +67,68 @@ public class NostrCryptoTest {
                 "e77583081169970bfb181a6a26a09b93d97263e3ef1ef259d74c7e4381ea270a"
                         + "788e6a304905a99cc79af2c65b150cf1dcb7977b35dd44586332f9a1e722dfc3",
                 NostrCrypto.bytesToHex(sig));
+    }
+
+    @Test
+    public void verifiesBip340Signature() {
+        byte[] msg = ConcordCrypto.hexToBytes(
+                "e18a5afe0d88c618fd757dee0dd2cd12dcf82f88a6beff8edb27e3683ee8c893");
+        byte[] pk = ConcordCrypto.hexToBytes(PK_A);
+        byte[] sig = ConcordCrypto.hexToBytes(
+                "e77583081169970bfb181a6a26a09b93d97263e3ef1ef259d74c7e4381ea270a"
+                        + "788e6a304905a99cc79af2c65b150cf1dcb7977b35dd44586332f9a1e722dfc3");
+        assertTrue(NostrCrypto.schnorrVerify(msg, pk, sig));
+
+        // Wrong signer (PK_B) must fail.
+        assertFalse(NostrCrypto.schnorrVerify(msg, ConcordCrypto.hexToBytes(PK_B), sig));
+
+        // A single flipped bit in the message must fail.
+        byte[] badMsg = msg.clone();
+        badMsg[0] ^= 0x01;
+        assertFalse(NostrCrypto.schnorrVerify(badMsg, pk, sig));
+
+        // A single flipped bit in the signature must fail.
+        byte[] badSig = sig.clone();
+        badSig[63] ^= 0x01;
+        assertFalse(NostrCrypto.schnorrVerify(msg, pk, badSig));
+
+        // Malformed lengths must fail rather than throw.
+        assertFalse(NostrCrypto.schnorrVerify(new byte[31], pk, sig));
+        assertFalse(NostrCrypto.schnorrVerify(msg, new byte[33], sig));
+        assertFalse(NostrCrypto.schnorrVerify(msg, pk, new byte[63]));
+    }
+
+    @Test
+    public void verifiesCompleteEvent() throws Exception {
+        // A self-consistent signed event built from the same vectors as
+        // computesCanonicalEventId + signsBip340WithFixedAux: the id is the
+        // canonical hash of these fields and the sig is SK_A over that id.
+        JSONArray tags = new JSONArray()
+                .put(new JSONArray().put("relay").put("wss://relay.example.com/"))
+                .put(new JSONArray().put("challenge").put("abc\"def\\g\nh\u0001i€😀"));
+        JSONObject event = new JSONObject()
+                .put("id", "e18a5afe0d88c618fd757dee0dd2cd12dcf82f88a6beff8edb27e3683ee8c893")
+                .put("pubkey", PK_A)
+                .put("created_at", 1752969600L)
+                .put("kind", 22242)
+                .put("tags", tags)
+                .put("content", "ctrl:\u0000\u001f tail")
+                .put("sig", "e77583081169970bfb181a6a26a09b93d97263e3ef1ef259d74c7e4381ea270a"
+                        + "788e6a304905a99cc79af2c65b150cf1dcb7977b35dd44586332f9a1e722dfc3");
+        assertTrue(NostrCrypto.verifyEvent(event));
+
+        // Tampering the content invalidates the id (recomputed hash mismatch).
+        JSONObject tampered = new JSONObject(event.toString()).put("content", "ctrl:\u0000\u001f TAIL");
+        assertFalse(NostrCrypto.verifyEvent(tampered));
+
+        // A forged pubkey (id/sig unchanged) must fail signature verification.
+        JSONObject forged = new JSONObject(event.toString()).put("pubkey", PK_B);
+        assertFalse(NostrCrypto.verifyEvent(forged));
+
+        // Missing signature must fail, not throw.
+        JSONObject unsigned = new JSONObject(event.toString());
+        unsigned.remove("sig");
+        assertFalse(NostrCrypto.verifyEvent(unsigned));
     }
 
     @Test

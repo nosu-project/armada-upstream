@@ -77,6 +77,13 @@ dependencies {
     implementation "androidx.security:security-crypto:1.1.0-beta01"
     implementation "com.google.code.gson:gson:2.13.1"
     implementation "androidx.lifecycle:lifecycle-process:2.8.7"
+    // secp256k1: ACINQ's Kotlin/JNI bindings over the audited libsecp256k1 C
+    // library (the same one Bitcoin Core and Amethyst use) for BIP-340 Schnorr
+    // sign/verify and NIP-44 ECDH — see NostrCrypto. The -android artifact
+    // bundles the native .so per ABI; the -jvm artifact provides a host-loadable
+    // native so the pure-JVM unit tests (NostrCryptoTest) can exercise it.
+    implementation "fr.acinq.secp256k1:secp256k1-kmp-jni-android:0.23.0"
+    testImplementation "fr.acinq.secp256k1:secp256k1-kmp-jni-jvm:0.23.0"
     testImplementation "junit:junit:$junitVersion"
     // org.json on the JVM, for unit-testing pure-Java classes (ProfileStore)
     // that use the Android-bundled org.json at runtime.

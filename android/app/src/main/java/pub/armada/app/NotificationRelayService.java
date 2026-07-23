@@ -1268,6 +1268,17 @@ public class NotificationRelayService extends Service {
             String pk = profilePubkeyForSub(sub);
             if (pk != null) {
                 closeProfileSub(relayUrl, sub);
+                // The relay could answer our one-shot kind-0 lookup with a
+                // forged or unrelated profile (poisoning a sender's name/avatar
+                // and the shared store). Require the reply to actually match the
+                // filter — kind 0 authored by the pubkey we asked for — and to
+                // carry a valid signature; otherwise resolve name-less.
+                if (event.optInt("kind", -1) != 0
+                        || !pk.equals(event.optString("pubkey"))
+                        || !NostrCrypto.verifyEvent(event)) {
+                    resolveProfile(pk, bestProfile.get(pk));
+                    return;
+                }
                 // Store the raw kind-0 in the SHARED database too (supersession
                 // keeps the newest), so the WebView's useAuthor reads it from
                 // the cache instead of re-fetching what we just fetched.
@@ -1288,6 +1299,16 @@ public class NotificationRelayService extends Service {
             String gid = groupIdForSub(sub);
             if (gid != null) {
                 closeProfileSub(relayUrl, sub);
+                // Same untrusted-relay gate as profiles: the reply must be the
+                // kind-39000 metadata for the group id we asked for, with a
+                // valid signature, or we resolve name-less rather than trust a
+                // forged room title.
+                if (event.optInt("kind", -1) != 39000
+                        || !gid.equals(tagValue(event, "d"))
+                        || !NostrCrypto.verifyEvent(event)) {
+                    resolveGroupName(gid, (String) null);
+                    return;
+                }
                 resolveGroupName(gid, parseGroupName(event));
                 return;
             }
@@ -1569,9 +1590,9 @@ public class NotificationRelayService extends Service {
      * Open a Concord sealed outer event with the supplied channel key: NIP-44
      * v2-decrypt the {@code content}, parse the inner authorship event, and
      * return it (with {@code pubkey} = real author, {@code content} = message).
-     * Best-effort: returns {@code null} on decrypt/parse failure or if the inner
-     * channel/epoch binding doesn't match (a spliced/foreign payload). We do not
-     * verify the inner Schnorr signature here (see {@link ConcordCrypto}).
+     * Best-effort: returns {@code null} on decrypt/parse failure, a bad inner
+     * signature, or if the inner channel/epoch binding doesn't match (a
+     * spliced/foreign payload).
      */
     private static JSONObject openConcord(JSONObject outer, ConcordKey ck) {
         try {
@@ -1580,9 +1601,13 @@ public class NotificationRelayService extends Service {
             String json = ConcordCrypto.decrypt(ck.key, payload);
             if (json == null) return null;
             JSONObject inner = new JSONObject(json);
+            // The inner authorship event is signed by the real author's key; a
+            // channel-key holder could otherwise forge `pubkey`. Verify it —
+            // the outer's ephemeral signature proves nothing about identity.
+            if (!NostrCrypto.verifyEvent(inner)) return null;
             // Binding: the inner kind must equal the outer's, and the inner
             // channel/epoch tags must match the key we decrypted with — cheap
-            // anti-splice checks that don't need secp256k1.
+            // anti-splice checks.
             if (inner.optInt("kind", -1) != outer.optInt("kind", -2)) return null;
             String ch = tagValue(inner, "channel");
             String ep = tagValue(inner, "epoch");
@@ -1600,10 +1625,8 @@ public class NotificationRelayService extends Service {
      * encrypted / 20014 plaintext), recover the rumor (decrypting again for
      * 20013), and return it ({@code pubkey} = real author, {@code content} =
      * message). Best-effort: returns {@code null} on decrypt/parse failure or
-     * if the rumor's author/channel/epoch binding doesn't match — cheap
-     * anti-splice checks that don't need secp256k1. We do not verify the
-     * seal's Schnorr signature here (see {@link ConcordCrypto}); the WebView
-     * fully re-verifies before trusting the event.
+     * if the seal signature is bad or the rumor's author/channel/epoch binding
+     * doesn't match (a spliced/foreign payload).
      */
     private static JSONObject openConcord2(JSONObject wrap, Concord2Stream st) {
         try {
@@ -1613,6 +1636,13 @@ public class NotificationRelayService extends Service {
             if (sealJson == null) return null;
             JSONObject seal = new JSONObject(sealJson);
             int sealKind = seal.optInt("kind", -1);
+            if (sealKind != 20013 && sealKind != 20014) return null;
+            // The seal is a signed event authored by the sender (the rumor
+            // inside is unsigned and bound to it by pubkey equality below);
+            // verify the seal's Schnorr signature, mirroring the WebView's
+            // openWrap. The kind-1059 wrap's outer signature is a group-derived
+            // stream key and proves no individual identity.
+            if (!NostrCrypto.verifyEvent(seal)) return null;
             String rumorJson;
             if (sealKind == 20013) {
                 rumorJson = ConcordCrypto.decrypt(st.convKey, seal.optString("content", ""));
@@ -1659,6 +1689,11 @@ public class NotificationRelayService extends Service {
             if (sealJson == null) return null;
             JSONObject seal = new JSONObject(sealJson);
             if (seal.optInt("kind", -1) != 13) return null;
+            // The NIP-17 seal is signed by the sender's identity key. NIP-44's
+            // AEAD already authenticates the ciphertext to the seal author, but
+            // verify the Schnorr signature too so a forged `pubkey`/`sig` can't
+            // slip a misattributed notification past the pairwise-key checks.
+            if (!NostrCrypto.verifyEvent(seal)) return null;
             String sealAuthor = seal.optString("pubkey", "");
             // The seal must be from the conversation peer (dmConvKey is the
             // pairwise key with exactly that peer; a seal from anyone else
@@ -1796,6 +1831,9 @@ public class NotificationRelayService extends Service {
             try {
                 JSONObject seal = new JSONObject(sealJson);
                 if (seal.optInt("kind", -1) != 13) return;
+                // The seal is signed by the sender's identity key (NIP-17);
+                // verify it so a relay-supplied forgery can't misattribute a DM.
+                if (!NostrCrypto.verifyEvent(seal)) return;
                 final String peer = seal.optString("pubkey", "");
                 if (peer.length() != 64) return;
                 if (peer.equals(userPubkey)) return; // our own sent copy
@@ -1894,6 +1932,27 @@ public class NotificationRelayService extends Service {
 
         int kind = event.optInt("kind");
 
+        // Security gate — the relay is untrusted. (1) Drop anything that
+        // doesn't satisfy a filter we actually sent, so a relay can't inject
+        // notifications or poison the shared store with a group we never
+        // joined, a DM from a non-follow, or a wrap not addressed to us.
+        // (2) Require a valid author signature on every non-wrap event. Gift
+        // wraps (kind 1059/21059) carry only an ephemeral / group-derived
+        // outer key whose signature proves no sender identity (matching the
+        // WebView's verifyEventSkippingWraps), so the outer sig is skipped
+        // here and the INNER seal is Schnorr-verified at decrypt time instead
+        // (see openConcord/openConcord2/openDm17). Everything else — NIP-29
+        // chat/reactions/replies, kind-4 DMs, and the Concord V1 kind-3300
+        // outer — must be verified before it is stored, fed to the WebView,
+        // or turned into a notification.
+        if (!passesFilter(event, kind, relayUrl)) {
+            return;
+        }
+        if (kind != 1059 && kind != 21059 && !NostrCrypto.verifyEvent(event)) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "DROP bad signature kind=" + kind + " id=" + id);
+            return;
+        }
+
         // Write the raw outer event into the SHARED database (durable, src
         // 'svc' so the WebView's cursor drain replays it on open/resume) and
         // feed it live over the bridge when the WebView is up — so a message
@@ -1965,9 +2024,8 @@ public class NotificationRelayService extends Service {
 
             // Feed the DECRYPTED inner straight to the WebView so the message
             // renders the instant the app opens — no second NIP-44 decrypt, no
-            // relay round-trip. We only checked HMAC + channel/epoch binding
-            // here, so the WebView re-verifies the inner Schnorr signature before
-            // trusting it (a channel-key holder could otherwise forge `pubkey`).
+            // relay round-trip. openConcord already verified the inner's Schnorr
+            // signature natively; the WebView re-verifies as defence in depth.
             ArmadaNotificationPlugin.feedConcordInner(inner.toString(), z, id);
 
             String author = inner.optString("pubkey");
@@ -2300,6 +2358,53 @@ public class NotificationRelayService extends Service {
             return c.substring(1, c.length() - 1);
         }
         return c;
+    }
+
+    /**
+     * Filter-match gate: an event the relay streams us is only acted on if it
+     * actually satisfies one of the REQ filters this connection sent (see
+     * {@link RelayConnection#sendReqs}). Mirrors those filters' exact
+     * kind/author/tag predicates — scoped to the same relay role — so a
+     * malicious or buggy relay can't smuggle in traffic we never asked for
+     * (a kind-9 for a group we haven't joined, a DM from a non-follow, a
+     * Concord wrap for a channel/stream we hold no key for, a gift wrap not
+     * addressed to us). {@code since} gating is handled separately
+     * (notifiedIds + sinceSec); this is purely the kind/author/tag match. Any
+     * kind no filter requests (e.g. 5 deletes, 1068 polls) falls through to
+     * false and is dropped.
+     */
+    private boolean passesFilter(JSONObject event, int kind, String relayUrl) {
+        switch (kind) {
+            case 9:
+                // {kinds:[9], "#h":groupIds} on the NIP-29 group relays.
+                return relayUrls.contains(relayUrl) && groupIds.contains(tagValue(event, "h"));
+            case 7:
+            case 1111:
+                // {kinds:[7,1111], "#h":groupIds, "#p":[me]} on the group relays.
+                return relayUrls.contains(relayUrl)
+                        && groupIds.contains(tagValue(event, "h"))
+                        && pTags(event).contains(userPubkey);
+            case 4:
+                // {kinds:[4], authors:dmFollows, "#p":[me]} on the DM relays.
+                return dmRelays.contains(relayUrl)
+                        && dmFollows.contains(event.optString("pubkey"))
+                        && pTags(event).contains(userPubkey);
+            case 3300: {
+                // {kinds:[3300], "#z":zs} — the #z values subscribed on THIS relay.
+                Set<String> zs = relayToZs.get(relayUrl);
+                return zs != null && zs.contains(tagValue(event, "z"));
+            }
+            case 1059: {
+                // Two filters carry kind 1059: the Concord V2 wrap sub is
+                // authors-scoped to this relay's stream keys; the NIP-17 DM
+                // wrap sub is the broad "#p":[me] inbox on the DM relays.
+                Set<String> pks = relayToPks2.get(relayUrl);
+                if (pks != null && pks.contains(event.optString("pubkey"))) return true;
+                return dmRelays.contains(relayUrl) && pTags(event).contains(userPubkey);
+            }
+            default:
+                return false;
+        }
     }
 
     private boolean wantsNotification(int kind, boolean mentionsMe) {

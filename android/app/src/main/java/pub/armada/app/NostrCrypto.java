@@ -1,50 +1,47 @@
 package pub.armada.app;
 
-import org.bouncycastle.asn1.x9.X9ECParameters;
-import org.bouncycastle.crypto.ec.CustomNamedCurves;
-import org.bouncycastle.math.ec.ECCurve;
-import org.bouncycastle.math.ec.ECPoint;
+import fr.acinq.secp256k1.Secp256k1;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.util.Arrays;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
  * The secp256k1 side of Nostr for the background service: x-only public keys,
- * NIP-44 conversation keys (ECDH), BIP-340 Schnorr signatures and canonical
- * NIP-01 event ids — enough to open ANY gift wrap addressed to the user and to
- * answer NIP-42 AUTH challenges natively, without the WebView.
+ * NIP-44 conversation keys (ECDH), BIP-340 Schnorr sign/verify and canonical
+ * NIP-01 event ids — enough to open ANY gift wrap addressed to the user, verify
+ * every event the untrusted relay streams, and answer NIP-42 AUTH challenges
+ * natively, without the WebView.
  *
- * <p>Built on Bouncy Castle's curve arithmetic (already an app dependency for
- * the Bluetooth mesh layer). Wire compatibility is pinned by unit tests whose
- * expected values were generated with the exact libraries the WebView signs
- * and encrypts with (nostr-tools / @noble/curves) — see NostrCryptoTest.
+ * <p>The elliptic-curve operations delegate to ACINQ's {@link Secp256k1}
+ * bindings over the audited libsecp256k1 C library (the same one Bitcoin Core
+ * and Amethyst use) — we do NOT hand-roll curve arithmetic. Wire compatibility
+ * with the WebView (nostr-tools / @noble/curves) is pinned by NostrCryptoTest,
+ * whose expected values were generated with those exact libraries.
  */
 final class NostrCrypto {
 
     private NostrCrypto() {}
 
-    private static final X9ECParameters PARAMS = CustomNamedCurves.getByName("secp256k1");
-    private static final ECCurve CURVE = PARAMS.getCurve();
-    private static final ECPoint G = PARAMS.getG();
-    private static final BigInteger N = PARAMS.getN();
-
+    private static final Secp256k1 SECP = Secp256k1.get();
     private static final SecureRandom RANDOM = new SecureRandom();
 
     // ── Keys ─────────────────────────────────────────────────────────────────
 
     /** x-only (BIP-340 / Nostr) public key for a 32-byte secret key, hex. */
     static String pubkeyOf(byte[] sk) {
-        BigInteger d = scalar(sk);
-        ECPoint p = G.multiply(d).normalize();
-        return bytesToHex(p.getAffineXCoord().getEncoded());
+        // pubkeyCreate → 65-byte uncompressed; compress → 33 bytes (prefix +
+        // x); the x-only key drops the parity prefix.
+        byte[] compressed = SECP.pubKeyCompress(SECP.pubkeyCreate(sk));
+        byte[] xonly = new byte[32];
+        System.arraycopy(compressed, 1, xonly, 0, 32);
+        return bytesToHex(xonly);
     }
 
     /**
@@ -52,6 +49,12 @@ final class NostrCrypto {
      * {@code HKDF-Extract(salt="nip44-v2", ikm=ECDH_x(sk, lift_x(peer)))}.
      * Symmetric — conv(a, B) == conv(b, A). Returns null on any invalid input
      * (bad hex, x not on curve) instead of throwing.
+     *
+     * <p>Uses the raw shared-point x-coordinate (via scalar point
+     * multiplication), NOT libsecp's {@code ecdh} helper, which returns a
+     * SHA-256 of the point — NIP-44 hashes the bare x itself. The even-Y lift
+     * (0x02 prefix) matches nostr-tools; a point and its negation share an x,
+     * so the peer's true Y parity doesn't change the result.
      */
     static byte[] conversationKey(byte[] sk, String peerPkHex) {
         try {
@@ -60,9 +63,10 @@ final class NostrCrypto {
             byte[] compressed = new byte[33];
             compressed[0] = 0x02; // lift_x: the even-Y point
             System.arraycopy(x, 0, compressed, 1, 32);
-            ECPoint peer = CURVE.decodePoint(compressed);
-            BigInteger d = scalar(sk);
-            byte[] sharedX = peer.multiply(d).normalize().getAffineXCoord().getEncoded();
+            // sk · peerPoint → 65-byte uncompressed point; take its x-coord.
+            byte[] shared = SECP.pubKeyTweakMul(compressed, sk);
+            byte[] sharedX = new byte[32];
+            System.arraycopy(shared, 1, sharedX, 0, 32);
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec("nip44-v2".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             return mac.doFinal(sharedX);
@@ -71,26 +75,64 @@ final class NostrCrypto {
         }
     }
 
-    // ── BIP-340 Schnorr signing ──────────────────────────────────────────────
+    // ── BIP-340 Schnorr ──────────────────────────────────────────────────────
 
     /** Sign a 32-byte message hash per BIP-340. {@code aux} is 32 random bytes. */
     static byte[] schnorrSign(byte[] msg32, byte[] sk, byte[] aux32) throws Exception {
-        BigInteger d0 = scalar(sk);
-        ECPoint P = G.multiply(d0).normalize();
-        BigInteger d = P.getAffineYCoord().toBigInteger().testBit(0) ? N.subtract(d0) : d0;
-        byte[] px = P.getAffineXCoord().getEncoded();
+        return SECP.signSchnorr(msg32, sk, aux32);
+    }
 
-        byte[] t = xor(to32(d), taggedHash("BIP0340/aux", aux32));
-        byte[] rand = taggedHash("BIP0340/nonce", concat(t, px, msg32));
-        BigInteger k0 = new BigInteger(1, rand).mod(N);
-        if (k0.signum() == 0) throw new IllegalStateException("zero nonce");
-        ECPoint R = G.multiply(k0).normalize();
-        BigInteger k = R.getAffineYCoord().toBigInteger().testBit(0) ? N.subtract(k0) : k0;
-        byte[] rx = R.getAffineXCoord().getEncoded();
+    /**
+     * Verify a 64-byte BIP-340 Schnorr signature over {@code msg32} for the
+     * x-only public key {@code pk32}. Returns false (never throws) on any
+     * malformed input or a signature that doesn't check out.
+     */
+    static boolean schnorrVerify(byte[] msg32, byte[] pk32, byte[] sig64) {
+        try {
+            if (msg32 == null || msg32.length != 32) return false;
+            if (pk32 == null || pk32.length != 32) return false;
+            if (sig64 == null || sig64.length != 64) return false;
+            return SECP.verifySchnorr(sig64, msg32, pk32);
+        } catch (Exception ex) {
+            return false;
+        }
+    }
 
-        BigInteger e = new BigInteger(1, taggedHash("BIP0340/challenge", concat(rx, px, msg32))).mod(N);
-        BigInteger s = k.add(e.multiply(d)).mod(N);
-        return concat(rx, to32(s));
+    /**
+     * Verify a complete Nostr event: recompute its canonical NIP-01 id from the
+     * signed fields (a mismatch means {@code content}/{@code tags} were tampered
+     * with) and check its Schnorr signature against {@code pubkey}. Returns
+     * false (never throws) on any malformed field. This is the same check the
+     * WebView runs via nostr-tools' {@code verifyEvent}; the background service
+     * must run it for every non-wrap event and every inner seal, since the
+     * relay is untrusted.
+     */
+    static boolean verifyEvent(JSONObject event) {
+        try {
+            if (event == null) return false;
+            String id = event.optString("id", "");
+            String pubkey = event.optString("pubkey", "");
+            String sig = event.optString("sig", "");
+            if (id.length() != 64 || pubkey.length() != 64 || sig.length() != 128) return false;
+            long createdAt = event.optLong("created_at", -1);
+            if (createdAt < 0) return false;
+            int kind = event.optInt("kind", -1);
+            if (kind < 0) return false;
+            JSONArray tags = event.optJSONArray("tags");
+            if (tags == null) tags = new JSONArray();
+            String content = event.optString("content", "");
+
+            String computedId = eventId(pubkey, createdAt, kind, tags, content);
+            if (!computedId.equals(id)) return false;
+
+            byte[] msg = ConcordCrypto.hexToBytes(id);
+            byte[] pk = ConcordCrypto.hexToBytes(pubkey);
+            byte[] sigBytes = ConcordCrypto.hexToBytes(sig);
+            if (msg == null || pk == null || sigBytes == null) return false;
+            return schnorrVerify(msg, pk, sigBytes);
+        } catch (Exception ex) {
+            return false;
+        }
     }
 
     // ── NIP-01 events ────────────────────────────────────────────────────────
@@ -179,53 +221,6 @@ final class NostrCrypto {
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
-
-    private static BigInteger scalar(byte[] sk) {
-        if (sk == null || sk.length != 32) throw new IllegalArgumentException("bad secret key");
-        BigInteger d = new BigInteger(1, sk);
-        if (d.signum() == 0 || d.compareTo(N) >= 0) throw new IllegalArgumentException("secret key out of range");
-        return d;
-    }
-
-    private static byte[] taggedHash(String tag, byte[] data) throws Exception {
-        MessageDigest sha = MessageDigest.getInstance("SHA-256");
-        byte[] tagHash = sha.digest(tag.getBytes(StandardCharsets.UTF_8));
-        sha.reset();
-        sha.update(tagHash);
-        sha.update(tagHash);
-        sha.update(data);
-        return sha.digest();
-    }
-
-    private static byte[] to32(BigInteger v) {
-        byte[] raw = v.toByteArray();
-        if (raw.length == 32) return raw;
-        byte[] out = new byte[32];
-        if (raw.length > 32) {
-            System.arraycopy(raw, raw.length - 32, out, 0, 32);
-        } else {
-            System.arraycopy(raw, 0, out, 32 - raw.length, raw.length);
-        }
-        return out;
-    }
-
-    private static byte[] xor(byte[] a, byte[] b) {
-        byte[] out = new byte[a.length];
-        for (int i = 0; i < a.length; i++) out[i] = (byte) (a[i] ^ b[i]);
-        return out;
-    }
-
-    private static byte[] concat(byte[]... parts) {
-        int len = 0;
-        for (byte[] p : parts) len += p.length;
-        byte[] out = new byte[len];
-        int pos = 0;
-        for (byte[] p : parts) {
-            System.arraycopy(p, 0, out, pos, p.length);
-            pos += p.length;
-        }
-        return out;
-    }
 
     static String bytesToHex(byte[] bytes) {
         StringBuilder sb = new StringBuilder(bytes.length * 2);
