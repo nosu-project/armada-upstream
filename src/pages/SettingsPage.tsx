@@ -8,6 +8,7 @@ import {
   Download,
   FileText,
   Image,
+  KeyRound,
   MessageSquareLock,
   Mic,
   Palette,
@@ -20,6 +21,7 @@ import {
   Wrench,
   Zap,
 } from "lucide-react";
+import { useNostrLogin } from "@nostrify/react/login";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { lazy, Suspense } from "react";
@@ -30,6 +32,7 @@ import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
+import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { WalletSettings } from "@/components/settings/WalletSettings";
 import { ThemeSelector } from "@/components/ThemeSelector";
@@ -64,6 +67,7 @@ const RequestToVanishDialog = lazy(() =>
 
 type SectionId =
   | "account"
+  | "keys"
   | "profile"
   | "notifications"
   | "appearance"
@@ -106,6 +110,7 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
+  const { logins } = useNostrLogin();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const dmRelayList = useDmRelayList();
   const blossomServerList = useBlossomServerList();
@@ -236,6 +241,12 @@ export function SettingsPage() {
       { id: "account", title: "Account", icon: UserCircle, inline: true },
     ];
     if (user) {
+      // Only an nsec login has a key this client can show/back up. Remote,
+      // extension and Android-signer logins keep the key inside the signer.
+      const activeLogin = logins[0];
+      if (activeLogin?.type === "nsec") {
+        userItems.push({ id: "keys", title: "Keys", icon: KeyRound });
+      }
       userItems.push(
         { id: "profile", title: "Profile", icon: UserCircle },
         { id: "notifications", title: "Notifications", icon: Bell },
@@ -268,7 +279,7 @@ export function SettingsPage() {
       groups.push({ heading: "Danger zone", items: [{ id: "danger", title: "Delete account", icon: AlertTriangle, inline: true }] });
     }
     return groups;
-  }, [user, canInstall, config.zapsEnabled]);
+  }, [user, logins, canInstall, config.zapsEnabled]);
 
   /** The row(s) inside one section's chrome card. */
   const sectionBody = (id: SectionId): ReactNode => {
@@ -279,6 +290,11 @@ export function SettingsPage() {
             <LoginArea className="w-full flex" />
           </SettingsRow>
         );
+      case "keys": {
+        const activeLogin = logins[0];
+        if (activeLogin?.type !== "nsec") return null;
+        return <KeyBackupSettings nsec={activeLogin.data.nsec} pubkey={activeLogin.pubkey} />;
+      }
       case "profile":
         return (
           <SettingsRow>

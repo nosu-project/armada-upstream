@@ -26,6 +26,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import WalletProvider from "@/components/WalletProvider";
 import { WebPushNotifications } from "@/components/WebPushNotifications";
 import { WireSync } from "@/wire/WireSync";
+import { secureStorage } from "@/lib/secureStorage";
 
 import AppRouter from "./AppRouter";
 
@@ -58,7 +59,7 @@ export function App() {
     <AppProvider storageKey="armada:app-config">
       <PlausibleProvider>
         <QueryClientProvider client={queryClient}>
-          <NostrLoginProvider storageKey="armada:login">
+          <NostrLoginProvider storageKey="armada:login" storage={secureStorage}>
             <NostrProvider>
               <WalletProvider>
                 <TooltipProvider>
