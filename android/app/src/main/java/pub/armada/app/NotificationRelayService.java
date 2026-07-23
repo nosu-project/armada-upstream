@@ -31,6 +31,8 @@ import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.Person;
+import androidx.core.content.pm.ShortcutInfoCompat;
+import androidx.core.content.pm.ShortcutManagerCompat;
 import androidx.core.app.ServiceCompat;
 import androidx.core.graphics.drawable.IconCompat;
 
@@ -103,15 +105,27 @@ public class NotificationRelayService extends Service {
     // summary lives ABOVE that band so it can never collide with a room id.
     private static final int ROOM_ID_MODULUS = 2_000_000_000;
     private static final int CONTENT_CAP = 140;
-    // ── Grouped (per-room) notifications ──────────────────────────────────────
-    // All message notifications share one group so the system collapses them
-    // under a single summary (Discord/Signal style). Each ROOM (NIP-29 group,
-    // Concord channel, or DM peer) gets ONE notification that accumulates its
-    // recent messages via MessagingStyle, rather than one flat notification per
-    // event. The summary is an InboxStyle digest of the active rooms.
-    private static final String GROUP_KEY = "armada_messages";
-    // The group summary's own notification id, reserved above the room id band.
-    private static final int SUMMARY_NOTIFICATION_ID = 2_000_000_001;
+    // ── Grouped (per-community) notifications ─────────────────────────────────
+    // Message notifications are grouped by COMMUNITY (a Concord V1/V2 community,
+    // a NIP-29 server/group, or the shared DM bucket): each community gets its
+    // own notification group + InboxStyle summary, so the collapsed stack shows
+    // that community's NAME and ICON rather than a generic app-wide summary.
+    // Inside a community, each ROOM (channel / DM peer) gets ONE notification
+    // that accumulates its recent messages via MessagingStyle. Android group
+    // keys are "armada:<communityKey>" (see CommunityRef); summary notification
+    // ids live in their own band ABOVE the room id band so they can never
+    // collide with a room id.
+    private static final String GROUP_PREFIX = "armada:";
+    // Summary ids: [SUMMARY_ID_BASE, SUMMARY_ID_BASE + SUMMARY_ID_MODULUS), just
+    // above the room band ([2, ROOM_ID_MODULUS + 1]) and below Integer.MAX_VALUE.
+    private static final int SUMMARY_ID_BASE = 2_000_000_002;
+    private static final int SUMMARY_ID_MODULUS = 140_000_000;
+    // "Mark read" notification action: dismisses the notification AND enqueues a
+    // durable read-marker the WebView applies (advancing the in-app read state)
+    // on its next open/resume. Delivered to the running service as a start intent
+    // (handled in onStartCommand WITHOUT tearing down relay connections).
+    static final String ACTION_MARK_READ = "pub.armada.app.action.MARK_READ";
+    static final String EXTRA_ROOM_KEY = "armada_room_key";
     // Most recent messages kept per room for the MessagingStyle expansion.
     private static final int MAX_MESSAGES_PER_ROOM = 8;
 
@@ -155,6 +169,10 @@ public class NotificationRelayService extends Service {
     private final java.util.Map<String, String> zToUrl = new java.util.HashMap<>();
     private final java.util.Map<String, ConcordKey> zToKey = new java.util.HashMap<>();
     private final java.util.Map<String, Set<String>> relayToZs = new java.util.HashMap<>();
+    //   zToCommunity: #z pseudonym (hex) → the community it belongs to (group
+    //                 key + summary title/icon) so its notifications stack under
+    //                 the community's summary
+    private final java.util.Map<String, CommunityRef> zToCommunity = new java.util.HashMap<>();
     // Concord V2 (CORD-02) channel subscriptions, keyed for fast lookup:
     //   pkToStream2: stream pubkey (the kind-1059 wrap's author, hex) → decrypt
     //                material + display name + deep link for that channel/epoch
@@ -199,6 +217,18 @@ public class NotificationRelayService extends Service {
     // Concord `z` pseudonym, or "dm:<peer>"), so successive messages UPDATE the
     // same notification instead of stacking a new one per event.
     private final Map<String, RoomNotif> roomNotifs = new HashMap<>();
+
+    // Per-community group summaries currently posted (Android group key →
+    // summary notification id), so a community whose rooms are all dismissed
+    // has its summary cancelled instead of lingering.
+    private final Map<String, Integer> postedSummaries = new HashMap<>();
+    // Resolved (decoded, circle-cropped) community icons, keyed by
+    // CommunityRef.imageCacheKey(). Populated async; used as the summary's
+    // large icon. Kept separate from avatarCache (sender avatars).
+    private final Map<String, Bitmap> groupImageCache = new HashMap<>();
+    // In-flight community-icon fetches (by imageCacheKey) so a burst of messages
+    // in one community doesn't kick off the same fetch repeatedly.
+    private final Set<String> groupImageInFlight = new HashSet<>();
 
     /**
      * The roomKey(s) the WebView is currently showing on screen (set via
@@ -249,6 +279,10 @@ public class NotificationRelayService extends Service {
     // groupId → resolved group name (kind 39000). Cached for the service lifetime
     // so the room name in a notification doesn't re-fetch on every event.
     private final Map<String, String> groupNameCache = new HashMap<>();
+    // groupId → the group's `picture` URL (kind 39000). Populated by the same
+    // metadata fetch that resolves the name; used as the NIP-29 community
+    // summary's large icon (a plain public URL — no decrypt).
+    private final Map<String, String> groupPictureCache = new HashMap<>();
     // groupId → waiters for an in-flight kind-39000 fetch.
     private final Map<String, List<GroupNameCallback>> pendingGroupNames = new HashMap<>();
     // Largest dimension (px) we keep for an avatar large-icon.
@@ -319,12 +353,15 @@ public class NotificationRelayService extends Service {
         final String epoch;      // decimal string; the rumor's `epoch` tag must match
         final String name;       // "Community / #channel" display name
         final String url;        // in-app deep link (/c/<communityId>/<channelId>)
-        Concord2Stream(byte[] convKey, String channelId, String epoch, String name, String url) {
+        final CommunityRef community; // the community this stream's channel belongs to
+        Concord2Stream(byte[] convKey, String channelId, String epoch, String name, String url,
+                       CommunityRef community) {
             this.convKey = convKey;
             this.channelId = channelId;
             this.epoch = epoch;
             this.name = name;
             this.url = url;
+            this.community = community;
         }
     }
 
@@ -354,6 +391,47 @@ public class NotificationRelayService extends Service {
     }
 
     /**
+     * The COMMUNITY a room belongs to: its notification group key + summary id,
+     * the display name + deep link shown on the group summary, and the summary's
+     * large-icon source. The icon is either a plain https URL (a NIP-29
+     * kind-39000 `picture`) or an encrypted-blob pointer the service fetches and
+     * AES-GCM decrypts itself (Concord V1/V2 community icons — key/nonce/hash
+     * are shipped from the WebView, the same trust model as the channel decrypt
+     * keys). A null/empty image url ⇒ the summary shows the app icon only.
+     */
+    private static final class CommunityRef {
+        final String groupKey;   // Android setGroup key (per community)
+        final int summaryId;     // this community's summary notification id
+        final String title;      // community/server display name (summary title)
+        final String url;        // community-level deep link (summary tap)
+        final String imageUrl;   // https URL to fetch, or null
+        final byte[] imgKey;     // AES-256-GCM key for an encrypted icon, or null
+        final byte[] imgNonce;   // GCM nonce, or null
+        final String imgHash;    // plaintext sha256 hex (cache key + integrity), or null
+
+        CommunityRef(String groupKey, String title, String url,
+                     String imageUrl, byte[] imgKey, byte[] imgNonce, String imgHash) {
+            this.groupKey = groupKey;
+            this.summaryId = summaryId(groupKey);
+            this.title = title;
+            this.url = url;
+            this.imageUrl = imageUrl;
+            this.imgKey = imgKey;
+            this.imgNonce = imgNonce;
+            this.imgHash = imgHash;
+        }
+
+        boolean hasImage() {
+            return imageUrl != null && !imageUrl.isEmpty();
+        }
+
+        /** Stable cache key for the resolved (decoded) icon bitmap. */
+        String imageCacheKey() {
+            return imgHash != null && !imgHash.isEmpty() ? "ci:h:" + imgHash : "ci:u:" + imageUrl;
+        }
+    }
+
+    /**
      * One conversation's accumulating notification. Holds the room's display
      * title + deep-link, a bounded history of recent messages (for the
      * MessagingStyle expansion), and the stable notification id derived from the
@@ -366,6 +444,9 @@ public class NotificationRelayService extends Service {
         String title;                // conversation/room name shown as the notif title
         String url;                  // in-app deep-link for the tap intent
         boolean isGroupConversation; // true for rooms (group title), false for 1:1 DMs
+        // The community this room belongs to — drives its Android group key and
+        // which per-community summary aggregates it.
+        CommunityRef community;
         final List<NotificationCompat.MessagingStyle.Message> messages = new ArrayList<>();
         long lastTimestampMs;
         // Most recent sender avatar seen for this room, used as the collapsed
@@ -520,6 +601,18 @@ public class NotificationRelayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // A "Mark read" action tap arrives as a start intent. Handle it WITHOUT
+        // running loadConfigAndReconnect (which tears down + rebuilds every relay
+        // socket) so acknowledging a notification doesn't churn live connections.
+        if (intent != null && ACTION_MARK_READ.equals(intent.getAction())) {
+            BootReceiver.scheduleWatchdog(this);
+            // Cold-started just for this action (process was dead): load the
+            // config first so the relay subscriptions come up AND the z→channel
+            // map the read-marker needs is populated before handleMarkRead reads it.
+            if (connections.isEmpty()) loadConfigAndReconnect();
+            handleMarkRead(intent.getStringExtra(EXTRA_ROOM_KEY));
+            return START_STICKY;
+        }
         // Re-arm the self-healing watchdog on every start so it survives a
         // START_STICKY relaunch. It's cancelled when the user turns
         // notifications off (loadConfigAndReconnect's disabled branch).
@@ -659,6 +752,39 @@ public class NotificationRelayService extends Service {
     }
 
     /**
+     * Build a {@link CommunityRef} from a subscription's community fields. The
+     * optional {@code communityImage} object is the summary's large icon: either
+     * a plain https URL ({@code {url}} only) or an encrypted-blob pointer
+     * ({@code {url,key,nonce,hash}} hex) the service fetches and AES-GCM
+     * decrypts itself. Key/nonce present but malformed ⇒ treated as no image.
+     */
+    private static CommunityRef communityRefFromSub(
+            JSONObject sub, String groupKey, String title, String url) {
+        String imageUrl = null;
+        byte[] imgKey = null;
+        byte[] imgNonce = null;
+        String imgHash = null;
+        JSONObject img = sub.optJSONObject("communityImage");
+        if (img != null) {
+            String u = img.optString("url", "");
+            if (!u.isEmpty()) {
+                imageUrl = u;
+                byte[] k = ConcordCrypto.hexToBytes(img.optString("key", null));
+                byte[] n = ConcordCrypto.hexToBytes(img.optString("nonce", null));
+                // An encrypted pointer needs BOTH key and nonce; a plain URL has
+                // neither. A half-present pair is unusable — fall back to plain.
+                if (k != null && n != null) {
+                    imgKey = k;
+                    imgNonce = n;
+                }
+                String h = img.optString("hash", "");
+                imgHash = h.isEmpty() ? null : h;
+            }
+        }
+        return new CommunityRef(groupKey, title, url, imageUrl, imgKey, imgNonce, imgHash);
+    }
+
+    /**
      * Parse the Concord subscriptions JSON
      * ([{relays:[],zs:[],keys:[{z,key,channelId,epoch}],communityName,channelName}, …])
      * into the lookup maps: z→display-name, z→deep-link, z→decrypt-key, and
@@ -670,6 +796,7 @@ public class NotificationRelayService extends Service {
         zToUrl.clear();
         zToKey.clear();
         relayToZs.clear();
+        zToCommunity.clear();
         if (json == null) return;
         try {
             JSONArray arr = new JSONArray(json);
@@ -685,6 +812,12 @@ public class NotificationRelayService extends Service {
                 JSONArray relays = sub.optJSONArray("relays");
                 if (zs == null || relays == null) continue;
 
+                // The community this channel's messages stack under (group key +
+                // summary title/icon). Keyed by community id so every channel of
+                // one community shares one summary.
+                CommunityRef ref = communityRefFromSub(
+                        sub, GROUP_PREFIX + "c1:" + communityId, community, url);
+
                 List<String> zList = new ArrayList<>();
                 for (int j = 0; j < zs.length(); j++) {
                     String z = zs.optString(j);
@@ -692,6 +825,7 @@ public class NotificationRelayService extends Service {
                         zList.add(z);
                         zToName.put(z, name);
                         zToUrl.put(z, url);
+                        zToCommunity.put(z, ref);
                     }
                 }
                 // Per-`z` decrypt material (key + channel/epoch binding).
@@ -751,6 +885,13 @@ public class NotificationRelayService extends Service {
                 JSONArray relays = sub.optJSONArray("relays");
                 if (streams == null || relays == null) continue;
 
+                // The community this channel's messages stack under. The summary
+                // deep-links to the community (not the channel), so a tap lands
+                // on the server rather than a specific channel.
+                CommunityRef ref = communityRefFromSub(
+                        sub, GROUP_PREFIX + "c2:" + communityId, community,
+                        "/c/" + uriEncode(communityId));
+
                 List<String> pkList = new ArrayList<>();
                 for (int j = 0; j < streams.length(); j++) {
                     JSONObject s = streams.optJSONObject(j);
@@ -760,7 +901,7 @@ public class NotificationRelayService extends Service {
                     if (pk == null || pk.isEmpty() || convKey == null || convKey.length != 32) continue;
                     pkList.add(pk);
                     pkToStream2.put(pk, new Concord2Stream(
-                            convKey, channelId, s.optString("epoch", ""), name, url));
+                            convKey, channelId, s.optString("epoch", ""), name, url, ref));
                 }
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
@@ -1309,6 +1450,13 @@ public class NotificationRelayService extends Service {
                     resolveGroupName(gid, (String) null);
                     return;
                 }
+                // Cache the group's picture (kind-39000 `picture` tag) alongside
+                // its name — the NIP-29 community summary's large icon. Plain
+                // public URL, no decrypt.
+                String pic = tagValue(event, "picture");
+                if (pic != null && !pic.isEmpty()) {
+                    groupPictureCache.put(gid, pic);
+                }
                 resolveGroupName(gid, parseGroupName(event));
                 return;
             }
@@ -1779,7 +1927,7 @@ public class NotificationRelayService extends Service {
             String picture = profile != null ? profile.picture : null;
             String line = preview.isEmpty() ? "Sent you a direct message" : preview;
             if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 from=" + name);
-            enqueueRoomMessage("dm:" + peer, name, url, /*isGroup=*/false,
+            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, url, /*isGroup=*/false,
                     author, name, picture, line, fTs, /*mention=*/false);
         });
     }
@@ -1863,7 +2011,7 @@ public class NotificationRelayService extends Service {
                             // thread is on screen (the peer isn't known until
                             // decrypt, so enqueueRoomMessage's active-room gate
                             // does it here rather than a synchronous pre-check).
-                            enqueueRoomMessage("dm:" + peer, name, "/dms/" + peer, /*isGroup=*/false,
+                            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, "/dms/" + peer, /*isGroup=*/false,
                                     peer, name, picture, line, fTs, /*mention=*/false);
                         });
                     } catch (Exception ignored) {
@@ -1890,7 +2038,7 @@ public class NotificationRelayService extends Service {
             if (roomKey.startsWith("dm:")) return;
         }
         if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (opaque)");
-        enqueueRoomMessage("dm17:opaque", "Direct messages", "/dms", /*isGroup=*/false,
+        enqueueRoomMessage(/*community=*/null, "dm17:opaque", "Direct messages", "/dms", /*isGroup=*/false,
                 /*senderPubkey=*/null, "Someone", /*picture=*/null,
                 "New direct message", System.currentTimeMillis(), /*mention=*/true);
     }
@@ -2016,7 +2164,7 @@ public class NotificationRelayService extends Service {
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord (opaque): " + room);
                 if (!prefBool("allGroupMessages", true)) return;
                 enqueueRoomMessage(
-                        "z:" + z, room, url != null ? url : "/", /*isGroup=*/true,
+                        zToCommunity.get(z), "z:" + z, room, url != null ? url : "/", /*isGroup=*/true,
                         /*senderPubkey=*/null, "Someone", /*picture=*/null,
                         "New message", System.currentTimeMillis(), /*mention=*/false);
                 return;
@@ -2060,7 +2208,7 @@ public class NotificationRelayService extends Service {
                 String text = buildMessageText(preview, fMention, threadRoot != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fRoom + " / " + name);
                 enqueueRoomMessage(
-                        "z:" + fZ, fRoom, appendThreadParam(fUrl, threadRoot), /*isGroup=*/true,
+                        zToCommunity.get(fZ), "z:" + fZ, fRoom, appendThreadParam(fUrl, threadRoot), /*isGroup=*/true,
                         author, name, picture, text, fTs, fMention);
             });
             return;
@@ -2090,7 +2238,7 @@ public class NotificationRelayService extends Service {
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 (opaque): " + st.name);
                 if (!prefBool("allGroupMessages", true)) return;
                 enqueueRoomMessage(
-                        "c2:" + st.channelId, st.name, st.url, /*isGroup=*/true,
+                        st.community, "c2:" + st.channelId, st.name, st.url, /*isGroup=*/true,
                         /*senderPubkey=*/null, "Someone", /*picture=*/null,
                         "New message", System.currentTimeMillis(), /*mention=*/false);
                 return;
@@ -2134,7 +2282,7 @@ public class NotificationRelayService extends Service {
                     String picture = profile != null ? profile.picture : null;
                     if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 reaction: " + fStR.name + " / " + name);
                     enqueueRoomMessage(
-                            "c2:" + fStR.channelId, fStR.name, fStR.url,
+                            fStR.community, "c2:" + fStR.channelId, fStR.name, fStR.url,
                             /*isGroup=*/true, author2, name, picture, reactionLine, fTsR, /*mention=*/true);
                 });
                 return;
@@ -2170,7 +2318,7 @@ public class NotificationRelayService extends Service {
                 String text = buildMessageText(preview2, fMention2, threadRoot2 != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2: " + fSt.name + " / " + name);
                 enqueueRoomMessage(
-                        "c2:" + fSt.channelId, fSt.name, appendThreadParam(fSt.url, threadRoot2),
+                        fSt.community, "c2:" + fSt.channelId, fSt.name, appendThreadParam(fSt.url, threadRoot2),
                         /*isGroup=*/true, author2, name, picture, text, fTs2, fMention2);
             });
             return;
@@ -2262,17 +2410,26 @@ public class NotificationRelayService extends Service {
                 // mention=false so it's suppressed while this peer's thread is on
                 // screen — a DM's `p` tag naming us isn't a break-through @-ping.
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm from=" + fName);
+                // DMs are NOT grouped: each conversation stands alone (null
+                // community ⇒ no setGroup, no summary).
                 enqueueRoomMessage(
-                        "dm:" + author, fName, fUrl, /*isGroup=*/false,
+                        /*community=*/null, "dm:" + author, fName, fUrl, /*isGroup=*/false,
                         author, fName, picture, fLine, fTs, /*mention=*/false);
                 return;
             }
-            // Resolve the group's display name; it becomes the conversation title.
+            // Resolve the group's display name; it becomes the conversation title
+            // AND the community (server) summary's title. The picture — cached by
+            // the same kind-39000 fetch — is the summary's large icon.
             resolveGroupName(nip29GroupId, relayUrl, groupName -> {
                 String roomTitle = (groupName != null && !groupName.isEmpty()) ? groupName : "Group";
+                CommunityRef community = new CommunityRef(
+                        GROUP_PREFIX + "h:" + relayUrl + "|" + nip29GroupId,
+                        roomTitle,
+                        "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId),
+                        groupPictureCache.get(nip29GroupId), null, null, null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " room=" + roomTitle);
                 enqueueRoomMessage(
-                        nip29RoomKey, roomTitle, fUrl, /*isGroup=*/true,
+                        community, nip29RoomKey, roomTitle, fUrl, /*isGroup=*/true,
                         author, fName, picture, fLine, fTs, mention);
             });
         });
@@ -2435,6 +2592,9 @@ public class NotificationRelayService extends Service {
      * channels, DMs), giving the Discord/Signal-style "one growing thread per
      * conversation, collapsed under a summary" presentation.
      *
+     * @param community the community this room belongs to — drives the Android
+     *                  group + per-community summary (icon/title). {@code null}
+     *                  for DMs, which are NOT grouped (each stands alone).
      * @param roomKey   stable conversation id (groupId / Concord `z` / "dm:<peer>")
      * @param roomTitle conversation display name (room name, or peer name for DMs)
      * @param url       in-app deep-link opened on tap
@@ -2449,7 +2609,7 @@ public class NotificationRelayService extends Service {
      *                      ping even on the channel the user is currently viewing)
      */
     private void enqueueRoomMessage(
-            String roomKey, String roomTitle, String url, boolean isGroup,
+            CommunityRef community, String roomKey, String roomTitle, String url, boolean isGroup,
             String senderPubkey, String senderName, String senderPicture,
             String text, long timestampMs, boolean mention) {
         // Suppress the notification entirely when the user is already looking at
@@ -2465,7 +2625,7 @@ public class NotificationRelayService extends Service {
         // Build the Person now (without an avatar); post immediately, then re-post
         // with the avatar once loaded so image I/O never delays the notification.
         Bitmap cachedAvatar = senderPicture != null ? avatarCache.get(senderPicture) : null;
-        postRoomMessage(roomKey, roomTitle, url, isGroup, senderPubkey, senderName,
+        postRoomMessage(community, roomKey, roomTitle, url, isGroup, senderPubkey, senderName,
                 cachedAvatar, text, timestampMs, /*replaceLast=*/false, /*alert=*/true);
 
         if (senderPicture != null && !senderPicture.isEmpty() && cachedAvatar == null) {
@@ -2475,7 +2635,7 @@ public class NotificationRelayService extends Service {
                     // carries the avatar, then re-post the same room id. This is a
                     // silent refresh — the initial post already alerted, so don't
                     // vibrate/sound again just because the avatar finished loading.
-                    postRoomMessage(roomKey, roomTitle, url, isGroup, senderPubkey, senderName,
+                    postRoomMessage(community, roomKey, roomTitle, url, isGroup, senderPubkey, senderName,
                             bmp, text, timestampMs, /*replaceLast=*/true, /*alert=*/false);
                 }
             });
@@ -2484,14 +2644,14 @@ public class NotificationRelayService extends Service {
 
     /**
      * Core builder: accumulate a message into its {@link RoomNotif} and post the
-     * room's MessagingStyle notification + the group summary. When
+     * room's MessagingStyle notification + its community's group summary. When
      * {@code replaceLast} is set, the most recently appended message for this room
      * is swapped out (used to re-post the same line once its avatar resolves)
      * rather than appended again. {@code alert} false posts silently (no
      * vibration/sound) for in-place refreshes like a late-arriving avatar.
      */
     private void postRoomMessage(
-            String roomKey, String roomTitle, String url, boolean isGroup,
+            CommunityRef community, String roomKey, String roomTitle, String url, boolean isGroup,
             String senderPubkey, String senderName, Bitmap avatar,
             String text, long timestampMs, boolean replaceLast, boolean alert) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -2502,6 +2662,7 @@ public class NotificationRelayService extends Service {
             room = new RoomNotif(roomKey, hashId(roomKey));
             roomNotifs.put(roomKey, room);
         }
+        room.community = community;
         // If the room's notification was dismissed (swiped / tapped away) since
         // its last message, start a FRESH notification rather than appending to
         // the dismissed message history — otherwise a new message in a room the
@@ -2527,6 +2688,20 @@ public class NotificationRelayService extends Service {
         }
         Person sender = pb.build();
 
+        // Conversation shortcut (the key to the Signal-style left avatar on
+        // Android 11+, see pushConversationShortcut): every room gets one. A DM
+        // uses the sender's avatar; a community channel uses the COMMUNITY image
+        // (like a Signal group chat's group avatar) — if it isn't cached yet,
+        // the shortcut goes up icon-less and refreshSummaries' icon fetch
+        // re-pushes it (and silently re-posts the room) once resolved.
+        if (community == null) {
+            pushConversationShortcut(room, sender,
+                    avatar != null ? avatar : room.lastAvatar);
+        } else {
+            pushConversationShortcut(room, sender,
+                    groupImageCache.get(community.imageCacheKey()));
+        }
+
         NotificationCompat.MessagingStyle.Message msg =
                 new NotificationCompat.MessagingStyle.Message(
                         text != null ? text : "", timestampMs, sender);
@@ -2547,7 +2722,10 @@ public class NotificationRelayService extends Service {
         pruneDismissedRooms(manager, room.notifId);
 
         manager.notify(room.notifId, buildRoomNotification(room, alert));
-        manager.notify(SUMMARY_NOTIFICATION_ID, buildSummaryNotification());
+        // Refresh the per-community group summaries (post/update the ones with
+        // rooms, cancel any whose rooms are all gone). DMs (null community) are
+        // ungrouped, so they contribute no summary.
+        refreshSummaries(manager);
     }
 
     /**
@@ -2594,15 +2772,24 @@ public class NotificationRelayService extends Service {
 
     /** Build a room's MessagingStyle notification from its accumulated messages. */
     private Notification buildRoomNotification(RoomNotif room, boolean alert) {
+        // Every room is a conversation notification: paired with the
+        // conversation shortcut pushed in postRoomMessage (setShortcutId
+        // below), Android 11+ renders the shortcut's avatar as the LEFT icon
+        // in place of the app icon — the peer's avatar for a 1:1 DM, the
+        // community image for a channel (like a Signal group chat).
+        boolean isDm = room.community == null;
+
         // "You" is the local user; MessagingStyle needs a self Person to anchor
         // incoming vs. outgoing (we only post incoming, so this is just the label).
         Person self = new Person.Builder().setName("You").setKey(userPubkey != null ? userPubkey : "self").build();
         NotificationCompat.MessagingStyle style = new NotificationCompat.MessagingStyle(self);
-        if (room.isGroupConversation) {
+        if (isDm) {
+            // 1:1: no conversation title — the system titles it with the
+            // sender Person's name (a title would make it render as a group).
+            style.setGroupConversation(false);
+        } else {
             style.setConversationTitle(room.title);
             style.setGroupConversation(true);
-        } else {
-            style.setGroupConversation(false);
         }
         for (NotificationCompat.MessagingStyle.Message m : room.messages) {
             style.addMessage(m);
@@ -2611,19 +2798,37 @@ public class NotificationRelayService extends Service {
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, MSG_CHANNEL_ID)
                 .setStyle(style)
                 .setSmallIcon(R.drawable.ic_stat_armada)
-                // The sender avatar as the collapsed-view large icon. MessagingStyle
-                // Person icons only paint in the expanded view on many devices, so
-                // without this the avatar is invisible half the time (whenever the
-                // notification isn't expanded).
+                // Sender avatar fallback for surfaces that don't do the
+                // conversation layout (pre-Android-11, some OEM skins). On the
+                // conversation layout the system ignores this and uses the
+                // shortcut/Person avatar on the left instead.
                 .setLargeIcon(room.lastAvatar)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setContentIntent(roomPendingIntent(room))
-                .setGroup(GROUP_KEY)
                 .setAutoCancel(true)
                 .setWhen(room.lastTimestampMs)
                 // A silent refresh (e.g. late avatar) must not re-buzz; only a
                 // genuine new message alerts.
-                .setOnlyAlertOnce(!alert);
+                .setOnlyAlertOnce(!alert)
+                // Ties the notification to the conversation shortcut pushed in
+                // postRoomMessage — the key that promotes it into the
+                // conversation space where the shortcut's avatar (sender for
+                // DMs, community image for channels) replaces the app icon.
+                .setShortcutId(room.roomKey);
+        // Group under the community's stack (channels) so it collapses into that
+        // community's summary. A DM (null community) gets its OWN unique group
+        // key: it still shows standalone (a group of one, no summary), but the
+        // explicit key opts it out of Android's auto-bundling — which otherwise
+        // sweeps 4+ group-less notifications into one system pile under the app
+        // icon, collapsing separate DM conversations together.
+        b.setGroup(room.community != null
+                ? room.community.groupKey
+                : GROUP_PREFIX + "dm:" + room.roomKey);
+        // "Mark read": dismiss this notification and advance the in-app read
+        // state (applied by the WebView on its next open). Shown on every room.
+        b.addAction(new NotificationCompat.Action.Builder(
+                R.drawable.ic_stat_armada, "Mark read", markReadIntent(room)).build());
         if (alert) {
             b.setVibrate(MSG_VIBRATION_PATTERN)
                     .setDefaults(NotificationCompat.DEFAULT_LIGHTS | NotificationCompat.DEFAULT_SOUND);
@@ -2632,17 +2837,136 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * Build the InboxStyle group summary: a digest of the active rooms with the
-     * total unread count. Android shows this when the room notifications are
+     * PendingIntent for a room's "Mark read" action — delivered to the service
+     * with {@link #ACTION_MARK_READ} + the room key. A per-room data URI keeps
+     * each room's PendingIntent distinct (extras alone don't affect PendingIntent
+     * identity, so without it two rooms could share one cached intent).
+     */
+    private PendingIntent markReadIntent(RoomNotif room) {
+        Intent intent = new Intent(this, NotificationRelayService.class);
+        intent.setAction(ACTION_MARK_READ);
+        intent.setData(Uri.parse("armada-markread:" + room.notifId));
+        intent.putExtra(EXTRA_ROOM_KEY, room.roomKey);
+        return PendingIntent.getService(
+                this, room.notifId, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /**
+     * Handle a "Mark read" tap: cancel the room's notification, drop its
+     * accumulated history, refresh its community summary (dropping it if the
+     * community now has no rooms), and enqueue a durable read-marker the WebView
+     * applies on its next open/resume to advance the in-app read state. Robust to
+     * a cold start (no in-memory room): the notif id is re-derivable from the
+     * room key and the timestamp falls back to now.
+     */
+    private void handleMarkRead(String roomKey) {
+        if (roomKey == null || roomKey.isEmpty()) return;
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        RoomNotif room = roomNotifs.remove(roomKey);
+        long tsMs = room != null && room.lastTimestampMs > 0
+                ? room.lastTimestampMs : System.currentTimeMillis();
+        int notifId = room != null ? room.notifId : hashId(roomKey);
+        if (manager != null) {
+            manager.cancel(notifId);
+            refreshSummaries(manager);
+        }
+        // Concord V1 read state is keyed by channel id, not the `z` pseudonym
+        // (which is per-epoch); resolve it from the decrypt-key map so the
+        // WebView can mark the right channel read.
+        String channelId = null;
+        if (roomKey.startsWith("z:")) {
+            ConcordKey ck = zToKey.get(roomKey.substring(2));
+            if (ck != null && !ck.channelId.isEmpty()) channelId = ck.channelId;
+        }
+        ArmadaNotificationPlugin.enqueueReadMarker(this, roomKey, tsMs / 1000L, channelId);
+        if (BuildConfig.DEBUG) Log.d(TAG, "MARK READ " + roomKey);
+    }
+
+    /**
+     * Re-post one group summary per community that currently has room
+     * notifications, and cancel the summary of any community whose rooms have
+     * all been dismissed. Called after every room (re)post. DMs (null community)
+     * are ungrouped and contribute no summary.
+     *
+     * The community icon is loaded async: the summary posts immediately with
+     * whatever icon is cached (the app icon on the first message), and re-posts
+     * silently once the icon resolves.
+     */
+    private void refreshSummaries(NotificationManager manager) {
+        // Partition the live rooms by their community group key.
+        Map<String, List<RoomNotif>> byGroup = new HashMap<>();
+        Map<String, CommunityRef> refByGroup = new HashMap<>();
+        for (RoomNotif r : roomNotifs.values()) {
+            if (r.community == null) continue; // DM — ungrouped
+            byGroup.computeIfAbsent(r.community.groupKey, k -> new ArrayList<>()).add(r);
+            refByGroup.put(r.community.groupKey, r.community);
+        }
+
+        // Cancel summaries for communities that no longer have any room.
+        java.util.Iterator<Map.Entry<String, Integer>> pit = postedSummaries.entrySet().iterator();
+        while (pit.hasNext()) {
+            Map.Entry<String, Integer> e = pit.next();
+            if (!byGroup.containsKey(e.getKey())) {
+                manager.cancel(e.getValue());
+                pit.remove();
+            }
+        }
+
+        // Post/update each community's summary.
+        for (Map.Entry<String, List<RoomNotif>> e : byGroup.entrySet()) {
+            CommunityRef ref = refByGroup.get(e.getKey());
+            Bitmap icon = groupImageCache.get(ref.imageCacheKey());
+            manager.notify(ref.summaryId, buildSummaryNotification(ref, e.getValue(), icon));
+            postedSummaries.put(e.getKey(), ref.summaryId);
+            // Kick off the community-icon fetch if we don't have it yet; the
+            // callback re-posts this summary with the icon.
+            if (icon == null && ref.hasImage()) {
+                fetchCommunityImage(ref, bmp -> {
+                    if (bmp == null) return;
+                    groupImageCache.put(ref.imageCacheKey(), bmp);
+                    NotificationManager m2 =
+                            (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                    if (m2 == null) return;
+                    // Re-post only if the community still has rooms.
+                    List<RoomNotif> rooms = new ArrayList<>();
+                    for (RoomNotif r : roomNotifs.values()) {
+                        if (r.community != null && r.community.groupKey.equals(ref.groupKey)) rooms.add(r);
+                    }
+                    if (!rooms.isEmpty()) {
+                        m2.notify(ref.summaryId, buildSummaryNotification(ref, rooms, bmp));
+                        // Refresh each channel's conversation shortcut with the
+                        // community image and silently re-post it so the left
+                        // avatar updates (the shortcut was pushed icon-less
+                        // while the image was still fetching).
+                        for (RoomNotif r : rooms) {
+                            NotificationCompat.MessagingStyle.Message last =
+                                    r.messages.isEmpty() ? null : r.messages.get(r.messages.size() - 1);
+                            Person sender = last != null ? last.getPerson() : null;
+                            if (sender != null) {
+                                pushConversationShortcut(r, sender, bmp);
+                                m2.notify(r.notifId, buildRoomNotification(r, /*alert=*/false));
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    /**
+     * Build one community's InboxStyle group summary: a digest of its rooms with
+     * the total unread count, titled with the community name and (once resolved)
+     * its icon. Android shows this when the community's room notifications are
      * collapsed into the group (Discord/Signal-style stack).
      */
-    private Notification buildSummaryNotification() {
+    private Notification buildSummaryNotification(CommunityRef community, List<RoomNotif> rooms, Bitmap icon) {
         NotificationCompat.InboxStyle inbox = new NotificationCompat.InboxStyle();
         int totalMessages = 0;
         // Newest rooms first.
-        List<RoomNotif> rooms = new ArrayList<>(roomNotifs.values());
-        rooms.sort((a, c) -> Long.compare(c.lastTimestampMs, a.lastTimestampMs));
-        for (RoomNotif room : rooms) {
+        List<RoomNotif> sorted = new ArrayList<>(rooms);
+        sorted.sort((a, c) -> Long.compare(c.lastTimestampMs, a.lastTimestampMs));
+        for (RoomNotif room : sorted) {
             int count = room.messages.size();
             totalMessages += count;
             // One digest line per room: "<room> · <N new>" or the latest sender.
@@ -2655,24 +2979,140 @@ public class NotificationRelayService extends Service {
                     : (room.title != null ? room.title : (who != null ? who : "New message"));
             inbox.addLine(line);
         }
-        String summaryText = roomNotifs.size() == 1
+        String summaryText = sorted.size() == 1
                 ? totalMessages + (totalMessages == 1 ? " new message" : " new messages")
-                : roomNotifs.size() + " conversations";
+                : sorted.size() + " channels";
         inbox.setSummaryText(summaryText);
 
-        return new NotificationCompat.Builder(this, MSG_CHANNEL_ID)
-                .setContentTitle("Armada")
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, MSG_CHANNEL_ID)
+                .setContentTitle(community.title != null && !community.title.isEmpty() ? community.title : "Armada")
                 .setContentText(summaryText)
                 .setStyle(inbox)
                 .setSmallIcon(R.drawable.ic_stat_armada)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setGroup(GROUP_KEY)
+                .setContentIntent(communityPendingIntent(community))
+                .setGroup(community.groupKey)
                 .setGroupSummary(true)
                 // The child (room) notification owns the alert (vibration/sound),
                 // so posting the summary alongside it doesn't double-buzz.
                 .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
-                .setAutoCancel(true)
-                .build();
+                .setAutoCancel(true);
+        if (icon != null) {
+            b.setLargeIcon(icon);
+        }
+        return b.build();
+    }
+
+    /** Deep-link tap intent for a community's group summary (opens the server). */
+    private PendingIntent communityPendingIntent(CommunityRef community) {
+        Intent intent = new Intent(this, MainActivity.class);
+        String url = community.url != null ? community.url : "/";
+        intent.setAction(Intent.ACTION_VIEW);
+        intent.setData(Uri.parse("armada://open" + url));
+        intent.putExtra("armada_path", url);
+        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return PendingIntent.getActivity(
+                this, community.summaryId, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /**
+     * Fetch a community's summary icon and deliver it circle-cropped on the main
+     * handler (best-effort: null on any failure). Plain https URLs are fetched
+     * directly; an encrypted-blob pointer ({@code imgKey}/{@code imgNonce}) is
+     * AES-256-GCM decrypted and the plaintext SHA-256 verified against
+     * {@code imgHash} before decode. Reuses the avatar disk cache, keyed by the
+     * ref's stable {@link CommunityRef#imageCacheKey()}.
+     */
+    private void fetchCommunityImage(CommunityRef ref, BitmapCallback cb) {
+        if (!ref.hasImage()) {
+            cb.onBitmap(null);
+            return;
+        }
+        final String cacheKey = ref.imageCacheKey();
+        if (!groupImageInFlight.add(cacheKey)) {
+            // Already being fetched — the in-flight call will re-post the summary.
+            cb.onBitmap(null);
+            return;
+        }
+        avatarClient.dispatcher().executorService().execute(() -> {
+            Bitmap disk = loadAvatarFromDisk(cacheKey);
+            if (disk != null) {
+                handler.post(() -> {
+                    groupImageInFlight.remove(cacheKey);
+                    cb.onBitmap(disk);
+                });
+                return;
+            }
+            Request request = new Request.Builder().url(ref.imageUrl).build();
+            avatarClient.newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(Call call, IOException e) {
+                    if (BuildConfig.DEBUG) Log.d(TAG, "community icon fetch failed: " + e.getMessage());
+                    handler.post(() -> {
+                        groupImageInFlight.remove(cacheKey);
+                        cb.onBitmap(null);
+                    });
+                }
+
+                @Override
+                public void onResponse(Call call, Response response) {
+                    Bitmap circle = null;
+                    try {
+                        if (response.isSuccessful() && response.body() != null) {
+                            byte[] bytes = response.body().bytes();
+                            if (ref.imgKey != null && ref.imgNonce != null) {
+                                bytes = decryptGcm(bytes, ref.imgKey, ref.imgNonce, ref.imgHash);
+                            }
+                            Bitmap raw = decodeSampled(bytes);
+                            circle = circleCrop(raw);
+                        }
+                    } catch (Exception e) {
+                        if (BuildConfig.DEBUG) Log.d(TAG, "community icon decode failed: " + e.getMessage());
+                    } finally {
+                        response.close();
+                    }
+                    final Bitmap result = circle;
+                    if (result != null) saveAvatarToDisk(cacheKey, result);
+                    handler.post(() -> {
+                        groupImageInFlight.remove(cacheKey);
+                        cb.onBitmap(result);
+                    });
+                }
+            });
+        });
+    }
+
+    /**
+     * AES-256-GCM decrypt an encrypted community-image blob and verify its
+     * plaintext SHA-256 (128-bit tag, matching the encrypt side in
+     * concord-v2/lib/image.ts and concord-v1/lib/communityImage.ts). Returns
+     * null on any crypto failure or a hash mismatch (a swapped blob fails
+     * closed), so the icon simply doesn't render rather than showing a forgery.
+     */
+    private static byte[] decryptGcm(byte[] ciphertext, byte[] key, byte[] nonce, String expectHashHex) {
+        if (ciphertext == null || key == null || nonce == null) return null;
+        try {
+            javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(
+                    javax.crypto.Cipher.DECRYPT_MODE,
+                    new javax.crypto.spec.SecretKeySpec(key, "AES"),
+                    new javax.crypto.spec.GCMParameterSpec(128, nonce));
+            byte[] plaintext = cipher.doFinal(ciphertext);
+            if (expectHashHex != null && !expectHashHex.isEmpty()) {
+                byte[] h = MessageDigest.getInstance("SHA-256").digest(plaintext);
+                StringBuilder sb = new StringBuilder(h.length * 2);
+                for (byte b : h) {
+                    sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+                    sb.append(Character.forDigit(b & 0xF, 16));
+                }
+                if (!sb.toString().equalsIgnoreCase(expectHashHex)) return null;
+            }
+            return plaintext;
+        } catch (Exception e) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "community icon decrypt failed: " + e.getMessage());
+            return null;
+        }
     }
 
     /** Deep-link tap intent for a room, keyed by the room's stable notif id. */
@@ -2690,6 +3130,40 @@ public class NotificationRelayService extends Service {
         return PendingIntent.getActivity(
                 this, room.notifId, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /**
+     * Publish/refresh the long-lived conversation shortcut a room notification
+     * references via {@code setShortcutId}. On Android 11+ a MessagingStyle
+     * notification whose shortcutId resolves to a long-lived conversation
+     * shortcut is promoted into the conversation space, where the SYSTEM draws
+     * the shortcut's icon as the left icon in place of the app icon (the app's
+     * small icon becomes a corner badge) — the Signal look. The icon is the
+     * sender's avatar for a DM, or the community image for a channel (like a
+     * Signal group chat's group avatar). Best-effort: a failed push (rate
+     * limit, OEM quirks) just means the notification renders the ordinary way.
+     */
+    private void pushConversationShortcut(RoomNotif room, Person sender, Bitmap avatar) {
+        try {
+            Intent intent = new Intent(this, MainActivity.class);
+            String url = room.url != null ? room.url : "/";
+            intent.setAction(Intent.ACTION_VIEW);
+            intent.setData(Uri.parse("armada://open" + url));
+            intent.putExtra("armada_path", url);
+            ShortcutInfoCompat.Builder sb = new ShortcutInfoCompat.Builder(this, room.roomKey)
+                    .setShortLabel(room.title != null && !room.title.isEmpty() ? room.title : "Chat")
+                    .setPerson(sender)
+                    .setLongLived(true)
+                    .setIntent(intent)
+                    .setCategories(java.util.Collections.singleton("android.shortcut.conversation"));
+            // The shortcut icon is what the conversation layout paints on the
+            // left; without it (avatar not fetched yet) the app icon shows until
+            // the silent avatar re-post refreshes the shortcut.
+            if (avatar != null) sb.setIcon(IconCompat.createWithBitmap(avatar));
+            ShortcutManagerCompat.pushDynamicShortcut(this, sb.build());
+        } catch (Exception e) {
+            if (BuildConfig.DEBUG) Log.w(TAG, "pushConversationShortcut failed", e);
+        }
     }
 
     private interface BitmapCallback {
@@ -3090,5 +3564,19 @@ public class NotificationRelayService extends Service {
             hash = ((hash << 5) - hash) + id.charAt(i);
         }
         return (Math.abs(hash) % ROOM_ID_MODULUS) + 2;
+    }
+
+    /**
+     * Stable notification id for a COMMUNITY's group summary, hashed into a band
+     * ([SUMMARY_ID_BASE, SUMMARY_ID_BASE + SUMMARY_ID_MODULUS)) reserved ABOVE
+     * the room id band so a summary can never collide with a room notification.
+     */
+    private static int summaryId(String groupKey) {
+        if (groupKey == null) return SUMMARY_ID_BASE;
+        int hash = 0;
+        for (int i = 0; i < groupKey.length(); i++) {
+            hash = ((hash << 5) - hash) + groupKey.charAt(i);
+        }
+        return SUMMARY_ID_BASE + (Math.abs(hash) % SUMMARY_ID_MODULUS);
     }
 }

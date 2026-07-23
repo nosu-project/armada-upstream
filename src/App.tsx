@@ -14,6 +14,7 @@ import { DeepLinkWarmup } from "@/components/DeepLinkWarmup";
 import { DesktopBadge } from "@/components/DesktopBadge";
 import { MeshProvider } from "@/components/MeshProvider";
 import { NativeNotifications } from "@/components/NativeNotifications";
+import { NativeReadMarkerSync } from "@/components/NativeReadMarkerSync";
 import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
 import { PlausibleProvider } from "@/components/PlausibleProvider";
@@ -69,6 +70,7 @@ export function App() {
                     <DeepLinkWarmup />
                     <DesktopBadge />
                     <NativeNotifications />
+                    <NativeReadMarkerSync />
                     <WebPushNotifications />
                     <ControlPlaneSync />
                     <ScreenSharePicker />

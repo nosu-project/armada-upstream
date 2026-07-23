@@ -9,6 +9,25 @@ import type { NostrEvent } from "@nostrify/nostrify";
  * arrives — instant push with no FCM/Google. iOS/web have no implementation;
  * the plugin calls simply no-op there.
  */
+/**
+ * A community's icon for the Android per-community group summary. Either a
+ * plain public URL (`{ url }` only — NIP-29 group `picture`) or an
+ * encrypted-blob pointer the background service fetches and AES-256-GCM
+ * decrypts itself: `key`/`nonce` are hex, and `hash` (hex SHA-256 of the
+ * plaintext) is verified after decrypt so a swapped blob fails closed. The
+ * image key is lower-sensitivity than the identity/channel keys already shared
+ * with the service (it only decrypts a public-facing community icon).
+ */
+export interface CommunityNotifImage {
+  url: string;
+  /** Hex AES-256-GCM key (encrypted icons only). */
+  key?: string;
+  /** Hex AES-GCM nonce/IV (encrypted icons only). */
+  nonce?: string;
+  /** Hex SHA-256 of the plaintext (integrity check; encrypted icons only). */
+  hash?: string;
+}
+
 export interface ArmadaNotificationPlugin {
   /** Whether POST_NOTIFICATIONS is granted (always true below Android 13). */
   checkPermission(): Promise<{ granted: boolean }>;
@@ -58,6 +77,17 @@ export interface ArmadaNotificationPlugin {
    * notification's message is on screen at once.
    */
   drainConcord(): Promise<{ concord: Array<{ inner: string; z: string; outerId: string }> }>;
+  /**
+   * Drain (and clear) the pending "Mark read" markers the background service
+   * recorded when the user tapped a notification's "Mark read" action. Each
+   * carries the room key, the unix-seconds timestamp to mark read up to, and —
+   * for Concord V1 only — the resolved channel id (its room key holds a
+   * per-epoch pseudonym, not the channel id). The JS layer maps each to the
+   * right per-protocol read-state write. No-ops (empty array) on web/iOS.
+   */
+  drainReadMarkers(): Promise<{
+    markers: Array<{ room: string; ts: number; channelId?: string }>;
+  }>;
   /**
    * The service's rolling per-room cache of raw outer wire events (newest
    * last). Unlike {@link drainEvents} — a one-shot global buffer of what
@@ -163,6 +193,13 @@ export interface ArmadaNotificationPlugin {
       communityId: string;
       communityName: string;
       channelName: string;
+      /**
+       * The community's icon for the per-community group summary. An encrypted
+       * blob pointer ({@link CommunityNotifImage}) the service fetches + AES-GCM
+       * decrypts itself (key/nonce/hash hex), or a plain https url (`url` only).
+       * Omitted when the community has no icon.
+       */
+      communityImage?: CommunityNotifImage;
       /** "mentions only" — suppress non-mention messages (older binaries notify all). */
       mentionOnly?: boolean;
     }>;
@@ -181,6 +218,14 @@ export interface ArmadaNotificationPlugin {
       channelId: string;
       channelName: string;
       streams: Array<{ pk: string; convKey: string; epoch: string }>;
+      /**
+       * The community's icon for the per-community group summary — see
+       * {@link CommunityNotifImage}. For V2 this is the encrypted CORD-02 §6
+       * icon pointer; the service fetches the blob, AES-GCM decrypts with the
+       * shipped key/nonce, and verifies the plaintext hash before display.
+       * Omitted when the community has no icon.
+       */
+      communityImage?: CommunityNotifImage;
       /** "mentions only" — suppress non-mention messages (older binaries notify all). */
       mentionOnly?: boolean;
     }>;

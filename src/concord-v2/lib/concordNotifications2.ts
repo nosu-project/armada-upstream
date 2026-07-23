@@ -39,6 +39,13 @@ export interface Concord2Sub {
   channelName: string;
   /** Every held epoch's stream (newest first). */
   streams: Concord2Stream[];
+  /**
+   * The community's encrypted icon pointer (CORD-02 §6), for the native
+   * per-community notification group summary. The service fetches the blob,
+   * AES-GCM decrypts with `key`/`nonce`, and verifies `hash`. Omitted when the
+   * community has no icon.
+   */
+  communityImage?: { url: string; key: string; nonce: string; hash: string };
 }
 
 /**
@@ -57,6 +64,12 @@ export function buildConcord2Subs(
   if (community.relays.length === 0) return { subs, streamKeys };
 
   const communityName = folded?.metadata?.name || community.name || "Community";
+  // The community icon (if any) is the same for every channel — decrypted
+  // natively for the group summary's large icon.
+  const icon = folded?.metadata?.icon;
+  const communityImage = icon
+    ? { url: icon.url, key: icon.key, nonce: icon.nonce, hash: icon.hash }
+    : undefined;
   for (const channel of channelsView(community, folded)) {
     if (channel.streams.length === 0) continue;
     streamKeys.push(...channel.streams.map((s) => s.group));
@@ -71,6 +84,7 @@ export function buildConcord2Subs(
         convKey: bytesToHex(s.group.convKey),
         epoch: s.epoch.toString(),
       })),
+      ...(communityImage ? { communityImage } : {}),
     });
   }
   // Deterministic order (ids, not display names) so a mere refetch/rename

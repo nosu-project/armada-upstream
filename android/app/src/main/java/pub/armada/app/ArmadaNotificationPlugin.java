@@ -23,6 +23,7 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * Capacitor bridge that lets the web layer configure the native background
@@ -87,6 +88,58 @@ public class ArmadaNotificationPlugin extends Plugin {
     static final String DRAIN_PREFS = "armada_drain";
     /** Max rows per drainEvents page (the JS side loops until empty). */
     private static final int DRAIN_PAGE = 500;
+
+    /**
+     * SharedPreferences file holding pending "Mark read" markers the service
+     * recorded from notification-action taps, for the WebView to drain and apply
+     * to the in-app read state on its next open/resume. One JSON object under
+     * key "markers": {@code {roomKey: {ts, channelId?}, …}} — keyed by room so a
+     * later tap in the same room just raises the (monotonic) timestamp.
+     */
+    static final String READ_MARKERS_PREFS = "armada_read_markers";
+    private static final String READ_MARKERS_KEY = "markers";
+    /** Guards the read-modify-write of the read-marker map (service ⇄ bridge). */
+    private static final Object READ_MARKERS_LOCK = new Object();
+
+    /**
+     * Record a "Mark read" marker (called by the service on an action tap). Keyed
+     * by room, monotonic in timestamp. {@code channelId} carries the Concord V1
+     * channel id (the roomKey holds only the per-epoch `z` pseudonym); null for
+     * every other room type, which the WebView derives from the room key itself.
+     */
+    static void enqueueReadMarker(Context ctx, String roomKey, long tsSec, String channelId) {
+        if (ctx == null || roomKey == null || roomKey.isEmpty()) return;
+        synchronized (READ_MARKERS_LOCK) {
+            SharedPreferences sp = ctx.getSharedPreferences(READ_MARKERS_PREFS, Context.MODE_PRIVATE);
+            JSONObject map;
+            try {
+                map = new JSONObject(sp.getString(READ_MARKERS_KEY, "{}"));
+            } catch (Exception e) {
+                map = new JSONObject();
+            }
+            try {
+                JSONObject existing = map.optJSONObject(roomKey);
+                long prev = existing != null ? existing.optLong("ts", 0L) : 0L;
+                if (tsSec >= prev || existing == null) {
+                    JSONObject entry = new JSONObject();
+                    entry.put("ts", Math.max(tsSec, prev));
+                    if (channelId != null && !channelId.isEmpty()) entry.put("channelId", channelId);
+                    map.put(roomKey, entry);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "enqueueReadMarker failed", e);
+                return;
+            }
+            sp.edit().putString(READ_MARKERS_KEY, map.toString()).apply();
+        }
+    }
+
+    /** Drop all pending read markers (on logout / disable, so they don't cross accounts). */
+    private static void clearReadMarkers(Context ctx) {
+        synchronized (READ_MARKERS_LOCK) {
+            ctx.getSharedPreferences(READ_MARKERS_PREFS, Context.MODE_PRIVATE).edit().clear().apply();
+        }
+    }
 
     /**
      * Rolling per-room cache of raw outer events, keyed by room
@@ -305,6 +358,45 @@ public class ArmadaNotificationPlugin extends Plugin {
     }
 
     /**
+     * Drain (and clear) the pending "Mark read" markers the service recorded
+     * from notification-action taps. Returns { markers: [{ room, ts, channelId? },
+     * …] }; the JS layer maps each room key to the right per-protocol read-state
+     * write. Consumed once — a clean drain, since read state is monotonic so a
+     * lost marker is at worst a stale badge the next real read corrects.
+     */
+    @PluginMethod
+    public void drainReadMarkers(PluginCall call) {
+        JSArray markers = new JSArray();
+        synchronized (READ_MARKERS_LOCK) {
+            SharedPreferences sp = getContext().getSharedPreferences(READ_MARKERS_PREFS, Context.MODE_PRIVATE);
+            String raw = sp.getString(READ_MARKERS_KEY, null);
+            if (raw != null) {
+                try {
+                    JSONObject map = new JSONObject(raw);
+                    java.util.Iterator<String> keys = map.keys();
+                    while (keys.hasNext()) {
+                        String room = keys.next();
+                        JSONObject entry = map.optJSONObject(room);
+                        if (entry == null) continue;
+                        JSObject o = new JSObject();
+                        o.put("room", room);
+                        o.put("ts", entry.optLong("ts", 0L));
+                        String channelId = entry.optString("channelId", null);
+                        if (channelId != null && !channelId.isEmpty()) o.put("channelId", channelId);
+                        markers.put(o);
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "drainReadMarkers parse failed", e);
+                }
+                sp.edit().remove(READ_MARKERS_KEY).apply();
+            }
+        }
+        JSObject ret = new JSObject();
+        ret.put("markers", markers);
+        call.resolve(ret);
+    }
+
+    /**
      * Receive a signed kind-22242 event from JS and hand it to the running
      * service to send as ["AUTH", event] on the matching relay connection.
      */
@@ -507,6 +599,9 @@ public class ArmadaNotificationPlugin extends Plugin {
                     + " concord2Subs=" + (concord2SubsRaw != null ? "yes" : "none"));
         } else {
             prefs.edit().clear().apply();
+            // Drop any un-drained read markers too, so they can't apply to a
+            // different account after a logout/switch.
+            clearReadMarkers(getContext());
             Log.d(TAG, "Config cleared (disabled or logged out)");
         }
 

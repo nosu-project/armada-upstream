@@ -41,6 +41,14 @@ export interface ConcordSub {
   communityId: string;
   communityName: string;
   channelName: string;
+  /**
+   * The community's encrypted icon pointer, for the native per-community
+   * notification group summary. The service fetches the blob, AES-GCM decrypts
+   * with `key`/`nonce`, and verifies `hash`. Best-effort: only present when the
+   * icon rides in the invite/rehydrated community (the authoritative fold icon
+   * isn't read here). Omitted otherwise.
+   */
+  communityImage?: { url: string; key: string; nonce: string; hash: string };
 }
 
 /** Every retained epoch key for a channel (newest first), with a safe fallback. */
@@ -91,6 +99,10 @@ export function buildConcordSubs(list: ConcordList | undefined): ConcordSub[] {
       continue;
     }
     if (community.relays.length === 0) continue;
+    const icon = community.icon;
+    const communityImage = icon
+      ? { url: icon.url, key: icon.key, nonce: icon.nonce, hash: icon.hash }
+      : undefined;
     for (const channel of community.channels) {
       const zs = channelZs(channel);
       if (zs.length === 0) continue;
@@ -101,6 +113,7 @@ export function buildConcordSubs(list: ConcordList | undefined): ConcordSub[] {
         communityId: entry.communityId,
         communityName: community.name,
         channelName: channel.name,
+        ...(communityImage ? { communityImage } : {}),
       });
     }
   }
