@@ -241,7 +241,7 @@ export function SettingsPage() {
       { id: "account", title: "Account", icon: UserCircle, inline: true },
     ];
     if (user) {
-      // Only an nsec login has a key this client can show/back up — remote,
+      // Only an nsec login has a key this client can show/back up. Remote,
       // extension and Android-signer logins keep the key inside the signer.
       const activeLogin = logins[0];
       if (activeLogin?.type === "nsec") {

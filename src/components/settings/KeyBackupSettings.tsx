@@ -20,8 +20,8 @@ interface KeyBackupSettingsProps {
 
 /**
  * "Keys" settings section: reveal, copy, and download the account's secret
- * key. Only nsec logins have a retrievable key — remote (NIP-46), extension
- * (NIP-07) and Android-signer logins keep the key inside the signer — so
+ * key. Only nsec logins have a retrievable key. Remote (NIP-46), extension
+ * (NIP-07) and Android-signer logins keep the key inside the signer, so
  * SettingsPage only renders this for nsec logins.
  */
 export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
@@ -77,7 +77,7 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
             </span>
           </div>
           <p className="text-xs text-amber-700 dark:text-amber-300/90">
-            Your secret key is the only way to access your account — there is no password reset.
+            Your secret key is the only way to access your account. There is no password reset.
             Anyone who sees it controls your identity. Store it somewhere safe, like a password
             manager.
           </p>
@@ -136,7 +136,7 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
 
       <SettingsRow
         label="Public key"
-        description="Your public identity — safe to share with anyone."
+        description="Your public identity, safe to share with anyone."
       >
         <Button
           variant="ghost"

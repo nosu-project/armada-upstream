@@ -9,7 +9,7 @@ import type { NLoginStorage } from "@nostrify/react/login";
  * web.
  *
  * The login store holds the nsec for key logins, so on native it must live in
- * the OS keystore — WebView `localStorage` is plaintext and can be evicted by
+ * the OS keystore. WebView `localStorage` is plaintext and can be evicted by
  * the OS under storage pressure (losing the session entirely). On the first
  * native read, a legacy plaintext `localStorage` copy is migrated into secure
  * storage and removed.
@@ -24,7 +24,7 @@ export const secureStorage: NLoginStorage = {
       const { value } = await SecureStoragePlugin.get({ key });
       return value;
     } catch {
-      // Key not found in secure storage — check localStorage for migration.
+      // Key not found in secure storage; check localStorage for migration.
       const legacy = localStorage.getItem(key);
       if (legacy !== null) {
         // Migrate to secure storage and remove the plaintext copy.
