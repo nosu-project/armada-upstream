@@ -71,8 +71,9 @@ import okhttp3.WebSocketListener;
  * polling.
  *
  * One WebSocket per relay is kept open with a live REQ:
- *   - {@code {kinds:[9], #h:[...groupIds], since}}      group messages
- *   - {@code {kinds:[7,1111], #h:[...groupIds], #p:[userPubkey], since}} reactions/replies
+ *   - {@code {kinds:[9], #h:[...ids-hosted-here], since}} group messages (a
+ *     NIP-29 group lives on one relay, so #h is scoped per relay)
+ *   - {@code {kinds:[7,1111], #h:[...ids-hosted-here], #p:[userPubkey], since}} reactions/replies
  *   - {@code {kinds:[4], authors:[...follows], #p:[userPubkey], since}} DMs (friends only)
  *   - {@code {kinds:[3300], #z:[...pseudonyms], since}}  Concord V1 sealed messages
  *   - {@code {kinds:[1059], authors:[...stream pks], since}} Concord V2 wraps
@@ -168,6 +169,14 @@ public class NotificationRelayService extends Service {
     private String userPubkey;
     private final List<String> relayUrls = new ArrayList<>();
     private final Set<String> groupIds = new LinkedHashSet<>();
+    // relay URL → the NIP-29 group ids hosted on THAT relay. A NIP-29 group is
+    // intrinsically tied to a single relay (its `h` id is only meaningful on
+    // its host), so each relay's kind-9 REQ is scoped to just its own groups —
+    // the same relay→subscription model as Concord's relayToZs, never a
+    // broadcast of every joined id to every relay. Built in loadConfig from the
+    // `groupSubs` config; falls back to relayUrls × groupIds for a config
+    // written by an older build that shipped only the flat arrays.
+    private final Map<String, Set<String>> relayToGroupIds = new HashMap<>();
     private final Set<String> dmRelays = new LinkedHashSet<>();
     // People the user follows (kind 3 `p` tags, hex). DM (kind 4) subscriptions
     // are scoped to `authors:[...dmFollows]` so notifications only fire for DMs
@@ -701,6 +710,7 @@ public class NotificationRelayService extends Service {
         relayUrls.addAll(parseStringArray(sp.getString("relayUrls", null)));
         groupIds.clear();
         groupIds.addAll(parseStringArray(sp.getString("groupIds", null)));
+        parseGroupSubs(sp.getString("groupSubs", null));
         dmRelays.clear();
         dmRelays.addAll(parseStringArray(sp.getString("dmRelays", null)));
         dmFollows.clear();
@@ -736,6 +746,7 @@ public class NotificationRelayService extends Service {
 
         // The relays to connect to: NIP-29 group relays ∪ DM relays ∪ Concord relays.
         Set<String> allRelays = new LinkedHashSet<>(relayUrls);
+        allRelays.addAll(relayToGroupIds.keySet());
         allRelays.addAll(dmRelays);
         allRelays.addAll(relayToZs.keySet());
         allRelays.addAll(relayToPks2.keySet());
@@ -786,6 +797,47 @@ public class NotificationRelayService extends Service {
             }
         }
         return new CommunityRef(groupKey, title, url, imageUrl, imgKey, imgNonce, imgHash);
+    }
+
+    /**
+     * Parse the NIP-29 group subscriptions JSON ([{relay,id}, …]) into
+     * {@link #relayToGroupIds}: each joined group mapped to its single host
+     * relay, so the kind-9/7/1111 REQ on a relay carries only the groups that
+     * relay actually hosts. Falls back — when the config carries no
+     * {@code groupSubs} (written by an older build) — to the legacy flat model:
+     * every {@code groupId} on every {@code relayUrl}.
+     */
+    private void parseGroupSubs(String json) {
+        relayToGroupIds.clear();
+        if (json != null) {
+            try {
+                JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject sub = arr.optJSONObject(i);
+                    if (sub == null) continue;
+                    String relay = sub.optString("relay", "");
+                    String id = sub.optString("id", "");
+                    if (relay.isEmpty() || id.isEmpty()) continue;
+                    Set<String> set = relayToGroupIds.get(relay);
+                    if (set == null) {
+                        set = new LinkedHashSet<>();
+                        relayToGroupIds.put(relay, set);
+                    }
+                    set.add(id);
+                }
+                return;
+            } catch (JSONException e) {
+                Log.w(TAG, "Failed to parse groupSubs", e);
+                relayToGroupIds.clear();
+            }
+        }
+        // Legacy fallback: no per-relay mapping shipped — subscribe every
+        // joined group on every group relay (imprecise, but keeps an older
+        // config working until the WebView reconfigures with groupSubs).
+        if (groupIds.isEmpty()) return;
+        for (String relay : relayUrls) {
+            relayToGroupIds.put(relay, new LinkedHashSet<>(groupIds));
+        }
     }
 
     /**
@@ -1040,24 +1092,26 @@ public class NotificationRelayService extends Service {
 
         void sendReqs(WebSocket webSocket) {
             try {
-                if (relayUrls.contains(relayUrl) && !groupIds.isEmpty()) {
-                    // Group messages: kind 9 in the user's joined groups.
+                // NIP-29 groups hosted on THIS relay (a group lives on exactly
+                // one relay, so we only ask each relay for its own groups).
+                Set<String> myGroups = relayToGroupIds.get(relayUrl);
+                if (myGroups != null && !myGroups.isEmpty()) {
+                    JSONArray h = new JSONArray();
+                    for (String id : myGroups) h.put(id);
+
+                    // Group messages: kind 9 in the groups this relay hosts.
                     JSONObject f = new JSONObject();
                     f.put("kinds", new JSONArray().put(9));
-                    JSONArray h = new JSONArray();
-                    for (String id : groupIds) h.put(id);
                     f.put("#h", h);
                     f.put("since", sinceSec);
                     webSocket.send(reqMessage(subGroups, f));
 
-                    // Reactions/replies to me, scoped to my joined groups so the
+                    // Reactions/replies to me, scoped to those groups so the
                     // query is a valid NIP-29 request (relays reject a #p-only
                     // filter with "must have 'h','e' or 'a' tag").
                     JSONObject f2 = new JSONObject();
                     f2.put("kinds", new JSONArray().put(7).put(1111));
-                    JSONArray h2 = new JSONArray();
-                    for (String id : groupIds) h2.put(id);
-                    f2.put("#h", h2);
+                    f2.put("#h", h);
                     f2.put("#p", new JSONArray().put(userPubkey));
                     f2.put("since", sinceSec);
                     webSocket.send(reqMessage(subDirect, f2));
@@ -2386,15 +2440,19 @@ public class NotificationRelayService extends Service {
      */
     private boolean passesFilter(JSONObject event, int kind, String relayUrl) {
         switch (kind) {
-            case 9:
-                // {kinds:[9], "#h":groupIds} on the NIP-29 group relays.
-                return relayUrls.contains(relayUrl) && groupIds.contains(tagValue(event, "h"));
+            case 9: {
+                // {kinds:[9], "#h":ids} — only the groups THIS relay hosts.
+                Set<String> gids = relayToGroupIds.get(relayUrl);
+                return gids != null && gids.contains(tagValue(event, "h"));
+            }
             case 7:
-            case 1111:
-                // {kinds:[7,1111], "#h":groupIds, "#p":[me]} on the group relays.
-                return relayUrls.contains(relayUrl)
-                        && groupIds.contains(tagValue(event, "h"))
+            case 1111: {
+                // {kinds:[7,1111], "#h":ids, "#p":[me]} on the group's host relay.
+                Set<String> gids = relayToGroupIds.get(relayUrl);
+                return gids != null
+                        && gids.contains(tagValue(event, "h"))
                         && pTags(event).contains(userPubkey);
+            }
             case 4:
                 // {kinds:[4], authors:dmFollows, "#p":[me]} on the DM relays.
                 return dmRelays.contains(relayUrl)

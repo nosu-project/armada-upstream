@@ -156,6 +156,26 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     [groupList, channelLevel],
   );
 
+  // Each joined group paired with its single host relay. A NIP-29 group lives
+  // on exactly one relay, so the native service scopes each relay's kind-9 REQ
+  // to just its own groups (see the `groupSubs` field). Deduped + sorted so a
+  // group-list refetch that merely reorders doesn't churn the native config.
+  const groupSubs = useMemo(() => {
+    const seen = new Set<string>();
+    const subs: Array<{ relay: string; id: string }> = [];
+    for (const g of groupList?.groups ?? []) {
+      if (channelLevel(g.relay, g.id) === "nothing") continue;
+      const relay = normalizeRelayUrl(g.relay);
+      if (!relay) continue;
+      const key = `${relay}\u0000${g.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      subs.push({ relay, id: g.id });
+    }
+    subs.sort((a, b) => a.relay.localeCompare(b.relay) || a.id.localeCompare(b.id));
+    return subs;
+  }, [groupList, channelLevel]);
+
   // DM relays: where kind-4 DMs are read from (config.appRelays, or the user's
   // own DM relays if opted in). These are NOT the NIP-29 group relays — DMs
   // live on the general app relays and are addressed by #p, so they get their
@@ -300,6 +320,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         userPubkey: user!.pubkey,
         relayUrls,
         groupIds,
+        groupSubs,
         mentionOnlyGroupIds,
         prefs: prefsRecord,
         concordSubs,
@@ -318,7 +339,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, signerCfg]);
+  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, signerCfg]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off, start the background service. Android lets us request the OS

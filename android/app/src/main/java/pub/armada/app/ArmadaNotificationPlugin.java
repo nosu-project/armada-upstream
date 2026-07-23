@@ -535,6 +535,7 @@ public class ArmadaNotificationPlugin extends Plugin {
 
         String relayUrlsRaw = arrayToString(call.getArray("relayUrls"));
         String groupIdsRaw = arrayToString(call.getArray("groupIds"));
+        String groupSubsRaw = arrayToString(call.getArray("groupSubs"));
         String dmRelaysRaw = arrayToString(call.getArray("dmRelays"));
         String dmFollowsRaw = arrayToString(call.getArray("dmFollows"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
@@ -574,6 +575,8 @@ public class ArmadaNotificationPlugin extends Plugin {
                     .putString("relayUrls", relayUrlsRaw != null ? relayUrlsRaw : "[]");
             if (groupIdsRaw != null) editor.putString("groupIds", groupIdsRaw);
             else editor.remove("groupIds");
+            if (groupSubsRaw != null) editor.putString("groupSubs", groupSubsRaw);
+            else editor.remove("groupSubs");
             if (dmRelaysRaw != null) editor.putString("dmRelays", dmRelaysRaw);
             else editor.remove("dmRelays");
             if (dmFollowsRaw != null) editor.putString("dmFollows", dmFollowsRaw);

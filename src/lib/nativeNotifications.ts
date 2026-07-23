@@ -164,6 +164,15 @@ export interface ArmadaNotificationPlugin {
     /** Joined group ids (the `h` tag values) for the kind-9 filter. */
     groupIds?: string[];
     /**
+     * Joined NIP-29 groups mapped to their single host relay. A NIP-29 group
+     * is intrinsically tied to one relay, so the service scopes each relay's
+     * kind-9/7/1111 REQ to just the groups that relay hosts — rather than
+     * broadcasting every joined id to every relay. Supersedes the flat
+     * `groupIds`/`relayUrls` pairing; `groupIds` is still sent so an older
+     * native binary (which ignores this field) keeps working.
+     */
+    groupSubs?: Array<{ relay: string; id: string }>;
+    /**
      * Subset of `groupIds` whose notification level is "mentions only" — the
      * service still subscribes (so mentions land) but should suppress non-
      * mention messages for these groups. Older native binaries that don't know
