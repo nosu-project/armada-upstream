@@ -5,6 +5,18 @@
     ],
     "target": {
       "namespace": "android_app",
+      "package_name": "buzz.armada.app",
+      "sha256_cert_fingerprints": [
+        "8A:D2:FB:4A:F8:09:7C:43:A0:70:77:5E:FC:D0:BC:87:96:AB:B7:AF:E2:94:00:22:4C:08:30:68:0D:1C:E5:8C"
+      ]
+    }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
       "package_name": "pub.armada.app",
       "sha256_cert_fingerprints": [
         "8A:D2:FB:4A:F8:09:7C:43:A0:70:77:5E:FC:D0:BC:87:96:AB:B7:AF:E2:94:00:22:4C:08:30:68:0D:1C:E5:8C"

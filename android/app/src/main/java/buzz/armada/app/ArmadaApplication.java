@@ -1,4 +1,4 @@
-package pub.armada.app;
+package buzz.armada.app;
 
 import android.app.Application;
 

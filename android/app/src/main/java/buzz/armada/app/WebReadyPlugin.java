@@ -1,4 +1,4 @@
-package pub.armada.app;
+package buzz.armada.app;
 
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;

@@ -7,7 +7,7 @@
 #
 # Built in CI on version tags; see ../../.gitlab-ci.yml (build-desktop-*).
 
-appId: pub.armada.app
+appId: buzz.armada.app
 productName: Armada
 copyright: Armada
 

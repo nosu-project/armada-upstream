@@ -1,4 +1,4 @@
-package pub.armada.app;
+package buzz.armada.app;
 
 import android.app.AlarmManager;
 import android.app.PendingIntent;
@@ -32,8 +32,8 @@ import android.util.Log;
 public class BootReceiver extends BroadcastReceiver {
 
     private static final String TAG = "ArmadaBootReceiver";
-    static final String ACTION_RETRY = "pub.armada.app.ACTION_BOOT_RETRY";
-    static final String ACTION_WATCHDOG = "pub.armada.app.ACTION_WATCHDOG";
+    static final String ACTION_RETRY = "buzz.armada.app.ACTION_BOOT_RETRY";
+    static final String ACTION_WATCHDOG = "buzz.armada.app.ACTION_WATCHDOG";
     private static final int RETRY_REQUEST_CODE = 1001;
     private static final int WATCHDOG_REQUEST_CODE = 1002;
     private static final long RETRY_DELAY_MS = 15_000;

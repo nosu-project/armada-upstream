@@ -1,4 +1,4 @@
-package pub.armada.app;
+package buzz.armada.app;
 
 import android.app.ForegroundServiceStartNotAllowedException;
 import android.app.Notification;
@@ -137,7 +137,7 @@ public class NotificationRelayService extends Service {
     // durable read-marker the WebView applies (advancing the in-app read state)
     // on its next open/resume. Delivered to the running service as a start intent
     // (handled in onStartCommand WITHOUT tearing down relay connections).
-    static final String ACTION_MARK_READ = "pub.armada.app.action.MARK_READ";
+    static final String ACTION_MARK_READ = "buzz.armada.app.action.MARK_READ";
     static final String EXTRA_ROOM_KEY = "armada_room_key";
     // Per-channel read-marker payload carried on the Mark read intent
     // (parallel arrays: channel roomKey ↔ last message ts in ms), so the

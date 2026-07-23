@@ -1,4 +1,4 @@
-package pub.armada.app;
+package buzz.armada.app;
 
 import android.content.Context;
 import android.database.Cursor;

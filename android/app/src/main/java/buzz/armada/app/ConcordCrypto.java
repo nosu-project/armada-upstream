@@ -1,4 +1,4 @@
-package pub.armada.app;
+package buzz.armada.app;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;

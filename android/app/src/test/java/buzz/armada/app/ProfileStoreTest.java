@@ -1,4 +1,4 @@
-package pub.armada.app;
+package buzz.armada.app;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;

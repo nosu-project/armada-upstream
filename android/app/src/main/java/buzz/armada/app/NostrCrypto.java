@@ -1,4 +1,4 @@
-package pub.armada.app;
+package buzz.armada.app;
 
 import fr.acinq.secp256k1.Secp256k1;
 

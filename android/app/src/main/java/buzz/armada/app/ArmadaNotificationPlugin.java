@@ -1,4 +1,4 @@
-package pub.armada.app;
+package buzz.armada.app;
 
 import android.app.ForegroundServiceStartNotAllowedException;
 import android.content.Context;
