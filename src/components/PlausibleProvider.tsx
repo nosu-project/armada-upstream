@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { PLAUSIBLE_DOMAIN, PLAUSIBLE_ENDPOINT } from "@/lib/platform";
+import { sanitizePlausibleUrl } from "@/lib/plausibleUrl";
 
 interface PlausibleProviderProps {
   children: ReactNode;
@@ -40,6 +41,12 @@ export function PlausibleProvider({ children }: PlausibleProviderProps) {
         init({
           domain: PLAUSIBLE_DOMAIN,
           ...(PLAUSIBLE_ENDPOINT && { endpoint: PLAUSIBLE_ENDPOINT }),
+          // Collapse dynamic routes to their template and strip query/hash so
+          // no pubkey, community id, or invite secret is ever reported.
+          transformRequest: (payload) => ({
+            ...payload,
+            u: sanitizePlausibleUrl(payload.u),
+          }),
         });
       })
       .catch((err) => {
