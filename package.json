@@ -67,6 +67,7 @@
     "@webxdc/types": "^2.2.0",
     "blurhash": "^2.0.5",
     "capacitor-plugin-nostr-signer": "^0.2.0",
+    "capacitor-secure-storage-plugin": "^0.13.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.0.0",
