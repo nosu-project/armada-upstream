@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.38.0] - 2026-07-22
+
+Adds community-wide message search to Concord communities — search every channel by keyword with channel, author, and media-type filters. Also tidies the channel header and server rail, and makes Android background notifications more reliable.
+
+### Added
+- Search across a whole Concord community by keyword, with channel, author, and media-type (images, videos, links) filters
+
+### Changed
+- Channel header actions, including invite and mute, now live in an overflow (…) menu on both mobile and desktop
+- Server rail pins Settings to a fixed footer and hides horizontal scroll overflow
+
+### Fixed
+- Android background notification service stays alive more reliably
+- Reserve the mobile call bar height so the swipe-reveal underlay lines up
+
 ## [0.37.1] - 2026-07-22
 
 Buzz community invite links now open directly in the Armada app, and several fixes protect your saved servers, DM relays, and mute list from being accidentally overwritten when they can't be loaded.
