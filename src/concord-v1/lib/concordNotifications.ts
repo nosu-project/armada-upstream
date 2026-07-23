@@ -113,7 +113,7 @@ export function buildConcordSubs(list: ConcordList | undefined): ConcordSub[] {
         communityId: entry.communityId,
         communityName: community.name,
         channelName: channel.name,
-        ...(communityImage ? { communityImage } : {}),
+        communityImage,
       });
     }
   }

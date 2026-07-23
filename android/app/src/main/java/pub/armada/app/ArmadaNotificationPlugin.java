@@ -111,26 +111,25 @@ public class ArmadaNotificationPlugin extends Plugin {
         if (ctx == null || roomKey == null || roomKey.isEmpty()) return;
         synchronized (READ_MARKERS_LOCK) {
             SharedPreferences sp = ctx.getSharedPreferences(READ_MARKERS_PREFS, Context.MODE_PRIVATE);
-            JSONObject map;
             try {
-                map = new JSONObject(sp.getString(READ_MARKERS_KEY, "{}"));
-            } catch (Exception e) {
-                map = new JSONObject();
-            }
-            try {
+                JSONObject map;
+                try {
+                    map = new JSONObject(sp.getString(READ_MARKERS_KEY, "{}"));
+                } catch (Exception e) {
+                    map = new JSONObject();
+                }
                 JSONObject existing = map.optJSONObject(roomKey);
                 long prev = existing != null ? existing.optLong("ts", 0L) : 0L;
-                if (tsSec >= prev || existing == null) {
+                if (tsSec >= prev) {
                     JSONObject entry = new JSONObject();
-                    entry.put("ts", Math.max(tsSec, prev));
+                    entry.put("ts", tsSec);
                     if (channelId != null && !channelId.isEmpty()) entry.put("channelId", channelId);
                     map.put(roomKey, entry);
+                    sp.edit().putString(READ_MARKERS_KEY, map.toString()).apply();
                 }
             } catch (Exception e) {
                 Log.w(TAG, "enqueueReadMarker failed", e);
-                return;
             }
-            sp.edit().putString(READ_MARKERS_KEY, map.toString()).apply();
         }
     }
 

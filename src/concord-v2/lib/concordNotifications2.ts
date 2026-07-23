@@ -84,7 +84,7 @@ export function buildConcord2Subs(
         convKey: bytesToHex(s.group.convKey),
         epoch: s.epoch.toString(),
       })),
-      ...(communityImage ? { communityImage } : {}),
+      communityImage,
     });
   }
   // Deterministic order (ids, not display names) so a mere refetch/rename

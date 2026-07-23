@@ -443,9 +443,9 @@ public class NotificationRelayService extends Service {
         final int notifId;
         String title;                // conversation/room name shown as the notif title
         String url;                  // in-app deep-link for the tap intent
-        boolean isGroupConversation; // true for rooms (group title), false for 1:1 DMs
         // The community this room belongs to — drives its Android group key and
-        // which per-community summary aggregates it.
+        // which per-community summary aggregates it. Null for DMs, which also
+        // makes it the room's group-vs-1:1 discriminator (null ⇒ 1:1).
         CommunityRef community;
         final List<NotificationCompat.MessagingStyle.Message> messages = new ArrayList<>();
         long lastTimestampMs;
@@ -1927,7 +1927,7 @@ public class NotificationRelayService extends Service {
             String picture = profile != null ? profile.picture : null;
             String line = preview.isEmpty() ? "Sent you a direct message" : preview;
             if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 from=" + name);
-            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, url, /*isGroup=*/false,
+            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, url,
                     author, name, picture, line, fTs, /*mention=*/false);
         });
     }
@@ -2011,7 +2011,7 @@ public class NotificationRelayService extends Service {
                             // thread is on screen (the peer isn't known until
                             // decrypt, so enqueueRoomMessage's active-room gate
                             // does it here rather than a synchronous pre-check).
-                            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, "/dms/" + peer, /*isGroup=*/false,
+                            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, "/dms/" + peer,
                                     peer, name, picture, line, fTs, /*mention=*/false);
                         });
                     } catch (Exception ignored) {
@@ -2038,7 +2038,7 @@ public class NotificationRelayService extends Service {
             if (roomKey.startsWith("dm:")) return;
         }
         if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (opaque)");
-        enqueueRoomMessage(/*community=*/null, "dm17:opaque", "Direct messages", "/dms", /*isGroup=*/false,
+        enqueueRoomMessage(/*community=*/null, "dm17:opaque", "Direct messages", "/dms",
                 /*senderPubkey=*/null, "Someone", /*picture=*/null,
                 "New direct message", System.currentTimeMillis(), /*mention=*/true);
     }
@@ -2164,7 +2164,7 @@ public class NotificationRelayService extends Service {
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord (opaque): " + room);
                 if (!prefBool("allGroupMessages", true)) return;
                 enqueueRoomMessage(
-                        zToCommunity.get(z), "z:" + z, room, url != null ? url : "/", /*isGroup=*/true,
+                        zToCommunity.get(z), "z:" + z, room, url != null ? url : "/",
                         /*senderPubkey=*/null, "Someone", /*picture=*/null,
                         "New message", System.currentTimeMillis(), /*mention=*/false);
                 return;
@@ -2208,7 +2208,7 @@ public class NotificationRelayService extends Service {
                 String text = buildMessageText(preview, fMention, threadRoot != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fRoom + " / " + name);
                 enqueueRoomMessage(
-                        zToCommunity.get(fZ), "z:" + fZ, fRoom, appendThreadParam(fUrl, threadRoot), /*isGroup=*/true,
+                        zToCommunity.get(fZ), "z:" + fZ, fRoom, appendThreadParam(fUrl, threadRoot),
                         author, name, picture, text, fTs, fMention);
             });
             return;
@@ -2238,7 +2238,7 @@ public class NotificationRelayService extends Service {
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 (opaque): " + st.name);
                 if (!prefBool("allGroupMessages", true)) return;
                 enqueueRoomMessage(
-                        st.community, "c2:" + st.channelId, st.name, st.url, /*isGroup=*/true,
+                        st.community, "c2:" + st.channelId, st.name, st.url,
                         /*senderPubkey=*/null, "Someone", /*picture=*/null,
                         "New message", System.currentTimeMillis(), /*mention=*/false);
                 return;
@@ -2283,7 +2283,7 @@ public class NotificationRelayService extends Service {
                     if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 reaction: " + fStR.name + " / " + name);
                     enqueueRoomMessage(
                             fStR.community, "c2:" + fStR.channelId, fStR.name, fStR.url,
-                            /*isGroup=*/true, author2, name, picture, reactionLine, fTsR, /*mention=*/true);
+                            author2, name, picture, reactionLine, fTsR, /*mention=*/true);
                 });
                 return;
             }
@@ -2319,7 +2319,7 @@ public class NotificationRelayService extends Service {
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2: " + fSt.name + " / " + name);
                 enqueueRoomMessage(
                         fSt.community, "c2:" + fSt.channelId, fSt.name, appendThreadParam(fSt.url, threadRoot2),
-                        /*isGroup=*/true, author2, name, picture, text, fTs2, fMention2);
+                        author2, name, picture, text, fTs2, fMention2);
             });
             return;
         }
@@ -2413,7 +2413,7 @@ public class NotificationRelayService extends Service {
                 // DMs are NOT grouped: each conversation stands alone (null
                 // community ⇒ no setGroup, no summary).
                 enqueueRoomMessage(
-                        /*community=*/null, "dm:" + author, fName, fUrl, /*isGroup=*/false,
+                        /*community=*/null, "dm:" + author, fName, fUrl,
                         author, fName, picture, fLine, fTs, /*mention=*/false);
                 return;
             }
@@ -2429,7 +2429,7 @@ public class NotificationRelayService extends Service {
                         groupPictureCache.get(nip29GroupId), null, null, null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY kind=" + kind + " room=" + roomTitle);
                 enqueueRoomMessage(
-                        community, nip29RoomKey, roomTitle, fUrl, /*isGroup=*/true,
+                        community, nip29RoomKey, roomTitle, fUrl,
                         author, fName, picture, fLine, fTs, mention);
             });
         });
@@ -2594,11 +2594,11 @@ public class NotificationRelayService extends Service {
      *
      * @param community the community this room belongs to — drives the Android
      *                  group + per-community summary (icon/title). {@code null}
-     *                  for DMs, which are NOT grouped (each stands alone).
+     *                  for 1:1 DMs, which are NOT grouped (each stands alone)
+     *                  and render without a conversation title.
      * @param roomKey   stable conversation id (groupId / Concord `z` / "dm:<peer>")
      * @param roomTitle conversation display name (room name, or peer name for DMs)
      * @param url       in-app deep-link opened on tap
-     * @param isGroup   true for multi-party rooms (shows the room title), false for 1:1 DMs
      * @param senderPubkey  message author (for the MessagingStyle Person key)
      * @param senderName    author display name
      * @param senderPicture author avatar URL (resolved async; optional)
@@ -2609,7 +2609,7 @@ public class NotificationRelayService extends Service {
      *                      ping even on the channel the user is currently viewing)
      */
     private void enqueueRoomMessage(
-            CommunityRef community, String roomKey, String roomTitle, String url, boolean isGroup,
+            CommunityRef community, String roomKey, String roomTitle, String url,
             String senderPubkey, String senderName, String senderPicture,
             String text, long timestampMs, boolean mention) {
         // Suppress the notification entirely when the user is already looking at
@@ -2625,7 +2625,7 @@ public class NotificationRelayService extends Service {
         // Build the Person now (without an avatar); post immediately, then re-post
         // with the avatar once loaded so image I/O never delays the notification.
         Bitmap cachedAvatar = senderPicture != null ? avatarCache.get(senderPicture) : null;
-        postRoomMessage(community, roomKey, roomTitle, url, isGroup, senderPubkey, senderName,
+        postRoomMessage(community, roomKey, roomTitle, url, senderPubkey, senderName,
                 cachedAvatar, text, timestampMs, /*replaceLast=*/false, /*alert=*/true);
 
         if (senderPicture != null && !senderPicture.isEmpty() && cachedAvatar == null) {
@@ -2635,7 +2635,7 @@ public class NotificationRelayService extends Service {
                     // carries the avatar, then re-post the same room id. This is a
                     // silent refresh — the initial post already alerted, so don't
                     // vibrate/sound again just because the avatar finished loading.
-                    postRoomMessage(community, roomKey, roomTitle, url, isGroup, senderPubkey, senderName,
+                    postRoomMessage(community, roomKey, roomTitle, url, senderPubkey, senderName,
                             bmp, text, timestampMs, /*replaceLast=*/true, /*alert=*/false);
                 }
             });
@@ -2651,7 +2651,7 @@ public class NotificationRelayService extends Service {
      * vibration/sound) for in-place refreshes like a late-arriving avatar.
      */
     private void postRoomMessage(
-            CommunityRef community, String roomKey, String roomTitle, String url, boolean isGroup,
+            CommunityRef community, String roomKey, String roomTitle, String url,
             String senderPubkey, String senderName, Bitmap avatar,
             String text, long timestampMs, boolean replaceLast, boolean alert) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -2675,7 +2675,6 @@ public class NotificationRelayService extends Service {
         }
         room.title = roomTitle;
         room.url = url;
-        room.isGroupConversation = isGroup;
         room.lastTimestampMs = Math.max(room.lastTimestampMs, timestampMs);
 
         Person.Builder pb = new Person.Builder()
@@ -2894,13 +2893,12 @@ public class NotificationRelayService extends Service {
      * silently once the icon resolves.
      */
     private void refreshSummaries(NotificationManager manager) {
-        // Partition the live rooms by their community group key.
+        // Partition the live rooms by their community group key. Every room in a
+        // group shares the same CommunityRef, so the ref is read off any member.
         Map<String, List<RoomNotif>> byGroup = new HashMap<>();
-        Map<String, CommunityRef> refByGroup = new HashMap<>();
         for (RoomNotif r : roomNotifs.values()) {
             if (r.community == null) continue; // DM — ungrouped
             byGroup.computeIfAbsent(r.community.groupKey, k -> new ArrayList<>()).add(r);
-            refByGroup.put(r.community.groupKey, r.community);
         }
 
         // Cancel summaries for communities that no longer have any room.
@@ -2915,7 +2913,7 @@ public class NotificationRelayService extends Service {
 
         // Post/update each community's summary.
         for (Map.Entry<String, List<RoomNotif>> e : byGroup.entrySet()) {
-            CommunityRef ref = refByGroup.get(e.getKey());
+            CommunityRef ref = e.getValue().get(0).community;
             Bitmap icon = groupImageCache.get(ref.imageCacheKey());
             manager.notify(ref.summaryId, buildSummaryNotification(ref, e.getValue(), icon));
             postedSummaries.put(e.getKey(), ref.summaryId);
@@ -2928,25 +2926,22 @@ public class NotificationRelayService extends Service {
                     NotificationManager m2 =
                             (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                     if (m2 == null) return;
-                    // Re-post only if the community still has rooms.
-                    List<RoomNotif> rooms = new ArrayList<>();
+                    // With the icon now cached, a plain refresh re-posts this
+                    // community's summary carrying it (or drops the summary if
+                    // its rooms were all dismissed while the fetch ran).
+                    refreshSummaries(m2);
+                    // Refresh each channel's conversation shortcut with the
+                    // community image and silently re-post it so the left
+                    // avatar updates (the shortcut was pushed icon-less
+                    // while the image was still fetching).
                     for (RoomNotif r : roomNotifs.values()) {
-                        if (r.community != null && r.community.groupKey.equals(ref.groupKey)) rooms.add(r);
-                    }
-                    if (!rooms.isEmpty()) {
-                        m2.notify(ref.summaryId, buildSummaryNotification(ref, rooms, bmp));
-                        // Refresh each channel's conversation shortcut with the
-                        // community image and silently re-post it so the left
-                        // avatar updates (the shortcut was pushed icon-less
-                        // while the image was still fetching).
-                        for (RoomNotif r : rooms) {
-                            NotificationCompat.MessagingStyle.Message last =
-                                    r.messages.isEmpty() ? null : r.messages.get(r.messages.size() - 1);
-                            Person sender = last != null ? last.getPerson() : null;
-                            if (sender != null) {
-                                pushConversationShortcut(r, sender, bmp);
-                                m2.notify(r.notifId, buildRoomNotification(r, /*alert=*/false));
-                            }
+                        if (r.community == null || !r.community.groupKey.equals(ref.groupKey)) continue;
+                        NotificationCompat.MessagingStyle.Message last =
+                                r.messages.isEmpty() ? null : r.messages.get(r.messages.size() - 1);
+                        Person sender = last != null ? last.getPerson() : null;
+                        if (sender != null) {
+                            pushConversationShortcut(r, sender, bmp);
+                            m2.notify(r.notifId, buildRoomNotification(r, /*alert=*/false));
                         }
                     }
                 });
@@ -2970,13 +2965,15 @@ public class NotificationRelayService extends Service {
             int count = room.messages.size();
             totalMessages += count;
             // One digest line per room: "<room> · <N new>" or the latest sender.
+            // (Only community rooms reach a summary, so the title is the channel
+            // name when present.)
             NotificationCompat.MessagingStyle.Message last =
                     room.messages.isEmpty() ? null : room.messages.get(room.messages.size() - 1);
             CharSequence whoCs = last != null && last.getPerson() != null ? last.getPerson().getName() : null;
             String who = whoCs != null ? whoCs.toString() : null;
-            String line = room.isGroupConversation && room.title != null
+            String line = room.title != null
                     ? room.title + (count > 1 ? " · " + count + " new" : (who != null ? " · " + who : ""))
-                    : (room.title != null ? room.title : (who != null ? who : "New message"));
+                    : (who != null ? who : "New message");
             inbox.addLine(line);
         }
         String summaryText = sorted.size() == 1
@@ -3005,11 +3002,7 @@ public class NotificationRelayService extends Service {
 
     /** Deep-link tap intent for a community's group summary (opens the server). */
     private PendingIntent communityPendingIntent(CommunityRef community) {
-        Intent intent = new Intent(this, MainActivity.class);
-        String url = community.url != null ? community.url : "/";
-        intent.setAction(Intent.ACTION_VIEW);
-        intent.setData(Uri.parse("armada://open" + url));
-        intent.putExtra("armada_path", url);
+        Intent intent = deepLinkIntent(community.url);
         intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         return PendingIntent.getActivity(
                 this, community.summaryId, intent,
@@ -3101,12 +3094,7 @@ public class NotificationRelayService extends Service {
             byte[] plaintext = cipher.doFinal(ciphertext);
             if (expectHashHex != null && !expectHashHex.isEmpty()) {
                 byte[] h = MessageDigest.getInstance("SHA-256").digest(plaintext);
-                StringBuilder sb = new StringBuilder(h.length * 2);
-                for (byte b : h) {
-                    sb.append(Character.forDigit((b >> 4) & 0xF, 16));
-                    sb.append(Character.forDigit(b & 0xF, 16));
-                }
-                if (!sb.toString().equalsIgnoreCase(expectHashHex)) return null;
+                if (!NostrCrypto.bytesToHex(h).equalsIgnoreCase(expectHashHex)) return null;
             }
             return plaintext;
         } catch (Exception e) {
@@ -3115,17 +3103,25 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /**
+     * Deep-link intent into {@link MainActivity} for an in-app path (null ⇒ "/").
+     * ACTION_VIEW is REQUIRED: Capacitor's @capacitor/app plugin only surfaces
+     * the launch URL (getLaunchUrl / appUrlOpen) for an intent whose action is
+     * ACTION_VIEW. Without it the data URI is present but ignored, so a
+     * notification tap delivers the intent yet the web layer never navigates.
+     */
+    private Intent deepLinkIntent(String url) {
+        Intent intent = new Intent(this, MainActivity.class);
+        String path = url != null ? url : "/";
+        intent.setAction(Intent.ACTION_VIEW);
+        intent.setData(Uri.parse("armada://open" + path));
+        intent.putExtra("armada_path", path);
+        return intent;
+    }
+
     /** Deep-link tap intent for a room, keyed by the room's stable notif id. */
     private PendingIntent roomPendingIntent(RoomNotif room) {
-        Intent intent = new Intent(this, MainActivity.class);
-        String url = room.url != null ? room.url : "/";
-        // ACTION_VIEW is REQUIRED: Capacitor's @capacitor/app plugin only surfaces
-        // the launch URL (getLaunchUrl / appUrlOpen) for an intent whose action is
-        // ACTION_VIEW. Without it the data URI is present but ignored, so a
-        // notification tap delivers the intent yet the web layer never navigates.
-        intent.setAction(Intent.ACTION_VIEW);
-        intent.setData(Uri.parse("armada://open" + url));
-        intent.putExtra("armada_path", url);
+        Intent intent = deepLinkIntent(room.url);
         intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         return PendingIntent.getActivity(
                 this, room.notifId, intent,
@@ -3145,16 +3141,11 @@ public class NotificationRelayService extends Service {
      */
     private void pushConversationShortcut(RoomNotif room, Person sender, Bitmap avatar) {
         try {
-            Intent intent = new Intent(this, MainActivity.class);
-            String url = room.url != null ? room.url : "/";
-            intent.setAction(Intent.ACTION_VIEW);
-            intent.setData(Uri.parse("armada://open" + url));
-            intent.putExtra("armada_path", url);
             ShortcutInfoCompat.Builder sb = new ShortcutInfoCompat.Builder(this, room.roomKey)
                     .setShortLabel(room.title != null && !room.title.isEmpty() ? room.title : "Chat")
                     .setPerson(sender)
                     .setLongLived(true)
-                    .setIntent(intent)
+                    .setIntent(deepLinkIntent(room.url))
                     .setCategories(java.util.Collections.singleton("android.shortcut.conversation"));
             // The shortcut icon is what the conversation layout paints on the
             // left; without it (avatar not fetched yet) the app icon shows until
@@ -3559,11 +3550,7 @@ public class NotificationRelayService extends Service {
      */
     private static int hashId(String id) {
         if (id == null) return 2;
-        int hash = 0;
-        for (int i = 0; i < id.length(); i++) {
-            hash = ((hash << 5) - hash) + id.charAt(i);
-        }
-        return (Math.abs(hash) % ROOM_ID_MODULUS) + 2;
+        return (Math.abs(stringHash(id)) % ROOM_ID_MODULUS) + 2;
     }
 
     /**
@@ -3573,10 +3560,15 @@ public class NotificationRelayService extends Service {
      */
     private static int summaryId(String groupKey) {
         if (groupKey == null) return SUMMARY_ID_BASE;
+        return SUMMARY_ID_BASE + (Math.abs(stringHash(groupKey)) % SUMMARY_ID_MODULUS);
+    }
+
+    /** 31x string hash over the WHOLE string (String.hashCode semantics, spelled out for stability). */
+    private static int stringHash(String s) {
         int hash = 0;
-        for (int i = 0; i < groupKey.length(); i++) {
-            hash = ((hash << 5) - hash) + groupKey.charAt(i);
+        for (int i = 0; i < s.length(); i++) {
+            hash = ((hash << 5) - hash) + s.charAt(i);
         }
-        return SUMMARY_ID_BASE + (Math.abs(hash) % SUMMARY_ID_MODULUS);
+        return hash;
     }
 }
