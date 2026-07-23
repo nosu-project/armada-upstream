@@ -1,5 +1,4 @@
 import { useCallback, useMemo } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCommunityRumors } from "@/concord-v2/hooks/useCommunityRumors";
@@ -8,12 +7,7 @@ import { openedToChatMsg } from "@/concord-v2/hooks/useTransport2";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { ChatMsg } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
-import {
-  loadConcord2ThreadReadState,
-  markConcord2ThreadRead,
-  markConcord2ThreadsRead,
-  type Concord2ThreadReadMap,
-} from "@/concord-v2/lib/threadReadState2";
+import { concord2ThreadReadKey, useReadState } from "@/hooks/useReadState";
 
 /**
  * Whether the thread root is a tombstone (a synthetic placeholder for a root
@@ -44,10 +38,6 @@ export interface Concord2Thread {
   hasNew: boolean;
 }
 
-/** Shared TanStack key for the per-user thread read map. */
-const threadReadMapKey = (pubkey: string | undefined) =>
-  ["concord2-thread-read-map", pubkey] as const;
-
 /**
  * Threads the current user has participated in across a Concord V2 community —
  * every thread whose root or any reply they authored — summarized newest-reply
@@ -55,9 +45,12 @@ const threadReadMapKey = (pubkey: string | undefined) =>
  * ({@link useCommunityRumors}). No store access of its own.
  *
  * "New" is per-thread: a thread lights up when its newest reply is newer than
- * the last time the user opened it (tracked in {@link threadReadState2}) and
- * isn't their own. The per-thread read comparison is pure computation layered
- * over the shared scan, so `markRead` recomputes instantly without re-reading.
+ * the last time the user saw it. Those stamps live in the shared read-state
+ * map at `c2t:<rootRumorId>` — the same map channels and DMs use, so they
+ * sync across devices via the encrypted NIP-78 settings event. The per-thread
+ * comparison is pure computation layered over the shared scan, so `markRead`
+ * recomputes instantly. Reading a channel that shows a thread's replies also
+ * advances that thread's stamp (the open-channel effect in ConcordV2Page).
  */
 export function useConcord2Threads(channels: ChannelV2[]): {
   threads: Concord2Thread[];
@@ -68,17 +61,10 @@ export function useConcord2Threads(channels: ChannelV2[]): {
 } {
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
-  const queryClient = useQueryClient();
+  const { readState, markRead: sharedMarkRead } = useReadState();
 
   const channelSig = channels.map((c) => c.idHex).join(",");
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const { data: readMap = {} } = useQuery<Concord2ThreadReadMap>({
-    queryKey: threadReadMapKey(pubkey),
-    queryFn: () => loadConcord2ThreadReadState(pubkey!),
-    enabled: !!pubkey,
-    staleTime: Infinity,
-  });
 
   const { byChannel: rumorsByChannel, isLoading } = useCommunityRumors(channelIds);
 
@@ -156,7 +142,8 @@ export function useConcord2Threads(channels: ChannelV2[]): {
     return out;
   }, [rumorsByChannel, pubkey]);
 
-  // Layer per-thread "new" on top as pure arithmetic against the read map.
+  // Layer per-thread "new" on top as pure arithmetic against the shared
+  // read-state map (`c2t:<rootId>` stamps).
   const threads = useMemo<Concord2Thread[]>(
     () =>
       scanned.map((t) => ({
@@ -165,48 +152,30 @@ export function useConcord2Threads(channels: ChannelV2[]): {
         replyCount: t.replyCount,
         lastReplyAt: t.lastReplyAt,
         participants: t.participants,
-        hasNew: t.newestReplyAuthor !== pubkey && t.lastReplyAt > (readMap[t.rootId] ?? 0),
+        hasNew:
+          t.newestReplyAuthor !== pubkey &&
+          t.lastReplyAt > (readState[concord2ThreadReadKey(t.rootId)] ?? 0),
       })),
-    [scanned, readMap, pubkey],
+    [scanned, readState, pubkey],
   );
 
   const markRead = useCallback(
     (rootId: string, timestamp: number) => {
-      if (!pubkey || timestamp <= 0) return;
-      queryClient.setQueryData<Concord2ThreadReadMap>(threadReadMapKey(pubkey), (prev = {}) =>
-        (prev[rootId] ?? 0) >= timestamp ? prev : { ...prev, [rootId]: timestamp },
-      );
-      void markConcord2ThreadRead(pubkey, rootId, timestamp).then((map) => {
-        queryClient.setQueryData(threadReadMapKey(pubkey), map);
-      });
+      if (timestamp <= 0) return;
+      sharedMarkRead(concord2ThreadReadKey(rootId), timestamp);
     },
-    [pubkey, queryClient],
+    [sharedMarkRead],
   );
 
   const hasNew = useMemo(() => threads.some((t) => t.hasNew), [threads]);
 
   // "Mark all as read": advance every currently-loaded thread with unseen
-  // replies to its newest reply, in ONE batched write (not N debounced ones).
-  // Monotonic, like the single-thread `markRead`.
+  // replies to its newest reply. Monotonic, like the single-thread `markRead`.
   const markAllRead = useCallback(() => {
-    if (!pubkey) return;
-    const entries = threads
-      .filter((t) => t.hasNew)
-      .map((t) => [t.root.id, t.lastReplyAt] as const);
-    if (entries.length === 0) return;
-    queryClient.setQueryData<Concord2ThreadReadMap>(threadReadMapKey(pubkey), (prev = {}) => {
-      let next: Concord2ThreadReadMap | undefined;
-      for (const [rootId, ts] of entries) {
-        if ((prev[rootId] ?? 0) >= ts) continue;
-        next ??= { ...prev };
-        next[rootId] = ts;
-      }
-      return next ?? prev;
-    });
-    void markConcord2ThreadsRead(pubkey, entries).then((map) => {
-      queryClient.setQueryData(threadReadMapKey(pubkey), map);
-    });
-  }, [pubkey, threads, queryClient]);
+    for (const t of threads) {
+      if (t.hasNew) markRead(t.root.id, t.lastReplyAt);
+    }
+  }, [threads, markRead]);
 
   return useMemo(
     () => ({ threads, isLoading, hasNew, markRead, markAllRead }),

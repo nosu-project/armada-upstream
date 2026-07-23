@@ -66,6 +66,7 @@ import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks
 import { BanMemberDialog } from "@/concord-v2/components/BanMemberDialog2";
 import type { BanPhase } from "@/concord-v2/hooks/useModeration2";
 import { hasForeignLiveLinks } from "@/concord-v2/lib/control";
+import { replyTargetOf } from "@/concord-v2/lib/chat";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useGuestbook2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useModeration2, useReadCutRetry2 } from "@/concord-v2/hooks/useModeration2";
@@ -718,6 +719,7 @@ export function ConcordV2Page() {
     mentions,
     isLoading: mentionsLoading,
     hasNew: hasUnreadMention,
+    markRead: markMentionsRead,
     markAllRead: markAllMentionsRead,
   } = useConcord2Mentions(channels, community?.idHex);
 
@@ -954,18 +956,47 @@ export function ConcordV2Page() {
 
   // Mark the open channel read up to its newest message while it's on screen —
   // immediately and again on tab refocus (mirrors GroupChat's NIP-29 behavior).
+  // Reading a channel naturally also consumes what it shows: mentions of the
+  // user and new replies in threads they participate in get their own stamps
+  // advanced too, so the Mentions/Threads tabs don't re-badge what was already
+  // read here.
   const channelIdForRead = channel?.idHex;
+  const readerPubkey = user?.pubkey;
   useEffect(() => {
-    if (!user || !channelIdForRead || allMessages.length === 0) return;
+    if (!readerPubkey || !channelIdForRead || allMessages.length === 0) return;
     const latest = allMessages[allMessages.length - 1]?.created_at ?? 0;
     if (latest <= 0) return;
+
+    // The newest visible mention of the user (never self-authored — the tab
+    // doesn't surface self-mentions), and the newest visible reply per
+    // participated thread.
+    let newestMention = 0;
+    const followedRoots = new Set(threads.map((t) => t.root.id));
+    const replyStamps = new Map<string, number>();
+    for (const m of allMessages) {
+      if (
+        m.pubkey !== readerPubkey &&
+        m.created_at > newestMention &&
+        m.tags.some(([n, v]) => n === "p" && v === readerPubkey)
+      ) {
+        newestMention = m.created_at;
+      }
+      const root = replyTargetOf(m);
+      if (root && followedRoots.has(root) && m.created_at > (replyStamps.get(root) ?? 0)) {
+        replyStamps.set(root, m.created_at);
+      }
+    }
+
     const stamp = () => {
-      if (document.visibilityState === "visible") markChannelRead(channelIdForRead, latest);
+      if (document.visibilityState !== "visible") return;
+      markChannelRead(channelIdForRead, latest);
+      if (newestMention > 0) markMentionsRead(newestMention);
+      for (const [root, ts] of replyStamps) markThreadRead(root, ts);
     };
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [user, channelIdForRead, allMessages, markChannelRead]);
+  }, [readerPubkey, channelIdForRead, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead]);
 
   const { leave, isLeaving, dissolve, createChannel, isAddingChannel } = useCommunityManagement2(community);
   const { coalesced } = useGuestbook2(community);

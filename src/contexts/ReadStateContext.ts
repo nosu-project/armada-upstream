@@ -38,4 +38,14 @@ export function concord2ReadKey(channelIdHex: string): string {
   return `c2:${channelIdHex}`;
 }
 
+/** Stable key for a Concord V2 community's mentions-tab last-seen stamp. */
+export function concord2MentionReadKey(communityIdHex: string): string {
+  return `c2m:${communityIdHex}`;
+}
+
+/** Stable key for a Concord V2 thread's last-read stamp (by root rumor id). */
+export function concord2ThreadReadKey(rootId: string): string {
+  return `c2t:${rootId}`;
+}
+
 export const ReadStateContext = createContext<ReadStateContextType | undefined>(undefined);

@@ -7,17 +7,10 @@ import { openedToChatMsg } from "@/concord-v2/hooks/useTransport2";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { ChatMsg } from "@/components/chat/transport";
 import { useWireScopes } from "@/wire/useWireScopes";
-import {
-  loadConcord2MentionReadState,
-  markConcord2MentionsRead,
-} from "@/concord-v2/lib/mentionReadState2";
+import { concord2MentionReadKey, useReadState } from "@/hooks/useReadState";
 
 /** How many newest cached mentions to surface. */
 const MENTION_LIMIT = 200;
-
-/** Shared TanStack key for the per-user, per-community mentions last-seen stamp. */
-const mentionReadKey = (pubkey: string | undefined, communityIdHex: string | undefined) =>
-  ["concord2-mention-read", pubkey, communityIdHex] as const;
 
 /**
  * The current user's mentions across a Concord V2 community — every cached
@@ -38,20 +31,25 @@ const mentionReadKey = (pubkey: string | undefined, communityIdHex: string | und
  * `channel` binding, so the view can label which channel a mention came from.
  *
  * Read state is independent of channel read state (issue #53): the tab is a
- * single flat list, so it tracks ONE last-seen `created_at` per community
- * ({@link mentionReadState2}). `hasNew` lights the tab when the newest mention
- * post-dates that stamp; `markAllRead` advances it to the newest mention, so
- * clearing the badge no longer requires opening every mentioning channel.
+ * single flat list, so it tracks ONE last-seen `created_at` per community,
+ * kept in the shared read-state map at `c2m:<communityIdHex>` — the same map
+ * channels and DMs use, so it syncs across devices via the encrypted NIP-78
+ * settings event. `hasNew` lights the tab when the newest mention post-dates
+ * that stamp; `markAllRead` advances it to the newest mention, so clearing
+ * the badge no longer requires opening every mentioning channel. Reading a
+ * channel that shows a mention also advances the stamp (see `markRead`).
  */
 export function useConcord2Mentions(channels: ChannelV2[], communityIdHex: string | undefined): {
   mentions: ChatMsg[];
   isLoading: boolean;
   hasNew: boolean;
+  markRead: (timestamp: number) => void;
   markAllRead: () => void;
 } {
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
   const queryClient = useQueryClient();
+  const { readState, markRead: sharedMarkRead } = useReadState();
 
   // A stable list of channel ids (recomputed only when the set changes), so
   // the query key doesn't churn on every parent re-render.
@@ -73,15 +71,6 @@ export function useConcord2Mentions(channels: ChannelV2[], communityIdHex: strin
     staleTime: 0,
   });
 
-  // The mentions last-seen stamp, shared across mounts via the query cache
-  // (the rail badge and the open page re-derive together on `markAllRead`).
-  const { data: readAt = 0 } = useQuery<number>({
-    queryKey: mentionReadKey(pubkey, communityIdHex),
-    queryFn: () => loadConcord2MentionReadState(pubkey!, communityIdHex!),
-    enabled: !!pubkey && !!communityIdHex,
-    staleTime: Infinity,
-  });
-
   // Re-scan the moment the wire ingests a rumor for any watched channel.
   useWireScopes((scopes) => {
     for (const idHex of channelIds) {
@@ -92,23 +81,33 @@ export function useConcord2Mentions(channels: ChannelV2[], communityIdHex: strin
     }
   });
 
+  // The mentions last-seen stamp from the shared read-state map (reactive, so
+  // the rail badge and the open page re-derive together on any advance).
+  const readKey = communityIdHex ? concord2MentionReadKey(communityIdHex) : undefined;
+  const readAt = readKey ? (readState[readKey] ?? 0) : 0;
+
   // `created_at` is unix SECONDS on the ChatMsg; the newest mention is first.
   const newestMentionAt = mentions[0]?.created_at ?? 0;
   const hasNew = newestMentionAt > readAt;
 
+  // Advance the stamp to an arbitrary timestamp (monotonic — the shared map
+  // no-ops on older stamps). Used when a mention is seen outside the tab,
+  // e.g. read naturally in its channel.
+  const markRead = useCallback(
+    (timestamp: number) => {
+      if (!readKey || timestamp <= 0) return;
+      sharedMarkRead(readKey, timestamp);
+    },
+    [readKey, sharedMarkRead],
+  );
+
   const markAllRead = useCallback(() => {
-    if (!pubkey || !communityIdHex || newestMentionAt <= 0) return;
-    const key = mentionReadKey(pubkey, communityIdHex);
-    // Optimistically advance the shared stamp so every mounted instance
-    // re-derives immediately, then persist (monotonic).
-    queryClient.setQueryData<number>(key, (prev = 0) => (prev >= newestMentionAt ? prev : newestMentionAt));
-    void markConcord2MentionsRead(pubkey, communityIdHex, newestMentionAt).then((at) => {
-      queryClient.setQueryData(key, at);
-    });
-  }, [pubkey, communityIdHex, newestMentionAt, queryClient]);
+    if (newestMentionAt <= 0) return;
+    markRead(newestMentionAt);
+  }, [markRead, newestMentionAt]);
 
   return useMemo(
-    () => ({ mentions, isLoading, hasNew, markAllRead }),
-    [mentions, isLoading, hasNew, markAllRead],
+    () => ({ mentions, isLoading, hasNew, markRead, markAllRead }),
+    [mentions, isLoading, hasNew, markRead, markAllRead],
   );
 }
