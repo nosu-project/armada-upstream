@@ -534,6 +534,7 @@ public class ArmadaNotificationPlugin extends Plugin {
                 }
             }
         } else {
+            BootReceiver.cancelWatchdog(ctx);
             ctx.stopService(serviceIntent);
             Log.d(TAG, "Stopped NotificationRelayService");
         }

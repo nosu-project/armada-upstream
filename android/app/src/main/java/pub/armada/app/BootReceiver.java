@@ -1,99 +1,104 @@
 package pub.armada.app;
 
 import android.app.AlarmManager;
-import android.app.ForegroundServiceStartNotAllowedException;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
-import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
 
 /**
- * Restarts the notification foreground service after a device reboot (or app
- * update) when background notifications are enabled.
+ * Brings the notification foreground service back whenever it isn't already
+ * running, from three triggers:
  *
- * Without this, the START_STICKY service only comes back the next time the
- * user opens the app (the WebView's configure() call), so notifications
- * silently stop after every reboot.
+ *   - a device reboot or app update (BOOT_COMPLETED / MY_PACKAGE_REPLACED);
+ *   - a short one-shot retry alarm (a background FGS start can still be refused
+ *     in some states, so the first attempt after boot can fail — the retry
+ *     succeeds once the app is exempt from battery optimizations); and
+ *   - a periodic self-healing watchdog alarm that re-arms itself while
+ *     configured, so an ordinary process kill is recovered without waiting for
+ *     the user to open the app.
  *
  * The service reads its full config (relays, group ids, prefs, Concord subs)
- * from SharedPreferences, so a boot start works without the WebView — same as
- * a START_STICKY restart after a crash. NIP-42 AUTH challenges can't be
- * signed until the app is next opened, but non-AUTH relays stream fine.
+ * from SharedPreferences, so a background start works without the WebView —
+ * same as a START_STICKY restart. NIP-42 AUTH challenges can't be signed until
+ * the app is next opened, but non-AUTH relays stream fine.
  *
- * Android 15+ (API 35) disallows launching a dataSync foreground service
- * directly from a BOOT_COMPLETED receiver. When that happens we schedule a
- * short one-shot alarm and retry from the alarm broadcast instead — a
- * background FGS start is permitted there as long as the app is exempt from
- * battery optimizations, which the notification settings UI prompts the user
- * to grant.
+ * Gating and the actual start live in {@link NotificationRelayService}
+ * (isConfigured / startIfConfigured) so boot, the watchdog, the plugin and
+ * {@link ArmadaApplication} all share one path.
  */
 public class BootReceiver extends BroadcastReceiver {
 
     private static final String TAG = "ArmadaBootReceiver";
-    private static final String ACTION_RETRY = "pub.armada.app.ACTION_BOOT_RETRY";
+    static final String ACTION_RETRY = "pub.armada.app.ACTION_BOOT_RETRY";
+    static final String ACTION_WATCHDOG = "pub.armada.app.ACTION_WATCHDOG";
     private static final int RETRY_REQUEST_CODE = 1001;
+    private static final int WATCHDOG_REQUEST_CODE = 1002;
     private static final long RETRY_DELAY_MS = 15_000;
+    // Doze coalesces setAndAllowWhileIdle alarms to at most ~1 per 9-15 min, so
+    // a tighter interval buys nothing. Each fire re-arms the next.
+    private static final long WATCHDOG_INTERVAL_MS = 15 * 60 * 1_000;
 
     @Override
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
-        if (!Intent.ACTION_BOOT_COMPLETED.equals(action)
-                && !Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
-                && !ACTION_RETRY.equals(action)) {
+        if (action == null) return;
+
+        boolean known = Intent.ACTION_BOOT_COMPLETED.equals(action)
+                || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
+                || ACTION_RETRY.equals(action)
+                || ACTION_WATCHDOG.equals(action);
+        if (!known) return;
+
+        // Not configured (logged out / notifications off): do nothing, and let
+        // the watchdog chain lapse — it is only re-armed on the configured path
+        // below and in the service's onStartCommand.
+        if (!NotificationRelayService.isConfigured(context)) {
             return;
         }
 
-        // Only start when background notifications are enabled and configured
-        // (i.e. someone is logged in). Mirrors the plugin's hasConfig check.
-        SharedPreferences prefs = context.getSharedPreferences(
-                ArmadaNotificationPlugin.PREFS_NAME, Context.MODE_PRIVATE);
-        boolean enabled = prefs.getBoolean("enabled", false);
-        String pubkey = prefs.getString("userPubkey", null);
-        if (!enabled || pubkey == null) {
-            return;
-        }
+        // The retry and watchdog alarms are themselves the retry, so don't have
+        // startIfConfigured schedule another one-shot retry on top of them.
+        boolean allowRetry = Intent.ACTION_BOOT_COMPLETED.equals(action)
+                || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action);
+        NotificationRelayService.startIfConfigured(context, allowRetry);
+        Log.d(TAG, "Ensured NotificationRelayService (" + action + ")");
 
-        Intent serviceIntent = new Intent(context, NotificationRelayService.class);
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent);
-            } else {
-                context.startService(serviceIntent);
-            }
-            Log.d(TAG, "Started NotificationRelayService (" + action + ")");
-        } catch (Exception e) {
-            boolean notAllowed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                    && e instanceof ForegroundServiceStartNotAllowedException;
-            if (notAllowed && !ACTION_RETRY.equals(action)) {
-                // Android 15+ blocks dataSync FGS launch from BOOT_COMPLETED.
-                // Retry once shortly via an alarm; succeeds when the app is
-                // exempt from battery optimizations.
-                Log.w(TAG, "FGS start not allowed from " + action + ", scheduling retry");
-                scheduleRetry(context);
-            } else {
-                Log.w(TAG, "Failed to start NotificationRelayService on " + action, e);
-            }
-        }
+        // Keep the self-healing chain alive while configured.
+        scheduleWatchdog(context);
     }
 
-    private void scheduleRetry(Context context) {
-        AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-        if (alarmManager == null) return;
+    static void scheduleRetry(Context context) {
+        schedule(context, ACTION_RETRY, RETRY_REQUEST_CODE, RETRY_DELAY_MS);
+    }
 
-        Intent retryIntent = new Intent(context, BootReceiver.class).setAction(ACTION_RETRY);
-        PendingIntent pending = PendingIntent.getBroadcast(
-                context,
-                RETRY_REQUEST_CODE,
-                retryIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    static void scheduleWatchdog(Context context) {
+        schedule(context, ACTION_WATCHDOG, WATCHDOG_REQUEST_CODE, WATCHDOG_INTERVAL_MS);
+    }
 
-        alarmManager.setAndAllowWhileIdle(
+    static void cancelWatchdog(Context context) {
+        AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        PendingIntent pi = pendingIntent(
+                context, ACTION_WATCHDOG, WATCHDOG_REQUEST_CODE, PendingIntent.FLAG_NO_CREATE);
+        if (pi != null) am.cancel(pi);
+    }
+
+    private static void schedule(Context context, String action, int requestCode, long delayMs) {
+        AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        am.setAndAllowWhileIdle(
                 AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                SystemClock.elapsedRealtime() + RETRY_DELAY_MS,
-                pending);
+                SystemClock.elapsedRealtime() + delayMs,
+                pendingIntent(context, action, requestCode, PendingIntent.FLAG_UPDATE_CURRENT));
+    }
+
+    private static PendingIntent pendingIntent(
+            Context context, String action, int requestCode, int extraFlags) {
+        Intent i = new Intent(context, BootReceiver.class).setAction(action);
+        return PendingIntent.getBroadcast(
+                context, requestCode, i, extraFlags | PendingIntent.FLAG_IMMUTABLE);
     }
 }

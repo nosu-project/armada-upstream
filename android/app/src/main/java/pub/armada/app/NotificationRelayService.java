@@ -9,6 +9,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -30,6 +31,7 @@ import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.Person;
+import androidx.core.app.ServiceCompat;
 import androidx.core.graphics.drawable.IconCompat;
 
 import org.json.JSONArray;
@@ -417,13 +419,69 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    // ── Lifecycle helpers (boot, watchdog, Application eager start) ────────────
+
+    /** True when background notifications are enabled and a user is logged in. */
+    static boolean isConfigured(Context ctx) {
+        SharedPreferences sp = ctx.getSharedPreferences(
+                ArmadaNotificationPlugin.PREFS_NAME, Context.MODE_PRIVATE);
+        return sp.getBoolean("enabled", false) && sp.getString("userPubkey", null) != null;
+    }
+
+    static void startIfConfigured(Context ctx) {
+        startIfConfigured(ctx, true);
+    }
+
+    /**
+     * Start the service iff it's configured and not already running.
+     *
+     * The running check matters: every caller here (boot, retry alarm,
+     * watchdog, ArmadaApplication) only wants "ensure the service is up".
+     * Delivering a redundant start to a live service would run
+     * onStartCommand → loadConfigAndReconnect, which tears down and rebuilds
+     * every relay socket — so a 15-min watchdog would churn healthy
+     * connections (re-handshake, re-AUTH, rebuild the signer) and open a
+     * recurring miss window for the live-only NIP-17 DM subscription. All
+     * parties touch {@code instance} on the main thread, so the check is
+     * race-free.
+     *
+     * specialUse can be started from boot, but a background FGS start can
+     * still be refused in some states (throwing
+     * ForegroundServiceStartNotAllowedException). When {@code allowRetry} is
+     * set we schedule a short one-shot retry alarm, which succeeds once the
+     * app is exempt from battery optimizations; the retry/watchdog alarms
+     * pass {@code false} so they don't stack retries.
+     */
+    static void startIfConfigured(Context ctx, boolean allowRetry) {
+        if (instance != null) return;
+        if (!isConfigured(ctx)) return;
+        Intent i = new Intent(ctx, NotificationRelayService.class);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ctx.startForegroundService(i);
+            } else {
+                ctx.startService(i);
+            }
+        } catch (Exception e) {
+            if (allowRetry && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    && e instanceof ForegroundServiceStartNotAllowedException) {
+                BootReceiver.scheduleRetry(ctx);
+            } else {
+                Log.w(TAG, "startIfConfigured failed", e);
+            }
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
         createChannels();
         try {
-            startForeground(FOREGROUND_ID, buildForegroundNotification());
+            int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                    ? ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    : 0;
+            ServiceCompat.startForeground(this, FOREGROUND_ID, buildForegroundNotification(), type);
         } catch (Exception e) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                     && e instanceof ForegroundServiceStartNotAllowedException) {
@@ -462,8 +520,36 @@ public class NotificationRelayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // Re-arm the self-healing watchdog on every start so it survives a
+        // START_STICKY relaunch. It's cancelled when the user turns
+        // notifications off (loadConfigAndReconnect's disabled branch).
+        BootReceiver.scheduleWatchdog(this);
         loadConfigAndReconnect();
         return START_STICKY;
+    }
+
+    /**
+     * Defensive: the service runs as a specialUse foreground service, which is
+     * NOT subject to Android 15's dataSync/mediaProcessing runtime cap, so this
+     * shouldn't fire. It's kept as a safety net in case the type ever changes:
+     * onTimeout requires stopping within seconds (or the app is killed for
+     * "foreground service did not stop"), after which the watchdog alarm / the
+     * next app launch (ArmadaApplication) brings the service back.
+     */
+    @Override
+    public void onTimeout(int startId) {
+        handleTimeout();
+    }
+
+    @Override
+    public void onTimeout(int startId, int fgsType) {
+        handleTimeout();
+    }
+
+    private void handleTimeout() {
+        Log.w(TAG, "Foreground service timed out; stopping, watchdog will retry.");
+        BootReceiver.scheduleWatchdog(this);
+        stopSelf();
     }
 
     @Override
@@ -508,6 +594,7 @@ public class NotificationRelayService extends Service {
         SharedPreferences sp = getSharedPreferences(ArmadaNotificationPlugin.PREFS_NAME, Context.MODE_PRIVATE);
         if (!sp.getBoolean("enabled", false)) {
             Log.d(TAG, "Disabled in config; stopping.");
+            BootReceiver.cancelWatchdog(this);
             stopSelf();
             return;
         }

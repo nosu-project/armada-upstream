@@ -11,11 +11,17 @@ import {
 } from "@/lib/nativeNotifications";
 
 /**
- * Once-ever localStorage flag so the battery nudge doesn't nag on every
- * launch. Declining is a valid choice — the warning in notification settings
- * remains available for users who change their mind.
+ * Timestamp (ms) of the last battery-exemption nudge. Without the exemption,
+ * Doze tears the persistent relay websockets down and the OS refuses
+ * background foreground-service starts, so the boot/watchdog recovery paths
+ * can't bring the service back — this is the single most important lever for
+ * reliable background notifications. We re-nudge periodically (not once-ever)
+ * until it's granted, but no more than once per NUDGE_INTERVAL_MS so it
+ * doesn't nag on every launch. The warning in notification settings remains
+ * available for users who keep declining.
  */
-const BATTERY_NUDGE_KEY = "armada:battery-exemption-nudged";
+const BATTERY_NUDGE_KEY = "armada:battery-exemption-nudged-at";
+const NUDGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Headless mount that keeps the native (APK) background notification service
@@ -38,7 +44,8 @@ export function NativeNotifications() {
   useEffect(() => {
     if (Capacitor.getPlatform() !== "android") return;
     if (!user || !enabled) return;
-    if (localStorage.getItem(BATTERY_NUDGE_KEY)) return;
+    const lastNudged = Number(localStorage.getItem(BATTERY_NUDGE_KEY)) || 0;
+    if (Date.now() - lastNudged < NUDGE_INTERVAL_MS) return;
 
     let cancelled = false;
 
@@ -46,7 +53,7 @@ export function NativeNotifications() {
       const exempt = await isIgnoringBatteryOptimizations();
       if (cancelled || exempt) return;
 
-      localStorage.setItem(BATTERY_NUDGE_KEY, "1");
+      localStorage.setItem(BATTERY_NUDGE_KEY, String(Date.now()));
       toast({
         title: "Notifications may be unreliable",
         description: (

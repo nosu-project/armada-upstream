@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
+        android:name=".ArmadaApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -55,7 +56,16 @@
         <service
             android:name=".NotificationRelayService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <!-- A persistent relay connection is not a batch "data sync": using
+                 dataSync subjects the service to Android 15's 6h/24h cap (it
+                 gets killed mid-session) and Android 14's ban on starting it
+                 from boot. specialUse is the category for exactly this "doesn't
+                 fit the other buckets" case and is exempt from both. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Hold a persistent connection to the user's Nostr relays to deliver message notifications" />
+        </service>
 
         <!-- Restarts the notification service after reboot or app update. Not
              exported: BOOT_COMPLETED / MY_PACKAGE_REPLACED are system
@@ -83,7 +93,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Restart the notification service after device reboot -->
