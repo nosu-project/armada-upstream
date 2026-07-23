@@ -11,8 +11,7 @@
  * Design goals mirroring native:
  *   - NIP-29 groups by `#h`; "all messages" vs "mentions-only" split so a
  *     mentions-only group only wakes on messages that `#p`-tag the user.
- *   - friends-only DMs (kind 4) scoped to the follow set; NIP-17 (kind 1059)
- *     scoped to derived conversation addresses (no gift-wrap spam pushes).
+ *   - friends-only DMs (kind 4) scoped to the follow set.
  *   - Concord V1 (`#z`) and V2 (kind-1059 stream authors), merged by relay set
  *     to keep the subscription count under the server's per-user quota.
  *   - deterministic subscription ids and sorted tag/author arrays, so an
@@ -29,7 +28,6 @@ import type { PushPrefs } from "@/hooks/usePushNotifications";
 import type { NostrFilter } from "@nostrify/types";
 import type { ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import type { Concord2Sub } from "@/concord-v2/lib/concordNotifications2";
-import type { Dm17NativeConv } from "@/lib/nip17/protocol";
 
 // Kinds we key notifications off (all plaintext-or-encrypted matched by tag).
 const KIND_GROUP_MESSAGE = 9;
@@ -40,7 +38,7 @@ const KIND_GIFT_WRAP = 1059;
 const KIND_CONCORD_V1 = 3300;
 
 /** How the service worker should fetch + render the referenced event. */
-export type PushScope = "group" | "group-mention" | "dm" | "dm17" | "c1" | "c2";
+export type PushScope = "group" | "group-mention" | "dm" | "c1" | "c2";
 
 /** Routing hints carried in the push payload's `data` for the service worker. */
 export interface PushNotifData {
@@ -76,8 +74,6 @@ export interface PushSubscriptionInput {
   dmRelays: string[];
   /** Follows — friends-only kind-4 DM authors. */
   dmFollows: string[];
-  /** NIP-17 derived conversation addresses (wrap authors). */
-  dm17Convs: Dm17NativeConv[];
   concordV1: ConcordSub[];
   concordV2: Concord2Sub[];
 }
@@ -152,22 +148,6 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
         title: "New message",
         body: "New direct message",
         data: { scope: "dm", relays: dmRelays },
-      },
-    });
-  }
-
-  // Direct messages — NIP-17 gift wraps, scoped to derived conversation
-  // addresses so unsolicited wraps don't push.
-  const wrapAuthors = uniqSorted(input.dm17Convs.map((c) => c.wrapPk));
-  if (prefs.directMessages && wrapAuthors.length > 0 && dmRelays.length > 0) {
-    specs.push({
-      id: "armada-dm17",
-      relays: dmRelays,
-      filter: { kinds: [KIND_GIFT_WRAP], authors: wrapAuthors },
-      notification: {
-        title: "New message",
-        body: "New direct message",
-        data: { scope: "dm17", relays: dmRelays },
       },
     });
   }

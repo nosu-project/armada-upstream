@@ -66,32 +66,6 @@ describe("buildWireSpec", () => {
     ]);
   });
 
-  it("maps NIP-17 conversation wrap addresses to their peer (dm17ByPk), without touching the sig", () => {
-    const inputs = {
-      pubkey: PUBKEY,
-      groups: [],
-      dmRelays: ["wss://dm.relay"],
-      dmFollows: ["a".repeat(64)],
-      concord1: [],
-      concord2: [],
-    };
-    const withAddrs = buildWireSpec({
-      ...inputs,
-      dm17WrapAddrs: [
-        { wrapPk: "1".repeat(64), peerPk: "a".repeat(64) },
-        { wrapPk: "2".repeat(64), peerPk: "b".repeat(64) },
-      ],
-    });
-    const without = buildWireSpec(inputs);
-
-    expect(withAddrs.dm17ByPk.get("1".repeat(64))).toBe("a".repeat(64));
-    expect(withAddrs.dm17ByPk.get("2".repeat(64))).toBe("b".repeat(64));
-    expect(without.dm17ByPk.size).toBe(0);
-    // The wrap-address map must NOT change the subscription set (the kind-1059
-    // #p filter is identical either way), so it never forces a resubscribe.
-    expect(withAddrs.sig).toBe(without.sig);
-  });
-
   it("omits DM filters entirely when logged out", () => {
     const spec = buildWireSpec({
       pubkey: undefined,

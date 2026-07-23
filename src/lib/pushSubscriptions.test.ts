@@ -14,7 +14,6 @@ function baseInput(overrides: Partial<PushSubscriptionInput> = {}): PushSubscrip
     prefs: { ...DEFAULT_PUSH_PREFS },
     dmRelays: [],
     dmFollows: [],
-    dm17Convs: [],
     concordV1: [],
     concordV2: [],
     ...overrides,
@@ -122,29 +121,11 @@ describe("buildPushSubscriptions", () => {
     expect(noFollows.has("armada-dm")).toBe(false);
   });
 
-  it("scopes NIP-17 DMs to derived conversation addresses", () => {
-    const specs = byId(
-      buildPushSubscriptions(
-        baseInput({
-          dmRelays: ["wss://dm"],
-          dm17Convs: [
-            { wrapPk: "wrapB", wrapConvKey: "k", dmConvKey: "k", peer: "bob" },
-            { wrapPk: "wrapA", wrapConvKey: "k", dmConvKey: "k", peer: "amy" },
-          ],
-        }),
-      ),
-    );
-    const dm17 = specs.get("armada-dm17")!;
-    expect(dm17.filter).toEqual({ kinds: [1059], authors: ["wrapA", "wrapB"] });
-    expect(dm17.notification.data.scope).toBe("dm17");
-  });
-
   it("respects the directMessages pref", () => {
     const specs = buildPushSubscriptions(
       baseInput({
         dmRelays: ["wss://dm"],
         dmFollows: ["bob"],
-        dm17Convs: [{ wrapPk: "w", wrapConvKey: "k", dmConvKey: "k", peer: "bob" }],
         prefs: { ...DEFAULT_PUSH_PREFS, directMessages: false },
       }),
     );

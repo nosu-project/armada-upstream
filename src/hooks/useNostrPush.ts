@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useDm17RawKey } from "@/hooks/useDm17";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useNotifLevels } from "@/hooks/useNotifLevels";
@@ -18,7 +17,6 @@ import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
-import { dm17NativeConv } from "@/lib/nip17/protocol";
 import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
 import { buildPushSubscriptions } from "@/lib/pushSubscriptions";
 import {
@@ -40,10 +38,10 @@ import {
  *
  * This hook mirrors the native Android background service's watch set
  * (`useNativeNotifications`): the same groups, mentions-only levels,
- * friends-only DMs, NIP-17 conversation addresses, and Concord V1/V2 channels —
- * turned into content-blind subscriptions by `buildPushSubscriptions`, then
- * registered with the server. It self-gates: `supported` is false unless a
- * nostr-push server is configured for this build and the signer can NIP-44.
+ * friends-only DMs, and Concord V1/V2 channels — turned into content-blind
+ * subscriptions by `buildPushSubscriptions`, then registered with the server.
+ * It self-gates: `supported` is false unless a nostr-push server is configured
+ * for this build and the signer can NIP-44.
  *
  * Exposes the same interface as `usePushNotifications` so the settings UI can
  * pick whichever path is active.
@@ -143,7 +141,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const { data: concordData } = useConcordList();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
   const { relays: publishedDmRelays } = useDmRelayList();
-  const rawKey = useDm17RawKey();
   const allConcord2Subs = useConcord2Subs();
 
   const supported =
@@ -214,11 +211,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
     [followData?.pubkeys],
   );
 
-  const dm17Convs = useMemo(() => {
-    if (!rawKey || !prefs.directMessages) return [];
-    return dmFollows.map((peer) => dm17NativeConv(rawKey, peer));
-  }, [rawKey, dmFollows, prefs.directMessages]);
-
   const concordV1 = useMemo<ConcordSub[]>(
     () =>
       buildConcordSubs(concordData?.list).filter((sub) => {
@@ -247,7 +239,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
       prefs,
       dmRelays,
       dmFollows,
-      dm17Convs,
       concordV1,
       concordV2,
     });
@@ -259,7 +250,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
     prefs,
     dmRelays,
     dmFollows,
-    dm17Convs,
     concordV1,
     concordV2,
   ]);

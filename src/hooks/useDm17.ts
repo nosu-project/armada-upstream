@@ -2,9 +2,9 @@
  * NIP-17 direct messages — sync, thread, and conversation hooks.
  *
  * The modern DM plane beside the legacy kind-4 engine (`useDirectMessages`).
- * Wire format lives in `src/lib/nip17/protocol.ts` (classic NIP-17 envelope +
- * the nips#2396 deterministic conversation wrap key); decrypted rumors persist
- * in `src/lib/nip17/dm17Store.ts`. These hooks own the relay traffic:
+ * Wire format lives in `src/lib/nip17/protocol.ts` (classic NIP-17 envelope);
+ * decrypted rumors persist in `src/lib/nip17/dm17Store.ts`. These hooks own the
+ * relay traffic:
  *
  *   - INBOX SYNC: a throttled `{kinds:[1059], "#p":[me]}` top-up against the
  *     viewer's DM relays. Every new wrap is opened once (consent-gated for
@@ -12,10 +12,8 @@
  *     stored decrypted; the ciphertext is never persisted. The scan is
  *     since-scoped with a 2-day slack window (NIP-59 backdating).
  *   - THREAD: local-first store read + the shared inbox sync; per-thread
- *     older-history backfill pages the global `#p` stream AND (when the raw
- *     key is available) the conversation's deterministic wrap address —
- *     `{authors:[convPk]}` — which reaches one conversation's history without
- *     pulling the whole inbox (the nips#2396 payoff).
+ *     older-history backfill pages the global `#p` gift-wrap stream with
+ *     `until`, decrypting each wrap to sort it into its conversation.
  *   - SEND: rumor → two seals (peer + self copy) → two wraps, published to
  *     the peer's kind-10050 inbox relays and the viewer's own DM relays
  *     respectively (NIP-17 publishing rules). Sends are optimistic: the rumor
@@ -28,9 +26,7 @@
  */
 
 import { useNostr } from "@nostrify/react";
-import { useNostrLogin } from "@nostrify/react/login";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
@@ -46,7 +42,6 @@ import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import {
   buildDmRumor,
-  conversationWrapKey,
   DM_RUMOR_KINDS,
   dmChatTags,
   dmDeleteTags,
@@ -145,26 +140,6 @@ export function useAdoptDmInbox(): void {
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.pubkey, isLoading, hasList, publishedKey, config.useOwnDmRelays]);
-}
-
-/**
- * The viewer's raw secret key when the login holds one locally (nsec logins
- * only) — what the deterministic conversation wrap key needs. Extension and
- * bunker signers never expose it; those sends fall back to ephemeral wrap
- * keys (plain NIP-17), and reads work identically either way.
- */
-export function useDm17RawKey(): Uint8Array | undefined {
-  const { logins } = useNostrLogin();
-  return useMemo(() => {
-    const login = logins[0];
-    if (!login || login.type !== "nsec") return undefined;
-    try {
-      const decoded = nip19.decode(login.data.nsec);
-      return decoded.type === "nsec" ? (decoded.data as Uint8Array) : undefined;
-    } catch {
-      return undefined;
-    }
-  }, [logins]);
 }
 
 // ── Inbox sync ────────────────────────────────────────────────────────────────
@@ -475,7 +450,6 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   const { config } = useAppContext();
   const queryClient = useQueryClient();
   const ctx = useDm17SyncCtx();
-  const rawKey = useDm17RawKey();
   const { consent } = useDecryptConsent();
   const support = useDm17Support();
   const eventStore = useEventStore();
@@ -592,9 +566,8 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   /**
    * Seal + wrap + publish one rumor: the peer's copy to their kind-10050
    * inbox relays (NIP-17 publishing rule), the self copy to the viewer's own
-   * DM relays. Signed with the deterministic conversation wrap key when the
-   * raw key is available. Resolves when the PEER copy is accepted; the self
-   * copy is best-effort (the rumor is already in the local store).
+   * DM relays. Resolves when the PEER copy is accepted; the self copy is
+   * best-effort (the rumor is already in the local store).
    */
   const publishRumor = useCallback(
     async (rumor: DmRumor, opts?: { firstContact?: boolean }) => {
@@ -605,15 +578,14 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const sealPeer = await sealDmRumor(rumor, peer, signer);
       const sealSelf = peer === self ? undefined : await sealDmRumor(rumor, self, signer);
 
-      const wrapSk = rawKey ? conversationWrapKey(rawKey, peer).sk : undefined;
-      const wrapPeer = wrapDmSeal(sealPeer, peer, { wrapSk, firstContact: opts?.firstContact });
-      const wrapSelf = sealSelf ? wrapDmSeal(sealSelf, self, { wrapSk }) : undefined;
+      const wrapPeer = wrapDmSeal(sealPeer, peer, { firstContact: opts?.firstContact });
+      const wrapSelf = sealSelf ? wrapDmSeal(sealSelf, self) : undefined;
 
       // Persist OUR self-addressed wrap locally BEFORE publishing. On Android
       // the event store is the same database the notification service dedupes
       // its kind-1059 inbox against, so when this wrap echoes back off the
-      // relay (unopenable to the service unless nsec-derived) it's recognized
-      // as already seen instead of firing a spurious "New direct message".
+      // relay it's recognized as already seen instead of firing a spurious
+      // "New direct message".
       const selfCopy = wrapSelf ?? wrapPeer; // peer === self ⇒ the peer copy IS the self copy
       await eventStore.then((s) => s.event(selfCopy)).catch(() => undefined);
 
@@ -631,7 +603,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const peerTargets = [...new Set([...peerInboxRelays, ...myRelays])];
       await nostr.group(peerTargets).event(wrapPeer, { signal: AbortSignal.timeout(8000) });
     },
-    [nostr, user, self, peer, rawKey, peerInboxRelays, myRelays, eventStore],
+    [nostr, user, self, peer, peerInboxRelays, myRelays, eventStore],
   );
 
   /** Optimistically render a rumor, then seal/wrap/publish in the background. */
@@ -760,9 +732,8 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   }, []);
 
   // ── Older-history backfill ──────────────────────────────────────────────
-  // Pages the global `#p` wrap stream (covers legacy ephemeral-key senders)
-  // and, when the conversation address is derivable, ALSO pages
-  // `{authors:[convPk]}` — precise per-conversation reach (nips#2396).
+  // Pages the global `#p` gift-wrap stream with `until`, decrypting each wrap
+  // to sort it into its conversation.
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const oldestRef = useRef<number | undefined>(undefined);
@@ -782,18 +753,9 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const until =
         oldestRef.current ??
         (messages.length > 0 ? messages[0].createdAt : Math.floor(Date.now() / 1000));
-      const filters: Array<{ kinds: number[]; "#p": string[]; until: number; limit: number; authors?: string[] }> = [
+      const filters: Array<{ kinds: number[]; "#p": string[]; until: number; limit: number }> = [
         { kinds: [1059], "#p": [self], until, limit: INBOX_PAGE },
       ];
-      if (rawKey) {
-        filters.push({
-          kinds: [1059],
-          "#p": [self],
-          authors: [conversationWrapKey(rawKey, peer).pk],
-          until,
-          limit: INBOX_PAGE,
-        });
-      }
       const wraps = await ctx.nostr.group(ctx.relays).query(filters, { signal: AbortSignal.timeout(8000) });
       if (wraps.length === 0) {
         setHasMore(false);
@@ -817,7 +779,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       loadingRef.current = false;
       setIsLoadingOlder(false);
     }
-  }, [ctx, self, peer, hasMore, messages, rawKey, queryClient, queryKey]);
+  }, [ctx, self, peer, hasMore, messages, queryClient, queryKey]);
 
   return {
     messages,

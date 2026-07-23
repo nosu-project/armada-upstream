@@ -18,8 +18,6 @@ import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
 import { signStreamAuthsChunked } from "@/concord-v2/lib/streamAuth";
-import { dm17NativeConv } from "@/lib/nip17/protocol";
-import { useDm17RawKey } from "@/hooks/useDm17";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { normalizeRelayUrl } from "@/lib/platform";
@@ -186,22 +184,6 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     [followData?.pubkeys],
   );
 
-  // NIP-17 gift-wrapped DM subscriptions (nips#2396). For each follow the
-  // viewer can derive a conversation address for — nsec logins only, the raw
-  // key never leaves this hook — ship the wrap address + the two NIP-44
-  // conversation keys that open wrap → seal → rumor. The native service then
-  // decrypts to a rich "<sender>: <preview>" WITHOUT the identity key, exactly
-  // as it does for Concord V2. Empty for extension/bunker logins (no raw key)
-  // or when the user has turned DM notifications off. Sorted by wrap address so
-  // a follow-list reorder doesn't churn the native config.
-  const rawKey = useDm17RawKey();
-  const dm17Subs = useMemo(() => {
-    if (!rawKey || !prefs.directMessages) return [];
-    const out = dmFollows.map((peer) => dm17NativeConv(rawKey, peer));
-    out.sort((a, b) => (a.wrapPk < b.wrapPk ? -1 : a.wrapPk > b.wrapPk ? 1 : 0));
-    return out;
-  }, [rawKey, dmFollows, prefs.directMessages]);
-
   // The signer credential shared with the service (Keystore-sealed natively,
   // wiped with the config on disable/logout) so it can open ANY inbox gift
   // wrap and answer NIP-42 AUTH with the app dead. Every login type carries a
@@ -324,7 +306,6 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         concord2Subs,
         dmRelays,
         dmFollows,
-        dm17Subs,
         signer: signerCfg,
       };
     }
@@ -337,7 +318,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, dm17Subs, signerCfg]);
+  }, [supported, enabled, user, relayUrls, groupIds, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, signerCfg]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off, start the background service. Android lets us request the OS

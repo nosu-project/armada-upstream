@@ -17,7 +17,6 @@ import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useDm17RawKey } from "@/hooks/useDm17";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
@@ -25,7 +24,6 @@ import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { readFolded } from "@/lib/foldedCache";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
-import { conversationWrapKey } from "@/lib/nip17/protocol";
 import { onRelayReopened } from "@/lib/relayReopen";
 import { logSync } from "@/lib/syncLog";
 import { emitWireScopes } from "@/wire/bus";
@@ -224,7 +222,6 @@ export function WireSync() {
   const { data: groupList } = useUserGroupList();
   const { data: followData } = useFollowList();
   const { data: concordData } = useConcordList();
-  const rawKey = useDm17RawKey();
   const { relays: publishedDmRelays } = useDmRelayList();
   const concord2 = useWireConcord2Channels();
   const concord2Control = useWireConcord2Control();
@@ -248,13 +245,6 @@ export function WireSync() {
     return [...byKey.values()];
   }, [nip29Groups, groupList?.groups]);
 
-  // NIP-17 conversation wrap addresses for the viewer's follows: `wrapPk →
-  // peerPk`. Derivable only for nsec logins (the deterministic nips#2396 key
-  // needs the raw secret key); extension/bunker logins yield an empty set and
-  // simply get no NIP-17 DM notifications (their wraps stay attributed to
-  // useDm17's own decrypt path). Follows-scoped, matching the unread dot. This
-  // does NOT enter the resubscribe signature — the `#p` gift-wrap filter is
-  // unchanged as follows come and go; only ingest attribution shifts.
   // The relays to hold the live kind-1059 gift-wrap subscription on. MUST match
   // the set useDm17's inbox scan reads from (useDm17SyncCtx): our effective DM
   // relays UNIONED with our PUBLISHED kind-10050 inbox. NIP-17 senders deliver a
@@ -269,19 +259,6 @@ export function WireSync() {
     [config, publishedDmRelays],
   );
 
-  const dm17WrapAddrs = useMemo(() => {
-    if (!rawKey) return [];
-    const out: Array<{ wrapPk: string; peerPk: string }> = [];
-    for (const peerPk of followData?.pubkeys ?? []) {
-      try {
-        out.push({ wrapPk: conversationWrapKey(rawKey, peerPk).pk, peerPk });
-      } catch {
-        // A malformed follow pubkey can't yield an address — skip it.
-      }
-    }
-    return out;
-  }, [rawKey, followData?.pubkeys]);
-
   const spec: WireSpec = useMemo(
     () =>
       buildWireSpec({
@@ -289,13 +266,12 @@ export function WireSync() {
         groups,
         dmRelays,
         dmFollows: followData?.pubkeys ?? [],
-        dm17WrapAddrs,
         concord1: buildConcordSubs(concordData?.list),
         concord1Control: buildConcordControlSubs(concordData?.list),
         concord2,
         concord2Control,
       }),
-    [user?.pubkey, groups, dmRelays, followData?.pubkeys, dm17WrapAddrs, concordData, concord2, concord2Control],
+    [user?.pubkey, groups, dmRelays, followData?.pubkeys, concordData, concord2, concord2Control],
   );
 
   // The ingest path reads the spec lazily so long-lived subscriptions always

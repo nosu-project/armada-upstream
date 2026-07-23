@@ -1,13 +1,10 @@
 import { getConversationKey, decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate } from "nostr-tools/pure";
-import { hexToBytes } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
 
 import {
   buildDmRumor,
-  conversationWrapKey,
-  dm17NativeConv,
   dmChatTags,
   dmDeleteTags,
   dmPeerOf,
@@ -35,37 +32,6 @@ function rawSigner(sk: Uint8Array): Dm17Signer {
     },
   };
 }
-
-describe("conversationWrapKey (nips#2396 derivation)", () => {
-  // The worked example from the #2396 draft (NIP-59 example keys).
-  const senderSk = hexToBytes("0beebd062ec8735f4243466049d7747ef5d6594ee838de147f8aab842b15e273");
-  const recipientSk = hexToBytes("e108399bd8424357a710b606ae0c13166d853d327e47a6e5e038197346bdbf45");
-  const senderPk = getPublicKey(senderSk);
-  const recipientPk = getPublicKey(recipientSk);
-
-  it("matches the draft's published test vector", () => {
-    const key = conversationWrapKey(senderSk, recipientPk);
-    expect(Buffer.from(key.sk).toString("hex")).toBe(
-      "2785604c24b7dd2fd83ff224f4d16b2dce384f3ce5a95c13f6ee2fe1fd170d41",
-    );
-    // The wrap pubkey from the draft's example gift wrap.
-    expect(key.pk).toBe("aefe6f6ff2ff2f2a12a90cfc79dca84abd6ba135d959d4247fa865853b1c281c");
-  });
-
-  it("is symmetric — both parties derive the same key", () => {
-    const a = conversationWrapKey(senderSk, recipientPk);
-    const b = conversationWrapKey(recipientSk, senderPk);
-    expect(Buffer.from(a.sk).toString("hex")).toBe(Buffer.from(b.sk).toString("hex"));
-    expect(a.pk).toBe(b.pk);
-  });
-
-  it("differs per counterparty", () => {
-    const otherPk = getPublicKey(generateSecretKey());
-    const a = conversationWrapKey(senderSk, recipientPk);
-    const b = conversationWrapKey(senderSk, otherPk);
-    expect(a.pk).not.toBe(b.pk);
-  });
-});
 
 describe("NIP-17 seal + wrap round trip", () => {
   const senderSk = generateSecretKey();
@@ -96,27 +62,6 @@ describe("NIP-17 seal + wrap round trip", () => {
     expect(opened!.kind).toBe(KIND_DM_CHAT);
     expect(opened!.peer).toBe(senderPk); // received: peer is the sender
     expect(opened!.wrapId).toBe(wrap.id);
-  });
-
-  it("signs with the conversation wrap key and stays legacy-decryptable", async () => {
-    const convKey = conversationWrapKey(senderSk, recipientPk);
-    const rumor = buildDmRumor({
-      kind: KIND_DM_CHAT,
-      content: "fast path",
-      tags: dmChatTags(recipientPk),
-      pubkey: senderPk,
-    });
-    const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
-    const wrap = wrapDmSeal(seal, recipientPk, { wrapSk: convKey.sk });
-
-    // The wrap author IS the deterministic conversation address.
-    expect(wrap.pubkey).toBe(convKey.pk);
-
-    // ...and a completely standard NIP-17 open (decrypt against wrap.pubkey)
-    // recovers it — the fast path costs zero interop.
-    const opened = await openDmWrap(wrap, rawSigner(recipientSk), recipientPk);
-    expect(opened?.content).toBe("fast path");
-    expect(opened?.author).toBe(senderPk);
   });
 
   it("attributes the SELF copy to the peer via the rumor's p tag", async () => {
@@ -202,60 +147,6 @@ describe("NIP-17 seal + wrap round trip", () => {
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
     const wrap = wrapDmSeal(seal, recipientPk);
     expect(await openDmWrap(wrap, rawSigner(recipientSk), recipientPk)).toBeUndefined();
-  });
-});
-
-describe("dm17NativeConv (Android background decrypt material)", () => {
-  const senderSk = generateSecretKey();
-  const senderPk = getPublicKey(senderSk);
-  const recipientSk = generateSecretKey();
-  const recipientPk = getPublicKey(recipientSk);
-
-  // What the Android service does with the two shipped hex keys: decrypt the
-  // outer wrap with wrapConvKey → the kind-13 seal, then the seal with
-  // dmConvKey → the rumor. This must recover the exact message a real
-  // conversation-wrap-key send produces, using ONLY the derived keys (never
-  // the recipient's secret key).
-  function nativeOpen(wrap: { pubkey: string; content: string }, conv: ReturnType<typeof dm17NativeConv>) {
-    const sealJson = nip44Decrypt(wrap.content, hexToBytes(conv.wrapConvKey));
-    const seal = JSON.parse(sealJson) as { kind: number; pubkey: string; content: string };
-    const rumorJson = nip44Decrypt(seal.content, hexToBytes(conv.dmConvKey));
-    return { seal, rumor: JSON.parse(rumorJson) as { kind: number; pubkey: string; content: string } };
-  }
-
-  it("derives keys that open the recipient's inbound wrap → seal → rumor", async () => {
-    // The recipient derives the material for their conversation with senderPk.
-    const conv = dm17NativeConv(recipientSk, senderPk);
-
-    // The sender sends a real conversation-wrap-key DM to the recipient.
-    const convKey = conversationWrapKey(senderSk, recipientPk);
-    const rumor = buildDmRumor({
-      kind: KIND_DM_CHAT,
-      content: "native path",
-      tags: dmChatTags(recipientPk),
-      pubkey: senderPk,
-    });
-    const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
-    const wrap = wrapDmSeal(seal, recipientPk, { wrapSk: convKey.sk });
-
-    // The wrap the service filters on IS this conversation's address.
-    expect(wrap.pubkey).toBe(conv.wrapPk);
-    expect(conv.peer).toBe(senderPk);
-
-    // The two derived keys open both layers with no secret key.
-    const { seal: openedSeal, rumor: openedRumor } = nativeOpen(wrap, conv);
-    expect(openedSeal.kind).toBe(13);
-    expect(openedSeal.pubkey).toBe(senderPk); // seal author == the peer
-    expect(openedRumor.kind).toBe(KIND_DM_CHAT);
-    expect(openedRumor.pubkey).toBe(senderPk);
-    expect(openedRumor.content).toBe("native path");
-  });
-
-  it("is symmetric on wrapPk with the sender's derivation", () => {
-    const recipientConv = dm17NativeConv(recipientSk, senderPk);
-    const senderConv = dm17NativeConv(senderSk, recipientPk);
-    // Both sides address the same conversation.
-    expect(recipientConv.wrapPk).toBe(senderConv.wrapPk);
   });
 });
 

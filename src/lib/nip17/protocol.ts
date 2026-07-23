@@ -5,49 +5,21 @@
  *
  *   rumor(unsigned kind 14/15/7/5, real author, real created_at)
  *     └ seal(kind 13, signed by the sender, nip44 to the recipient, backdated)
- *         └ wrap(kind 1059, ["p", recipient], backdated)
+ *         └ wrap(kind 1059, ["p", recipient], backdated, single-use ephemeral key)
  *
- * ...with ONE enhancement, adopted from nostr-protocol/nips#2396: when the
- * sender holds their raw secret key, the wrap is signed with a DETERMINISTIC
- * "conversation wrap key" derived from the pairwise ECDH secret instead of a
- * throwaway random key. Both parties derive the same key, so its x-only
- * pubkey becomes a stable per-conversation address:
- *
- *   - a reader can fetch ONE conversation with `{kinds:[1059], authors:[pk]}`
- *     (plus the usual `#p` scan for everything else) instead of downloading
- *     and decrypting every wrap ever p-tagged at them — NIP-17's DoS problem;
- *   - relays can whitelist known conversation addresses without AUTH.
- *
- * DELIBERATE DEVIATION from #2396's draft: the wrap content is encrypted to
- * `conv(wrapKey, recipient)` — standard NIP-59 semantics — NOT to the pairwise
- * sender↔recipient conversation key. A vanilla NIP-17 client decrypts our
- * wraps with `nip44.decrypt(wrap.pubkey, content)` exactly as it always has,
- * so the deterministic key costs ZERO interop: legacy clients read our
- * messages without knowing anything changed, and we can `authors`-filter.
- * (#2396's draft encrypts the wrap under the pairwise key, which silently
- * breaks every existing reader; it was closed unmerged.) The key DERIVATION
- * itself follows #2396 byte-for-byte (`HKDF-extract(sharedX,
- * 'nip59-signing-key' + counter)`), so if other clients adopt the draft, the
- * conversation addresses agree.
- *
- * Signer support: SENDING with the deterministic key needs the raw secret key
- * (nsec logins). Extension/bunker logins fall back to a random ephemeral wrap
- * key — plain NIP-17, same envelope, no filterable address. RECEIVING never
- * needs the raw key: every wrap opens with the ordinary
- * `signer.nip44.decrypt(wrap.pubkey, …)` path, whatever signed it.
+ * The wrap is authored by a throwaway random key and its content encrypted to
+ * `conv(wrapKey, recipient)` — standard NIP-59 semantics — so any NIP-17
+ * client opens it with the ordinary `nip44.decrypt(wrap.pubkey, content)`.
+ * The recipient is addressed by the outer `["p", recipient]` tag, so a reader
+ * fetches their inbox with `{kinds:[1059], "#p":[me]}` and decrypts each wrap.
  *
  * First contact: a wrap to a peer we've never messaged carries an outer
  * `["k", "14"]` hint so k-aware clients can index their cold inbox
  * (`{kinds:[1059], "#p":[me], "#k":["14"]}`) — the same trick Concord direct
- * invites use (`directInvite.ts`). Established conversations omit it: the
- * conversation address already scopes them, and the hint would leak the inner
- * kind for no benefit.
+ * invites use (`directInvite.ts`). Established conversations omit it so the
+ * hint doesn't leak the inner kind for no benefit.
  */
 
-import { extract as hkdfExtract } from "@noble/hashes/hkdf.js";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { getConversationKey, encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getEventHash } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent, UnsignedEvent } from "nostr-tools/pure";
@@ -156,54 +128,6 @@ export function dmPeerOf(rumor: { pubkey: string; tags: string[][] }, self: stri
   return rumor.tags.find(([name, value]) => name === "p" && value)?.[1];
 }
 
-// ── The conversation wrap key (nips#2396) ────────────────────────────────────
-
-/** A derived per-conversation wrap keypair (both parties derive the same one). */
-export interface ConversationWrapKey {
-  /** secp256k1 secret key — signs the conversation's wraps. */
-  sk: Uint8Array;
-  /** x-only pubkey hex — the conversation's filterable wrap address. */
-  pk: string;
-}
-
-/**
- * Derive the deterministic conversation wrap key per nips#2396: HKDF-extract
- * over the unhashed ECDH x-coordinate (the same `shared_x` NIP-44 hashes with
- * its own salt) with salt `nip59-signing-key`, appending an incrementing
- * counter (`nip59-signing-key1`, …) in the astronomically-rare case the output
- * isn't a valid secp256k1 scalar. Symmetric: `key(a, B) === key(b, A)`.
- *
- * Memoized — the ECDH plus point-multiply costs ~ms on phones and callers
- * re-derive on every render/poll.
- */
-export function conversationWrapKey(rawSk: Uint8Array, peerPk: string): ConversationWrapKey {
-  const memoKey = `${bytesToHex(rawSk)}|${peerPk}`;
-  const hit = wrapKeyMemo.get(memoKey);
-  if (hit) return hit;
-
-  const sharedX = secp256k1.getSharedSecret(rawSk, hexToBytes(`02${peerPk}`)).subarray(1, 33);
-  let sk: Uint8Array | undefined;
-  for (let counter = 0; counter <= 0xff; counter++) {
-    const salt = new TextEncoder().encode(`nip59-signing-key${counter || ""}`);
-    const prk = hkdfExtract(sha256, sharedX, salt);
-    if (secp256k1.utils.isValidSecretKey(prk)) {
-      sk = prk;
-      break;
-    }
-  }
-  if (!sk) throw new Error("scalar rejection 256 times running is impossible");
-
-  const key: ConversationWrapKey = { sk, pk: bytesToHex(schnorr.getPublicKey(sk)) };
-  if (wrapKeyMemo.size >= WRAP_KEY_MEMO_MAX) {
-    wrapKeyMemo.delete(wrapKeyMemo.keys().next().value as string);
-  }
-  wrapKeyMemo.set(memoKey, key);
-  return key;
-}
-
-const wrapKeyMemo = new Map<string, ConversationWrapKey>();
-const WRAP_KEY_MEMO_MAX = 1024;
-
 // ── Sealing + wrapping (sending) ─────────────────────────────────────────────
 
 /**
@@ -230,23 +154,21 @@ export async function sealDmRumor(
 }
 
 /**
- * Wrap a signed seal for one recipient. Signed by the deterministic
- * conversation wrap key when provided (nips#2396 fast path), else by a
- * single-use ephemeral key (vanilla NIP-17). Either way the content is
- * encrypted to `conv(wrapKey, recipient)`, so any NIP-17 client opens it with
- * the standard `nip44.decrypt(wrap.pubkey, content)`.
+ * Wrap a signed seal for one recipient with a single-use ephemeral key. The
+ * content is encrypted to `conv(wrapKey, recipient)`, so any NIP-17 client
+ * opens it with the standard `nip44.decrypt(wrap.pubkey, content)`.
  */
 export function wrapDmSeal(
   seal: NostrEvent,
   recipientPk: string,
-  opts?: { wrapSk?: Uint8Array; firstContact?: boolean },
+  opts?: { firstContact?: boolean },
 ): NostrEvent {
-  const wrapSk = opts?.wrapSk ?? generateSecretKey();
+  const wrapSk = generateSecretKey();
   const convKey = getConversationKey(wrapSk, recipientPk);
   const tags: string[][] = [["p", recipientPk]];
   // First-contact hint: lets a k-aware receiver index a cold inbox without
   // decrypting their whole gift-wrap backlog. Established conversations omit
-  // it (the conversation address scopes them; don't leak the kind for free).
+  // it so it doesn't leak the inner kind for no benefit.
   if (opts?.firstContact) tags.push(["k", String(KIND_DM_CHAT)]);
   return finalizeEvent(
     {
@@ -337,49 +259,4 @@ export async function openDmWrap(
   } catch {
     return undefined;
   }
-}
-
-// ── Native-notification decrypt material (nips#2396) ─────────────────────────
-
-/**
- * The two NIP-44 conversation keys the Android background service needs to open
- * one conversation's gift wraps WITHOUT the raw identity key — the exact
- * "ship a derived conversation key, never the secret key" pattern Concord V2
- * uses (see concordNotifications2.ts). Two layers, two keys:
- *
- *   - `wrapConvKey` = conv(rawSk, wrapPk): opens the OUTER wrap (kind 1059) →
- *     seal. Symmetric with the sender's conv(wrapSk, self), so it decrypts our
- *     inbound wrap regardless of who signed it.
- *   - `dmConvKey` = conv(rawSk, peerPk): opens the INNER seal (kind 13) →
- *     rumor. This is the pairwise identity conversation key; the seal is
- *     nip44-encrypted under conv(senderIdentity, self) == conv(self, sender).
- *
- * `wrapPk` is the deterministic conversation address the service filters on
- * (`{kinds:[1059], "#p":[self]}` then match author == wrapPk). Requires the
- * viewer's raw secret key (nsec logins) and a known `peerPk` (a follow), so
- * it's derivable for exactly the conversations the wire already attributes.
- *
- * SECURITY: only the two per-conversation NIP-44 keys leave the WebView, never
- * `rawSk`. Each opens exactly one conversation — the same trust surface as the
- * V2 stream `convKey` and the decrypt-at-rest rumor store.
- */
-export interface Dm17NativeConv {
-  /** Conversation wrap address (x-only hex) — the wrap author to match. */
-  wrapPk: string;
-  /** NIP-44 key (hex) opening the outer wrap → seal. */
-  wrapConvKey: string;
-  /** NIP-44 key (hex) opening the inner seal → rumor. */
-  dmConvKey: string;
-  /** The conversation peer (hex) — routing + name. */
-  peer: string;
-}
-
-export function dm17NativeConv(rawSk: Uint8Array, peerPk: string): Dm17NativeConv {
-  const wrapPk = conversationWrapKey(rawSk, peerPk).pk;
-  return {
-    wrapPk,
-    wrapConvKey: bytesToHex(getConversationKey(rawSk, wrapPk)),
-    dmConvKey: bytesToHex(getConversationKey(rawSk, peerPk)),
-    peer: peerPk,
-  };
 }

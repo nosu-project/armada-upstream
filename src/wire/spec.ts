@@ -76,15 +76,6 @@ export interface WireInputs {
   dmRelays: string[];
   /** Friends-only DM senders (kind-3 follows). */
   dmFollows: string[];
-  /**
-   * NIP-17 conversation wrap addresses for follows the viewer can derive an
-   * address for (nsec logins only — see nips#2396). Each maps a wrap author
-   * pubkey to the peer who owns that conversation, so the wire can attribute an
-   * inbound (undecrypted) kind-1059 gift wrap to a sender WITHOUT unwrapping it,
-   * and fire a "{peer} sent you a message" notification. Empty for extension /
-   * bunker logins (the raw key isn't available to derive the address).
-   */
-  dm17WrapAddrs?: Array<{ wrapPk: string; peerPk: string }>;
   /** Concord V1 channel subscriptions (relays + `#z` pseudonyms + bindings). */
   concord1: ConcordSub[];
   /**
@@ -128,12 +119,6 @@ export interface WireSpec {
   v1ByZ: Map<string, string>;
   /** V1 CONTROL `#z` pseudonym → its community id hex, for the fold-wake scope. */
   v1CtlByZ: Map<string, string>;
-  /**
-   * NIP-17 wrap author pubkey → conversation peer pubkey, for attributing an
-   * inbound kind-1059 gift wrap to a sender at ingest without unwrapping it
-   * (nips#2396 conversation addresses; follows-scoped, nsec logins only).
-   */
-  dm17ByPk: Map<string, string>;
   /** Deterministic signature of `subs` for cheap diffing/resubscribe. */
   sig: string;
 }
@@ -193,19 +178,10 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
         add(url, { kinds: [KIND_DM], authors: follows, "#p": [inputs.pubkey] });
       }
       // NIP-17: every gift wrap addressed to the viewer. The wrap author hides
-      // the real sender, so this can't be `authors`-narrowed — but the wire
-      // only NOTIFIES for wraps whose author matches a derived conversation
-      // address (dm17ByPk below); useDm17 owns fetching + decrypting the rest.
+      // the real sender, so this can't be `authors`-narrowed; useDm17 owns
+      // fetching + decrypting these wraps.
       add(url, { kinds: [KIND_GIFT_WRAP], "#p": [inputs.pubkey] });
     }
-  }
-
-  // NIP-17 conversation wrap addresses → peer (nips#2396, follows-scoped). The
-  // ingest path uses this to attribute an inbound gift wrap to its sender for a
-  // notification without unwrapping. Deduped on wrap pubkey.
-  const dm17ByPk = new Map<string, string>();
-  for (const { wrapPk, peerPk } of inputs.dm17WrapAddrs ?? []) {
-    if (wrapPk && peerPk) dm17ByPk.set(wrapPk, peerPk);
   }
 
   // ── Concord V1: merged `#z` filter per community relay ───────────────────
@@ -293,5 +269,5 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     .map(([relay, filters]) => ({ relay, filters }))
     .sort((a, b) => (a.relay < b.relay ? -1 : 1));
 
-  return { subs, v2ByPk, v2CommunityByChannel, v2CtlByPk, v1ByZ, v1CtlByZ, dm17ByPk, sig: JSON.stringify(subs) };
+  return { subs, v2ByPk, v2CommunityByChannel, v2CtlByPk, v1ByZ, v1CtlByZ, sig: JSON.stringify(subs) };
 }

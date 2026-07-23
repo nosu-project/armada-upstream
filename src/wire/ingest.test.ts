@@ -82,7 +82,6 @@ function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
     v2CtlByPk: new Map(),
     v1ByZ: new Map(),
     v1CtlByZ: new Map(),
-    dm17ByPk: new Map(),
     sig: "",
     ...spec,
   };
@@ -214,8 +213,7 @@ describe("ingestWireEvents", () => {
     const { store, sinks } = makeSinks({});
     const withSelf = { ...sinks, getSelfPubkey: () => self };
     // A kind-1059 gift wrap #p-tagged to the viewer (the wire's DM filter),
-    // whose author is an unknown pubkey (ephemeral-key sender / bunker login,
-    // so no dm17ByPk attribution).
+    // whose author is an ephemeral key (as every NIP-17 wrap is).
     const wrap = plainEvent(1059, [["p", self]]);
     wrap.pubkey = "a".repeat(64);
 
@@ -367,89 +365,29 @@ describe("ingestWireEvents — foreground notify candidates", () => {
     });
   });
 
-  it("emits a DM candidate for a NIP-17 wrap whose author is a known conversation address", async () => {
-    // A kind-1059 wrap from a follows-scoped conversation address (nips#2396).
-    // The wire attributes it to the peer WITHOUT unwrapping, so mention=true,
-    // no body, and — critically — it uses the ingest wall-clock time, not the
-    // wrap's NIP-59-backdated created_at.
-    const wrapPk = "a".repeat(64);
-    const now = Math.floor(Date.now() / 1000);
+  it("never emits a DM candidate for a NIP-17 wrap (can't attribute without decrypting)", async () => {
+    // The wire holds no NIP-44 keys, so an inbound gift wrap can't be
+    // attributed to a sender here — it only buffers the wrap and rings
+    // `dm:wrap` for useDm17 to decrypt. No foreground DM candidate is emitted.
     const wrap: NostrEvent = {
       id: "d".repeat(64),
       kind: 1059,
-      pubkey: wrapPk,
-      created_at: now - 2 * 24 * 60 * 60, // backdated 2 days (NIP-59)
+      pubkey: "a".repeat(64),
+      created_at: Math.floor(Date.now() / 1000) - 2 * 24 * 60 * 60,
       content: "sealed",
       tags: [["p", SELF]],
       sig: "",
     };
-    const { captured, off, sinks } = withSink({ dm17ByPk: new Map([[wrapPk, PEER]]) });
+    const { captured, off, sinks } = withSink({});
     try {
       await ingestWireEvents(sinks, [wrap]);
     } finally {
       off();
     }
-    expect(captured).toHaveLength(1);
-    expect(captured[0]).toMatchObject({
-      plane: "dm",
-      peer: PEER,
-      author: PEER,
-      mention: true,
-      roomKey: `dm:${PEER}`,
-      path: `/dms/${PEER}`,
-    });
-    expect(captured[0].body).toBeUndefined();
-    // Live-stamped, not the backdated wrap time (which would trip the notifier's
-    // session-floor / dedupe gates).
-    expect(captured[0].createdAt).toBeGreaterThanOrEqual(now);
-    // The wrap is NOT parked — useDm17 owns fetching/decrypting DM wraps.
-    const parked = await peekPendingWraps([wrapPk]);
-    expect(parked.some((w) => w.id === wrap.id)).toBe(false);
-  });
-
-  it("never emits a DM candidate for a REPLAYED NIP-17 wrap (live:false — pre-EOSE / APK drain)", async () => {
-    // Candidates for DM wraps are wall-clock-stamped (the wrap's created_at is
-    // backdated), so a replayed wrap would look brand-new to the notifier and
-    // re-alert on every fresh round / relaunch. The wrap still buffers for the
-    // decrypt path — only the notification is suppressed.
-    const wrapPk = "a".repeat(64);
-    const wrap: NostrEvent = {
-      id: "f".repeat(64),
-      kind: 1059,
-      pubkey: wrapPk,
-      created_at: Math.floor(Date.now() / 1000) - 3600,
-      content: "sealed",
-      tags: [["p", SELF]],
-      sig: "",
-    };
-    const { captured, off, sinks } = withSink({ dm17ByPk: new Map([[wrapPk, PEER]]) });
-    try {
-      await ingestWireEvents(sinks, [wrap], { live: false });
-    } finally {
-      off();
-    }
     expect(captured).toHaveLength(0);
+    // The wrap is buffered for the decrypt path, not parked.
     expect(drainLiveDmWraps().map((w) => w.id)).toEqual([wrap.id]);
-  });
-
-  it("never emits a DM candidate for our own self-copy wrap (author resolves to self)", async () => {
-    const wrapPk = "b".repeat(64);
-    const wrap: NostrEvent = {
-      id: "e".repeat(64),
-      kind: 1059,
-      pubkey: wrapPk,
-      created_at: Math.floor(Date.now() / 1000),
-      content: "sealed",
-      tags: [["p", SELF]],
-      sig: "",
-    };
-    // A self-copy conversation address maps back to SELF.
-    const { captured, off, sinks } = withSink({ dm17ByPk: new Map([[wrapPk, SELF]]) });
-    try {
-      await ingestWireEvents(sinks, [wrap]);
-    } finally {
-      off();
-    }
-    expect(captured).toHaveLength(0);
+    const parked = await peekPendingWraps(["a".repeat(64)]);
+    expect(parked.some((w) => w.id === wrap.id)).toBe(false);
   });
 });

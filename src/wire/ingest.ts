@@ -86,20 +86,16 @@ function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined
  * wire bus; hooks re-read the store. Writes are idempotent (stores dedupe by
  * id), so overlapping transports are harmless.
  *
- * `opts.live` marks events STREAMED live (post-EOSE / the APK's live feed) as
- * opposed to a round's stored replay (pre-EOSE / the APK's buffered drain).
- * Only live NIP-17 DM wraps produce notify candidates: their candidates are
- * stamped with the ingest wall clock (the wrap's own `created_at` is NIP-59
- * backdated), so a replayed wrap would look brand-new to the notifier and
- * re-alert on every fresh round / relaunch.
+ * `_opts.live` (STREAMED live post-EOSE vs a round's stored replay) is accepted
+ * for transport parity but not acted on: the notifier's own session-floor and
+ * per-room high-water mark suppress replayed re-alerts.
  */
 export async function ingestWireEvents(
   sinks: WireSinks,
   events: NostrEvent[],
-  opts?: { live?: boolean },
+  _opts?: { live?: boolean },
 ): Promise<void> {
   if (events.length === 0) return;
-  const live = opts?.live ?? true;
   const spec = sinks.getSpec();
   const self = sinks.getSelfPubkey?.();
   const scopes = new Set<string>();
@@ -149,23 +145,11 @@ export async function ingestWireEvents(
     // The buffer dedupes by session-seen id: the wire's wrap filter rewinds
     // `since` by the NIP-59 backdate window (stampRoundSince), so every fresh
     // round REPLAYS recent wraps — only genuinely new ones ring the doorbell.
+    // Ring `dm:wrap` so useDm17 drains and decrypts the in-hand wrap (it holds
+    // the NIP-44 keys + the consent gate); a wrap can't be attributed to a
+    // sender here without unwrapping, so ingest never fires a DM candidate.
     const freshDmWraps = bufferLiveDmWraps(dmWraps);
-    if (freshDmWraps.length > 0) {
-      scopes.add("dm:wrap");
-      // Notify only for LIVE arrivals attributable to a known conversation
-      // (nips#2396). Replayed wraps (pre-EOSE / APK drain) stay silent — their
-      // candidates carry a fresh wall-clock stamp and would re-alert. An
-      // unattributable wrap (ephemeral-key sender, non-follow, first contact,
-      // bunker/extension login) still wakes decryption via `dm:wrap`.
-      if (live) {
-        for (const ev of freshDmWraps) {
-          const dmPeer = spec?.dm17ByPk.get(ev.pubkey);
-          if (!dmPeer) continue;
-          const cand = dm17Candidate(ev, dmPeer, self);
-          if (cand) candidates.push(cand);
-        }
-      }
-    }
+    if (freshDmWraps.length > 0) scopes.add("dm:wrap");
   }
 
   // V2: decrypt with the owning channel's stream keys → rumor store.
@@ -251,34 +235,6 @@ export async function ingestWireEvents(
 
   if (scopes.size > 0) emitWireScopes(scopes);
   feedNotifyCandidates(candidates);
-}
-
-/**
- * Build a DM notify candidate for an inbound NIP-17 gift wrap whose author
- * matches a known conversation address (nips#2396). The wrap is never
- * unwrapped here, so there is no body preview and no per-message mention
- * signal (a DM is inherently directed at the viewer). The wrap's `created_at`
- * is NIP-59-backdated (up to 2 days into the past), which would trip the
- * notifier's session-floor / dedupe gates — so the candidate is stamped with
- * the ingest wall-clock time instead (this wrap is arriving live now).
- */
-function dm17Candidate(
-  wrap: NostrEvent,
-  peer: string,
-  self: string | undefined,
-): NotifyCandidate | undefined {
-  if (self && peer === self) return undefined; // a self-copy wrap: never notify
-  return {
-    plane: "dm",
-    author: peer,
-    createdAt: Math.floor(Date.now() / 1000),
-    mention: true, // a DM is inherently directed at the user
-    kind: KIND_DM_WRAP,
-    roomKey: `dm:${peer}`,
-    readKey: `dm:${peer}`,
-    path: `/dms/${peer}`,
-    peer,
-  };
 }
 
 /** Build notify candidates for a batch of decrypted V2 chat rumors. */
