@@ -322,12 +322,21 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           if (PINNED_RAIL_RELAYS.includes(relay) || config.addedRelays.includes(relay)) {
             throw new Error("That server is already in your list.");
           }
-          const res = await fetch(relayToHttpUrl(relay), {
+          // The NIP-11 document is only a preview of the server's name and
+          // description — the actual join is a kind-9021 event over WebSocket
+          // (see useJoinGroup), which CORS does not gate. Many relays don't
+          // send Access-Control-Allow-Origin on their NIP-11 endpoint, so a
+          // failed/blocked fetch here must not block joining a public server.
+          const info = await fetch(relayToHttpUrl(relay), {
             headers: { Accept: "application/nostr+json" },
             signal: AbortSignal.timeout(8000),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const info = (await res.json()) as { name?: string; description?: string };
+          })
+            .then((res) =>
+              res.ok
+                ? (res.json() as Promise<{ name?: string; description?: string }>)
+                : ({} as { name?: string; description?: string }),
+            )
+            .catch(() => ({}) as { name?: string; description?: string });
           if (cancelled) return;
           setTarget({ kind: "nip29", relay, name: info.name, description: info.description });
         }
