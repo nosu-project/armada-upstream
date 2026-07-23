@@ -15,6 +15,7 @@ export interface GroupMetadataPatch {
   name?: string;
   about?: string;
   picture?: string;
+  banner?: string;
   isPrivate?: boolean;
   isRestricted?: boolean;
   isClosed?: boolean;
@@ -26,6 +27,7 @@ function metadataTags(patch: GroupMetadataPatch): string[][] {
   if (patch.name !== undefined) tags.push(["name", patch.name]);
   if (patch.about !== undefined) tags.push(["about", patch.about]);
   if (patch.picture !== undefined) tags.push(["picture", patch.picture]);
+  if (patch.banner !== undefined) tags.push(["banner", patch.banner]);
   if (patch.isPrivate !== undefined) {
     tags.push([patch.isPrivate ? "private" : "public"]);
     // Buzz relays take visibility as a `visibility` tag on the 9002 (the bare

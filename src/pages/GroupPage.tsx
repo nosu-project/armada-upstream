@@ -15,6 +15,7 @@ import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { GroupChat } from "@/components/chat/GroupChat";
 import { MemberList } from "@/components/chat/MemberList";
 import { PinnedMessagesBar } from "@/components/chat/PinnedMessagesBar";
+import { GroupBannerImage } from "@/components/GroupBannerImage";
 import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
 import { GroupSettingsDialog } from "@/components/dialogs/GroupSettingsDialog";
 import { InvitePeopleDialog } from "@/components/dialogs/InvitePeopleDialog";
@@ -61,8 +62,9 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   const join = useJoinGroup(relayUrl, groupId);
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const [searchParams] = useSearchParams();
-  // Accept both Armada's `?code=` and Flotilla/Coracle's `?c=` invite param.
-  const inviteCode = searchParams.get("code") ?? searchParams.get("c") ?? "";
+  // Accept Armada's `?code=`, Flotilla/Coracle's `?c=`, and the standardized
+  // NIP-29 `?invite=` (the naddr invite-code suffix, see buildGroupNaddr).
+  const inviteCode = searchParams.get("code") ?? searchParams.get("c") ?? searchParams.get("invite") ?? "";
   const [code, setCode] = useState(inviteCode);
   const autoJoined = useRef(false);
 
@@ -734,6 +736,14 @@ export function GroupPage() {
             </Button>
           </div>
         </header>
+
+        {/* Channel banner — the kind-39000 `banner` tag, a header image above
+            the group content (Discord-style community branding). */}
+        {group?.banner && (
+          <div className="mx-2 mt-2 h-24 shrink-0 overflow-hidden clip-corner-lg">
+            <GroupBannerImage src={group.banner} className="size-full object-cover" />
+          </div>
+        )}
 
         {/* Buzz canvas bar — the channel's shared document, below the header. */}
         {isBuzz && (

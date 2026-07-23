@@ -1,4 +1,7 @@
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import { nip19 } from "nostr-tools";
+
+import { tryNaddrEncode } from "@/lib/safeNip19";
 
 /**
  * NIP-29 (Relay-based Groups) constants and event parsing.
@@ -194,6 +197,8 @@ export interface Nip29Group {
   relay: string;
   name: string;
   picture?: string;
+  /** Optional header/banner image for the group page. */
+  banner?: string;
   about?: string;
   /** Only members can read. */
   isPrivate: boolean;
@@ -491,6 +496,7 @@ export function parseGroupMetadata(event: NostrEvent, relay: string): Nip29Group
     relay,
     name: tag(event, "name")?.[1] || id,
     picture: tag(event, "picture")?.[1],
+    banner: tag(event, "banner")?.[1],
     about: tag(event, "about")?.[1],
     isPrivate: hasTag(event, "private"),
     isRestricted: hasTag(event, "restricted"),
@@ -502,6 +508,81 @@ export function parseGroupMetadata(event: NostrEvent, relay: string): Nip29Group
       : undefined,
     event,
   };
+}
+
+// ── Group identifiers (naddr + invite-code suffix) ───────────────────────────
+//
+// NIP-29 identifies a group by an naddr for its kind-39000 metadata event:
+// the coordinate's pubkey is the relay's `self` key, the `d` identifier is the
+// group id, and a relay hint names the host relay. An invite code rides along
+// as a `?invite=<code>` suffix — `?` is outside the bech32 charset, so the
+// bare naddr stays valid on its own for clients that don't know the suffix.
+
+/** A parsed group identifier (`naddr1...` with optional `?invite=` suffix). */
+export interface ParsedGroupNaddr {
+  /** The group id (the naddr's `d` identifier). */
+  groupId: string;
+  /** The first relay hint, when present (raw — not normalized). */
+  relay?: string;
+  /** The `?invite=<code>` suffix value, when present. */
+  inviteCode?: string;
+}
+
+/**
+ * Build the standardized NIP-29 group identifier for a group, optionally
+ * carrying an invite code. Returns undefined when `relaySelf` isn't a valid
+ * pubkey (e.g. the relay's NIP-11 doc hasn't resolved).
+ */
+export function buildGroupNaddr(params: {
+  relaySelf: string;
+  groupId: string;
+  relay: string;
+  inviteCode?: string;
+}): string | undefined {
+  const naddr = tryNaddrEncode({
+    kind: KIND_GROUP_METADATA,
+    pubkey: params.relaySelf,
+    identifier: params.groupId,
+    relays: [params.relay],
+  });
+  if (!naddr) return undefined;
+  return params.inviteCode
+    ? `${naddr}?invite=${encodeURIComponent(params.inviteCode)}`
+    : naddr;
+}
+
+/**
+ * Parse a group identifier — bare `naddr1...` or `nostr:naddr1...`, with an
+ * optional `?invite=<code>` suffix. Returns undefined unless the naddr points
+ * at a kind-39000 group metadata coordinate. An unrecognized suffix is ignored
+ * (the portion before `?` is still a valid identifier), per the spec.
+ */
+export function parseGroupNaddr(input: string): ParsedGroupNaddr | undefined {
+  let value = input.trim();
+  if (value.toLowerCase().startsWith("nostr:")) value = value.slice("nostr:".length);
+
+  // Split the suffix first: `?` isn't in the bech32 charset, so everything
+  // before it must decode on its own.
+  let inviteCode: string | undefined;
+  const q = value.indexOf("?");
+  if (q !== -1) {
+    const suffix = value.slice(q + 1);
+    value = value.slice(0, q);
+    inviteCode = new URLSearchParams(suffix).get("invite") || undefined;
+  }
+
+  try {
+    const decoded = nip19.decode(value);
+    if (decoded.type !== "naddr") return undefined;
+    if (decoded.data.kind !== KIND_GROUP_METADATA) return undefined;
+    return {
+      groupId: decoded.data.identifier,
+      relay: decoded.data.relays?.[0],
+      inviteCode,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**

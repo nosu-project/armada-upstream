@@ -42,6 +42,7 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
   const { editMetadata, createInvite } = useGroupModeration(relayUrl, group.id);
   const [name, setName] = useState(group.name);
   const [about, setAbout] = useState(group.about ?? "");
+  const [banner, setBanner] = useState(group.banner ?? "");
   const [isPrivate, setIsPrivate] = useState(group.isPrivate);
   const [isClosed, setIsClosed] = useState(group.isClosed);
   const [inviteCode, setInviteCode] = useState<string | null>(null);
@@ -53,6 +54,7 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
     if (open) {
       setName(group.name);
       setAbout(group.about ?? "");
+      setBanner(group.banner ?? "");
       setIsPrivate(group.isPrivate);
       setIsClosed(group.isClosed);
       setInviteCode(null);
@@ -66,6 +68,7 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
       await editMetadata.mutateAsync({
         name: name.trim() || group.id,
         about: about.trim(),
+        banner: banner.trim(),
         isPrivate,
         isClosed,
       });
@@ -166,6 +169,23 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
                     Topic
                   </Label>
                   <Textarea id="settings-about" value={about} onChange={(e) => setAbout(e.target.value)} maxLength={300} rows={2} className="bg-background/40 border-transparent focus-visible:ring-0 focus-visible:ring-offset-0" />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="settings-banner" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Banner image URL
+                  </Label>
+                  <Input
+                    id="settings-banner"
+                    value={banner}
+                    onChange={(e) => setBanner(e.target.value)}
+                    placeholder="https://…"
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="bg-background/40 border-transparent"
+                  />
                 </div>
 
                 <div className="space-y-2">

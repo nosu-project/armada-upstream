@@ -6,6 +6,7 @@ import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { ServerProfileDialog } from "@/components/dialogs/ServerProfileDialog";
+import { GroupBannerImage } from "@/components/GroupBannerImage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -156,7 +157,7 @@ export function ServerPage() {
                     key={group.id}
                     role="button"
                     tabIndex={0}
-                    className="cursor-pointer hover:border-primary/50 transition-colors"
+                    className="cursor-pointer overflow-hidden hover:border-primary/50 transition-colors"
                     onClick={() => navigate(`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(group.id)}`)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -165,6 +166,11 @@ export function ServerPage() {
                       }
                     }}
                   >
+                    {group.banner && (
+                      <div className="h-20 overflow-hidden">
+                        <GroupBannerImage src={group.banner} className="size-full object-cover" />
+                      </div>
+                    )}
                     <CardHeader className="pb-2">
                       <CardTitle className="flex items-center gap-2 text-base">
                         {group.hasLivekit ? <Volume2 className="size-4 text-muted-foreground" /> : <Hash className="size-4 text-muted-foreground" />}

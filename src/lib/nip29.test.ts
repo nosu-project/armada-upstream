@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { nip19 } from "nostr-tools";
 
-import { KIND_RELAY_MEMBERS, parseRelayMemberRoles } from "@/lib/nip29";
+import {
+  buildGroupNaddr,
+  KIND_GROUP_METADATA,
+  KIND_RELAY_MEMBERS,
+  parseGroupMetadata,
+  parseGroupNaddr,
+  parseRelayMemberRoles,
+} from "@/lib/nip29";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -71,5 +79,86 @@ describe("parseRelayMemberRoles", () => {
 
   it("returns an empty map for the wrong kind", () => {
     expect(parseRelayMemberRoles(snapshot([["member", PK_A, "admin"]], 39002))).toEqual({});
+  });
+});
+
+describe("parseGroupMetadata", () => {
+  const meta = (tags: string[][]) =>
+    parseGroupMetadata(snapshot([["d", "general"], ...tags], KIND_GROUP_METADATA), "wss://relay.example");
+
+  it("parses name, picture, banner and about display tags", () => {
+    expect(
+      meta([
+        ["name", "Pizza Lovers"],
+        ["picture", "https://pizza.com/pizza.png"],
+        ["banner", "https://pizza.com/banner.png"],
+        ["about", "a group for people who love pizza"],
+      ]),
+    ).toMatchObject({
+      id: "general",
+      relay: "wss://relay.example",
+      name: "Pizza Lovers",
+      picture: "https://pizza.com/pizza.png",
+      banner: "https://pizza.com/banner.png",
+      about: "a group for people who love pizza",
+    });
+  });
+
+  it("leaves banner undefined when the tag is absent", () => {
+    expect(meta([["name", "no banner"]])?.banner).toBeUndefined();
+  });
+});
+
+describe("group naddr identifiers", () => {
+  const params = { relaySelf: PK_A, groupId: "general", relay: "wss://relay.example" };
+
+  it("round-trips a bare group naddr", () => {
+    const naddr = buildGroupNaddr(params);
+    expect(naddr).toMatch(/^naddr1/);
+    expect(parseGroupNaddr(naddr!)).toEqual({
+      groupId: "general",
+      relay: "wss://relay.example",
+      inviteCode: undefined,
+    });
+  });
+
+  it("round-trips an naddr with the ?invite= suffix", () => {
+    const naddr = buildGroupNaddr({ ...params, inviteCode: "abc123" });
+    expect(naddr).toContain("?invite=abc123");
+    expect(parseGroupNaddr(naddr!)).toEqual({
+      groupId: "general",
+      relay: "wss://relay.example",
+      inviteCode: "abc123",
+    });
+  });
+
+  it("accepts a nostr: prefix and decodes percent-encoded invite codes", () => {
+    const naddr = buildGroupNaddr({ ...params, inviteCode: "a b+c" });
+    expect(parseGroupNaddr(`nostr:${naddr}`)).toEqual({
+      groupId: "general",
+      relay: "wss://relay.example",
+      inviteCode: "a b+c",
+    });
+  });
+
+  it("ignores an unrecognized suffix (the bare naddr stays valid)", () => {
+    const naddr = buildGroupNaddr(params)!;
+    expect(parseGroupNaddr(`${naddr}?foo=bar`)).toEqual({
+      groupId: "general",
+      relay: "wss://relay.example",
+      inviteCode: undefined,
+    });
+  });
+
+  it("rejects naddrs for other kinds, non-naddr bech32, and garbage", () => {
+    const other = buildGroupNaddr({ ...params, groupId: "x" })!;
+    // Re-encode the same coordinate at a different (non-39000) kind.
+    const decoded = nip19.decode(other);
+    if (decoded.type !== "naddr") throw new Error("expected naddr");
+    const wrongKind = nip19.naddrEncode({ ...decoded.data, kind: 39001 });
+    expect(parseGroupNaddr(wrongKind)).toBeUndefined();
+    expect(parseGroupNaddr(nip19.npubEncode(PK_A))).toBeUndefined();
+    expect(parseGroupNaddr("not an naddr")).toBeUndefined();
+    expect(parseGroupNaddr("")).toBeUndefined();
   });
 });
