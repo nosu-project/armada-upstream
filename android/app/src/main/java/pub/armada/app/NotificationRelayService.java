@@ -1907,7 +1907,7 @@ public class NotificationRelayService extends Service {
                         final int rumorKind = rumor.optInt("kind", -1);
                         if (rumorKind != 14 && rumorKind != 15) return;
                         final String preview = truncate(
-                                rumorKind == 15 ? "Sent a file" : rumor.optString("content"));
+                                rumorKind == 15 ? "Sent a file" : cleanContent(rumor.optString("content")));
                         final long rts = rumor.optLong("created_at", 0);
                         final long fTs = (rts > 0 ? rts * 1000L : System.currentTimeMillis());
                         resolveAuthor(peer, relayUrl, profile -> {
@@ -2096,7 +2096,7 @@ public class NotificationRelayService extends Service {
             final String fRoom = room;
             final String fUrl = url != null ? url : "/";
             final boolean fMention = mentionsMe;
-            final String preview = truncate(inner.optString("content"));
+            final String preview = truncate(cleanContent(inner.optString("content")));
             final long fTs = (cts > 0 ? cts * 1000L : System.currentTimeMillis());
             // A kind-1111 comment (threaded reply) carries its thread root in the
             // uppercase `E` tag. Append it to the deep-link so the WebView can
@@ -2205,7 +2205,7 @@ public class NotificationRelayService extends Service {
             }
             final Concord2Stream fSt = st;
             final boolean fMention2 = mentionsMe2;
-            final String preview2 = truncate(rumor.optString("content"));
+            final String preview2 = truncate(cleanContent(rumor.optString("content")));
             final long rts = rumor.optLong("created_at", 0);
             final long fTs2 = (rts > 0 ? rts * 1000L : System.currentTimeMillis());
             // A kind-1111 comment (threaded reply) carries its thread root in the
@@ -2275,7 +2275,7 @@ public class NotificationRelayService extends Service {
             String url;
             switch (kind) {
                 case 9: {
-                    line = truncate(event.optString("content"));
+                    line = truncate(cleanContent(event.optString("content")));
                     if (line.isEmpty()) line = "Sent a message";
                     if (mention) line = "@you " + line;
                     url = nip29GroupId != null
@@ -2291,7 +2291,7 @@ public class NotificationRelayService extends Service {
                     break;
                 }
                 case 1111: {
-                    line = buildMessageText(truncate(event.optString("content")), mention, true);
+                    line = buildMessageText(truncate(cleanContent(event.optString("content"))), mention, true);
                     url = nip29GroupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
@@ -2383,6 +2383,39 @@ public class NotificationRelayService extends Service {
         String text = !preview.isEmpty() ? preview : (isThreadReply ? "Replied in thread" : "Sent a message");
         if (isThreadReply && !preview.isEmpty()) text = "Replied in thread: " + text;
         return text;
+    }
+
+    /**
+     * Prepare an event's content for a notification body, mirroring the web
+     * client's on-screen preview: resolve NIP-27 {@code nostr:} mentions to
+     * {@code @name} and strip inline media URLs (images/video/audio) that would
+     * otherwise show as a raw blob URL. See {@link NotificationContent}.
+     */
+    private String cleanContent(String content) {
+        return NotificationContent.clean(content, this::mentionName);
+    }
+
+    /**
+     * Display name for a MENTIONED pubkey, resolved best-effort from what we
+     * already hold (memory store, then the shared DB) — never the network, so a
+     * mention can't delay or block the notification. An unknown mention falls
+     * back to a short id via {@link #displayName}, never a wrong name.
+     */
+    private String mentionName(String pubkeyHex) {
+        return displayName(cachedProfile(pubkeyHex), pubkeyHex);
+    }
+
+    /** Synchronous profile lookup from cache/DB only; null when not held. */
+    private Profile cachedProfile(String pubkey) {
+        ProfileStore.Entry held = profileStore.get(pubkey);
+        if (held != null) return new Profile(held.name, held.picture, held.nip05, held.ts);
+        try {
+            String raw = SharedEventDb.get(this).getProfileRaw(pubkey);
+            if (raw != null) return parseProfile(new JSONObject(raw));
+        } catch (Exception ignored) {
+            // Unreadable row — treat as unknown (short-id fallback).
+        }
+        return null;
     }
 
     /** Display name from a resolved profile, falling back to a short npub-ish id. */
