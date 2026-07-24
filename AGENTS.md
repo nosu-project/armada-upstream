@@ -42,7 +42,7 @@ commit/PR.
 |----------|---------|------|
 | `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build) and `npm audit --audit-level=high` |
 | `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
-| `release.yml` | tag `v*` | signed Android APK + AAB, then Zapstore publish, then Google Play publish (skips Play if the service-account secret isn't provisioned) |
+| `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
 | `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb) and Windows (NSIS + portable) |
 
 Notes specific to ngit-ci (vs the old GitLab pipeline):
@@ -73,6 +73,16 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
 - **act images are minimal.** They are not full GitHub-hosted runners: use setup
   actions (`actions/setup-node`, `setup-java`, `android-actions/setup-android`)
   and install anything else explicitly (e.g. `rsync`, `wine`).
+- **`ubuntu-latest` runs in a pre-baked `armada-ci` image.** The coordinator
+  maps the label to it via `NGIT_CI_ACT_PLATFORMS`; the Dockerfile lives in
+  `.ngit/ci-image/` and pre-installs the JDK/node/go toolcaches (setup-*
+  actions no-op), the Android SDK, ruby+fastlane, the zsp binary, and warm
+  `~/.gradle` / `~/.npm` caches for this repo. Cold runs on the stock act
+  image re-downloaded ~700 MB of toolchain+deps and blew the coordinator's
+  30-min default job timeout (`NGIT_CI_JOB_TIMEOUT_SECS`, raised to 3600
+  server-side). Rebuild and reload the image on the coordinator host when
+  `package-lock.json` or the android/gradle deps change; the setup-* actions
+  self-heal version drift in between.
 
 ## How the client reaches backends (no build-time coupling)
 
