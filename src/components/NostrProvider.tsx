@@ -9,6 +9,7 @@ import { EventStoreContext, type EventStoreContextType } from "@/contexts/EventS
 import { useAppContext } from "@/hooks/useAppContext";
 import { appEventStore } from "@/lib/sqlite/eventStore";
 import { NostrBatcher } from "@/lib/NostrBatcher";
+import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
 import { Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
@@ -491,6 +492,21 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         }
         case "extension":
           return NUser.fromExtensionLogin(currentLogin).signer;
+        case "x-android-signer": {
+          // Native Android signer app (Amber, etc.) via NIP-55. Seeded with the
+          // login's known pubkey so answering a challenge never triggers a
+          // getPublicKey round-trip. NOT wrapped in AppSigner/signerWithNudge —
+          // like every other branch here, this is the AUTH-only signer.
+          //
+          // Each sign is an intent round-trip to the signer app, so it is a
+          // "slow signer" in the same sense as a remote bunker: the per-relay
+          // cache + in-flight collapse + cooldown above keep a challenge burst
+          // down to one round-trip, and the USER_AUTH_HEADSTART_MS race lets a
+          // stream key answer the challenge while the user's AUTH follows
+          // out-of-band.
+          const { packageName } = currentLogin.data as { packageName: string };
+          return new AndroidNativeSigner(packageName, currentLogin.pubkey);
+        }
         default:
           return undefined;
       }
