@@ -1,4 +1,4 @@
-import { AtSign, Ban, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -2211,7 +2211,26 @@ export function ConcordV2Page() {
                     intro="Browse this community's repositories and activity."
                     emptyHint="Repositories attached to this community's channels will appear here."
                     onOpenItem={openProjectItem}
-                    headerExtra={user ? <NewIssueDialog repos={projects.repos} onCreate={handleCreateIssue} /> : undefined}
+                    headerExtra={
+                      <div className="flex items-center gap-1.5">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-muted-foreground"
+                              aria-label="Refresh repository activity"
+                              disabled={projects.isSyncing}
+                              onClick={projects.refresh}
+                            >
+                              <RefreshCw className={cn("size-4", projects.isSyncing && "animate-spin")} />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Refresh repository activity</TooltipContent>
+                        </Tooltip>
+                        {user && <NewIssueDialog repos={projects.repos} onCreate={handleCreateIssue} />}
+                      </div>
+                    }
                   />
                 </div>
               ) : searching ? (

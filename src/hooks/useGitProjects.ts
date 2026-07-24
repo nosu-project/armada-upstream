@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -192,6 +192,8 @@ export function useGitProjects(
   enabled: boolean,
 ): GitProjects & {
   isLoading: boolean;
+  isSyncing: boolean;
+  refresh: () => void;
   refreshTicket: (ticket: GitTicket) => Promise<number>;
   relaysForCoordinates: (coordinates: readonly string[]) => string[];
 } {
@@ -232,11 +234,15 @@ export function useGitProjects(
   // with `until` cursors; children are then fetched for every known root so
   // pre-attachment discussion threads become readable too.
   const syncing = useRef(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncNonce, setSyncNonce] = useState(0);
   useEffect(() => {
+    void syncNonce;
     if (!enabled || syncing.current) return;
     const pending = sources.filter((source) => !deepSynced.has(source.address.coordinate) && sourceRelays(source).length > 0);
     if (pending.length === 0) return;
     syncing.current = true;
+    setIsSyncing(true);
     void (async () => {
       const touched = new Set<string>();
       try {
@@ -307,11 +313,18 @@ export function useGitProjects(
         }));
       } finally {
         syncing.current = false;
+        setIsSyncing(false);
         if (touched.size > 0) emitWireScopes(touched);
         void queryClient.invalidateQueries({ queryKey });
       }
     })();
-  }, [enabled, sources, eventStore, nostr, queryClient, queryKey]);
+  }, [enabled, sources, eventStore, nostr, queryClient, queryKey, syncNonce]);
+
+  // Forget this session's sync marks so the next effect run re-pulls everything.
+  const refresh = useCallback(() => {
+    for (const source of sources) deepSynced.delete(source.address.coordinate);
+    setSyncNonce((nonce) => nonce + 1);
+  }, [sources]);
 
   // Pull one ticket's full thread from the repository relays on demand.
   const refreshTicket = useCallback(async (ticket: GitTicket): Promise<number> => {
@@ -365,7 +378,9 @@ export function useGitProjects(
     activities: data?.activities ?? [],
     ticketsById: data?.ticketsById ?? new Map(),
     isLoading: query.isLoading,
+    isSyncing,
+    refresh,
     refreshTicket,
     relaysForCoordinates,
-  }), [data, query.isLoading, refreshTicket, relaysForCoordinates]);
+  }), [data, query.isLoading, isSyncing, refresh, refreshTicket, relaysForCoordinates]);
 }
