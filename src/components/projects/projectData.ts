@@ -16,7 +16,8 @@ export interface ProjectRepo {
   webUrl?: string;
   contributors: string[];
   createdAt: number;
-  event: NostrEvent;
+  /** The repository announcement, when one has been seen. */
+  event?: NostrEvent;
   /** Optional origin label (e.g. the channel a repo is attached to). */
   subtitle?: string;
 }

@@ -355,9 +355,9 @@ function RepoCard({ repo, summary, people }: { repo: ProjectRepo; summary: Proje
   return (
     <Card className="relative flex min-h-44 flex-col overflow-hidden border-border/60 bg-card shadow-none transition-colors hover:bg-foreground/[0.02]">
       <div className="flex min-w-0 items-center justify-between gap-3 px-4 pt-3">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <RepoIcon />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <span className="block min-w-0 truncate text-sm font-semibold text-foreground">{repo.name}</span>
             {repo.subtitle && <span className="block min-w-0 truncate text-xs text-muted-foreground">{repo.subtitle}</span>}
           </div>
@@ -516,7 +516,7 @@ function Overview({
   return (
     <div className="space-y-6">
       {/* Stat pills */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr))]">
         <StatPill count={repos.length} icon={FolderGit2} label="Repositories" onClick={() => onSelect("repositories")} />
         <StatPill count={prCount} icon={GitPullRequest} label="Pull requests" onClick={() => onSelect("prs")} />
         <StatPill count={issueCount} icon={CircleDot} label="Issues" onClick={() => onSelect("issues")} />
@@ -525,7 +525,7 @@ function Overview({
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
         {/* Activity feed */}
-        <section className="space-y-3">
+        <section className="min-w-0 space-y-3">
           <h3 className="text-base font-semibold text-foreground">Recent activity</h3>
           {feed.length > 0 ? (
             <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
@@ -546,7 +546,7 @@ function Overview({
         </section>
 
         {/* Rail: people + contribution graph */}
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <section className="space-y-3">
             <h3 className="text-base font-semibold text-foreground">People</h3>
             {people.length > 0 ? (
@@ -573,9 +573,13 @@ function Overview({
 // Loading / empty
 // ---------------------------------------------------------------------------
 
+// The view renders inside panes narrower than the viewport (a community's main
+// area), so column counts derive from available width, not viewport breakpoints.
+const CARD_GRID = "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(20rem,1fr))]";
+
 function CardsSkeleton() {
   return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <div className={CARD_GRID}>
       {["a", "b", "c", "d"].map((k) => <Skeleton key={k} className="h-44 w-full" />)}
     </div>
   );
@@ -700,7 +704,7 @@ export function ProjectsView({
           <Overview repos={repos} items={items} people={people} onSelect={setFilter} onOpenItem={onOpenItem} />
         ) : filter === "repositories" ? (
           viewMode === "grid" ? (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className={CARD_GRID}>
               {sortedRepos.map((repo) => (
                 <RepoCard key={repo.coord} repo={repo} summary={summaryOf(repo.coord)} people={peopleOf(repo)} />
               ))}

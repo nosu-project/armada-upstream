@@ -1,4 +1,4 @@
-import { AtSign, Ban, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -56,6 +56,9 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelGitActivity } from "@/hooks/useChannelGitActivity";
+import { useGitProjects } from "@/hooks/useGitProjects";
+import { ProjectsView } from "@/components/projects/ProjectsView";
+import type { ProjectWorkItem } from "@/components/projects/projectData";
 import { useCommunityGitActivity } from "@/hooks/useCommunityGitActivity";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -93,7 +96,7 @@ import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2
 import { completeMemberlist } from "@/concord-v2/lib/guestbook";
 import { badgeOf, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import { channelGitRepositoryAttachments, type ChannelV2, type CommunityV2, type ImagePointer } from "@/concord-v2/lib/types";
-import type { GitTicket } from "@/lib/gitActivity";
+import { sortAndDedupeGitTimelineActivities, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
@@ -724,6 +727,11 @@ export function ConcordV2Page() {
     channelGitRepositoryAttachments(folded?.channels.get(candidate.idHex)?.metadata ?? { name: candidate.name, private: candidate.isPrivate }),
   ])), [channels, folded]);
   const communityGitActivity = useCommunityGitActivity(gitAttachmentsByChannel);
+  // The Projects tab exists only once some channel is tied to a repository.
+  const hasProjects = useMemo(
+    () => [...gitAttachmentsByChannel.values()].some((list) => list.some((attachment) => attachment.detachedAt === undefined)),
+    [gitAttachmentsByChannel],
+  );
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels, communityGitActivity.byChannel);
 
   // "Mark all as read": stamp every unread channel to its newest unread
@@ -797,9 +805,9 @@ export function ConcordV2Page() {
     if (routeChannelId) setChannelIdHex(routeChannelId);
   }, [routeChannelId]);
   // Which pane the main area shows: the selected channel's chat, the
-  // community-wide "@ Mentions" list, or the "Threads" list. Selecting a
-  // channel returns to chat.
-  const [view, setView] = useState<"channel" | "mentions" | "threads" | "audit" | "invites" | "banned" | "health">("channel");
+  // community-wide "@ Mentions" list, the "Threads" list, or the "Projects"
+  // view. Selecting a channel returns to chat.
+  const [view, setView] = useState<"channel" | "mentions" | "threads" | "projects" | "audit" | "invites" | "banned" | "health">("channel");
   useEffect(() => {
     if (routeChannelId) setView("channel");
   }, [routeChannelId]);
@@ -807,6 +815,10 @@ export function ConcordV2Page() {
     setChannelIdHex(idHex);
     setView("channel");
   }, []);
+  // Projects data loads lazily, the first time the tab is opened this session.
+  const [projectsTouched, setProjectsTouched] = useState(false);
+  const channelNameById = useMemo(() => new Map(channels.map((c) => [c.idHex, c.name])), [channels]);
+  const projects = useGitProjects(gitAttachmentsByChannel, channelNameById, projectsTouched);
   // A pending "jump to message" target set by clicking a mention: switch to its
   // channel, then scroll+highlight it once that channel's timeline has loaded
   // it (an effect below fires when the message appears in `allMessages`).
@@ -977,6 +989,20 @@ export function ConcordV2Page() {
     user?.pubkey,
   );
   const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
+  const openProjectItem = useCallback((item: ProjectWorkItem) => {
+    const ticket = projects.ticketsById.get(item.id);
+    if (!ticket) return;
+    setOpenTicket(ticket);
+    void projects.refreshTicket(ticket);
+  }, [projects]);
+  // The conversation panel merges gated channel activity with the Projects
+  // view's full history, so a ticket opened from either surface reads complete.
+  const panelActivities = useMemo(
+    () => projects.activities.length === 0
+      ? gitActivity.activities
+      : sortAndDedupeGitTimelineActivities([...gitActivity.activities, ...projects.activities]),
+    [gitActivity.activities, projects.activities],
+  );
   const { mutateAsync: send } = useSendMessage2(community, channel);
 
   // (useActiveRoom is called below, after `threadRoot` is defined, so it can
@@ -1694,6 +1720,26 @@ export function ConcordV2Page() {
                 />
               ) : null}
             </button>
+            {hasProjects && (
+              <button
+                type="button"
+                onClick={() => {
+                  setProjectsTouched(true);
+                  setView("projects");
+                  onNavigate?.();
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
+                  view === "projects"
+                    ? "bg-primary text-primary-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+                )}
+                aria-current={view === "projects"}
+              >
+                <FolderGit2 className="size-4 shrink-0" />
+                <span className="truncate flex-1 min-w-0">Projects</span>
+              </button>
+            )}
           </>
         ) : undefined
       }
@@ -1836,6 +1882,11 @@ export function ConcordV2Page() {
                   <MessagesSquare className="size-5 text-muted-foreground shrink-0" />
                   <h1 className="font-semibold truncate leading-tight">Threads</h1>
                 </>
+              ) : view === "projects" ? (
+                <>
+                  <FolderGit2 className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Projects</h1>
+                </>
               ) : (
                 <>
                   {channel?.isPrivate ? (
@@ -1896,6 +1947,11 @@ export function ConcordV2Page() {
                     <>
                       <MessagesSquare className="size-3 shrink-0" />
                       Threads
+                    </>
+                  ) : view === "projects" ? (
+                    <>
+                      <FolderGit2 className="size-3 shrink-0" />
+                      Projects
                     </>
                   ) : (
                     <>
@@ -2106,6 +2162,17 @@ export function ConcordV2Page() {
                     onOpen={openThreadFromList}
                   />
                 </div>
+              ) : view === "projects" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
+                  <ProjectsView
+                    repos={projects.repos}
+                    items={projects.items}
+                    isLoading={projects.isLoading}
+                    intro="Browse this community's repositories and activity."
+                    emptyHint="Repositories attached to this community's channels will appear here."
+                    onOpenItem={openProjectItem}
+                  />
+                </div>
               ) : searching ? (
                 /* Community-wide search results replace the timeline + composer
                    in-place. Clicking a result jumps to its channel. */
@@ -2260,7 +2327,7 @@ export function ConcordV2Page() {
               )}
             </div>
 
-            <TicketSidePanel ticket={openTicket} members={new Set(memberPubkeys)} activities={gitActivity.activities} onClose={() => setOpenTicket(undefined)} />
+            <TicketSidePanel ticket={openTicket} members={new Set(memberPubkeys)} activities={panelActivities} onClose={() => setOpenTicket(undefined)} />
             </ComposerBoundsProvider>
 
             {/* Thread panel. Desktop: in-flow sibling whose width animates open.
