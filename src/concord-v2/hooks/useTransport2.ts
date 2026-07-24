@@ -306,6 +306,15 @@ export function useTransport2(
     [send],
   );
 
+  // Adapters from the id-keyed hooks to the event-keyed ChatTransport shape.
+  // Defined OUTSIDE the transport memo: inline in it they'd take a new identity
+  // every time `messages` changed, and they're handed straight to memoized
+  // message rows as props — which would re-render the whole mounted window on
+  // every arriving message and every backfilled page.
+  const sendStatusFor = useCallback((id: string) => sendStatus[id], [sendStatus]);
+  const retryEvent = useCallback((event: ChatMsg) => retry(event.id), [retry]);
+  const deleteEvent = useCallback((event: ChatMsg) => deleteMessage(event.id), [deleteMessage]);
+
   const transport = useMemo<ChatTransport>(
     () => ({
       messages: topLevel,
@@ -316,10 +325,10 @@ export function useTransport2(
       loadOlder,
       hasMore,
       isLoadingOlder,
-      sendStatusFor: (id: string) => sendStatus[id],
-      retry: (event: ChatMsg) => retry(event.id),
+      sendStatusFor,
+      retry: retryEvent,
       discard,
-      deleteMessage: (event: ChatMsg) => deleteMessage(event.id),
+      deleteMessage: deleteEvent,
       editMessage,
       replyCountFor,
       reactionsFor,
@@ -329,7 +338,7 @@ export function useTransport2(
       threadRepliesFor,
       sendThreadReply,
     }),
-    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, threadRepliesFor, sendThreadReply],
+    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, threadRepliesFor, sendThreadReply],
   );
 
   return { transport, reactionsFor, allMessages: messages };

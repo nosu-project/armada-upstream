@@ -1,19 +1,51 @@
 import { ChevronDown, Loader2 } from "lucide-react";
-import { useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Virtuoso } from "react-virtuoso";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import {
+  FIRST_PAINT_WINDOW,
+  INITIAL_WINDOW,
+  resolveWindowStart,
+  TRIM_ABOVE,
+  WINDOW_STEP,
+} from "@/components/chat/timelineWindow";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
-import type { ReactNode, RefObject, UIEvent } from "react";
-import type { FollowOutputScalarType, VirtuosoHandle } from "react-virtuoso";
+import type { ReactNode, RefObject } from "react";
 
 /**
  * Largest gap (seconds) between two same-author messages for the later one to
  * render as a compact continuation (no repeated avatar/name/timestamp).
  */
 const CONTINUATION_WINDOW_SECONDS = 5 * 60;
+
+/**
+ * Distance from the top (px) at which older history is requested from the
+ * transport. Deliberately a screenful-plus so the round trip overlaps with the
+ * reader still having loaded content above them.
+ */
+const BACKFILL_TRIGGER_PX = 1200;
+
+/** Distance from the top (px) at which already-loaded messages are revealed. */
+const REVEAL_TRIGGER_PX = 900;
+
+/** Distance from the bottom (px) still counted as "reading the newest". */
+const AT_BOTTOM_PX = 60;
+
+/** Distance from the bottom (px) at which the jump-to-present pill appears. */
+const JUMP_PILL_PX = 300;
+
+/** Messages revealed above a jump target so it doesn't land against the top. */
+const JUMP_CONTEXT = 15;
+
+/**
+ * Rows rendered in each successive commit while a conversation opens, one per
+ * frame. Mounting a row is expensive (author query, content tokenization, media
+ * and embed subtrees), so the commit that the channel-switch click renders
+ * synchronously contains none of them.
+ */
+const OPENING_RAMP = [0, FIRST_PAINT_WINDOW, INITIAL_WINDOW];
 
 /** Whether two unix-second timestamps fall on the same local calendar day. */
 function isSameDay(a: number, b: number): boolean {
@@ -66,51 +98,46 @@ function NewMessagesDivider() {
   );
 }
 
-/**
- * One virtualized row: a message (with its precomputed continuation flag), a
- * day separator, or the unread "NEW" divider. Separators are rows of their own
- * so the windowing library can measure and anchor every piece of scroll content.
- */
+/** One rendered row: a message, a day separator, or the unread "NEW" divider. */
 type TimelineItem =
   | { type: "date"; ts: number; key: string }
   | { type: "unread"; key: string }
   | { type: "message"; msg: ChatMsg; continuation: boolean; key: string };
 
+/** A row's identity plus its position relative to the viewport's top edge. */
+interface ScrollAnchor {
+  /** The `items` array this anchor was captured against. */
+  items: TimelineItem[];
+  key: string;
+  offset: number;
+}
+
 /**
- * `firstItemIndex` base for the virtualizer. Backfill prepends older rows by
- * DECREASING this offset by the number of prepended rows (react-virtuoso then
- * keeps the reading position anchored automatically), so it starts high enough
- * to never hit zero.
+ * Record the topmost row still touching the viewport, and how far its top edge
+ * sits from the viewport's. Called during render — before React commits — so it
+ * reads the DOM as the reader currently sees it; {@link restoreAnchor} then puts
+ * that same row back under the same pixel once the new rows are in.
+ *
+ * This is the entire scroll-position-preservation story for prepends: no height
+ * bookkeeping, no scrollTop arithmetic against a remembered `scrollHeight` (which
+ * goes wrong the moment anything above resizes between the two measurements).
  */
-const FIRST_INDEX_BASE = 10_000_000;
-
-/** Context handed to the virtualizer's Header/Footer (kept stable at module scope). */
-interface TimelineContext {
-  isLoadingOlder: boolean;
+function captureAnchor(scroller: HTMLElement, content: HTMLElement, items: TimelineItem[]): ScrollAnchor | null {
+  const rows = content.querySelectorAll<HTMLElement>("[data-row-key]");
+  const top = scroller.scrollTop;
+  for (const row of rows) {
+    if (row.offsetTop + row.offsetHeight > top) {
+      return { items, key: row.dataset.rowKey ?? "", offset: row.offsetTop - top };
+    }
+  }
+  return null;
 }
 
-/** Top of the scroll content: backfill spinner while loading older, else padding. */
-function TimelineHeader({ context }: { context?: TimelineContext }) {
-  return context?.isLoadingOlder ? (
-    <div className="flex justify-center pt-4 pb-3">
-      <Loader2 className="size-4 animate-spin text-muted-foreground" />
-    </div>
-  ) : (
-    <div className="h-4" aria-hidden />
-  );
-}
-
-/** Bottom padding of the scroll content (the scroller itself can't take `py`). */
-function TimelineFooter() {
-  return <div className="h-4" aria-hidden />;
-}
-
-// Stable component map — a fresh object each render would remount Header/Footer.
-const TIMELINE_COMPONENTS = { Header: TimelineHeader, Footer: TimelineFooter };
-
-/** Follow appended messages only while the view is already at the bottom. */
-function followOutput(isAtBottom: boolean): FollowOutputScalarType {
-  return isAtBottom ? "auto" : false;
+/** Put the anchored row back under the pixel it was under when captured. */
+function restoreAnchor(scroller: HTMLElement, content: HTMLElement, anchor: ScrollAnchor): void {
+  const row = content.querySelector<HTMLElement>(`[data-row-key="${anchor.key}"]`);
+  if (!row) return;
+  scroller.scrollTop = row.offsetTop - anchor.offset;
 }
 
 /** Imperative handle a parent can use to jump the timeline to a message by id. */
@@ -119,9 +146,10 @@ export interface MessageTimelineHandle {
   /** Re-anchor to the bottom and resume auto-scroll (e.g. after sending). */
   pinToBottom: () => void;
   /**
-   * Keep the view at the bottom *only if the user was already there* — used
-   * while a sibling panel animates its width and would otherwise let the
-   * bottom-anchored view drift.
+   * Keep the view at the bottom *only if the user was already there*. Layout
+   * changes around the timeline are handled automatically (a ResizeObserver
+   * watches the scroller and its content); this is for callers that change
+   * something the observer can't see.
    */
   maintainBottom: () => void;
 }
@@ -160,29 +188,42 @@ interface MessageTimelineProps {
 }
 
 /**
- * The transport-agnostic message timeline: a bottom-anchored, auto-scrolling,
- * VIRTUALIZED scroll area with scroll-up backfill, same-author continuation
- * collapsing, a loading skeleton and an empty state. It owns only scroll
- * mechanics and the continuation rule; every message's content/actions come
- * from `renderMessage`, and all data/mutations come from the
- * {@link ChatTransport}. Shared by NIP-29 group chat, Concord communities,
- * DMs and the Bluetooth mesh.
+ * The transport-agnostic message timeline: a bottom-anchored, auto-scrolling
+ * scroll area with scroll-up backfill, same-author continuation collapsing, a
+ * loading skeleton and an empty state. It owns only scroll mechanics and the
+ * continuation rule; every message's content/actions come from `renderMessage`,
+ * and all data/mutations come from the {@link ChatTransport}. Shared by NIP-29
+ * group chat, Concord communities, DMs and the Bluetooth mesh.
  *
- * Windowing is react-virtuoso: only rows near the viewport are mounted, which
- * is what keeps long histories cheap on iOS Safari (low per-tab memory
- * ceiling). The timeline's contract survives it as follows:
- * - Bottom pinning: `followOutput` re-pins on appends; `totalListHeightChanged`
- *   re-pins when already-mounted rows GROW from async loads (images, link
- *   previews, embeds, reactions) that don't change `messages`.
- * - Backfill: older history is prepended by decreasing `firstItemIndex`, which
- *   virtuoso uses to keep the same content under the viewport — no manual
- *   scrollTop restore math.
- * - `scrollToMessage`: resolved to an item INDEX (not a DOM node — the row may
- *   be unmounted), scrolled to via `scrollToIndex`, then highlighted once the
- *   row exists in the DOM (short rAF retry loop on `[data-event-id]`).
- * - Conversation switches without a remount (some callers don't `key` this
- *   component) are detected by anchor loss — no previously-known message id
- *   survives into the new list — and reset the virtualizer via an epoch key.
+ * ## Why this is a plain scroller and not a virtualized list
+ *
+ * Rows here change height *after* they mount — images decode, link previews and
+ * embeds resolve, reactions and thread badges arrive. A measuring virtualizer
+ * positions rows from heights it sampled at mount, so every one of those
+ * resizes invalidates its model and it has to guess how to re-anchor the
+ * viewport; that guess is what the reader sees as a jump. It also
+ * absolutely-positions rows, which switches off the browser's own scroll
+ * anchoring (`overflow-anchor`) — the mechanism that solves exactly this
+ * problem for free in normal flow.
+ *
+ * So the rows are real DOM in normal flow, and the *data* is bounded instead:
+ *
+ * - **Bounded window.** A conversation opens with {@link FIRST_PAINT_WINDOW}
+ *   rows and fills out to {@link INITIAL_WINDOW} a frame later, which is what
+ *   keeps a channel switch cheap (the switch cost is O(rows in the commit) of
+ *   React mounting, not O(loaded history)). Nearing the top reveals
+ *   {@link WINDOW_STEP} more already-loaded messages, then asks the transport
+ *   for older ones. Returning to the bottom trims back down.
+ * - **Anchored position.** The window is anchored to a message ID, and any
+ *   change to the top of the rendered slice is compensated by measuring one row
+ *   before the commit and putting it back afterwards ({@link captureAnchor}).
+ * - **Async row growth** is left to the browser: content that resizes above the
+ *   viewport is absorbed by native scroll anchoring, so a row that grows late
+ *   costs nothing instead of teleporting the view. (Safari has no
+ *   `overflow-anchor`; there it degrades to the same shift a plain page has.)
+ * - **Stick-to-bottom** restores the reader's *distance* from the bottom rather
+ *   than snapping to it, so a reader who has just started scrolling up isn't
+ *   yanked back when an image below them finishes decoding.
  */
 export function MessageTimeline({
   transport,
@@ -208,11 +249,61 @@ export function MessageTimeline({
   if (messages.length > 0) hadMessagesRef.current = true;
   const transientEmpty = messages.length === 0 && hadMessagesRef.current;
 
-  // Flatten messages + injected separators into the virtualizer's row model,
-  // applying the shared continuation rule (same author, same day, small gap).
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Live mirrors, so scroll/observer callbacks never close over stale props.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  // How far the reader is from the newest message. Updated on every scroll and
+  // after every programmatic move; the single input to stick-to-bottom.
+  const distanceRef = useRef(0);
+  // A window extension is committed but not yet laid out — don't stack another.
+  const extendLockRef = useRef(false);
+  // A transport backfill is in flight (independent of the transport's own,
+  // possibly lagging, `isLoadingOlder`).
+  const loadingOlderRef = useRef(false);
+  // The next layout should pin to the bottom (first paint, conversation switch).
+  const pinBottomRef = useRef(true);
+  // A message id to reveal-and-jump-to once it's in the rendered window.
+  const pendingJumpRef = useRef<string | null>(null);
+  const anchorRef = useRef<ScrollAnchor | null>(null);
+  // Previous scroll offset, to tell a reader moving up from this component's
+  // own downward scrolls (see `handleScroll`).
+  const lastScrollTopRef = useRef(Number.POSITIVE_INFINITY);
+
+  const [showJumpPill, setShowJumpPill] = useState(false);
+
+  // Oldest message currently rendered. `null` = the newest INITIAL_WINDOW.
+  const [windowStartId, setWindowStartId] = useState<string | null>(null);
+  const windowStartIdRef = useRef<string | null>(null);
+  windowStartIdRef.current = windowStartId;
+
+  /** Move the top of the rendered window, eagerly so callbacks see it at once. */
+  const setWindowStart = useCallback((id: string | null) => {
+    windowStartIdRef.current = id;
+    setWindowStartId(id);
+  }, []);
+
+  // Rows per commit as a conversation opens. The click that switches channels
+  // is what pays for the first commit, so it renders NO message rows: they
+  // arrive on the following frames, off the interaction's critical path.
+  const [rampStep, setRampStep] = useState(0);
+
+  const { startIndex, anchorLost } = useMemo(
+    () => resolveWindowStart(messages, windowStartId, OPENING_RAMP[rampStep]),
+    [messages, windowStartId, rampStep],
+  );
+  const startIndexRef = useRef(startIndex);
+  startIndexRef.current = startIndex;
+
+  // Flatten the windowed slice + injected separators into rows. Continuation is
+  // computed against the message *before* the window so the topmost row doesn't
+  // change shape as the window grows.
   const items = useMemo<TimelineItem[]>(() => {
     const out: TimelineItem[] = [];
-    for (let i = 0; i < messages.length; i++) {
+    for (let i = startIndex; i < messages.length; i++) {
       const msg = messages[i];
       const prev = messages[i - 1];
       const newDay = !!prev && !isSameDay(prev.created_at, msg.created_at);
@@ -226,191 +317,224 @@ export function MessageTimeline({
       out.push({ type: "message", msg, continuation, key: msg.id });
     }
     return out;
-  }, [messages, newDividerId]);
+  }, [messages, startIndex, newDividerId]);
 
-  const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const scrollerElRef = useRef<HTMLElement | null>(null);
-  // Whether the view is (near) the bottom — mirrors virtuoso's atBottom state
-  // and gates the re-pin paths, like the old manual `isAutoScrollRef`.
-  const atBottomRef = useRef(true);
-  // Whether the user has scrolled far enough up that a "jump to present" pill
-  // should be offered. (setState bails out when unchanged, so updating this on
-  // every scroll event is cheap.)
-  const [showJumpPill, setShowJumpPill] = useState(false);
-  // In-flight guard for backfill, independent of the transport's (possibly
-  // lagging) `isLoadingOlder`, so one scroll gesture can't double-trigger it.
-  const loadingOlderRef = useRef(false);
-
-  // ── Prepend anchoring / conversation-switch detection ─────────────────────
-  // Derived synchronously during render (getDerivedStateFromProps-style): when
-  // `items` changes, locate the previous first MESSAGE row in the new list.
-  // Found at a later index → rows were prepended (backfill): decrease
-  // `firstItemIndex` by the difference and virtuoso holds the reading position.
-  // Gone entirely (along with the previous last message) → this is a different
-  // conversation: bump the epoch, which remounts the virtualizer pinned to the
-  // bottom with a fresh index base.
-  const anchorRef = useRef<{ items: TimelineItem[]; firstItemIndex: number; epoch: number }>({
-    items: [],
-    firstItemIndex: FIRST_INDEX_BASE,
-    epoch: 0,
-  });
-  if (anchorRef.current.items !== items) {
-    const prev = anchorRef.current;
-    const prevFirstIdx = prev.items.findIndex((it) => it.type === "message");
-    let firstItemIndex = prev.firstItemIndex;
-    let epoch = prev.epoch;
-    if (prevFirstIdx === -1) {
-      // Previously empty — fresh conversation, fresh base.
-      firstItemIndex = FIRST_INDEX_BASE;
-    } else {
-      const anchorItem = prev.items[prevFirstIdx];
-      const anchorId = anchorItem.type === "message" ? anchorItem.msg.id : "";
-      const newIdx = items.findIndex((it) => it.type === "message" && it.msg.id === anchorId);
-      if (newIdx !== -1) {
-        firstItemIndex = prev.firstItemIndex - (newIdx - prevFirstIdx);
-      } else {
-        // The old first message is gone. If the old NEWEST message survived,
-        // history was merely trimmed/deleted at the front — keep the offset
-        // (a one-row shift beats a full reset). Otherwise: new conversation.
-        const prevLast = [...prev.items].reverse().find((it) => it.type === "message");
-        const sameConversation =
-          prevLast?.type === "message" &&
-          items.some((it) => it.type === "message" && it.msg.id === prevLast.msg.id);
-        if (!sameConversation) {
-          epoch = prev.epoch + 1;
-          firstItemIndex = FIRST_INDEX_BASE;
-          atBottomRef.current = true;
-          loadingOlderRef.current = false;
-        }
-      }
+  // Rows are about to change at the top of the slice (a revealed batch, a
+  // backfill prepend, a trim). Measure the reader's anchor row NOW, while the
+  // DOM still shows the old slice — render runs before React touches the DOM.
+  const prevFirstKeyRef = useRef<string | null>(null);
+  const firstKey = items[0]?.key ?? null;
+  if (firstKey !== prevFirstKeyRef.current) {
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (
+      prevFirstKeyRef.current !== null &&
+      firstKey !== null &&
+      !anchorLost &&
+      distanceRef.current > AT_BOTTOM_PX &&
+      scroller &&
+      content
+    ) {
+      anchorRef.current = captureAnchor(scroller, content, items);
     }
-    anchorRef.current = { items, firstItemIndex, epoch };
+    prevFirstKeyRef.current = firstKey;
   }
-  const { firstItemIndex, epoch } = anchorRef.current;
 
-  /** Jump to the newest message (instant), hiding the pill. */
+  /** Jump to the newest message and resume following it. */
   const pinToBottomNow = useCallback(() => {
-    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end" });
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    distanceRef.current = 0;
     setShowJumpPill(false);
   }, []);
 
-  // Rows growing from async loads (images, link previews, embeds, reactions)
-  // change the total list height without changing `messages`; keep the view
-  // pinned through that, but only while the user is at the bottom. (Replaces
-  // the old ResizeObserver on a fully-mounted content wrapper.)
-  const handleTotalListHeightChanged = useCallback(() => {
-    if (atBottomRef.current) pinToBottomNow();
-  }, [pinToBottomNow]);
-
-  const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
-    atBottomRef.current = atBottom;
-    if (atBottom) setShowJumpPill(false);
+  /**
+   * Hold the reader's distance from the newest message across a content-height
+   * change. At the bottom this pins; a few dozen pixels up it preserves those
+   * pixels instead of snapping — the difference between "the view stays put as
+   * an image loads" and "the view yanks me back down".
+   */
+  const stickToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (distanceRef.current > AT_BOTTOM_PX) return;
+    el.scrollTop = el.scrollHeight - el.clientHeight - distanceRef.current;
   }, []);
 
-  const handleScroll = useCallback(
-    (e: UIEvent<HTMLDivElement>) => {
-      const el = e.currentTarget;
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setShowJumpPill(distanceFromBottom > 300);
-      // Near the top: backfill older history. Virtuoso anchors the reading
-      // position itself when `firstItemIndex` decreases on the prepend.
-      if (
-        !paused &&
-        loadOlder &&
-        hasMore &&
-        !isLoadingOlder &&
-        !loadingOlderRef.current &&
-        el.scrollTop < 200
-      ) {
-        loadingOlderRef.current = true;
-        void loadOlder().finally(() => {
-          loadingOlderRef.current = false;
-        });
-      }
-    },
-    [paused, loadOlder, hasMore, isLoadingOlder],
-  );
+  /** Center a mounted row and flash a highlight over it. */
+  const jumpToRow = useCallback((id: string) => {
+    const el = scrollRef.current;
+    const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
+    if (!el || !row) return;
+    // Rows above the target that have never been painted are still sitting at
+    // their `contain-intrinsic-size` estimate, so the first scroll lands
+    // approximately; re-centering on the next two frames settles it once those
+    // rows have real heights. Bounded, unlike polling for the row to appear.
+    row.scrollIntoView({ block: "center" });
+    requestAnimationFrame(() => {
+      row.scrollIntoView({ block: "center" });
+      requestAnimationFrame(() => row.scrollIntoView({ block: "center" }));
+    });
+    distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+    row.classList.add("bg-primary/10", "transition-colors", "duration-1000", "rounded-md");
+    setTimeout(() => row.classList.remove("bg-primary/10"), 1200);
+    setTimeout(
+      () => row.classList.remove("transition-colors", "duration-1000", "rounded-md"),
+      2200,
+    );
+  }, []);
 
-  // Scroll a (pinned) message into view and briefly highlight it with a subtle
-  // background tint that fades out. No-op if it's not in the currently-loaded
-  // timeline. The row may not be mounted yet (that's the point of windowing),
-  // so the scroll targets its item INDEX and the highlight retries against the
-  // DOM until the row exists.
-  const scrollToMessage = useCallback((id: string) => {
-    const current = anchorRef.current.items;
-    const idx = current.findIndex((it) => it.type === "message" && it.msg.id === id);
-    if (idx === -1) return;
-    atBottomRef.current = false;
-    virtuosoRef.current?.scrollToIndex({ index: idx, align: "center", behavior: "smooth" });
-    const started = performance.now();
-    const tryHighlight = () => {
-      const el = scrollerElRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
-      if (el) {
-        el.classList.add("bg-primary/10", "transition-colors", "duration-1000", "rounded-md");
-        setTimeout(() => el.classList.remove("bg-primary/10"), 1200);
-        setTimeout(() => el.classList.remove("transition-colors", "duration-1000", "rounded-md"), 2200);
+  // The one place scroll position is adjusted for a rendered-slice change.
+  // Exactly one of these applies, in priority order.
+  useLayoutEffect(() => {
+    extendLockRef.current = false;
+    const el = scrollRef.current;
+    if (!el || items.length === 0) return;
+    if (anchorLost) {
+      // The window's anchor message is gone: different conversation (or the
+      // transport dropped the front of its history). Fall back to the newest
+      // messages, pinned to the bottom. Runs before paint, so no flash.
+      anchorRef.current = null;
+      pinBottomRef.current = true;
+      setRampStep(0);
+      setWindowStart(null);
+      return;
+    }
+    const jump = pendingJumpRef.current;
+    if (jump) {
+      pendingJumpRef.current = null;
+      anchorRef.current = null;
+      pinBottomRef.current = false;
+      jumpToRow(jump);
+      return;
+    }
+    if (pinBottomRef.current) {
+      pinBottomRef.current = false;
+      anchorRef.current = null;
+      pinToBottomNow();
+      return;
+    }
+    const anchor = anchorRef.current;
+    anchorRef.current = null;
+    if (anchor && anchor.items === items) {
+      restoreAnchor(el, contentRef.current!, anchor);
+      distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+      return;
+    }
+    stickToBottom();
+  }, [items, anchorLost, setWindowStart, jumpToRow, pinToBottomNow, stickToBottom]);
+
+  const listVisible = !isLoading && !transientEmpty && messages.length > 0;
+
+  // Content that grows or shrinks without the message list changing (images,
+  // link previews, embeds, reactions) and container reflows (the thread panel
+  // animating its width, the composer swapping for a join prompt) both land
+  // here. Callers used to drive this by polling `maintainBottom` from a rAF
+  // loop for ~260ms; the observer sees every frame of it and nothing else.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+    const ro = new ResizeObserver(() => {
+      if (anchorRef.current || pinBottomRef.current || pendingJumpRef.current) return;
+      stickToBottom();
+    });
+    ro.observe(content);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [listVisible, stickToBottom]);
+
+  /**
+   * Near the top: reveal more already-loaded messages, or — once the window
+   * covers everything loaded — ask the transport for an older page.
+   *
+   * Only while the reader is actually away from the bottom, which is what keeps
+   * a freshly-opened conversation from walking its own history in: pinned at
+   * the bottom there is nothing above to read yet.
+   */
+  const maybeExtend = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || paused || extendLockRef.current) return;
+    if (distanceRef.current <= AT_BOTTOM_PX) return;
+    const start = startIndexRef.current;
+    if (start > 0) {
+      if (el.scrollTop >= REVEAL_TRIGGER_PX) return;
+      const next = messagesRef.current[Math.max(0, start - WINDOW_STEP)];
+      if (!next) return;
+      extendLockRef.current = true;
+      setWindowStart(next.id);
+      return;
+    }
+    if (el.scrollTop >= BACKFILL_TRIGGER_PX) return;
+    if (!loadOlder || !hasMore || isLoadingOlder || loadingOlderRef.current) return;
+    loadingOlderRef.current = true;
+    void loadOlder().finally(() => {
+      loadingOlderRef.current = false;
+    });
+  }, [paused, loadOlder, hasMore, isLoadingOlder, setWindowStart]);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
+    // Only extend while the scroller is moving toward older messages. Every
+    // scroll this component performs itself — the opening pin, stick-to-bottom,
+    // an anchor restore after rows land above — moves the offset DOWN, so this
+    // one comparison keeps the timeline from reacting to its own scrolling and
+    // walking a channel's history in the moment it opens.
+    const movingUp = el.scrollTop < lastScrollTopRef.current;
+    lastScrollTopRef.current = el.scrollTop;
+    if (movingUp) maybeExtend();
+  }, [maybeExtend]);
+
+  // Walk the opening ramp, a frame at a time. Rows land above a reader who is
+  // pinned to the bottom, so nothing moves as the window fills out.
+  useEffect(() => {
+    if (rampStep >= OPENING_RAMP.length - 1 || messages.length === 0) return;
+    const frame = requestAnimationFrame(() => setRampStep((step) => step + 1));
+    return () => cancelAnimationFrame(frame);
+  }, [rampStep, messages.length]);
+
+  // Back at the bottom with a long window behind us: drop it back to the newest
+  // messages. The rows removed are far above the viewport, so this is invisible
+  // — and it's the only thing bounding a long session's DOM.
+  useEffect(() => {
+    if (distanceRef.current > AT_BOTTOM_PX) return;
+    if (messages.length - startIndex <= TRIM_ABOVE) return;
+    setWindowStart(null);
+  }, [messages, startIndex, setWindowStart]);
+
+  // Scroll a message into view and briefly highlight it. No-op if it isn't in
+  // the loaded history; if it's older than the rendered window, the window is
+  // extended to cover it first and the jump happens in the same commit.
+  const scrollToMessage = useCallback(
+    (id: string) => {
+      const all = messagesRef.current;
+      const index = all.findIndex((m) => m.id === id);
+      if (index === -1) return;
+      if (index < startIndexRef.current) {
+        pendingJumpRef.current = id;
+        setWindowStart(all[Math.max(0, index - JUMP_CONTEXT)].id);
         return;
       }
-      if (performance.now() - started < 2000) requestAnimationFrame(tryHighlight);
-    };
-    requestAnimationFrame(tryHighlight);
-  }, []);
+      jumpToRow(id);
+    },
+    [jumpToRow, setWindowStart],
+  );
 
   useImperativeHandle(
     handleRef,
     () => ({
       scrollToMessage,
       pinToBottom: () => {
-        atBottomRef.current = true;
+        distanceRef.current = 0;
         pinToBottomNow();
       },
-      maintainBottom: () => {
-        if (!atBottomRef.current) return;
-        pinToBottomNow();
-      },
+      maintainBottom: stickToBottom,
     }),
-    [scrollToMessage, pinToBottomNow],
-  );
-
-  const scrollerRefCallback = useCallback((el: HTMLElement | Window | null) => {
-    scrollerElRef.current = el instanceof HTMLElement ? el : null;
-  }, []);
-
-  const itemContent = useCallback(
-    (_index: number, item: TimelineItem) => {
-      // The horizontal gutter (`px-3`) lives on each row, NOT the Virtuoso
-      // scroller: virtuoso's viewport/list is absolutely positioned and
-      // `width: 100%`, so a scroller `px-*` only honors the LEFT side (the
-      // list's static x sits inside the left padding) while the right padding
-      // is spanned over — content would hug the right edge (and the sliver of
-      // overflow gets silently eaten by `overflow-x-clip`). Padding the rows
-      // themselves restores the symmetric gutter the pre-virtualized scroll
-      // container had.
-      switch (item.type) {
-        case "date":
-          return (
-            <div className="px-3">
-              <DateSeparator ts={item.ts} />
-            </div>
-          );
-        case "unread":
-          return (
-            <div className="px-3">
-              <NewMessagesDivider />
-            </div>
-          );
-        case "message":
-          // `hover:z-10` lifts the hovered row above its siblings so the
-          // floating action toolbar (which overhangs the row's top edge) isn't
-          // painted under the row above.
-          return (
-            <div className="px-3 relative hover:z-10 focus-within:z-10">
-              {renderMessage(item.msg, item.continuation)}
-            </div>
-          );
-      }
-    },
-    [renderMessage],
+    [scrollToMessage, pinToBottomNow, stickToBottom],
   );
 
   return (
@@ -433,32 +557,53 @@ export function MessageTimeline({
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4">{emptyState ?? null}</div>
       ) : (
         <>
-          <Virtuoso<TimelineItem, TimelineContext>
-            key={epoch}
-            ref={virtuosoRef}
-            scrollerRef={scrollerRefCallback}
-            className="flex-1 min-h-0 overflow-x-clip overscroll-contain scrollbar-stable"
-            data={items}
-            context={{ isLoadingOlder: Boolean(isLoadingOlder) }}
-            components={TIMELINE_COMPONENTS}
-            computeItemKey={(_i, item) => item.key}
-            itemContent={itemContent}
-            firstItemIndex={firstItemIndex}
-            initialTopMostItemIndex={{ index: "LAST", align: "end" }}
-            followOutput={followOutput}
-            atBottomThreshold={60}
-            atBottomStateChange={handleAtBottomStateChange}
-            totalListHeightChanged={handleTotalListHeightChanged}
-            increaseViewportBy={{ top: 800, bottom: 200 }}
+          <div
+            ref={scrollRef}
             onScroll={handleScroll}
-          />
+            className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3"
+          >
+            {/* Positioned, so every row's `offsetTop` is measured against it. */}
+            <div ref={contentRef} className="relative">
+              <div className="h-4" aria-hidden />
+              {items.map((item) => (
+                // `hover:z-10` lifts the hovered row above its siblings so the
+                // floating action toolbar (which overhangs the row's top edge)
+                // isn't painted under the row above.
+                <div
+                  key={item.key}
+                  data-row-key={item.key}
+                  className="relative hover:z-10 focus-within:z-10"
+                >
+                  {item.type === "date" ? (
+                    <DateSeparator ts={item.ts} />
+                  ) : item.type === "unread" ? (
+                    <NewMessagesDivider />
+                  ) : (
+                    renderMessage(item.msg, item.continuation)
+                  )}
+                </div>
+              ))}
+              <div className="h-4" aria-hidden />
+            </div>
+          </div>
+          {/* Backfill spinner, floating OVER the top edge rather than occupying
+              space in the scroll content: growing and shrinking the content at
+              the very edge the reader is anchored to jolts the view twice per
+              loaded page. */}
+          {isLoadingOlder && (
+            <div className="absolute top-1 inset-x-0 z-10 flex justify-center pointer-events-none">
+              <span className="rounded-full bg-background/80 backdrop-blur p-1.5 shadow-sm">
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              </span>
+            </div>
+          )}
           {/* Jump-to-present pill, floating over the bottom edge of the list. */}
           {showJumpPill && (
             <div className="absolute bottom-3 inset-x-0 z-10 flex justify-center pointer-events-none">
               <button
                 type="button"
                 onClick={() => {
-                  atBottomRef.current = true;
+                  distanceRef.current = 0;
                   pinToBottomNow();
                 }}
                 className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border/60 bg-secondary/90 backdrop-blur px-5 py-2.5 text-sm font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"

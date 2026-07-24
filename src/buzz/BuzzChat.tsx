@@ -72,13 +72,13 @@ function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl
   const author = useAuthor(event?.pubkey);
   const displayName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
 
-  if (!event) return null;
-
-  const image = firstImageRef(event);
+  // Render the line even before the relay answers: `ReplyContextLine` holds a
+  // fixed height, so the row doesn't grow when the parent lands mid-scroll.
+  const image = event ? firstImageRef(event) : undefined;
   return (
     <ReplyContextLine
-      name={displayName}
-      preview={<ReplyPreview content={event.content} hideMediaPlaceholder={!!image} />}
+      name={event ? displayName : undefined}
+      preview={event ? <ReplyPreview content={event.content} hideMediaPlaceholder={!!image} /> : undefined}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
       onClick={() => onJump(eventId)}
     />
@@ -585,17 +585,9 @@ export function BuzzChat({
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [user, timeline, relayUrl, channelId, markRead]);
 
-  // Re-pin to bottom across panel/footer reflows (mirrors GroupChat).
-  useEffect(() => {
-    let rafId = 0;
-    const start = performance.now();
-    const pin = (now: number) => {
-      timelineRef.current?.maintainBottom();
-      if (now - start < 260) rafId = requestAnimationFrame(pin);
-    };
-    rafId = requestAnimationFrame(pin);
-    return () => cancelAnimationFrame(rafId);
-  }, [threadRoot, canWrite, membershipPending, searching]);
+  // Panel/footer reflows need no re-pinning here (mirrors GroupChat): the
+  // timeline observes its own scroller and content and holds the reading
+  // position across them.
 
   const handleSent = useCallback(() => {
     timelineRef.current?.pinToBottom();

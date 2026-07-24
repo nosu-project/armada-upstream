@@ -1,6 +1,6 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { ChevronDown, ChevronLeft, Bell, BellOff, CheckCheck, Hash, Loader2, LogOut, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";import { ChannelNavContext } from "@/contexts/ChannelNavContext";
@@ -94,14 +94,15 @@ function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
 function ReplyContext1({ parent, onJump }: { parent: ChatMsg | undefined; onJump: (id: string) => void }) {
   const author = useAuthor(parent?.pubkey);
   const name = useScopedDisplayName(parent?.pubkey, author.data?.metadata);
-  if (!parent) return null;
-  const image = firstImageRef(parent);
+  // Render the line even when the parent isn't in the decoded set yet:
+  // `ReplyContextLine` holds a fixed height, so the row doesn't grow later.
+  const image = parent ? firstImageRef(parent) : undefined;
   return (
     <ReplyContextLine
-      name={name}
-      preview={<ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} />}
+      name={parent ? name : undefined}
+      preview={parent ? <ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} /> : undefined}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
-      onClick={() => onJump(parent.id)}
+      onClick={parent ? () => onJump(parent.id) : undefined}
     />
   );
 }
@@ -120,8 +121,15 @@ interface ConcordChatMessageProps {
   onToggleActive: (id: string) => void;
   onOpenThread: ((event: ChatMsg) => void) | undefined;
   onReply: ((event: ChatMsg) => void) | undefined;
-  /** Resolved "replying to …" line for an inline reply (undefined otherwise). */
-  replyContext: ReactNode;
+  /**
+   * The inline reply's parent: its id (undefined when this isn't a reply) and
+   * the resolved message (undefined when it isn't in the decoded set). Passed
+   * as plain values rather than a ready-made element — a fresh element on every
+   * caller render would defeat the `memo` below for every reply row.
+   */
+  replyToId: string | undefined;
+  replyParent: ChatMsg | undefined;
+  onJumpToReply: (id: string) => void;
   onDelete: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
@@ -149,12 +157,17 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   onToggleActive,
   onOpenThread,
   onReply,
-  replyContext,
+  replyToId,
+  replyParent,
+  onJumpToReply,
   onDelete,
   onRetry,
   onDiscard,
 }: ConcordChatMessageProps) {
   const threadInfo = threadSummary(replies);
+  const replyContext = replyToId ? (
+    <ReplyContext1 parent={replyParent} onJump={onJumpToReply} />
+  ) : undefined;
   return (
     <ChatMessage
       event={event}
@@ -1037,11 +1050,9 @@ export function ConcordPage() {
                   onToggleActive={toggleActive}
                   onOpenThread={onOpenThreadCb}
                   onReply={canWrite ? setReplyTo : undefined}
-                  replyContext={
-                    replyId ? (
-                      <ReplyContext1 parent={messagesById.get(replyId)} onJump={jumpWithinChannel} />
-                    ) : undefined
-                  }
+                  replyToId={replyId}
+                  replyParent={replyId ? messagesById.get(replyId) : undefined}
+                  onJumpToReply={jumpWithinChannel}
                   onDelete={transport.deleteMessage}
                   onRetry={transport.retry}
                   onDiscard={transport.discard}

@@ -270,9 +270,38 @@ function usableMime(m: string | undefined): string | undefined {
  * cards), nostr: URIs (mentions, embedded note/naddr cards), hashtags,
  * NIP-30 custom emoji, and lightning invoices.
  */
+/**
+ * Tokenized message bodies, keyed by event id.
+ *
+ * Tokenizing is the expensive half of mounting a message row — the whole
+ * markdown / URL / `nostr:` URI / emoji / invoice pass runs over the content —
+ * and a `useMemo` only survives as long as the component instance, so every
+ * remount pays for it again: opening a channel re-tokenizes every row it
+ * renders, and going back to a channel you were just in pays the same bill a
+ * second time. Nostr events are immutable, so the result can be kept across
+ * mounts; the stored content is compared on lookup anyway, for synthesized
+ * events (mesh, placeholders) whose id isn't a hash of their body, and for
+ * inline edits rendered through `contentOverride`.
+ */
+const TOKEN_CACHE = new Map<string, { content: string; tokens: ContentToken[] }>();
+
+/** Entries kept before the oldest is dropped (insertion-ordered Map). */
+const TOKEN_CACHE_MAX = 800;
+
+function cacheTokens(id: string, content: string, tokens: ContentToken[]): ContentToken[] {
+  if (TOKEN_CACHE.size >= TOKEN_CACHE_MAX) {
+    const oldest = TOKEN_CACHE.keys().next().value;
+    if (oldest !== undefined) TOKEN_CACHE.delete(oldest);
+  }
+  TOKEN_CACHE.set(id, { content, tokens });
+  return tokens;
+}
+
 export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines }: ChatContentProps) {
   const rawTokens = useMemo(() => {
     const text = contentOverride ?? event.content;
+    const cached = TOKEN_CACHE.get(event.id);
+    if (cached && cached.content === text) return cached.tokens;
 
     // Parse imeta tags for media URLs declared out-of-band. Vector/0xChat send
     // chat attachments by uploading AES-GCM ciphertext to Blossom and putting
@@ -608,7 +637,11 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     }
 
     // Filter out empty text tokens
-    return result.filter((t) => !(t.type === "text" && t.value === ""));
+    return cacheTokens(
+      event.id,
+      text,
+      result.filter((t) => !(t.type === "text" && t.value === "")),
+    );
   }, [event, contentOverride]);
 
   // Resolve `@name` mentions carried as plain text + `p` tags (Buzz/legacy
@@ -1093,39 +1126,34 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
     );
   }
 
-  const aspectRatio = parseDimAspectRatio(image.dim);
+  const box = mediaBox(image.dim);
 
   return (
     <button
       type="button"
-      className="block my-1.5 rounded-lg overflow-hidden max-w-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className={cn(
+        "relative block my-1.5 rounded-lg overflow-hidden cursor-pointer",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+        !image.blurhash && "bg-muted",
+      )}
+      style={box.style}
       onClick={onClick}
     >
-      <div
-        className={cn("relative rounded-lg overflow-hidden", !loaded && !image.blurhash && "bg-muted")}
-        style={
-          !loaded
-            ? { aspectRatio, minHeight: aspectRatio ? undefined : 120, minWidth: 160 }
-            : undefined
-        }
-      >
-        {!loaded && image.blurhash && (
-          <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
-        )}
-        {resolved.status === "ready" && (
-          <img
-            src={resolved.src}
-            alt=""
-            className={cn(
-              "block max-w-full max-h-80 h-auto rounded-lg hover:opacity-90 transition-opacity",
-              !loaded && aspectRatio && "absolute inset-0 w-full h-full object-cover",
-            )}
-            loading="lazy"
-            onLoad={() => setLoaded(true)}
-            onError={() => setFailed(true)}
-          />
-        )}
-      </div>
+      {!loaded && image.blurhash && (
+        <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
+      )}
+      {resolved.status === "ready" && (
+        <img
+          src={resolved.src}
+          alt=""
+          className={cn(
+            "absolute inset-0 w-full h-full hover:opacity-90 transition-opacity",
+            box.fit,
+          )}
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+        />
+      )}
     </button>
   );
 }
@@ -1181,12 +1209,45 @@ function GridImage({ image }: { image: ImageRef }) {
   );
 }
 
-/** Parses a NIP-94 `dim` string ("WxH") into a CSS `aspect-ratio` value. */
-function parseDimAspectRatio(dim: string | undefined): string | undefined {
-  if (!dim) return undefined;
-  const [w, h] = dim.split("x").map(Number);
-  if (!w || !h || Number.isNaN(w) || Number.isNaN(h)) return undefined;
-  return `${w} / ${h}`;
+/** Widest an inline attachment renders (px) — the old `max-w-sm`. */
+const MEDIA_MAX_WIDTH = 384;
+/** Tallest an inline attachment renders (px) — the old `max-h-80`. */
+const MEDIA_MAX_HEIGHT = 320;
+/** Letterbox height (px) used when a NIP-94 `dim` isn't available. */
+const MEDIA_FALLBACK_HEIGHT = 240;
+
+/**
+ * The box an inline attachment occupies, sized BEFORE its bytes arrive.
+ *
+ * Inline media lives inside a virtualized timeline, so a row that changes
+ * height once the image decodes shifts everything below it — the reason
+ * scrolling back through history juddered. Previously the reserved box was
+ * sized by aspect ratio alone while the loaded image was clamped by
+ * `max-h-80`, so the two disagreed for anything portrait: a 1080×1920 phone
+ * photo reserved 683px and then snapped to 320px on load.
+ *
+ * With a `dim` we cap the WIDTH such that the aspect ratio can't produce a
+ * height above {@link MEDIA_MAX_HEIGHT}, so the reservation is exactly what the
+ * image ends up occupying and nothing moves. Without one the true ratio is
+ * unknowable ahead of time, so we letterbox into a fixed-height well
+ * (`object-contain`) rather than guess and correct.
+ */
+function mediaBox(dim: string | undefined): {
+  style: React.CSSProperties;
+  fit: "object-cover" | "object-contain";
+} {
+  const [w, h] = (dim ?? "").split("x").map(Number);
+  if (!w || !h || Number.isNaN(w) || Number.isNaN(h)) {
+    return {
+      style: { width: `min(100%, ${MEDIA_MAX_WIDTH}px)`, height: MEDIA_FALLBACK_HEIGHT },
+      fit: "object-contain",
+    };
+  }
+  const width = Math.min(MEDIA_MAX_WIDTH, Math.round((MEDIA_MAX_HEIGHT * w) / h));
+  return {
+    style: { width: `min(100%, ${width}px)`, aspectRatio: `${w} / ${h}` },
+    fit: "object-cover",
+  };
 }
 
 /** Mention chip resolving the profile's display name. */

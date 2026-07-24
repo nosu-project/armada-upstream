@@ -1,5 +1,5 @@
 import { AtSign, Ban, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
@@ -145,14 +145,15 @@ function Banner2({ banner }: { banner: ImagePointer | undefined }) {
 function ReplyContext2({ parent, onJump }: { parent: ChatMsg | undefined; onJump: (id: string) => void }) {
   const author = useAuthor(parent?.pubkey);
   const name = useScopedDisplayName(parent?.pubkey, author.data?.metadata);
-  if (!parent) return null;
-  const image = firstImageRef(parent);
+  // Render the line even when the parent isn't in the decoded set yet:
+  // `ReplyContextLine` holds a fixed height, so the row doesn't grow later.
+  const image = parent ? firstImageRef(parent) : undefined;
   return (
     <ReplyContextLine
-      name={name}
-      preview={<ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} />}
+      name={parent ? name : undefined}
+      preview={parent ? <ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} /> : undefined}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
-      onClick={() => onJump(parent.id)}
+      onClick={parent ? () => onJump(parent.id) : undefined}
     />
   );
 }
@@ -173,8 +174,15 @@ interface ChatMessage2Props {
   onToggleActive: (id: string) => void;
   onOpenThread: ((event: ChatMsg) => void) | undefined;
   onReply: ((event: ChatMsg) => void) | undefined;
-  /** Resolved "replying to …" line for an inline reply (undefined otherwise). */
-  replyContext: ReactNode;
+  /**
+   * The inline reply's parent: its id (undefined when this isn't a reply) and
+   * the resolved message (undefined when it isn't in the decoded set). Passed
+   * as plain values rather than a ready-made element — a fresh element on every
+   * caller render would defeat this component's `memo` for every reply row.
+   */
+  replyToId: string | undefined;
+  replyParent: ChatMsg | undefined;
+  onJumpToReply: (id: string) => void;
   onDelete: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
@@ -202,7 +210,9 @@ const ChatMessage2 = memo(function ChatMessage2({
   onToggleActive,
   onOpenThread,
   onReply,
-  replyContext,
+  replyToId,
+  replyParent,
+  onJumpToReply,
   onDelete,
   onRetry,
   onDiscard,
@@ -212,6 +222,9 @@ const ChatMessage2 = memo(function ChatMessage2({
   onEditCancel,
 }: ChatMessage2Props) {
   const threadInfo = threadSummary(replies);
+  const replyContext = replyToId ? (
+    <ReplyContext2 parent={replyParent} onJump={onJumpToReply} />
+  ) : undefined;
   // Concord V2 messages are unsigned rumors sealed at the channel's stream
   // address — there's no relay-addressable event id, so the "Copy message ID" /
   // "View on Ditto" off-ramps are nonsensical. Pass the rumor through so the
@@ -1274,6 +1287,32 @@ export function ConcordV2Page() {
     [canWrite, openThread],
   );
 
+  // Stable identities so an unchanged message row's props don't churn and its
+  // `memo` can bail out. `transport` is rebuilt on every message, so reach it
+  // through a ref rather than depending on it.
+  const transportRef = useRef(transport);
+  transportRef.current = transport;
+  const startEditing = useCallback((e: ChatMsg) => setEditingId(e.id), []);
+  const cancelEditing = useCallback(() => setEditingId(undefined), []);
+
+  const handleEditSubmit = useCallback(async (original: ChatMsg, content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed || trimmed === original.content.trim()) {
+      setEditingId(undefined);
+      return;
+    }
+    setEditingId(undefined);
+    try {
+      await transportRef.current.editMessage?.(original, trimmed);
+    } catch {
+      toast({
+        title: "Edit failed",
+        description: "Could not publish the edit.",
+        variant: "destructive",
+      });
+    }
+  }, []);
+
   // Keep the open thread's read stamp advancing as new replies land while its
   // panel is on screen — mirrors the channel read effect above so the Threads
   // tab's "new" highlight clears for replies that arrive mid-view, not just
@@ -1320,24 +1359,6 @@ export function ConcordV2Page() {
     );
     await send({ content, extraTags });
     setReplyTo(undefined);
-  };
-
-  const handleEditSubmit = async (original: ChatMsg, content: string) => {
-    const trimmed = content.trim();
-    if (!trimmed || trimmed === original.content.trim()) {
-      setEditingId(undefined);
-      return;
-    }
-    setEditingId(undefined);
-    try {
-      await transport.editMessage?.(original, trimmed);
-    } catch {
-      toast({
-        title: "Edit failed",
-        description: "Could not publish the edit.",
-        variant: "destructive",
-      });
-    }
   };
 
   const handleCreateChannel = async () => {
@@ -2074,18 +2095,16 @@ export function ConcordV2Page() {
                         onToggleActive={toggleActive}
                         onOpenThread={onOpenThreadCb}
                         onReply={canWrite ? setReplyTo : undefined}
-                        replyContext={
-                          replyId ? (
-                            <ReplyContext2 parent={messagesById.get(replyId)} onJump={jumpWithinChannel} />
-                          ) : undefined
-                        }
+                        replyToId={replyId}
+                        replyParent={replyId ? messagesById.get(replyId) : undefined}
+                        onJumpToReply={jumpWithinChannel}
                         onDelete={transport.deleteMessage}
                         onRetry={transport.retry}
                         onDiscard={transport.discard}
                         isEditing={editingId === msg.id}
-                        onEdit={canWrite ? (e) => setEditingId(e.id) : undefined}
+                        onEdit={canWrite ? startEditing : undefined}
                         onEditSubmit={handleEditSubmit}
-                        onEditCancel={() => setEditingId(undefined)}
+                        onEditCancel={cancelEditing}
                       />
                       );
                     }}

@@ -200,6 +200,15 @@ export function useConcordTransport(
     };
   }, [talliesById, send]);
 
+  // Adapters from the id-keyed hooks to the event-keyed ChatTransport shape.
+  // Defined OUTSIDE the transport memo: inline in it they'd take a new identity
+  // every time `messages` changed, and they're handed straight to memoized
+  // message rows as props — which would re-render the whole mounted window on
+  // every arriving message and every backfilled page.
+  const sendStatusFor = useCallback((id: string) => sendStatus[id], [sendStatus]);
+  const retryEvent = useCallback((event: ChatMsg) => retry(event.id), [retry]);
+  const deleteEvent = useCallback((event: NostrEvent) => deleteMessage(event.id), [deleteMessage]);
+
   const transport = useMemo<ChatTransport>(
     () => ({
       messages: topLevel,
@@ -209,16 +218,16 @@ export function useConcordTransport(
       loadOlder,
       hasMore,
       isLoadingOlder,
-      sendStatusFor: (id: string) => sendStatus[id],
-      retry: (event: ChatMsg) => retry(event.id),
+      sendStatusFor,
+      retry: retryEvent,
       discard,
-      deleteMessage: (event: NostrEvent) => deleteMessage(event.id),
+      deleteMessage: deleteEvent,
       replyCountFor,
       reactionsFor,
       threadRepliesFor,
       sendThreadReply,
     }),
-    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatus, retry, discard, deleteMessage, replyCountFor, reactionsFor, threadRepliesFor, sendThreadReply],
+    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, replyCountFor, reactionsFor, threadRepliesFor, sendThreadReply],
   );
 
   return { transport, reactionsFor, allMessages: messages };

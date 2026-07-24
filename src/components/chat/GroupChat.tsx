@@ -46,13 +46,13 @@ function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl
   const author = useAuthor(event?.pubkey);
   const displayName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
 
-  if (!event) return null;
-
-  const image = firstImageRef(event);
+  // Render the line even before the relay answers: `ReplyContextLine` holds a
+  // fixed height, so the row doesn't grow when the parent lands mid-scroll.
+  const image = event ? firstImageRef(event) : undefined;
   return (
     <ReplyContextLine
-      name={displayName}
-      preview={<ReplyPreview content={event.content} hideMediaPlaceholder={!!image} />}
+      name={event ? displayName : undefined}
+      preview={event ? <ReplyPreview content={event.content} hideMediaPlaceholder={!!image} /> : undefined}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
       onClick={() => onJump(eventId)}
     />
@@ -99,13 +99,44 @@ function Nip29ChatMessage({
   onReply,
 }: Nip29ChatMessageProps) {
   const { config } = useAppContext();
-  const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
+  // The transport object is rebuilt whenever `messages` changes — on every
+  // arriving message and every backfilled page — so anything derived from it
+  // inline hands ChatMessage a fresh prop identity and defeats its React.memo,
+  // re-rendering the whole mounted window. The per-id accessors already return
+  // identity-stable values; it's the inline arrows and object/element literals
+  // that churn, so those are memoized here and the transport is read through a
+  // ref so the callbacks don't have to depend on its identity.
+  const transportRef = useRef(transport);
+  transportRef.current = transport;
+
+  const replies = transport.threadRepliesFor?.(event.id);
+  const threadInfo = useMemo(() => threadSummary(replies ?? []), [replies]);
+  const pollContext = useMemo(() => ({ relayUrl, groupId }), [relayUrl, groupId]);
+
+  const handleRetry = useCallback(() => transportRef.current.retry?.(event), [event]);
+  const handleDiscard = useCallback(() => transportRef.current.discard?.(event.id), [event]);
+
+  const canOpenThread = Boolean(transport.openThread);
+  const handleOpenThread = useMemo(
+    () => (canOpenThread ? (e: ChatMsg) => transportRef.current.openThread!(e, true) : undefined),
+    [canOpenThread],
+  );
+
+  const replyToId = getReplyToId(event);
+  const replyContext = useMemo(
+    () =>
+      replyToId ? (
+        <ReplyContext eventId={replyToId} relayUrl={relayUrl} onJump={onJumpToReply} />
+      ) : undefined,
+    [replyToId, relayUrl, onJumpToReply],
+  );
+
   return (
     <ChatMessage
       event={event}
       canWrite={transport.canWrite}
       canModerate={transport.canModerate}
-      pollContext={{ relayUrl, groupId }}
+      pollContext={pollContext}
       reactions={transport.reactionsFor?.(event.id)}
       zapEnabled={config.zapsEnabled && Boolean(transport.zapsFor)}
       zaps={transport.zapsFor?.(event.id)}
@@ -118,16 +149,12 @@ function Nip29ChatMessage({
       replyCount={transport.replyCountFor?.(event.id) ?? 0}
       threadParticipants={threadInfo.participants}
       lastReplyAt={threadInfo.lastReplyAt}
-      replyContext={
-        getReplyToId(event)
-          ? <ReplyContext eventId={getReplyToId(event)!} relayUrl={relayUrl} onJump={onJumpToReply} />
-          : undefined
-      }
-      onRetry={() => transport.retry?.(event)}
-      onDiscard={() => transport.discard?.(event.id)}
+      replyContext={replyContext}
+      onRetry={handleRetry}
+      onDiscard={handleDiscard}
       onTogglePin={transport.togglePin}
       onDelete={transport.deleteMessage}
-      onOpenThread={transport.openThread ? (e) => transport.openThread!(e, true) : undefined}
+      onOpenThread={handleOpenThread}
       onReply={onReply}
       onEdit={onEdit}
       onEditSubmit={onEditSubmit}
@@ -319,6 +346,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     timelineRef.current?.scrollToMessage(id);
   }, []);
 
+  // Stable identities so an unchanged row's props don't churn (React.memo).
+  const startEditing = useCallback((e: ChatMsg) => setEditingId(e.id), []);
+  const cancelEditing = useCallback(() => setEditingId(undefined), []);
+
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {
     if (threadRoot) {
@@ -345,34 +376,11 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [user, messages, relayUrl, groupId, markRead]);
 
-  // Opening/closing the thread panel reflows the message column (its width
-  // animates over ~200ms). While it animates, keep the scroll pinned to the
-  // bottom if the user was already there.
-  useEffect(() => {
-    let raf = 0;
-    const start = performance.now();
-    const pin = (now: number) => {
-      timelineRef.current?.maintainBottom();
-      if (now - start < 260) raf = requestAnimationFrame(pin);
-    };
-    raf = requestAnimationFrame(pin);
-    return () => cancelAnimationFrame(raf);
-  }, [threadRoot]);
-
-  // The footer below the timeline (composer / membership skeleton / join
-  // prompt) changes height when membership resolves or search toggles, which
-  // resizes the timeline. Re-pin to the bottom across that swap so a pinned
-  // view doesn't jump.
-  useEffect(() => {
-    let raf = 0;
-    const start = performance.now();
-    const pin = (now: number) => {
-      timelineRef.current?.maintainBottom();
-      if (now - start < 260) raf = requestAnimationFrame(pin);
-    };
-    raf = requestAnimationFrame(pin);
-    return () => cancelAnimationFrame(raf);
-  }, [canWrite, membershipPending, searching]);
+  // Opening the thread panel (its width animates over ~200ms) and the footer
+  // swapping between composer / membership skeleton / join prompt both resize
+  // the timeline. Nothing to do here: the timeline observes its own scroller and
+  // content, so it holds the reading position across every frame of both — this
+  // used to be a rAF loop polling `maintainBottom` for 260ms.
 
   const handleSent = useCallback(() => {
     timelineRef.current?.pinToBottom();
@@ -601,9 +609,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                 active={activeId === msg.id}
                 onToggleActive={toggleActive}
                 continuation={continuation}
-                onEdit={(e) => setEditingId(e.id)}
+                onEdit={startEditing}
                 onEditSubmit={handleEditSubmit}
-                onEditCancel={() => setEditingId(undefined)}
+                onEditCancel={cancelEditing}
                 onJumpToReply={jumpToReply}
                 onReply={setReplyTo}
               />

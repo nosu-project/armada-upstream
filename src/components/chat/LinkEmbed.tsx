@@ -1,10 +1,17 @@
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Link2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLinkPreview } from "@/hooks/useLinkPreview";
 import { extractSpotifyEmbed, extractYouTubeId } from "@/lib/linkEmbed";
 import { cn } from "@/lib/utils";
+
+/**
+ * Height of a link card's thumbnail well, in px. Fixed (rather than an aspect
+ * ratio) so the card's total height doesn't depend on how wide its column is —
+ * it stays identical across the loading, resolved and no-thumbnail states.
+ */
+const THUMBNAIL_HEIGHT = 180;
 
 interface LinkEmbedProps {
   url: string;
@@ -71,7 +78,9 @@ function EmbedInfoBar({ url }: { url: string }) {
           <span>Open</span>
         </a>
       </div>
-      {data?.title && <p className="text-sm font-semibold leading-snug line-clamp-2">{data.title}</p>}
+      {/* Fixed two-line box: the title arrives asynchronously, and letting it
+          expand the bar would resize the row inside the virtualized timeline. */}
+      <p className="h-10 text-sm font-semibold leading-snug line-clamp-2">{data?.title}</p>
     </div>
   );
 }
@@ -85,35 +94,26 @@ function displayDomain(url: string): string {
   }
 }
 
-/** Rich link preview card rendered from OEmbed data. */
+/**
+ * Rich link preview card rendered from OEmbed data.
+ *
+ * The card's height is FIXED and identical in every state — loading, resolved
+ * with a thumbnail, resolved without one, and thumbnail-failed-to-load. It sits
+ * inside a virtualized timeline, where a row that resizes after mount shoves
+ * everything below it; a preview that resolved from a two-line skeleton into a
+ * hero card (or collapsed into a bare link) moved the reading position by
+ * ~200px, which is what made scrolling back through history judder. So the
+ * thumbnail well is a fixed {@link THUMBNAIL_HEIGHT}px box that falls back to an
+ * icon placeholder, and each text row occupies its line box whether or not it
+ * has content.
+ */
 function LinkPreview({ url, className }: { url: string; className?: string }) {
   const { data, isLoading } = useLinkPreview(url);
-
-  if (isLoading) {
-    return (
-      <div className={cn("max-w-md rounded-xl border border-border overflow-hidden", className)}>
-        <div className="px-3.5 py-2.5 space-y-1.5">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-4 w-3/4" />
-        </div>
-      </div>
-    );
-  }
-
-  // No preview data — fall back to a plain inline link.
-  if (!data?.title && !data?.thumbnail_url) {
-    return (
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary hover:underline break-all"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {url}
-      </a>
-    );
-  }
+  // Thumbnail 404s/hotlink blocks are common; swap to the placeholder rather
+  // than hiding the well (hiding it would resize the row a second time).
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const thumbnail = !thumbFailed ? data?.thumbnail_url : undefined;
+  const domain = displayDomain(url);
 
   return (
     <a
@@ -127,29 +127,40 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      {data.thumbnail_url && (
-        <div className="w-full overflow-hidden">
+      <div
+        className="relative w-full overflow-hidden bg-muted"
+        style={{ height: THUMBNAIL_HEIGHT }}
+      >
+        {isLoading ? (
+          <Skeleton className="absolute inset-0 rounded-none" />
+        ) : thumbnail ? (
           <img
-            src={data.thumbnail_url}
+            src={thumbnail}
             alt=""
-            className="w-full max-h-[180px] object-cover"
-            loading="lazy"
-            onError={(e) => {
-              (e.currentTarget.parentElement as HTMLElement).style.display = "none";
-            }}
+            className="absolute inset-0 w-full h-full object-cover"
+            onError={() => setThumbFailed(true)}
           />
-        </div>
-      )}
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <Link2 className="size-8 text-muted-foreground/40" />
+          </div>
+        )}
+      </div>
 
       <div className="px-3.5 py-2.5 space-y-0.5">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="truncate">{data.provider_name || displayDomain(url)}</span>
+        <div className="flex items-center gap-1.5 h-4 text-xs text-muted-foreground">
+          <span className="truncate">{data?.provider_name || domain}</span>
           <ExternalLink className="size-3 ml-auto shrink-0 opacity-0 group-hover:opacity-100 touch:opacity-100 transition-opacity" />
         </div>
-        {data.title && <p className="text-sm font-semibold leading-snug line-clamp-2">{data.title}</p>}
-        {data.author_name && (
-          <p className="text-xs text-muted-foreground leading-relaxed line-clamp-1">{data.author_name}</p>
-        )}
+        {/* Two fixed line boxes: `h-10` is exactly two `text-sm leading-snug`
+            lines, so a one-line title (or none at all) reserves the same space
+            as a wrapped one. */}
+        <p className="h-10 text-sm font-semibold leading-snug line-clamp-2">
+          {isLoading ? <Skeleton className="h-4 w-3/4" /> : data?.title ?? url}
+        </p>
+        <p className="h-4 text-xs text-muted-foreground line-clamp-1">
+          {data?.author_name}
+        </p>
       </div>
     </a>
   );

@@ -1,7 +1,6 @@
 import { Braces, ChevronDown, Copy, Link2, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Virtuoso } from "react-virtuoso";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
@@ -38,8 +37,6 @@ import { writeClipboardText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, ChatTransport, MessageReactions, MessageZaps, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
-import type { ReactNode, UIEvent } from "react";
-import type { FollowOutputScalarType, VirtuosoHandle } from "react-virtuoso";
 
 /**
  * Consecutive replies from the same author within this window collapse into a
@@ -52,29 +49,8 @@ const CONTINUATION_WINDOW_SECONDS = 5 * 60;
  * ReactionBar keeps a constant prop instead of a fresh closure per render. */
 const NOOP_REACT = () => {};
 
-/** Stable empty list while the thread's replies are still loading. */
-const NO_REPLIES: ChatMsg[] = [];
-
-/**
- * Context handed to the virtualizer's Header. The header (root message +
- * divider + spinner) is built per render in ThreadPanel; routing it through
- * `context` keeps the component map itself stable, so the header re-renders in
- * place instead of remounting (which would drop e.g. an in-progress root edit).
- */
-interface ThreadListContext {
-  header: ReactNode;
-}
-
-function ThreadListHeader({ context }: { context?: ThreadListContext }) {
-  return <>{context?.header}</>;
-}
-
-const THREAD_COMPONENTS = { Header: ThreadListHeader };
-
-/** Always snap to a newly-arrived reply (the panel's long-standing behavior). */
-function alwaysFollow(): FollowOutputScalarType {
-  return "smooth";
-}
+/** Distance from the bottom (px) still counted as "reading the newest". */
+const AT_BOTTOM_PX = 60;
 
 /** A single message row inside the thread panel (root or reply). */
 function ThreadMessage({
@@ -143,9 +119,13 @@ function ThreadMessage({
   // Raw event source for the "View event JSON" menu item: a rumor has no
   // signature, so strip the synthetic empty `sig` the transport adds for
   // rendering; a signed event (NIP-29) is shown as-is.
-  const sourceJson = isRumor
-    ? JSON.stringify((({ sig: _sig, ...rest }) => rest)(event), null, 2)
-    : JSON.stringify(event, null, 2);
+  // Serialized only while the dialog is open: this runs per rendered row, and
+  // stringifying every message's event on mount is pure cost on a channel switch.
+  const sourceJson = !jsonOpen
+    ? ""
+    : isRumor
+      ? JSON.stringify((({ sig: _sig, ...rest }) => rest)(event), null, 2)
+      : JSON.stringify(event, null, 2);
 
   // The author can delete their own message; moderators can delete anyone's
   // (mirrors ChatMessage's gating). The transport decides how.
@@ -422,21 +402,55 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   };
 
   // --- Auto-scroll + jump-to-latest ---
-  // The list is virtualized (react-virtuoso): it mounts at the newest reply
-  // (`initialTopMostItemIndex`, re-applied per root via the `key`), and
-  // `followOutput` snaps to newly-arrived replies.
-  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  // A plain scroller, like the main timeline: replies are real DOM in normal
+  // flow, so the browser anchors the reading position itself when a reply grows
+  // (image, embed, reaction) instead of a virtualizer re-measuring and guessing.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const distanceRef = useRef(0);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
-  const scrollToBottom = useCallback(() => {
-    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" });
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+    distanceRef.current = 0;
     setShowJumpToLatest(false);
   }, []);
 
-  const handleScroll = useCallback((e: UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setShowJumpToLatest(distanceFromBottom > 120);
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowJumpToLatest(distanceRef.current > 120);
+  }, []);
+
+  // Open each thread at its newest reply.
+  useLayoutEffect(() => {
+    scrollToBottom("auto");
+  }, [root.id, scrollToBottom]);
+
+  // Snap to a newly-arrived reply — the panel's long-standing behavior, unlike
+  // the main timeline, which only follows for a reader already at the bottom.
+  useLayoutEffect(() => {
+    if (isLoading) return;
+    scrollToBottom(distanceRef.current > AT_BOTTOM_PX ? "smooth" : "auto");
+  }, [replies.length, isLoading, scrollToBottom]);
+
+  // Replies growing after mount (images, link previews, reactions) and the panel
+  // itself resizing (expand/collapse, the composer growing) both land here; hold
+  // the reader's distance from the newest reply across either.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+    const ro = new ResizeObserver(() => {
+      if (distanceRef.current > AT_BOTTOM_PX) return;
+      el.scrollTop = el.scrollHeight - el.clientHeight - distanceRef.current;
+    });
+    ro.observe(content);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   // Scrolls with the content above the replies: the root message (or its
@@ -493,39 +507,36 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
       </div>
 
       <div className="flex-1 min-h-0 relative">
-        <Virtuoso<ChatMsg, ThreadListContext>
-          key={root.id}
-          ref={virtuosoRef}
-          className="h-full overflow-x-clip overscroll-contain scrollbar-stable"
-          data={isLoading ? NO_REPLIES : replies}
-          context={{ header: listHeader }}
-          components={THREAD_COMPONENTS}
-          computeItemKey={(_i, reply) => reply.id}
-          followOutput={alwaysFollow}
-          initialTopMostItemIndex={{ index: "LAST", align: "end" }}
-          increaseViewportBy={{ top: 400, bottom: 200 }}
+        <div
+          ref={scrollRef}
           onScroll={handleScroll}
-          itemContent={(index, reply) => {
-            // Collapse consecutive same-author replies within a short window into
-            // a compact continuation, mirroring the main timeline. The root never
-            // continues into the first reply (they're separated by the divider).
-            const prev = replies[index - 1];
-            const continuation =
-              !!prev &&
-              prev.pubkey === reply.pubkey &&
-              reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
-            return (
-              <div className="pt-1">
-                <ThreadMessage event={reply} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
-              </div>
-            );
-          }}
-        />
+          className="h-full overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable"
+        >
+          <div ref={contentRef}>
+            {listHeader}
+            {!isLoading && replies.map((reply, index) => {
+              // Collapse consecutive same-author replies within a short window
+              // into a compact continuation, mirroring the main timeline. The
+              // root never continues into the first reply (the divider splits
+              // them).
+              const prev = replies[index - 1];
+              const continuation =
+                !!prev &&
+                prev.pubkey === reply.pubkey &&
+                reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
+              return (
+                <div key={reply.id} className="pt-1">
+                  <ThreadMessage event={reply} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
         {showJumpToLatest && (
           <div className="absolute bottom-3 inset-x-0 z-10 flex justify-center pointer-events-none">
             <button
               type="button"
-              onClick={scrollToBottom}
+              onClick={() => scrollToBottom()}
               className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-secondary/90 backdrop-blur px-4 py-2 text-xs font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
               aria-label="Jump to latest replies"
             >
