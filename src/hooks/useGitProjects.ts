@@ -141,6 +141,22 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
     };
   });
 
+  // All-time pseudo-attachments turn the timeline builder's interval gate into
+  // a no-op while keeping its trust rules for status changes.
+  const allTime = sources.map((source) => ({ address: source.address, relayHints: [], attachedAt: 0 }));
+  const activities = buildGitTimelineActivities(
+    events,
+    allTime,
+    [...announcements.values()].filter((a): a is NonNullable<typeof a> => Boolean(a)),
+  );
+
+  // Discussion sizes from the built activities, so retracted comments don't count.
+  const commentCounts = new Map<string, number>();
+  for (const activity of activities) {
+    if (activity.type !== "comment") continue;
+    commentCounts.set(activity.ticket.id, (commentCounts.get(activity.ticket.id) ?? 0) + 1);
+  }
+
   const items: ProjectWorkItem[] = [...tickets.values()]
     .map((ticket) => {
       const repository = ticketRepository.get(ticket.id)!;
@@ -160,18 +176,11 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
         repoCoord: repository.coordinate,
         status: gitStatusFromKind(status?.kind, ticket.kind),
         event: ticket.event,
+        labels: ticket.labels,
+        commentCount: commentCounts.get(ticket.id) ?? 0,
       };
     })
     .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
-
-  // All-time pseudo-attachments turn the timeline builder's interval gate into
-  // a no-op while keeping its trust rules for status changes.
-  const allTime = sources.map((source) => ({ address: source.address, relayHints: [], attachedAt: 0 }));
-  const activities = buildGitTimelineActivities(
-    events,
-    allTime,
-    [...announcements.values()].filter((a): a is NonNullable<typeof a> => Boolean(a)),
-  );
 
   return { repos, items, activities, ticketsById: tickets };
 }

@@ -1,5 +1,5 @@
-import { CircleDot, Copy, ExternalLink, FolderGit2, GitMerge, GitPullRequest, LayoutGrid, List, Users } from "lucide-react";
-import { useMemo, useState } from "react";
+import { CircleDot, Copy, ExternalLink, FolderGit2, GitMerge, GitPullRequest, LayoutGrid, List, MessageCircle, Users, X } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -238,8 +238,9 @@ function StatusChip({ status }: { status: ProjectWorkItem["status"] }) {
 }
 
 /** A feed/list row for a single issue / patch / PR. */
-function WorkItemRow({ item, repoName, onOpen }: { item: ProjectWorkItem; repoName?: string; onOpen?: () => void }) {
+function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWorkItem; repoName?: string; onOpen?: () => void; onLabelClick?: (label: string) => void }) {
   const Comp = onOpen ? "button" : "article";
+  const labels = item.labels ?? [];
   return (
     <Comp
       {...(onOpen ? { type: "button" as const, onClick: onOpen } : {})}
@@ -252,16 +253,39 @@ function WorkItemRow({ item, repoName, onOpen }: { item: ProjectWorkItem; repoNa
         <WorkItemIcon kind={item.kind} />
         <div className="min-w-0 flex-1 space-y-1">
           <p className="truncate text-sm font-semibold leading-5 text-foreground">{item.title}</p>
-          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs leading-4 text-muted-foreground">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-4 text-muted-foreground">
             {repoName && <span className="truncate">{repoName}</span>}
             {repoName && <span aria-hidden>·</span>}
             <span>{relativeTime(item.createdAt)}</span>
             <span aria-hidden>·</span>
             <span>by <AuthorName pubkey={item.author} /></span>
+            {labels.slice(0, 3).map((label) => (
+              // A span, not a button: the row itself may already be a button.
+              <span
+                key={label}
+                role={onLabelClick ? "button" : undefined}
+                onClick={onLabelClick ? (e) => { e.stopPropagation(); onLabelClick(label); } : undefined}
+                className={cn(
+                  "rounded-full border border-border/60 px-1.5 py-px text-[10px]",
+                  onLabelClick && "cursor-pointer transition-colors hover:border-primary/50 hover:text-foreground",
+                )}
+              >
+                {label}
+              </span>
+            ))}
+            {labels.length > 3 && <span className="text-[10px]">+{labels.length - 3}</span>}
           </div>
         </div>
       </div>
-      <StatusChip status={item.status} />
+      <div className="flex shrink-0 items-center gap-2">
+        {(item.commentCount ?? 0) > 0 && (
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            <MessageCircle className="size-3.5" />
+            {item.commentCount}
+          </span>
+        )}
+        <StatusChip status={item.status} />
+      </div>
     </Comp>
   );
 }
@@ -585,6 +609,15 @@ function CardsSkeleton() {
   );
 }
 
+function FilteredOutNotice({ onShowAll }: { onShowAll: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-3 px-4 py-14 text-center">
+      <p className="text-sm text-muted-foreground">Nothing matches the current filters.</p>
+      <Button variant="outline" size="sm" onClick={onShowAll}>Show all</Button>
+    </div>
+  );
+}
+
 function EmptyState({ icon: Icon, title, hint }: { icon: typeof FolderGit2; title: string; hint: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-4 py-20 text-center">
@@ -628,6 +661,8 @@ export function ProjectsView({
   const [filter, setFilter] = useState<Filter>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [sort, setSort] = useState<"updated" | "name">("updated");
+  const [statusFilter, setStatusFilter] = useState<"open" | "closed" | "all">("open");
+  const [labelFilter, setLabelFilter] = useState<string | null>(null);
 
   const items = workItems;
   const summaries = useMemo(() => repoSummaries(items), [items]);
@@ -643,6 +678,22 @@ export function ProjectsView({
 
   const prs = useMemo(() => items.filter((i) => i.kind !== "issue"), [items]);
   const issues = useMemo(() => items.filter((i) => i.kind === "issue"), [items]);
+  // Drafts count as open (they are unresolved work), matching the trackers
+  // people come from.
+  const matchesFilters = useCallback((item: ProjectWorkItem) => {
+    const unresolved = item.status === "open" || item.status === "draft";
+    if (statusFilter === "open" && !unresolved) return false;
+    if (statusFilter === "closed" && unresolved) return false;
+    if (labelFilter && !(item.labels ?? []).includes(labelFilter)) return false;
+    return true;
+  }, [statusFilter, labelFilter]);
+  const filteredPrs = useMemo(() => prs.filter(matchesFilters), [prs, matchesFilters]);
+  const filteredIssues = useMemo(() => issues.filter(matchesFilters), [issues, matchesFilters]);
+  const toggleLabel = useCallback((label: string) => setLabelFilter((current) => (current === label ? null : label)), []);
+  const showAll = useCallback(() => {
+    setStatusFilter("all");
+    setLabelFilter(null);
+  }, []);
   const summaryOf = (coord: string): ProjectRepoSummary => summaries.get(coord) ?? { prCount: 0, issueCount: 0 };
   const peopleOf = (repo: ProjectRepo): string[] => [...new Set([repo.owner, ...repo.contributors])];
 
@@ -660,6 +711,28 @@ export function ProjectsView({
         <Tabs filter={filter} onChange={setFilter} />
         {filter !== "all" && (
           <div className="mb-2 flex items-center gap-2">
+            {(filter === "prs" || filter === "issues") && labelFilter && (
+              <Button variant="secondary" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setLabelFilter(null)}>
+                {labelFilter}
+                <X className="size-3" />
+              </Button>
+            )}
+            {(filter === "prs" || filter === "issues") && (
+              <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
+                {(["open", "closed", "all"] as const).map((value) => (
+                  <Button
+                    key={value}
+                    variant={statusFilter === value ? "secondary" : "ghost"}
+                    size="sm"
+                    className="h-7 px-2 text-xs capitalize"
+                    aria-pressed={statusFilter === value}
+                    onClick={() => setStatusFilter(value)}
+                  >
+                    {value}
+                  </Button>
+                ))}
+              </div>
+            )}
             <select
               value={sort}
               onChange={(e) => setSort(e.target.value as "updated" | "name")}
@@ -717,31 +790,37 @@ export function ProjectsView({
             </div>
           )
         ) : filter === "prs" ? (
-          prs.length > 0 ? (
+          filteredPrs.length > 0 ? (
             <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
-              {prs.map((item) => (
+              {filteredPrs.map((item) => (
                 <WorkItemRow
                   key={item.id}
                   item={item}
                   repoName={item.repoCoord ? repoNameByCoord.get(item.repoCoord) : undefined}
                   onOpen={onOpenItem && (() => onOpenItem(item))}
+                  onLabelClick={toggleLabel}
                 />
               ))}
             </div>
+          ) : prs.length > 0 ? (
+            <FilteredOutNotice onShowAll={showAll} />
           ) : (
             <EmptyState icon={GitPullRequest} title="No pull requests" hint="Patches and PRs opened on this workspace will appear here." />
           )
-        ) : issues.length > 0 ? (
+        ) : filteredIssues.length > 0 ? (
           <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
-            {issues.map((item) => (
+            {filteredIssues.map((item) => (
               <WorkItemRow
                 key={item.id}
                 item={item}
                 repoName={item.repoCoord ? repoNameByCoord.get(item.repoCoord) : undefined}
                 onOpen={onOpenItem && (() => onOpenItem(item))}
+                onLabelClick={toggleLabel}
               />
             ))}
           </div>
+        ) : issues.length > 0 ? (
+          <FilteredOutNotice onShowAll={showAll} />
         ) : (
           <EmptyState icon={CircleDot} title="No issues" hint="Issues opened on this workspace will appear here." />
         )}

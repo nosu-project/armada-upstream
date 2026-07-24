@@ -187,3 +187,42 @@ describe("assembleGitProjects", () => {
     expect(activities.some((activity) => activity.type === "comment" && activity.comment.content === "A drive-by remark")).toBe(true);
   });
 });
+
+describe("labels and comment counts", () => {
+  const sources = gitProjectSources(
+    new Map([["chan1", [attachment()]]]),
+    new Map([["chan1", "engineering"]]),
+  );
+  const labeled = event({
+    id: "2".repeat(64),
+    kind: GIT_ISSUE_KIND,
+    pubkey: AUTHOR,
+    created_at: 10,
+    tags: [["a", address.coordinate], ["subject", "Tagged"], ["t", "Bug"], ["t", "ui"]],
+  });
+  const comment = (id: string, author: string) => event({
+    id: id.repeat(64).slice(0, 64),
+    kind: NIP22_COMMENT_KIND,
+    pubkey: author,
+    created_at: 30,
+    tags: [["E", "2".repeat(64), "", AUTHOR], ["K", String(GIT_ISSUE_KIND)]],
+  });
+
+  it("exposes lowercased labels and counts comments", () => {
+    const { items } = assembleGitProjects(sources, [labeled, comment("7", STRANGER), comment("8", AUTHOR)]);
+    expect(items[0].labels).toEqual(["bug", "ui"]);
+    expect(items[0].commentCount).toBe(2);
+  });
+
+  it("does not count retracted comments", () => {
+    const retraction = event({
+      id: "9".repeat(64),
+      kind: 5,
+      pubkey: STRANGER,
+      created_at: 40,
+      tags: [["e", "7".repeat(64)]],
+    });
+    const { items } = assembleGitProjects(sources, [labeled, comment("7", STRANGER), comment("8", AUTHOR), retraction]);
+    expect(items[0].commentCount).toBe(1);
+  });
+});

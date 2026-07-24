@@ -35,6 +35,10 @@ export interface ProjectWorkItem {
   repoCoord: string | null;
   status: ProjectWorkStatus;
   event: NostrEvent;
+  /** Lowercased `t` labels, when the source parses them. */
+  labels?: string[];
+  /** Known discussion size; hidden when the source doesn't count. */
+  commentCount?: number;
 }
 
 export interface ProjectRepoSummary {
