@@ -397,6 +397,14 @@ export function ConnectedRepositoriesSection({
   });
 
   const connectedCoordinates = new Set(repositories.map(({ attachment }) => attachment.address.coordinate));
+  // A channel already holding a repository is spoken for: a second one would
+  // blend two projects into one timeline. Shown, but not selectable.
+  const repositoryByChannel = new Map<string, { owner: string; name: string }>();
+  for (const { channel, attachment } of repositories) {
+    if (!repositoryByChannel.has(channel.idHex)) {
+      repositoryByChannel.set(channel.idHex, { owner: attachment.address.owner, name: attachment.address.identifier });
+    }
+  }
 
   const connect = async (channelIdHex: string, repository: PickedRepository) => {
     // The announcement is authoritative for activity relays; any address the
@@ -446,6 +454,7 @@ export function ConnectedRepositoriesSection({
           onOpenChange={setConnectOpen}
           channels={channels}
           connectedCoordinates={connectedCoordinates}
+          repositoryByChannel={repositoryByChannel}
           onConnect={connect}
         />
       )}
@@ -454,11 +463,12 @@ export function ConnectedRepositoriesSection({
 }
 
 /** Pick a repository, then the channel it belongs to. Mirrors the create-channel wizard. */
-function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordinates, onConnect }: {
+function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordinates, repositoryByChannel, onConnect }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   channels: ChannelV2[];
   connectedCoordinates: ReadonlySet<string>;
+  repositoryByChannel: ReadonlyMap<string, { owner: string; name: string }>;
   onConnect: (channelIdHex: string, repository: PickedRepository) => Promise<unknown>;
 }) {
   const [picked, setPicked] = useState<PickedRepository | null>(null);
@@ -512,20 +522,34 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
               </span>
             </div>
             <div className="max-h-56 space-y-0.5 overflow-y-auto rounded-lg bg-secondary/40 p-1">
-              {channels.map((channel) => (
-                <button
-                  key={channel.idHex}
-                  type="button"
-                  disabled={connecting}
-                  onClick={() => void connect(channel.idHex)}
-                  className="flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-foreground/[0.05] disabled:opacity-50"
-                >
-                  {channel.isPrivate ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <Hash className="size-4 shrink-0 text-muted-foreground" />}
-                  <span className="min-w-0 flex-1 truncate">{channel.name}</span>
-                  {connecting && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
-                </button>
-              ))}
+              {channels.map((channel) => {
+                const taken = repositoryByChannel.get(channel.idHex);
+                return (
+                  <button
+                    key={channel.idHex}
+                    type="button"
+                    disabled={connecting || Boolean(taken)}
+                    onClick={() => void connect(channel.idHex)}
+                    className={cn(
+                      "flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                      taken ? "opacity-50" : "hover:bg-foreground/[0.05] disabled:opacity-50",
+                    )}
+                  >
+                    {channel.isPrivate ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <Hash className="size-4 shrink-0 text-muted-foreground" />}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{channel.name}</span>
+                      {taken && <span className="block truncate text-xs text-muted-foreground">Already connected to {taken.name}</span>}
+                    </span>
+                    {connecting && !taken && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
+                  </button>
+                );
+              })}
             </div>
+            {channels.every((channel) => repositoryByChannel.has(channel.idHex)) && (
+              <p className="text-xs text-muted-foreground">
+                Every channel already has a repository. Add a channel first, or create a repository channel from the channel list.
+              </p>
+            )}
             {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
           </div>
         )}

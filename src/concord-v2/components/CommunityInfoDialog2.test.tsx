@@ -8,14 +8,17 @@ import { ConnectedRepositoriesSection } from "./CommunityInfoDialog2";
 const h = vi.hoisted(() => ({
   attach: vi.fn(),
   resolve: vi.fn(),
+  // Per-test control-plane fold, so a test can give a channel an attachment.
+  fold: { channels: new Map<string, unknown>([["channel", { metadata: { name: "general", private: false } }]]) },
 }));
 
 const OWNER = "a".repeat(64);
+const ATTACHED = `30617:${"b".repeat(64)}:bitchat`;
 
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: {} }) }));
 vi.mock("@/concord-v2/hooks/useControlPlane2", () => ({
   useChannels2: () => [{ idHex: "channel", name: "general" }],
-  useControlFold2: () => ({ data: { channels: new Map([["channel", { metadata: { name: "general", private: false } }]]) } }),
+  useControlFold2: () => ({ data: h.fold }),
 }));
 vi.mock("@/concord-v2/hooks/useCommunityActions2", () => ({
   useCommunityManagement2: () => ({ attachRepository: h.attach, detachRepository: vi.fn() }),
@@ -48,8 +51,22 @@ function pasteAddress(value: string) {
   fireEvent.click(screen.getByRole("button", { name: /Use this repository address/ }));
 }
 
+/** Give the one channel an active attachment for the duration of a test. */
+function channelHoldsRepository() {
+  h.fold.channels.set("channel", {
+    metadata: {
+      name: "general",
+      private: false,
+      custom: { "armada.git": { repositories: [{ address: ATTACHED, relayHints: ["wss://git.example"], attachedAt: 1 }] } },
+    },
+  });
+}
+
 describe("ConnectedRepositoriesSection", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.fold.channels.set("channel", { metadata: { name: "general", private: false } });
+  });
 
   it("only shows repository management controls to channel managers", () => {
     renderSection(false);
@@ -77,6 +94,23 @@ describe("ConnectedRepositoriesSection", () => {
       address: `30617:${OWNER}:armada`,
       relayHints: ["wss://git.example"],
     }));
+  });
+
+  it("will not attach a second repository to a channel that already has one", async () => {
+    channelHoldsRepository();
+    h.resolve.mockResolvedValue({
+      address: { coordinate: `30617:${OWNER}:armada`, owner: OWNER, identifier: "armada" },
+      relayHints: ["wss://git.example"],
+      announcement: { name: "Armada" },
+    });
+    renderSection(true);
+    pasteAddress("naddr1example");
+
+    const channel = await screen.findByRole("button", { name: /general/ });
+    expect(channel).toBeDisabled();
+    expect(channel).toHaveTextContent("Already connected to bitchat");
+    fireEvent.click(channel);
+    expect(h.attach).not.toHaveBeenCalled();
   });
 
   it("shows resolver errors without attempting an attachment", async () => {
