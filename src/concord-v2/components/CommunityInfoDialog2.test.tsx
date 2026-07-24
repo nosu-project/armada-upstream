@@ -41,7 +41,10 @@ const SEARCH_PLACEHOLDER = "Search repositories, or paste an naddr / nostr:// ad
 
 function renderSection(canManage: boolean) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={queryClient}><ConnectedRepositoriesSection community={community} canManage={canManage} /></QueryClientProvider>);
+  const element = () => <QueryClientProvider client={queryClient}><ConnectedRepositoriesSection community={community} canManage={canManage} /></QueryClientProvider>;
+  const view = render(element());
+  // A fresh element each time, so a control-plane change is actually re-read.
+  return { ...view, refresh: () => view.rerender(element()) };
 }
 
 /** Open the connect dialog and resolve a pasted address, landing on the channel step. */
@@ -111,6 +114,32 @@ describe("ConnectedRepositoriesSection", () => {
     expect(channel).toHaveTextContent("Already connected to bitchat");
     fireEvent.click(channel);
     expect(h.attach).not.toHaveBeenCalled();
+  });
+
+  it("keeps the chosen channel pending while the attachment publishes", async () => {
+    let settle: () => void = () => undefined;
+    h.attach.mockImplementation(() => new Promise<void>((resolve) => { settle = resolve; }));
+    h.resolve.mockResolvedValue({
+      address: { coordinate: `30617:${OWNER}:armada`, owner: OWNER, identifier: "armada" },
+      relayHints: ["wss://git.example"],
+      announcement: { name: "Armada" },
+    });
+    const view = renderSection(true);
+    pasteAddress("naddr1example");
+    fireEvent.click(await screen.findByRole("button", { name: /general/ }));
+
+    // The control plane folds our own write before the publish resolves; the
+    // row must read as pending rather than "already connected", and the
+    // all-taken notice must not fire on our own in-flight attachment.
+    channelHoldsRepository();
+    view.refresh();
+    const channel = await screen.findByRole("button", { name: /general/ });
+    expect(channel).toHaveTextContent("Connecting…");
+    expect(channel).not.toHaveTextContent("Already connected");
+    expect(screen.queryByText(/Every channel already has a repository/)).not.toBeInTheDocument();
+
+    settle();
+    await waitFor(() => expect(h.attach).toHaveBeenCalledTimes(1));
   });
 
   it("shows resolver errors without attempting an attachment", async () => {

@@ -472,27 +472,31 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
   onConnect: (channelIdHex: string, repository: PickedRepository) => Promise<unknown>;
 }) {
   const [picked, setPicked] = useState<PickedRepository | null>(null);
-  const [connecting, setConnecting] = useState(false);
+  // The channel a write is in flight for. The control plane folds our own
+  // attachment before the publish resolves, so this row must keep reading as
+  // pending rather than flipping to "already connected" under the cursor.
+  const [pendingChannelId, setPendingChannelId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const connecting = pendingChannelId !== null;
 
   useEffect(() => {
     if (!open) return;
     setPicked(null);
-    setConnecting(false);
+    setPendingChannelId(null);
     setError(null);
   }, [open]);
 
   const connect = async (channelIdHex: string) => {
     if (!picked || connecting) return;
     setError(null);
-    setConnecting(true);
+    setPendingChannelId(channelIdHex);
     try {
       await onConnect(channelIdHex, picked);
       onOpenChange(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't connect repository.");
     } finally {
-      setConnecting(false);
+      setPendingChannelId(null);
     }
   };
 
@@ -523,7 +527,9 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
             </div>
             <div className="max-h-56 space-y-0.5 overflow-y-auto rounded-lg bg-secondary/40 p-1">
               {channels.map((channel) => {
-                const taken = repositoryByChannel.get(channel.idHex);
+                const pending = pendingChannelId === channel.idHex;
+                // While our own write lands, the row stays "Connecting…".
+                const taken = pending ? undefined : repositoryByChannel.get(channel.idHex);
                 return (
                   <button
                     key={channel.idHex}
@@ -538,14 +544,18 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
                     {channel.isPrivate ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <Hash className="size-4 shrink-0 text-muted-foreground" />}
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{channel.name}</span>
-                      {taken && <span className="block truncate text-xs text-muted-foreground">Already connected to {taken.name}</span>}
+                      {pending
+                        ? <span className="block truncate text-xs text-muted-foreground">Connecting…</span>
+                        : taken && <span className="block truncate text-xs text-muted-foreground">Already connected to {taken.name}</span>}
                     </span>
-                    {connecting && !taken && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
+                    {pending && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
                   </button>
                 );
               })}
             </div>
-            {channels.every((channel) => repositoryByChannel.has(channel.idHex)) && (
+            {/* Not while connecting: our own in-flight attachment would make
+                every channel look spoken for mid-write. */}
+            {!connecting && channels.every((channel) => repositoryByChannel.has(channel.idHex)) && (
               <p className="text-xs text-muted-foreground">
                 Every channel already has a repository. Add a channel first, or create a repository channel from the channel list.
               </p>
