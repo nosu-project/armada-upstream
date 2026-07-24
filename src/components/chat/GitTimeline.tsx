@@ -110,7 +110,7 @@ export function GitTimelineRow({ entry, members, onOpen, commentEntries, activit
 
 function GitCommentRow({ entry, members }: { entry: Extract<GitChannelTimelineEntry, { type: "git-comment" }>; members: ReadonlySet<string> }) {
   const { comment } = entry.activity;
-  return <div className="flex gap-2.5"><Avatar className="size-8 shrink-0"><ActorAvatar pubkey={comment.author} /></Avatar><div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"><ActorName pubkey={comment.author} members={members} /><span className="text-xs text-muted-foreground">commented · {shortTimeAgo(entry.createdAt)}</span></div><p className="mt-1 whitespace-pre-wrap text-sm leading-5">{comment.content}</p></div></div>;
+  return <div className="flex gap-2.5"><Avatar className="size-8 shrink-0"><ActorAvatar pubkey={comment.author} /></Avatar><div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"><ActorName pubkey={comment.author} members={members} /><span className="text-xs text-muted-foreground">commented · {shortTimeAgo(entry.createdAt)}</span></div><ChatContent event={comment.event} disableNoteEmbeds className="mt-1 break-words text-sm leading-5" /></div></div>;
 }
 
 function ActorAvatar({ pubkey }: { pubkey: string }) {
