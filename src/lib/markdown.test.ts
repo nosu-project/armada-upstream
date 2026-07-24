@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseInline, splitInlineCode, splitMarkdownBlocks } from "./markdown";
+import { parseInline, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "./markdown";
 
 describe("splitMarkdownBlocks", () => {
   it("passes plain text through as one block", () => {
@@ -112,5 +112,77 @@ describe("parseInline", () => {
 
   it("leaves stray asterisks literal", () => {
     expect(parseInline("2 * 3 = 6")).toEqual([{ type: "text", value: "2 * 3 = 6" }]);
+  });
+});
+
+describe("splitMarkdownBlocks (document mode)", () => {
+  it("keeps chat mode free of document blocks", () => {
+    expect(splitMarkdownBlocks("## Heading\n- item")).toEqual([
+      { type: "text", text: "## Heading\n- item" },
+    ]);
+  });
+
+  it("extracts ATX headings with their level", () => {
+    expect(splitMarkdownBlocks("## Feature Request\nbody text", true)).toEqual([
+      { type: "heading", level: 2, text: "Feature Request" },
+      { type: "text", text: "body text" },
+    ]);
+  });
+
+  it("leaves hashtags and unspaced hashes literal", () => {
+    expect(splitMarkdownBlocks("#nostr is neat", true)).toEqual([
+      { type: "text", text: "#nostr is neat" },
+    ]);
+  });
+
+  it("groups consecutive list items, split by ordering", () => {
+    expect(splitMarkdownBlocks("- one\n- two\n3. three\n4. four", true)).toEqual([
+      { type: "list", ordered: false, start: 1, items: ["one", "two"] },
+      { type: "list", ordered: true, start: 3, items: ["three", "four"] },
+    ]);
+  });
+
+  it("keeps italics literal (a list marker requires a space)", () => {
+    expect(splitMarkdownBlocks("*emphasis* stays inline", true)).toEqual([
+      { type: "text", text: "*emphasis* stays inline" },
+    ]);
+  });
+
+  it("folds one boundary newline into the neighbor block", () => {
+    expect(splitMarkdownBlocks("## H\n\npara one\n\npara two\n\n- li", true)).toEqual([
+      { type: "heading", level: 2, text: "H" },
+      { type: "text", text: "para one\n\npara two" },
+      { type: "list", ordered: false, start: 1, items: ["li"] },
+    ]);
+  });
+
+  it("still extracts fences and quotes alongside document blocks", () => {
+    expect(splitMarkdownBlocks("# Title\n> quoted\n```\ncode\n```", true)).toEqual([
+      { type: "heading", level: 1, text: "Title" },
+      { type: "quote", text: "quoted" },
+      { type: "code", lang: undefined, code: "code" },
+    ]);
+  });
+});
+
+describe("splitMarkdownLinks", () => {
+  it("splits [text](url) links out of a run", () => {
+    expect(splitMarkdownLinks("see [F-Droid](https://f-droid.org) today")).toEqual([
+      { type: "text", value: "see " },
+      { type: "link", text: "F-Droid", url: "https://f-droid.org" },
+      { type: "text", value: " today" },
+    ]);
+  });
+
+  it("reduces image syntax to its bare URL for the media tokenizer", () => {
+    expect(splitMarkdownLinks("![shot](https://blossom.example/a.png)")).toEqual([
+      { type: "text", value: "https://blossom.example/a.png" },
+    ]);
+  });
+
+  it("leaves non-http schemes literal", () => {
+    expect(splitMarkdownLinks("[x](javascript:alert(1))")).toEqual([
+      { type: "text", value: "[x](javascript:alert(1))" },
+    ]);
   });
 });

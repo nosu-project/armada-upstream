@@ -18,6 +18,8 @@
 export type MdBlock =
   | { type: "code"; lang?: string; code: string }
   | { type: "quote"; text: string }
+  | { type: "heading"; level: number; text: string }
+  | { type: "list"; ordered: boolean; start: number; items: string[] }
   | { type: "text"; text: string };
 
 /** A segment of a text run, either plain or inline code. */
@@ -37,15 +39,17 @@ const QUOTE_LINE_RE = /^>\s?/;
 /**
  * Split message text into top-level blocks: fenced code, quote runs
  * (consecutive `> ` lines merged into one block, markers stripped), and plain
- * text (newlines preserved).
+ * text (newlines preserved). With `document` set, plain text further splits
+ * into ATX headings and flat ordered/unordered lists — the GitHub-flavored
+ * additions long-form git content uses, kept out of chat's dialect.
  */
-export function splitMarkdownBlocks(src: string): MdBlock[] {
+export function splitMarkdownBlocks(src: string, document = false): MdBlock[] {
   const blocks: MdBlock[] = [];
   let last = 0;
   FENCE_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = FENCE_RE.exec(src)) !== null) {
-    if (m.index > last) blocks.push(...splitQuoteBlocks(src.slice(last, m.index)));
+    if (m.index > last) blocks.push(...splitQuoteBlocks(src.slice(last, m.index), document));
     const code = m[2].replace(/\n$/, "");
     if (code.trim() !== "") {
       blocks.push({ type: "code", lang: m[1] || undefined, code });
@@ -55,12 +59,12 @@ export function splitMarkdownBlocks(src: string): MdBlock[] {
     }
     last = m.index + m[0].length;
   }
-  if (last < src.length) blocks.push(...splitQuoteBlocks(src.slice(last)));
+  if (last < src.length) blocks.push(...splitQuoteBlocks(src.slice(last), document));
   return blocks;
 }
 
 /** Split a non-code chunk into quote blocks (runs of `> ` lines) and text. */
-function splitQuoteBlocks(src: string): MdBlock[] {
+function splitQuoteBlocks(src: string, document = false): MdBlock[] {
   const blocks: MdBlock[] = [];
   const lines = src.split("\n");
   let textLines: string[] = [];
@@ -69,7 +73,10 @@ function splitQuoteBlocks(src: string): MdBlock[] {
   const flushText = () => {
     if (textLines.length > 0) {
       const text = textLines.join("\n");
-      if (text !== "") blocks.push({ type: "text", text });
+      if (text !== "") {
+        if (document) blocks.push(...splitDocumentBlocks(text));
+        else blocks.push({ type: "text", text });
+      }
       textLines = [];
     }
   };
@@ -92,6 +99,87 @@ function splitQuoteBlocks(src: string): MdBlock[] {
   flushText();
   flushQuote();
   return blocks;
+}
+
+/** ATX heading: `## text` (1-6 hashes, space required so `#hashtag` stays literal). */
+const HEADING_RE = /^(#{1,6})\s+(.+)$/;
+/** Unordered list item: `- text` (space required so `*italic*` stays literal). */
+const UNORDERED_ITEM_RE = /^\s{0,3}[-*+]\s+(.+)$/;
+/** Ordered list item: `1. text` / `1) text`. */
+const ORDERED_ITEM_RE = /^\s{0,3}(\d{1,9})[.)]\s+(.+)$/;
+
+/** Split a text chunk into headings, flat list runs and remaining text. */
+function splitDocumentBlocks(src: string): MdBlock[] {
+  const blocks: MdBlock[] = [];
+  let textLines: string[] = [];
+  let list: { ordered: boolean; start: number; items: string[] } | null = null;
+
+  const flushText = () => {
+    if (textLines.length > 0) {
+      // One boundary newline each side folds into the neighbor block's margin.
+      const text = textLines.join("\n").replace(/^\n/, "").replace(/\n$/, "");
+      if (text !== "") blocks.push({ type: "text", text });
+      textLines = [];
+    }
+  };
+  const flushList = () => {
+    if (list) {
+      blocks.push({ type: "list", ...list });
+      list = null;
+    }
+  };
+
+  for (const line of src.split("\n")) {
+    const heading = HEADING_RE.exec(line);
+    if (heading) {
+      flushText();
+      flushList();
+      blocks.push({ type: "heading", level: heading[1].length, text: heading[2].trim() });
+      continue;
+    }
+    const ordered = ORDERED_ITEM_RE.exec(line);
+    const unordered = ordered ? null : UNORDERED_ITEM_RE.exec(line);
+    if (ordered || unordered) {
+      flushText();
+      const isOrdered = Boolean(ordered);
+      if (list && list.ordered !== isOrdered) flushList();
+      if (!list) list = { ordered: isOrdered, start: ordered ? parseInt(ordered[1], 10) : 1, items: [] };
+      list.items.push((ordered?.[2] ?? unordered![1]).trim());
+      continue;
+    }
+    flushList();
+    textLines.push(line);
+  }
+  flushText();
+  flushList();
+  return blocks;
+}
+
+/** A segment of a text run, either plain or a `[text](url)` markdown link. */
+export type MdLinkSegment =
+  | { type: "text"; value: string }
+  | { type: "link"; text: string; url: string };
+
+/** `[text](url)` / `![alt](url)`, http(s) only so pseudo-scheme URLs stay literal. */
+const MD_LINK_RE = /(!?)\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
+
+/**
+ * Split a text run on markdown links. Image syntax (`![alt](url)`) yields the
+ * bare URL as text so the media tokenizer embeds it like any pasted image URL.
+ */
+export function splitMarkdownLinks(src: string): MdLinkSegment[] {
+  const out: MdLinkSegment[] = [];
+  let last = 0;
+  MD_LINK_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = MD_LINK_RE.exec(src)) !== null) {
+    if (m.index > last) out.push({ type: "text", value: src.slice(last, m.index) });
+    if (m[1]) out.push({ type: "text", value: m[3] });
+    else out.push({ type: "link", text: m[2], url: m[3] });
+    last = m.index + m[0].length;
+  }
+  if (last < src.length) out.push({ type: "text", value: src.slice(last) });
+  return out;
 }
 
 /** Inline code span: `code` (no newlines, non-empty). */

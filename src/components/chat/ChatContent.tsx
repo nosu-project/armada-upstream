@@ -28,7 +28,7 @@ import { HASHTAG_PATTERN } from "@/lib/hashtag";
 import { isInviteUrl } from "@/concord-v2/lib/invite";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
-import { splitInlineCode, splitMarkdownBlocks } from "@/lib/markdown";
+import { splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
 import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
@@ -63,6 +63,10 @@ interface ChatContentProps {
    *  ellipsis (used by quoted/embedded cards). Ignored when the content
    *  contains block media (images/embeds), which a line clamp would break. */
   clampLines?: number;
+  /** When true, long-form document markdown also renders: ATX headings, flat
+   *  lists and `[text](url)` links. Used for git issues/PRs/comments; chat
+   *  keeps its Discord-flavored subset. */
+  documentMarkdown?: boolean;
 }
 
 /** Bech32 charset used by NIP-19 identifiers. */
@@ -108,7 +112,10 @@ type ContentToken =
   | { type: "lightning-invoice"; invoice: string }
   | { type: "code-block"; code: string; lang?: string }
   | { type: "inline-code"; code: string }
-  | { type: "quote"; tokens: ContentToken[] };
+  | { type: "quote"; tokens: ContentToken[] }
+  | { type: "md-link"; text: string; url: string }
+  | { type: "heading"; level: number; tokens: ContentToken[] }
+  | { type: "list"; ordered: boolean; start: number; items: ContentToken[][] };
 
 /**
  * Split a plain-text leaf into text + `text-mention` tokens by matching known
@@ -273,7 +280,7 @@ function usableMime(m: string | undefined): string | undefined {
  * NIP-30 custom emoji, and lightning invoices.
  */
 /**
- * Tokenized message bodies, keyed by event id.
+ * Tokenized message bodies, keyed by event id and rendering dialect.
  *
  * Tokenizing is the expensive half of mounting a message row — the whole
  * markdown / URL / `nostr:` URI / emoji / invoice pass runs over the content —
@@ -299,10 +306,13 @@ function cacheTokens(id: string, content: string, tokens: ContentToken[]): Conte
   return tokens;
 }
 
-export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines }: ChatContentProps) {
+export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines, documentMarkdown = false }: ChatContentProps) {
   const rawTokens = useMemo(() => {
     const text = contentOverride ?? event.content;
-    const cached = TOKEN_CACHE.get(event.id);
+    // The dialect is part of the identity: the same event tokenizes
+    // differently in document mode (headings, lists, [text](url)).
+    const cacheKey = documentMarkdown ? `doc:${event.id}` : event.id;
+    const cached = TOKEN_CACHE.get(cacheKey);
     if (cached && cached.content === text) return cached.tokens;
 
     // Parse imeta tags for media URLs declared out-of-band. Vector/0xChat send
@@ -522,25 +532,40 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     };
 
     // A text run may still contain `inline code` spans — extract those first
-    // so code never gets linkified/emojified.
+    // so code never gets linkified/emojified. In document mode, `[text](url)`
+    // links split out of the non-code segments before URL tokenizing so the
+    // wrapped URL doesn't linkify on its own.
     const tokenizeRun = (run: string): ContentToken[] => {
       const out: ContentToken[] = [];
       for (const seg of splitInlineCode(run)) {
-        if (seg.code) out.push({ type: "inline-code", code: seg.value });
-        else out.push(...tokenizeSegment(seg.value));
+        if (seg.code) {
+          out.push({ type: "inline-code", code: seg.value });
+        } else if (documentMarkdown) {
+          for (const part of splitMarkdownLinks(seg.value)) {
+            if (part.type === "link") out.push({ type: "md-link", text: part.text, url: part.url });
+            else out.push(...tokenizeSegment(part.value));
+          }
+        } else {
+          out.push(...tokenizeSegment(seg.value));
+        }
       }
       return out;
     };
 
-    // Markdown block pass first (fenced ``` code, > quotes), then tokenize
-    // each non-code run. Quote blocks carry their own token list and render
-    // inside a <blockquote> (media inside quotes demotes to plain links).
+    // Markdown block pass first (fenced ``` code, > quotes, and in document
+    // mode headings/lists), then tokenize each non-code run. Quote blocks
+    // carry their own token list and render inside a <blockquote> (media
+    // inside quotes demotes to plain links).
     const result: ContentToken[] = [];
-    for (const block of splitMarkdownBlocks(text)) {
+    for (const block of splitMarkdownBlocks(text, documentMarkdown)) {
       if (block.type === "code") {
         result.push({ type: "code-block", code: block.code, lang: block.lang });
       } else if (block.type === "quote") {
         result.push({ type: "quote", tokens: tokenizeRun(block.text) });
+      } else if (block.type === "heading") {
+        result.push({ type: "heading", level: block.level, tokens: tokenizeRun(block.text) });
+      } else if (block.type === "list") {
+        result.push({ type: "list", ordered: block.ordered, start: block.start, items: block.items.map(tokenizeRun) });
       } else {
         result.push(...tokenizeRun(block.text));
       }
@@ -640,11 +665,11 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
 
     // Filter out empty text tokens
     return cacheTokens(
-      event.id,
+      cacheKey,
       text,
       result.filter((t) => !(t.type === "text" && t.value === "")),
     );
-  }, [event, contentOverride]);
+  }, [event, contentOverride, documentMarkdown]);
 
   // Resolve `@name` mentions carried as plain text + `p` tags (Buzz/legacy
   // style) back to pubkeys, then split them out of the text leaves. NIP-27
@@ -813,6 +838,46 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             {token.tokens.map((t, j) => renderToken(t, `${key}-q${j}`, null, true))}
           </blockquote>
         );
+      case "md-link": {
+        const safe = sanitizeUrl(token.url);
+        if (!safe) return <span key={key}>{token.text}</span>;
+        return (
+          <a
+            key={key}
+            href={safe}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline break-words"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {token.text}
+          </a>
+        );
+      }
+      case "heading":
+        return (
+          <div
+            key={key}
+            role="heading"
+            aria-level={token.level}
+            className={cn(
+              "mb-1 mt-3 font-bold leading-snug first:mt-0",
+              token.level === 1 ? "text-lg" : token.level === 2 ? "text-base" : "text-sm",
+            )}
+          >
+            {token.tokens.map((t, j) => renderToken(t, `${key}-h${j}`, null, true))}
+          </div>
+        );
+      case "list": {
+        const items = token.items.map((item, j) => (
+          <li key={`${key}-li${j}`}>{item.map((t, k) => renderToken(t, `${key}-li${j}-${k}`, null, true))}</li>
+        ));
+        // whitespace-normal: the pre-wrap container would otherwise render the
+        // markup's own line breaks as blank rows between <li> elements.
+        return token.ordered
+          ? <ol key={key} start={token.start} className="my-1 list-decimal space-y-0.5 whitespace-normal pl-5">{items}</ol>
+          : <ul key={key} className="my-1 list-disc space-y-0.5 whitespace-normal pl-5">{items}</ul>;
+      }
       case "image-embed": {
         if (inQuote) return inlineLink(key, token.url);
         const imgIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
