@@ -39,9 +39,14 @@ export function useGitAttachmentUploads(appendText: (url: string) => void) {
     }
   }, [appendText, uploadFile]);
 
-  // Deleting a pasted URL from the text detaches its file.
+  // Deleting an appended URL from the text detaches its file. Whole-token
+  // matching, so an uploaded URL that happens to prefix a longer URL in the
+  // text doesn't attach the wrong imeta.
   const mediaFor = useCallback(
-    (content: string) => [...uploaded.current].filter(([url]) => content.includes(url)).map(([, tag]) => tag),
+    (content: string) => {
+      const tokens = new Set(content.split(/\s+/));
+      return [...uploaded.current].filter(([url]) => tokens.has(url)).map(([, tag]) => tag);
+    },
     [],
   );
 

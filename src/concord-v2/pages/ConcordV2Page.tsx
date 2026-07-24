@@ -1009,9 +1009,12 @@ export function ConcordV2Page() {
   );
   const gitActions = useGitWorkItemActions();
   // The ticket's repository as this community holds it (address + trust set).
+  // No first-tag fallback: `a` tag order is author-controlled, so guessing
+  // could grant a fork owner status controls (and mis-tag emitted statuses)
+  // while the projects data is still loading. Controls appear once it lands.
   const ticketRepository = useCallback((ticket: GitTicket): GitWorkItemRepository | undefined => {
     const held = new Set(projects.repos.map((repo) => repo.coord));
-    const address = matchGitTicketRepository(ticket, held) ?? ticket.repositoryAddresses[0];
+    const address = matchGitTicketRepository(ticket, held);
     if (!address) return undefined;
     const repo = projects.repos.find((candidate) => candidate.coord === address.coordinate);
     return { address, maintainers: repo?.contributors ?? [] };

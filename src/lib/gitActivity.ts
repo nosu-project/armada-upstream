@@ -419,7 +419,7 @@ export type GitTimelineActivity =
 export function buildGitTimelineActivities(
   events: readonly NostrEvent[],
   attachments: readonly GitRepositoryAttachment[],
-  repositories: readonly Pick<GitRepositoryAnnouncement, "address" | "owner" | "maintainers">[] = [],
+  repositories: readonly Pick<GitRepositoryAnnouncement, "address" | "owner" | "maintainers" | "createdAt">[] = [],
 ): GitTimelineActivity[] {
   const attached = new Map<string, GitRepositoryAttachment[]>();
   for (const attachment of attachments) {
@@ -427,6 +427,7 @@ export function buildGitTimelineActivities(
     if (list) list.push(attachment);
     else attached.set(attachment.address.coordinate, [attachment]);
   }
+  const deletions = collectGitDeletions(events);
   const tickets = new Map<string, GitTicket>();
   // Which ATTACHED repository each ticket belongs to — not necessarily its
   // first `a` tag, since a ticket tags every fork that adopted it.
@@ -434,13 +435,22 @@ export function buildGitTimelineActivities(
   for (const event of events) {
     const ticket = parseGitTicket(event);
     if (!ticket) continue;
+    // A ticket its own author retracted drops with its whole thread.
+    if (isGitEventDeleted(deletions, ticket.id, ticket.author)) continue;
     const repository = matchGitTicketRepository(ticket, attached);
     if (!repository) continue;
     tickets.set(ticket.id, ticket);
     ticketRepository.set(ticket.id, repository);
   }
-  const repositoryByAddress = new Map(repositories.map((repository) => [repository.address.coordinate, repository]));
-  const deletions = collectGitDeletions(events);
+  // Newest announcement wins regardless of array order — a stale duplicate
+  // must not resurrect a removed maintainer's status authority.
+  const repositoryByAddress = new Map<string, (typeof repositories)[number]>();
+  for (const repository of repositories) {
+    const existing = repositoryByAddress.get(repository.address.coordinate);
+    if (!existing || repository.createdAt > existing.createdAt) {
+      repositoryByAddress.set(repository.address.coordinate, repository);
+    }
+  }
   const activity: GitTimelineActivity[] = [];
   for (const ticket of tickets.values()) {
     const repository = ticketRepository.get(ticket.id)!;
@@ -462,6 +472,7 @@ export function buildGitTimelineActivities(
     }
     const status = parseGitStatusEvent(event);
     if (!status) continue;
+    if (isGitEventDeleted(deletions, status.event.id, status.author)) continue;
     const ticket = tickets.get(status.ticketId);
     const repository = ticket && ticketRepository.get(ticket.id);
     if (!ticket || !repository || !attached.get(repository.coordinate)?.some((interval) => isGitRepositoryAttachedAt(interval, status.createdAt))) continue;

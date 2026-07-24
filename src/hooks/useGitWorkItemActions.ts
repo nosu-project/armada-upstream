@@ -5,6 +5,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { toast } from "@/hooks/useToast";
 import {
   buildGitCommentTemplate,
   buildGitDeletionTemplate,
@@ -67,8 +68,13 @@ export function useGitWorkItemActions() {
     const results = await Promise.allSettled(
       relays.map((relay) => nostr.relay(relay).event(event, { signal: AbortSignal.timeout(timeout) })),
     );
-    if (results.some((result) => result.status === "fulfilled")) {
+    // The outbox entry targets relays[0]; only that relay's own ack clears
+    // it, so a down primary keeps retrying even when a secondary delivered.
+    if (results[0]?.status === "fulfilled") {
       removeQueuedPublish(event.id);
+    }
+    if (!results.some((result) => result.status === "fulfilled")) {
+      toast({ title: "Delivery queued", description: "No repository relay answered. The post is saved and will retry." });
     }
     return event;
   }, [eventStore, nostr, user]);
@@ -113,10 +119,14 @@ export function useGitWorkItemActions() {
     [publish],
   );
 
-  // Kind 1111 is not replaceable, so an edit is a replacement comment at the
-  // ORIGINAL created_at (keeping its thread position) plus a NIP-09 retraction
-  // of the old event. Replacement publishes first: if the retraction then
-  // fails, the worst case is both versions visible on non-deleting clients.
+  // Kind 1111 is not replaceable, so an edit is a NIP-09 retraction of the
+  // old event plus a replacement comment at the ORIGINAL created_at (keeping
+  // its thread position). Retraction goes FIRST so a retry after partial
+  // failure is idempotent — re-retracting is harmless, and the worst
+  // mid-failure state is a plain deletion, never a permanent duplicate.
+  // The backdated replacement is invisible to since-cursor readers until
+  // they re-fetch the thread (our panel refresh does on every open); a
+  // fresh-dated replacement would instead reorder the thread everywhere.
   const editTicketComment = useCallback(
     async (ticket: GitTicket, comment: GitComment, content: string, relays: readonly string[]) => {
       const media = comment.event.tags
@@ -124,18 +134,17 @@ export function useGitWorkItemActions() {
           const url = field.startsWith("url ") ? field.slice(4) : undefined;
           return url !== undefined && content.includes(url);
         }));
-      const replacement = await publish(
-        buildGitCommentTemplate(ticket, content, relays[0] ?? "", media),
-        relays,
-        ticket.repositoryAddresses.map((address) => `git:${address.coordinate}`),
-        comment.createdAt,
-      );
       await publish(
         buildGitDeletionTemplate(comment.event),
         relays,
         ticket.repositoryAddresses.map((address) => `git:${address.coordinate}`),
       );
-      return replacement;
+      return await publish(
+        buildGitCommentTemplate(ticket, content, relays[0] ?? "", media),
+        relays,
+        ticket.repositoryAddresses.map((address) => `git:${address.coordinate}`),
+        comment.createdAt,
+      );
     },
     [publish],
   );

@@ -841,6 +841,10 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
       case "md-link": {
         const safe = sanitizeUrl(token.url);
         if (!safe) return <span key={key}>{token.text}</span>;
+        // Anti-spoof: when the link TEXT reads as a URL/domain whose host
+        // differs from the real target, surface the real host beside it —
+        // [github.com/x](https://evil.example) must not pass as github.
+        const spoofedHost = mdLinkSpoofHost(token.text, safe);
         return (
           <a
             key={key}
@@ -851,6 +855,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             onClick={(e) => e.stopPropagation()}
           >
             {token.text}
+            {spoofedHost && <span className="text-muted-foreground"> ({spoofedHost})</span>}
           </a>
         );
       }
@@ -1149,6 +1154,23 @@ function CollapsibleContent({ children }: { children: ReactNode }) {
 }
 
 /** Extract the lowercase file extension from a URL's path, or undefined when there is none. */
+/**
+ * The real target host, when a markdown link's TEXT itself reads as a
+ * URL/domain pointing somewhere else. Undefined for honest links and for
+ * plain-prose link text.
+ */
+function mdLinkSpoofHost(text: string, href: string): string | undefined {
+  const match = text.trim().toLowerCase().match(/^(?:https?:\/\/)?((?:[\w-]+\.)+[a-z]{2,})(?:[/:?#]|$)/i);
+  const textHost = match?.[1]?.replace(/^www\./, "");
+  if (!textHost) return undefined;
+  try {
+    const realHost = new URL(href).hostname.toLowerCase().replace(/^www\./, "");
+    return realHost === textHost ? undefined : realHost;
+  } catch {
+    return undefined;
+  }
+}
+
 function extOfUrl(url: string): string | undefined {
   try {
     const path = new URL(url).pathname;

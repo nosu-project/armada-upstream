@@ -38,6 +38,7 @@ export function NewIssueDialog({ repos, onCreate }: {
       .then(() => {
         toast({ title: "Issue opened" });
         setOpen(false);
+        setRepoCoord(undefined);
         setSubject("");
         setBody("");
       })
@@ -86,7 +87,9 @@ export function NewIssueDialog({ repos, onCreate }: {
             rows={5}
             className="resize-none text-sm"
           />
-          <div className="flex items-center justify-end gap-1.5">
+          <div className="flex items-center justify-between gap-1.5">
+            <p className="min-w-0 truncate text-[10px] text-muted-foreground">Public: issues are visible outside this community.</p>
+            <div className="flex shrink-0 items-center gap-1.5">
             <input
               ref={fileInput}
               type="file"
@@ -110,6 +113,7 @@ export function NewIssueDialog({ repos, onCreate }: {
             <Button size="sm" disabled={sending || isUploading || !subject.trim()} onClick={submit}>
               {sending ? <Loader2 className="size-4 animate-spin" /> : "Open issue"}
             </Button>
+            </div>
           </div>
         </div>
       </DialogContent>

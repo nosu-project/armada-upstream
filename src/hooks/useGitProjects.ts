@@ -14,6 +14,8 @@ import {
   GIT_STATUS_KINDS,
   NIP22_COMMENT_KIND,
   buildGitTimelineActivities,
+  collectGitDeletions,
+  isGitEventDeleted,
   gitStatusFromKind,
   matchGitTicketRepository,
   parseGitComment,
@@ -103,11 +105,13 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
     }
   }
 
+  const deletions = collectGitDeletions(events);
   const tickets = new Map<string, GitTicket>();
   const ticketRepository = new Map<string, GitRepositoryAddress>();
   for (const event of events) {
     const ticket = parseGitTicket(event);
     if (!ticket) continue;
+    if (isGitEventDeleted(deletions, ticket.id, ticket.author)) continue;
     const repository = matchGitTicketRepository(ticket, coordinates);
     if (!repository) continue;
     tickets.set(ticket.id, ticket);
@@ -118,6 +122,7 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
   for (const event of events) {
     const status = parseGitStatusEvent(event);
     if (!status || !tickets.has(status.ticketId)) continue;
+    if (isGitEventDeleted(deletions, status.event.id, status.author)) continue;
     const list = statusesByTicket.get(status.ticketId);
     if (list) list.push(event);
     else statusesByTicket.set(status.ticketId, [event]);
@@ -189,8 +194,25 @@ function sourceRelays(source: GitProjectSource): string[] {
   return source.relayHints.filter((relay) => !relay.includes("index.ngit.dev"));
 }
 
-/** Coordinates already deep-synced this app session (module scope survives view unmounts). */
-const deepSynced = new Set<string>();
+/**
+ * Deep-sync attempts per coordinate this app session (module scope survives
+ * view unmounts). A repository is done once a relay actually answered; total
+ * failures retry up to the cap so an offline first open isn't final, without
+ * looping while offline. Manual refresh clears the slate.
+ */
+const deepSyncAttempts = new Map<string, number>();
+const MAX_SYNC_ATTEMPTS = 2;
+/** Fan-out bounds: repos and relay hints are admin-controlled data. */
+const SYNC_SOURCES_PER_RUN = 4;
+const MAX_SYNC_RELAYS = 8;
+/** Relays cap REQ/filter sizes; id lists are chunked to stay under them. */
+const RELAY_ID_CHUNK = 200;
+
+function chunked<T>(values: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size));
+  return out;
+}
 
 /**
  * Store-first Projects data for a community's attached repositories, with a
@@ -253,7 +275,11 @@ export function useGitProjects(
   useEffect(() => {
     void syncNonce;
     if (!enabled || syncing.current) return;
-    const pending = sources.filter((source) => !deepSynced.has(source.address.coordinate) && sourceRelays(source).length > 0);
+    // A bounded batch per run; the finally-nonce re-fires the effect until no
+    // source is pending (sources attached mid-sync included).
+    const pending = sources
+      .filter((source) => (deepSyncAttempts.get(source.address.coordinate) ?? 0) < MAX_SYNC_ATTEMPTS && sourceRelays(source).length > 0)
+      .slice(0, SYNC_SOURCES_PER_RUN);
     if (pending.length === 0) return;
     syncing.current = true;
     setIsSyncing(true);
@@ -262,11 +288,16 @@ export function useGitProjects(
       try {
         const store = await eventStore;
         await Promise.all(pending.map(async (source) => {
-          const relays = sourceRelays(source);
+          const relays = sourceRelays(source).slice(0, MAX_SYNC_RELAYS);
           const coordinate = source.address.coordinate;
+          // "Done" requires a relay to have actually answered — a fully
+          // offline run must stay retryable, not read as an empty repo.
+          let answered = false;
           const query = async (relay: string, filter: NostrFilter): Promise<NostrEvent[]> => {
             try {
-              return await nostr.relay(relay).query([filter], { signal: AbortSignal.timeout(PULL_TIMEOUT_MS) });
+              const events = await nostr.relay(relay).query([filter], { signal: AbortSignal.timeout(PULL_TIMEOUT_MS) });
+              answered = true;
+              return events;
             } catch {
               return [];
             }
@@ -282,7 +313,10 @@ export function useGitProjects(
             }
           }
 
-          // Full root history, paged oldest-ward.
+          // Full root history, paged oldest-ward. The cursor steps TO the
+          // oldest seen second (`seen` dedupes the overlap) so a page cut
+          // mid-second doesn't skip its remaining siblings; it only steps
+          // past a second once a page yields nothing new.
           const seen = new Set<string>();
           let until: number | undefined;
           for (let page = 0; page < MAX_ROOT_PAGES; page++) {
@@ -291,8 +325,9 @@ export function useGitProjects(
               ...(until === undefined ? {} : { until }), limit: PAGE_SIZE,
             };
             const pages = await Promise.all(relays.map((relay) => query(relay, filter)));
+            const all = pages.flat();
             const fresh: NostrEvent[] = [];
-            for (const event of pages.flat()) {
+            for (const event of all) {
               if (seen.has(event.id)) continue;
               const ticket = parseGitTicket(event);
               if (!ticket || matchGitTicketRepository(ticket, new Set([coordinate])) === undefined) continue;
@@ -301,20 +336,22 @@ export function useGitProjects(
             }
             for (const event of fresh) await store.event(event).catch(() => undefined);
             const mayHaveOlder = pages.some((list) => list.length >= PAGE_SIZE);
-            if (fresh.length === 0 || !mayHaveOlder) break;
-            until = Math.min(...fresh.map((event) => event.created_at)) - 1;
+            if (!mayHaveOlder || all.length === 0) break;
+            const oldest = Math.min(...all.map((event) => event.created_at));
+            until = fresh.length > 0 ? oldest : oldest - 1;
           }
 
-          // Children for every root now known for this repository.
+          // Children for every root now known for this repository, in
+          // relay-safe id chunks.
           const roots = await store.query([{ kinds: [GIT_PULL_REQUEST_KIND, GIT_ISSUE_KIND], "#a": [coordinate], limit: 5_000 }]);
           const rootIds = [...new Set(roots.map((root) => root.id))].sort();
-          if (rootIds.length > 0) {
+          const rootIdSet = new Set(rootIds);
+          const childIds = new Set<string>();
+          for (const ids of chunked(rootIds, RELAY_ID_CHUNK)) {
             const children = (await Promise.all(relays.flatMap((relay) => [
-              query(relay, { kinds: [NIP22_COMMENT_KIND], "#E": rootIds, limit: 4_000 }),
-              query(relay, { kinds: [...GIT_STATUS_KINDS], "#e": rootIds, limit: 4_000 }),
+              query(relay, { kinds: [NIP22_COMMENT_KIND], "#E": ids, limit: 4_000 }),
+              query(relay, { kinds: [...GIT_STATUS_KINDS], "#e": ids, limit: 4_000 }),
             ]))).flat();
-            const rootIdSet = new Set(rootIds);
-            const childIds = new Set<string>();
             for (const event of children) {
               const comment = parseGitComment(event);
               const status = parseGitStatusEvent(event);
@@ -322,33 +359,38 @@ export function useGitProjects(
               childIds.add(event.id);
               await store.event(event).catch(() => undefined);
             }
-            // Author-published retractions of those children (NIP-09 deletes/edits).
-            if (childIds.size > 0) {
-              const ids = [...childIds].sort();
-              const retractions = (await Promise.all(relays.map((relay) =>
-                query(relay, { kinds: [EVENT_DELETION_KIND], "#e": ids, limit: 4_000 })))).flat();
-              for (const event of retractions) {
-                if (!event.tags.some(([name, value]) => name === "e" && value && childIds.has(value))) continue;
-                await store.event(event).catch(() => undefined);
-              }
+          }
+          // Author-published retractions of those children (NIP-09 deletes/edits).
+          for (const ids of chunked([...childIds].sort(), RELAY_ID_CHUNK)) {
+            const retractions = (await Promise.all(relays.map((relay) =>
+              query(relay, { kinds: [EVENT_DELETION_KIND], "#e": ids, limit: 4_000 })))).flat();
+            for (const event of retractions) {
+              if (!event.tags.some(([name, value]) => name === "e" && value && childIds.has(value))) continue;
+              await store.event(event).catch(() => undefined);
             }
           }
 
-          deepSynced.add(coordinate);
-          touched.add(`git:${coordinate}`);
+          if (answered) {
+            deepSyncAttempts.set(coordinate, MAX_SYNC_ATTEMPTS);
+            touched.add(`git:${coordinate}`);
+          } else {
+            deepSyncAttempts.set(coordinate, (deepSyncAttempts.get(coordinate) ?? 0) + 1);
+          }
         }));
       } finally {
         syncing.current = false;
         setIsSyncing(false);
         if (touched.size > 0) emitWireScopes(touched);
         void queryClient.invalidateQueries({ queryKey });
+        // Continue with whatever is still pending (or no-op when done).
+        setSyncNonce((nonce) => nonce + 1);
       }
     })();
   }, [enabled, sources, eventStore, nostr, queryClient, queryKey, syncNonce]);
 
   // Forget this session's sync marks so the next effect run re-pulls everything.
   const refresh = useCallback(() => {
-    for (const source of sources) deepSynced.delete(source.address.coordinate);
+    for (const source of sources) deepSyncAttempts.delete(source.address.coordinate);
     setSyncNonce((nonce) => nonce + 1);
   }, [sources]);
 

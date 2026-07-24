@@ -383,3 +383,60 @@ describe("deletions", () => {
     expect(retracted.some((activity) => activity.type === "ticket-opened")).toBe(true);
   });
 });
+
+describe("deletions beyond comments", () => {
+  const intervals = [{ address: parseGitRepositoryAddress(`30617:${OWNER}:armada`)!, relayHints: [], attachedAt: 0 }];
+  const ticket = event({
+    id: "2".repeat(64),
+    kind: GIT_ISSUE_KIND,
+    pubkey: AUTHOR,
+    created_at: 50,
+    tags: [["a", `30617:${OWNER}:armada`], ["subject", "A bug"]],
+  });
+  const comment = event({
+    id: "3".repeat(64),
+    kind: NIP22_COMMENT_KIND,
+    pubkey: MAINTAINER,
+    created_at: 150,
+    tags: [["E", ticket.id, "", AUTHOR], ["K", String(GIT_ISSUE_KIND)]],
+  });
+
+  it("drops a retracted ticket with its whole thread, but only for its author", () => {
+    const retract = (pubkey: string) => event({ id: "5".repeat(64), kind: 5, pubkey, created_at: 200, tags: [["e", ticket.id]] });
+    const own = buildGitTimelineActivities([ticket, comment, retract(AUTHOR)], intervals, [repository()]);
+    expect(own).toHaveLength(0);
+    const spoofed = buildGitTimelineActivities([ticket, comment, retract(ATTACKER)], intervals, [repository()]);
+    expect(spoofed.some((activity) => activity.type === "ticket-opened")).toBe(true);
+  });
+
+  it("ignores a status change its author retracted", () => {
+    const status = event({ id: "6".repeat(64), kind: GIT_STATUS_CLOSED_KIND, pubkey: MAINTAINER, created_at: 160, tags: [["e", ticket.id, "", "root"]] });
+    const retract = event({ id: "7".repeat(64), kind: 5, pubkey: MAINTAINER, created_at: 200, tags: [["e", status.id]] });
+    const activities = buildGitTimelineActivities([ticket, status, retract], intervals, [repository()]);
+    expect(activities.some((activity) => activity.type === "status-change")).toBe(false);
+  });
+});
+
+describe("announcement folding in the builder", () => {
+  it("keeps the newest announcement regardless of array order", () => {
+    const stale = parseGitRepositoryAnnouncement(event({
+      id: "8".repeat(64),
+      kind: GIT_REPOSITORY_ANNOUNCEMENT_KIND,
+      created_at: 10,
+      tags: [["d", "armada"], ["maintainers", ATTACKER]],
+    }))!;
+    const fresh = parseGitRepositoryAnnouncement(event({
+      id: "9".repeat(64),
+      kind: GIT_REPOSITORY_ANNOUNCEMENT_KIND,
+      created_at: 20,
+      tags: [["d", "armada"], ["maintainers", MAINTAINER]],
+    }))!;
+    const intervals = [{ address: parseGitRepositoryAddress(`30617:${OWNER}:armada`)!, relayHints: [], attachedAt: 0 }];
+    const ticket = event({ id: "2".repeat(64), kind: GIT_ISSUE_KIND, pubkey: AUTHOR, created_at: 50, tags: [["a", `30617:${OWNER}:armada`]] });
+    // The removed maintainer's status must not survive via the stale entry,
+    // even when the stale announcement is listed last.
+    const status = event({ id: "6".repeat(64), kind: GIT_STATUS_CLOSED_KIND, pubkey: ATTACKER, created_at: 60, tags: [["e", ticket.id, "", "root"]] });
+    const activities = buildGitTimelineActivities([ticket, status], intervals, [fresh, stale]);
+    expect(activities.some((activity) => activity.type === "status-change")).toBe(false);
+  });
+});

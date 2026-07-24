@@ -260,10 +260,11 @@ function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWo
             <span aria-hidden>·</span>
             <span>by <AuthorName pubkey={item.author} /></span>
             {labels.slice(0, 3).map((label) => (
-              // A span, not a button: the row itself may already be a button.
+              // Plain spans: the row is already a button, so a nested control
+              // would be invalid. Clicking is a pointer shortcut; the status
+              // filter bar remains the accessible filtering surface.
               <span
                 key={label}
-                role={onLabelClick ? "button" : undefined}
                 onClick={onLabelClick ? (e) => { e.stopPropagation(); onLabelClick(label); } : undefined}
                 className={cn(
                   "rounded-full border border-border/60 px-1.5 py-px text-[10px]",

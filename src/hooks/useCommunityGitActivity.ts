@@ -30,7 +30,12 @@ export function useCommunityGitActivity(attachmentsByChannel: ReadonlyMap<string
       const children = ids.length ? await store.query([{ kinds: [NIP22_COMMENT_KIND], "#E": ids, limit: 8_000 }, { kinds: [...GIT_STATUS_KINDS], "#e": ids, limit: 8_000 }]) : [];
       const childIds = [...new Set(children.map((child) => child.id))].sort();
       const deletions = childIds.length ? await store.query([{ kinds: [EVENT_DELETION_KIND], "#e": childIds, limit: 8_000 }]) : [];
-      const announcements = await store.query([{ kinds: [GIT_REPOSITORY_ANNOUNCEMENT_KIND], "#d": [...new Set([...attachmentsByChannel.values()].flatMap((items) => items.map((item) => item.address.identifier)))], limit: 1_000 }]);
+      // Exact per-owner filters: a bare `#d` match drags in same-identifier
+      // repos from unrelated authors.
+      const uniqueAddresses = [...new Map([...attachmentsByChannel.values()].flatMap((items) => items.map((item) => [item.address.coordinate, item.address]))).values()];
+      const announcements = uniqueAddresses.length === 0 ? [] : await store.query(uniqueAddresses.map((address) => ({
+        kinds: [GIT_REPOSITORY_ANNOUNCEMENT_KIND], authors: [address.owner], "#d": [address.identifier], limit: 1,
+      })));
       const repos = announcements.map(parseGitRepositoryAnnouncement).filter((repo): repo is NonNullable<typeof repo> => Boolean(repo));
       return new Map([...attachmentsByChannel].map(([id, attachments]) => [id, buildGitTimelineActivities([...roots, ...children, ...deletions], attachments, repos)]));
     },

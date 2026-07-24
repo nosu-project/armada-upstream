@@ -205,7 +205,9 @@ function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onCom
         rows={2}
         className="min-h-0 resize-none text-sm"
       />
-      <div className="mt-2 flex items-center justify-end gap-1.5">
+      <div className="mt-2 flex items-center justify-between gap-1.5">
+        <p className="min-w-0 truncate text-[10px] text-muted-foreground">Public: repository discussion is visible outside this community.</p>
+        <div className="flex shrink-0 items-center gap-1.5">
         <input
           ref={fileInput}
           type="file"
@@ -229,6 +231,7 @@ function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onCom
         <Button size="sm" className="h-7 px-3 text-xs" disabled={sending || isUploading || !text.trim()} onClick={submit}>
           {sending ? <Loader2 className="size-3.5 animate-spin" /> : "Comment"}
         </Button>
+        </div>
       </div>
     </div>
   );
