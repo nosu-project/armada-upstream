@@ -427,24 +427,32 @@ function RepoCard({ repo, summary, people }: { repo: ProjectRepo; summary: Proje
   );
 }
 
+/**
+ * The denser repository layout. Its columns stack rather than compete for one
+ * line: viewport breakpoints would keep every column mounted inside a narrow
+ * community pane and crush the repository name — the one thing the row exists
+ * to show — to zero width.
+ */
 function RepoRow({ repo, summary, people }: { repo: ProjectRepo; summary: ProjectRepoSummary; people: string[] }) {
   const web = safeWeb(repo.webUrl);
   return (
-    <div className="flex min-w-0 items-center gap-2.5 px-3 py-3 transition-colors hover:bg-foreground/[0.03]">
+    <div className="flex min-w-0 items-start gap-2.5 px-3 py-2.5 transition-colors hover:bg-foreground/[0.03]">
       <RepoIcon />
-      <div className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold text-foreground">{repo.name}</span>
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{repo.name}</span>
+          <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground/70">{relativeTime(repo.createdAt)}</span>
+        </div>
         <p className="truncate text-xs text-muted-foreground">
           {repo.subtitle ? `${repo.subtitle} · ` : ""}
           {repo.description || "A shared space for git work."}
         </p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <StatsRow summary={summary} />
+          <div className="w-20 shrink-0"><ActivityBar summary={summary} /></div>
+          <PeopleStack pubkeys={people} />
+        </div>
       </div>
-      <div className="hidden items-center gap-4 sm:flex">
-        <StatsRow summary={summary} />
-        <div className="w-20"><ActivityBar summary={summary} /></div>
-      </div>
-      <div className="hidden w-24 justify-end lg:flex"><PeopleStack pubkeys={people} /></div>
-      <span className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground/70 md:block">{relativeTime(repo.createdAt)}</span>
       <div className="flex shrink-0 items-center">
         {web && (
           <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground" asChild>
