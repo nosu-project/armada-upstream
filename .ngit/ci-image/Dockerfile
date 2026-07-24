@@ -91,7 +91,13 @@ ENV PATH="/opt/hostedtoolcache/Ruby/${RUBY_VERSION}/x64/bin:$PATH"
 RUN set -eux; \
     gem install fastlane multi_json --no-document; \
     gem cleanup; \
-    fastlane --version
+    fastlane --version; \
+    # act rebuilds the step PATH and does NOT inherit the image's ENV PATH,
+    # so the ruby bindir above is invisible to workflow steps. Symlink the
+    # tools into /usr/local/bin, which act's PATH always includes.
+    for b in ruby gem bundle bundler fastlane; do \
+      ln -sf "/opt/hostedtoolcache/Ruby/${RUBY_VERSION}/x64/bin/$b" "/usr/local/bin/$b"; \
+    done
 
 # ── zsp binary (replaces setup-go + go install in the Zapstore step) ─────────
 ARG ZSP_VERSION=v0.4.12
