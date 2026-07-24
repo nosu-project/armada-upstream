@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.39.1] - 2026-07-23
+
+Read state for Concord channels, mentions, and threads now syncs across your devices instead of living only on the one you read on, and there's a quick "mark all as read" action for servers, direct messages, and communities.
+
+### Added
+- "Mark all as read" action in server, direct message, and Concord community menus
+- A check-check button in the Messages list header to mark every unread conversation read
+
+### Changed
+- Concord channel, mentions, and threads read state syncs across devices through your shared encrypted settings
+- Which channel you're viewing no longer syncs across devices — it stays per device, so two open clients stop switching each other's channel
+
+### Fixed
+- Preview cards for shared links use absolute image URLs and include the page URL and site name
+
 ## [0.39.0] - 2026-07-23
 
 Adds a key backup section to Settings and a much richer set of Android message notifications, grouped by community with a Mark read action and per-conversation avatars. The Android app also moves to a new identifier (buzz.armada.app), so it installs alongside an existing Armada install with fresh data — back up your key first, and sign in again after updating.
