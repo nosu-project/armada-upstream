@@ -4,6 +4,13 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.39.6] - 2026-07-24
+
+Fixes the background mesh connection on Android 14 and newer, where it could crash and repeatedly restart shortly after starting.
+
+### Fixed
+- Mesh background service no longer crashes and restarts on Android 14+
+
 ## [0.39.5] - 2026-07-23
 
 No user-facing changes — this release publishes Armada to Google Play for the first time and is otherwise the same app as 0.39.1.
