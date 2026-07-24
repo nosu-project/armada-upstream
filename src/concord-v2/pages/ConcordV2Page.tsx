@@ -57,6 +57,8 @@ import { useIsTouch } from "@/hooks/useIsMobile";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelGitActivity } from "@/hooks/useChannelGitActivity";
 import { useGitProjects } from "@/hooks/useGitProjects";
+import { useGitWorkItemActions, type GitWorkItemRepository } from "@/hooks/useGitWorkItemActions";
+import { NewIssueDialog } from "@/components/projects/NewIssueDialog";
 import { ProjectsView } from "@/components/projects/ProjectsView";
 import type { ProjectWorkItem } from "@/components/projects/projectData";
 import { useCommunityGitActivity } from "@/hooks/useCommunityGitActivity";
@@ -96,7 +98,7 @@ import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2
 import { completeMemberlist } from "@/concord-v2/lib/guestbook";
 import { badgeOf, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import { channelGitRepositoryAttachments, type ChannelV2, type CommunityV2, type ImagePointer } from "@/concord-v2/lib/types";
-import { sortAndDedupeGitTimelineActivities, type GitTicket } from "@/lib/gitActivity";
+import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
@@ -815,10 +817,12 @@ export function ConcordV2Page() {
     setChannelIdHex(idHex);
     setView("channel");
   }, []);
-  // Projects data loads lazily, the first time the tab is opened this session.
+  // Projects data loads lazily: the first time the tab is opened this session,
+  // or when a ticket conversation opens (its trust set and thread need it).
   const [projectsTouched, setProjectsTouched] = useState(false);
+  const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
   const channelNameById = useMemo(() => new Map(channels.map((c) => [c.idHex, c.name])), [channels]);
-  const projects = useGitProjects(gitAttachmentsByChannel, channelNameById, projectsTouched);
+  const projects = useGitProjects(gitAttachmentsByChannel, channelNameById, projectsTouched || Boolean(openTicket));
   // A pending "jump to message" target set by clicking a mention: switch to its
   // channel, then scroll+highlight it once that channel's timeline has loaded
   // it (an effect below fires when the message appears in `allMessages`).
@@ -988,7 +992,6 @@ export function ConcordV2Page() {
     })),
     user?.pubkey,
   );
-  const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
   const openProjectItem = useCallback((item: ProjectWorkItem) => {
     const ticket = projects.ticketsById.get(item.id);
     if (!ticket) return;
@@ -1003,6 +1006,43 @@ export function ConcordV2Page() {
       : sortAndDedupeGitTimelineActivities([...gitActivity.activities, ...projects.activities]),
     [gitActivity.activities, projects.activities],
   );
+  const gitActions = useGitWorkItemActions();
+  // The ticket's repository as this community holds it (address + trust set).
+  const ticketRepository = useCallback((ticket: GitTicket): GitWorkItemRepository | undefined => {
+    const held = new Set(projects.repos.map((repo) => repo.coord));
+    const address = matchGitTicketRepository(ticket, held) ?? ticket.repositoryAddresses[0];
+    if (!address) return undefined;
+    const repo = projects.repos.find((candidate) => candidate.coord === address.coordinate);
+    return { address, maintainers: repo?.contributors ?? [] };
+  }, [projects.repos]);
+  const canSetTicketStatus = useMemo(() => {
+    if (!user?.pubkey || !openTicket) return false;
+    const repository = ticketRepository(openTicket);
+    if (!repository) return false;
+    return trustedGitStatusAuthors(
+      openTicket,
+      { owner: repository.address.owner, maintainers: [...repository.maintainers] },
+    ).has(user.pubkey);
+  }, [user?.pubkey, openTicket, ticketRepository]);
+  const ticketActions = useMemo(() => ({
+    onComment: user
+      ? async (ticket: GitTicket, content: string) => {
+          await gitActions.commentOnTicket(ticket, content, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)));
+        }
+      : undefined,
+    onSetStatus: async (ticket: GitTicket, statusKind: GitStatusKind) => {
+      const repository = ticketRepository(ticket);
+      if (!repository) return;
+      await gitActions.setTicketStatus(ticket, repository, statusKind, projects.relaysForCoordinates([repository.address.coordinate]));
+    },
+    canSetStatus: canSetTicketStatus,
+  }), [user, gitActions, projects, ticketRepository, canSetTicketStatus]);
+  const handleCreateIssue = useCallback(async (repoCoord: string, subject: string, body: string) => {
+    const address = parseGitRepositoryAddress(repoCoord);
+    if (!address) throw new Error("Unknown repository.");
+    const repo = projects.repos.find((candidate) => candidate.coord === repoCoord);
+    await gitActions.openIssue({ address, maintainers: repo?.contributors ?? [] }, subject, body, projects.relaysForCoordinates([repoCoord]));
+  }, [gitActions, projects]);
   const { mutateAsync: send } = useSendMessage2(community, channel);
 
   // (useActiveRoom is called below, after `threadRoot` is defined, so it can
@@ -2171,6 +2211,7 @@ export function ConcordV2Page() {
                     intro="Browse this community's repositories and activity."
                     emptyHint="Repositories attached to this community's channels will appear here."
                     onOpenItem={openProjectItem}
+                    headerExtra={user ? <NewIssueDialog repos={projects.repos} onCreate={handleCreateIssue} /> : undefined}
                   />
                 </div>
               ) : searching ? (
@@ -2327,7 +2368,7 @@ export function ConcordV2Page() {
               )}
             </div>
 
-            <TicketSidePanel ticket={openTicket} members={new Set(memberPubkeys)} activities={panelActivities} onClose={() => setOpenTicket(undefined)} />
+            <TicketSidePanel ticket={openTicket} members={new Set(memberPubkeys)} activities={panelActivities} onClose={() => setOpenTicket(undefined)} actions={ticketActions} />
             </ComposerBoundsProvider>
 
             {/* Thread panel. Desktop: in-flow sibling whose width animates open.

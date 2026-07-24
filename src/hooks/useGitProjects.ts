@@ -190,7 +190,11 @@ export function useGitProjects(
   attachmentsByChannel: ReadonlyMap<string, readonly GitRepositoryAttachment[]>,
   channelNameById: ReadonlyMap<string, string>,
   enabled: boolean,
-): GitProjects & { isLoading: boolean; refreshTicket: (ticket: GitTicket) => Promise<number> } {
+): GitProjects & {
+  isLoading: boolean;
+  refreshTicket: (ticket: GitTicket) => Promise<number>;
+  relaysForCoordinates: (coordinates: readonly string[]) => string[];
+} {
   const { nostr } = useNostr();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
@@ -348,6 +352,12 @@ export function useGitProjects(
     }
   });
 
+  // Activity relays for a set of repository coordinates (write targets).
+  const relaysForCoordinates = useCallback((coordinates: readonly string[]): string[] => {
+    const wanted = new Set(coordinates);
+    return [...new Set(sources.filter((source) => wanted.has(source.address.coordinate)).flatMap(sourceRelays))];
+  }, [sources]);
+
   const data = query.data;
   return useMemo(() => ({
     repos: data?.repos ?? [],
@@ -356,5 +366,6 @@ export function useGitProjects(
     ticketsById: data?.ticketsById ?? new Map(),
     isLoading: query.isLoading,
     refreshTicket,
-  }), [data, query.isLoading, refreshTicket]);
+    relaysForCoordinates,
+  }), [data, query.isLoading, refreshTicket, relaysForCoordinates]);
 }

@@ -9,8 +9,12 @@ import {
   GIT_STATUS_CLOSED_KIND,
   NIP22_COMMENT_KIND,
   attachGitRepository,
+  buildGitCommentTemplate,
+  buildGitIssueTemplate,
+  buildGitStatusTemplate,
   buildGitTimelineActivities,
   detachGitRepository,
+  trustedGitStatusAuthors,
   gitStatusFromKind,
   isGitRepositoryAttachedAt,
   normalizeGitRepositoryAttachments,
@@ -250,5 +254,75 @@ describe("buildGitTimelineActivities", () => {
       "status-change:350", "comment:150",
     ]);
     expect(activities[1].type === "comment" && activities[1].comment.ticketId).toBe(ticket.id);
+  });
+});
+
+describe("event template builders", () => {
+  const ticket = parseGitTicket(event({
+    id: "2".repeat(64),
+    kind: GIT_ISSUE_KIND,
+    pubkey: AUTHOR,
+    created_at: 50,
+    tags: [["a", `30617:${OWNER}:armada`], ["subject", "A bug"]],
+  }))!;
+  const repo = repository();
+
+  function signedAs(template: { kind: number; content: string; tags: string[][] }, pubkey: string): NostrEvent {
+    return event({ id: "9".repeat(64), kind: template.kind, pubkey, created_at: 500, content: template.content, tags: template.tags });
+  }
+
+  it("builds comments its own parser accepts", () => {
+    const template = buildGitCommentTemplate(ticket, "Looks good", "wss://relay.example/");
+    const parsed = parseGitComment(signedAs(template, MAINTAINER));
+    expect(parsed).toBeDefined();
+    expect(parsed!.ticketId).toBe(ticket.id);
+    expect(parsed!.ticketKind).toBe(GIT_ISSUE_KIND);
+    expect(parsed!.content).toBe("Looks good");
+    // NIP-22 parent scope mirrors the root for a top-level comment.
+    expect(template.tags.filter(([name]) => name === "e")).toHaveLength(1);
+    expect(template.tags.filter(([name]) => name === "k")[0][1]).toBe(String(GIT_ISSUE_KIND));
+  });
+
+  it("builds issues its own parser accepts, addressed to owner and maintainers", () => {
+    const template = buildGitIssueTemplate(
+      { address: repo.address, maintainers: repo.maintainers },
+      "Crash on boot",
+      "Steps to reproduce",
+      "wss://relay.example/",
+    );
+    const parsed = parseGitTicket(signedAs(template, AUTHOR));
+    expect(parsed).toBeDefined();
+    expect(parsed!.subject).toBe("Crash on boot");
+    expect(parsed!.content).toBe("Steps to reproduce");
+    expect(parsed!.repositoryAddress?.coordinate).toBe(repo.address.coordinate);
+    const recipients = template.tags.filter(([name]) => name === "p").map(([, value]) => value);
+    expect(recipients).toEqual([OWNER, MAINTAINER]);
+  });
+
+  it("builds statuses its own parser and trust resolution accept", () => {
+    const template = buildGitStatusTemplate(ticket, { address: repo.address, maintainers: repo.maintainers }, GIT_STATUS_CLOSED_KIND, "wss://relay.example/");
+    const signed = signedAs(template, MAINTAINER);
+    const parsed = parseGitStatusEvent(signed);
+    expect(parsed).toBeDefined();
+    expect(parsed!.ticketId).toBe(ticket.id);
+    expect(resolveGitTicketStatus(ticket, repo, [signed])?.kind).toBe(GIT_STATUS_CLOSED_KIND);
+    expect(gitStatusFromKind(parsed!.kind, ticket.kind)).toBe("closed");
+  });
+});
+
+describe("trustedGitStatusAuthors", () => {
+  it("trusts exactly the ticket author, owner and maintainers", () => {
+    const ticket = parseGitTicket(event({
+      id: "2".repeat(64),
+      kind: GIT_ISSUE_KIND,
+      pubkey: AUTHOR,
+      created_at: 50,
+      tags: [["a", `30617:${OWNER}:armada`]],
+    }))!;
+    const trusted = trustedGitStatusAuthors(ticket, repository());
+    expect(trusted.has(AUTHOR)).toBe(true);
+    expect(trusted.has(OWNER)).toBe(true);
+    expect(trusted.has(MAINTAINER)).toBe(true);
+    expect(trusted.has(ATTACKER)).toBe(false);
   });
 });

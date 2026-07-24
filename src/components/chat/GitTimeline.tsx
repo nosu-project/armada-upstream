@@ -1,4 +1,4 @@
-import { Braces, CircleDot, GitPullRequest, MessageCircle, X } from "lucide-react";
+import { Braces, CircleDot, GitPullRequest, Loader2, MessageCircle, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
@@ -7,12 +7,35 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Textarea } from "@/components/ui/textarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { toast } from "@/hooks/useToast";
 import { shortTimeAgo } from "@/lib/formatTime";
-import { gitStatusFromKind, type GitTicket, type GitTimelineActivity } from "@/lib/gitActivity";
+import {
+  GIT_ISSUE_KIND,
+  GIT_STATUS_APPLIED_KIND,
+  GIT_STATUS_CLOSED_KIND,
+  GIT_STATUS_DRAFT_KIND,
+  GIT_STATUS_OPEN_KIND,
+  gitStatusFromKind,
+  type GitStatusKind,
+  type GitTicket,
+  type GitTicketStatus,
+  type GitTimelineActivity,
+} from "@/lib/gitActivity";
 import { cn } from "@/lib/utils";
+
+/** Callbacks that make the conversation panel writable. All optional: absent means read-only. */
+export interface TicketPanelActions {
+  /** Post a top-level comment on the ticket. */
+  onComment?: (ticket: GitTicket, content: string) => Promise<unknown>;
+  /** Publish a status change; only offered when `canSetStatus`. */
+  onSetStatus?: (ticket: GitTicket, statusKind: GitStatusKind) => Promise<unknown>;
+  /** Whether the viewer is in the ticket's trusted status-author set. */
+  canSetStatus?: boolean;
+}
 
 function TicketIcon({ ticket }: { ticket: GitTicket }) {
   const Icon = ticket.type === "issue" ? CircleDot : GitPullRequest;
@@ -98,7 +121,80 @@ function ActorName({ pubkey, members }: { pubkey: string; members: ReadonlySet<s
   return <><span className="text-sm font-semibold">{name}</span>{isCommunityGuest(pubkey, members) && <span className="ml-1 rounded border border-border px-1 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Guest</span>}</>;
 }
 
-function TicketPanelBody({ ticket, members, activities }: { ticket: GitTicket; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[] }) {
+function statusOptions(status: GitTicketStatus, ticket: GitTicket): Array<{ label: string; kind: GitStatusKind }> {
+  if (status === "closed" || status === "merged" || status === "resolved") {
+    return [{ label: "Reopen", kind: GIT_STATUS_OPEN_KIND }];
+  }
+  const options: Array<{ label: string; kind: GitStatusKind }> = [];
+  if (status === "draft") options.push({ label: "Mark open", kind: GIT_STATUS_OPEN_KIND });
+  options.push({ label: ticket.kind === GIT_ISSUE_KIND ? "Mark resolved" : "Mark merged", kind: GIT_STATUS_APPLIED_KIND });
+  if (status === "open" && ticket.kind !== GIT_ISSUE_KIND) options.push({ label: "Mark draft", kind: GIT_STATUS_DRAFT_KIND });
+  options.push({ label: "Close", kind: GIT_STATUS_CLOSED_KIND });
+  return options;
+}
+
+function TicketStatusControls({ ticket, status, onSet }: { ticket: GitTicket; status: GitTicketStatus; onSet: NonNullable<TicketPanelActions["onSetStatus"]> }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="mt-3 flex flex-wrap gap-1.5">
+      {statusOptions(status, ticket).map(({ label, kind }) => (
+        <Button
+          key={label}
+          variant="outline"
+          size="sm"
+          className="h-7 px-2.5 text-xs"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            onSet(ticket, kind)
+              .catch((error) => toast({ title: "Couldn't update status", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
+              .finally(() => setBusy(false));
+          }}
+        >
+          {label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onComment: NonNullable<TicketPanelActions["onComment"]> }) {
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const submit = () => {
+    const content = text.trim();
+    if (!content || sending) return;
+    setSending(true);
+    onComment(ticket, content)
+      .then(() => setText(""))
+      .catch((error) => toast({ title: "Couldn't post comment", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
+      .finally(() => setSending(false));
+  };
+  return (
+    <div className="shrink-0 border-t border-border p-3">
+      <Textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder={`Comment on this ${ticket.type === "issue" ? "issue" : "pull request"}`}
+        rows={2}
+        className="min-h-0 resize-none text-sm"
+      />
+      <div className="mt-2 flex justify-end">
+        <Button size="sm" className="h-7 px-3 text-xs" disabled={sending || !text.trim()} onClick={submit}>
+          {sending ? <Loader2 className="size-3.5 animate-spin" /> : "Comment"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function TicketPanelBody({ ticket, members, activities, actions }: { ticket: GitTicket; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; actions?: TicketPanelActions }) {
   const [jsonOpen, setJsonOpen] = useState(false);
   const { comments, latestStatus } = useMemo(() => {
     const related = activities.filter((activity) => activity.ticket.id === ticket.id);
@@ -110,15 +206,15 @@ function TicketPanelBody({ ticket, members, activities }: { ticket: GitTicket; m
   const status = gitStatusFromKind(latestStatus?.status.kind, ticket.kind);
   const repository = ticket.repositoryAddress?.identifier ?? "Unknown repository";
 
-  return <div className="flex min-h-0 flex-1 flex-col"><div className="min-h-0 flex-1 overflow-y-auto p-3"><div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><TicketIcon ticket={ticket} />{ticketType(ticket)}</div><h2 className="mt-2 break-words text-sm font-semibold">{ticket.subject}</h2><p className="mt-1 text-xs text-muted-foreground">{repository} · <span className="capitalize">{status}</span></p><div className="my-4 border-t border-border" /><p className="text-xs text-muted-foreground">This is the work item’s durable discussion. Its card in the channel is a contextual reference, not a chat thread.</p>{ticket.content && <DiscussionMessage pubkey={ticket.author} createdAt={ticket.createdAt} content={ticket.content} members={members} className="mt-4" />}<div className="mt-4 space-y-4">{comments.map(({ comment }) => <DiscussionMessage key={comment.id} pubkey={comment.author} createdAt={comment.createdAt} content={comment.content} members={members} />)}</div>{comments.length === 0 && <p className="mt-4 text-sm text-muted-foreground">No comments yet.</p>}<Button variant="ghost" size="sm" className="mt-4" onClick={() => setJsonOpen(true)}><Braces className="mr-2 size-4" />View event JSON</Button></div><Dialog open={jsonOpen} onOpenChange={setJsonOpen}><DialogContent><DialogHeader><DialogTitle>Event JSON</DialogTitle></DialogHeader><pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(ticket.event, null, 2)}</pre></DialogContent></Dialog></div>;
+  return <div className="flex min-h-0 flex-1 flex-col"><div className="min-h-0 flex-1 overflow-y-auto p-3"><div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><TicketIcon ticket={ticket} />{ticketType(ticket)}</div><h2 className="mt-2 break-words text-sm font-semibold">{ticket.subject}</h2><p className="mt-1 text-xs text-muted-foreground">{repository} · <span className="capitalize">{status}</span></p>{actions?.canSetStatus && actions.onSetStatus && <TicketStatusControls ticket={ticket} status={status} onSet={actions.onSetStatus} />}<div className="my-4 border-t border-border" /><p className="text-xs text-muted-foreground">This is the work item’s durable discussion. Its card in the channel is a contextual reference, not a chat thread.</p>{ticket.content && <DiscussionMessage pubkey={ticket.author} createdAt={ticket.createdAt} content={ticket.content} members={members} className="mt-4" />}<div className="mt-4 space-y-4">{comments.map(({ comment }) => <DiscussionMessage key={comment.id} pubkey={comment.author} createdAt={comment.createdAt} content={comment.content} members={members} />)}</div>{comments.length === 0 && <p className="mt-4 text-sm text-muted-foreground">No comments yet.</p>}<Button variant="ghost" size="sm" className="mt-4" onClick={() => setJsonOpen(true)}><Braces className="mr-2 size-4" />View event JSON</Button></div>{actions?.onComment && <TicketCommentComposer ticket={ticket} onComment={actions.onComment} />}<Dialog open={jsonOpen} onOpenChange={setJsonOpen}><DialogContent><DialogHeader><DialogTitle>Event JSON</DialogTitle></DialogHeader><pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(ticket.event, null, 2)}</pre></DialogContent></Dialog></div>;
 }
 
 function DiscussionMessage({ pubkey, createdAt, content, members, className }: { pubkey: string; createdAt: number; content: string; members: ReadonlySet<string>; className?: string }) {
   return <div className={cn("flex gap-2.5", className)}><Avatar className="size-8 shrink-0"><ActorAvatar pubkey={pubkey} /></Avatar><div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"><ActorName pubkey={pubkey} members={members} /><span className="text-xs text-muted-foreground">commented · {shortTimeAgo(createdAt)}</span></div><p className="mt-1 whitespace-pre-wrap break-words text-sm leading-5">{content}</p></div></div>;
 }
 
-export function TicketSidePanel({ ticket, members, activities, onClose }: { ticket: GitTicket | undefined; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; onClose: () => void }) {
+export function TicketSidePanel({ ticket, members, activities, onClose, actions }: { ticket: GitTicket | undefined; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; onClose: () => void; actions?: TicketPanelActions }) {
   const isDesktop = useIsDesktop();
 
-  return <><aside className={cn("hidden shrink-0 overflow-hidden border-l border-border bg-chrome sidebar:flex sidebar:transition-[width] sidebar:duration-200", ticket ? "sidebar:w-[21rem]" : "sidebar:w-0")}>{ticket && <div className="flex w-[21rem] min-w-[21rem] flex-col"><div className="flex h-12 items-center border-b border-border px-3"><p className="text-sm font-semibold">Conversation</p><Button variant="ghost" size="icon" className="ml-auto size-8" onClick={onClose} aria-label="Close conversation"><X className="size-4" /></Button></div><TicketPanelBody ticket={ticket} members={members} activities={activities} /></div>}</aside>{ticket && !isDesktop && <Sheet open onOpenChange={(open) => !open && onClose()}><SheetContent side="right" className="flex w-[92vw] max-w-none flex-col p-0"><div className="flex h-12 shrink-0 items-center border-b border-border px-3"><SheetTitle className="text-sm font-semibold">Conversation</SheetTitle><Button variant="ghost" size="icon" className="ml-auto size-8" onClick={onClose} aria-label="Close conversation"><X className="size-4" /></Button></div><TicketPanelBody ticket={ticket} members={members} activities={activities} /></SheetContent></Sheet>}</>;
+  return <><aside className={cn("hidden shrink-0 overflow-hidden border-l border-border bg-chrome sidebar:flex sidebar:transition-[width] sidebar:duration-200", ticket ? "sidebar:w-[21rem]" : "sidebar:w-0")}>{ticket && <div className="flex w-[21rem] min-w-[21rem] flex-col"><div className="flex h-12 items-center border-b border-border px-3"><p className="text-sm font-semibold">Conversation</p><Button variant="ghost" size="icon" className="ml-auto size-8" onClick={onClose} aria-label="Close conversation"><X className="size-4" /></Button></div><TicketPanelBody ticket={ticket} members={members} activities={activities} actions={actions} /></div>}</aside>{ticket && !isDesktop && <Sheet open onOpenChange={(open) => !open && onClose()}><SheetContent side="right" className="flex w-[92vw] max-w-none flex-col p-0"><div className="flex h-12 shrink-0 items-center border-b border-border px-3"><SheetTitle className="text-sm font-semibold">Conversation</SheetTitle><Button variant="ghost" size="icon" className="ml-auto size-8" onClick={onClose} aria-label="Close conversation"><X className="size-4" /></Button></div><TicketPanelBody ticket={ticket} members={members} activities={activities} actions={actions} /></SheetContent></Sheet>}</>;
 }

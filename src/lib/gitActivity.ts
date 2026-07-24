@@ -217,13 +217,21 @@ export function gitStatusFromKind(kind: GitStatusKind | undefined, ticketKind: G
   return "open";
 }
 
+/** Authors whose status events a ticket trusts: its author, the repository owner, and maintainers. */
+export function trustedGitStatusAuthors(
+  ticket: Pick<GitTicket, "author">,
+  repository: Pick<GitRepositoryAnnouncement, "owner" | "maintainers">,
+): Set<string> {
+  return new Set([ticket.author, repository.owner, ...repository.maintainers]);
+}
+
 /** Newest trusted status for a ticket, or undefined when none is valid. */
 export function resolveGitTicketStatus(
   ticket: GitTicket,
   repository: Pick<GitRepositoryAnnouncement, "owner" | "maintainers">,
   events: readonly NostrEvent[],
 ): GitStatusEvent | undefined {
-  const trustedAuthors = new Set([ticket.author, repository.owner, ...repository.maintainers]);
+  const trustedAuthors = trustedGitStatusAuthors(ticket, repository);
   return events
     .map(parseGitStatusEvent)
     .filter((status): status is GitStatusEvent => Boolean(status && status.ticketId === ticket.id && trustedAuthors.has(status.author)))
@@ -283,6 +291,72 @@ export function attachGitRepository(
     ...attachments,
     { address, relayHints: normalizedRelays(relayHints), attachedAt },
   ]);
+}
+
+/** An unsigned event body ready for the caller's signer. */
+export interface GitEventTemplate {
+  kind: number;
+  content: string;
+  tags: string[][];
+}
+
+/**
+ * A top-level NIP-22 comment on an issue or pull request. The root and parent
+ * scopes coincide because the ticket itself is the parent.
+ */
+export function buildGitCommentTemplate(ticket: GitTicket, content: string, relayHint = ""): GitEventTemplate {
+  return {
+    kind: NIP22_COMMENT_KIND,
+    content,
+    tags: [
+      ["E", ticket.id, relayHint, ticket.author],
+      ["K", String(ticket.kind)],
+      ["P", ticket.author],
+      ["e", ticket.id, relayHint, ticket.author],
+      ["k", String(ticket.kind)],
+      ["p", ticket.author],
+    ],
+  };
+}
+
+/** A NIP-34 issue against a repository, addressed to its owner and maintainers. */
+export function buildGitIssueTemplate(
+  repository: { address: GitRepositoryAddress; maintainers: readonly string[] },
+  subject: string,
+  body: string,
+  relayHint = "",
+): GitEventTemplate {
+  const recipients = [...new Set([repository.address.owner, ...repository.maintainers])].filter(isNostrId);
+  return {
+    kind: GIT_ISSUE_KIND,
+    content: body,
+    tags: [
+      ["a", repository.address.coordinate, relayHint],
+      ["subject", subject],
+      ["alt", `git repository issue: ${subject}`],
+      ...recipients.map((pubkey) => ["p", pubkey]),
+    ],
+  };
+}
+
+/** A NIP-34 status change rooted in a ticket. Display trust stays with `resolveGitTicketStatus`. */
+export function buildGitStatusTemplate(
+  ticket: GitTicket,
+  repository: { address: GitRepositoryAddress; maintainers: readonly string[] },
+  statusKind: GitStatusKind,
+  relayHint = "",
+): GitEventTemplate {
+  const recipients = [...new Set([ticket.author, repository.address.owner, ...repository.maintainers])].filter(isNostrId);
+  return {
+    kind: statusKind,
+    content: "",
+    tags: [
+      ["e", ticket.id, relayHint, "root"],
+      ["a", repository.address.coordinate, relayHint],
+      ["alt", `git ${ticket.type === "issue" ? "issue" : "pull request"} status`],
+      ...recipients.map((pubkey) => ["p", pubkey]),
+    ],
+  };
 }
 
 export type GitTimelineActivity =
