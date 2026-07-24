@@ -4,9 +4,13 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
-## [0.39.2] - 2026-07-23
+## [0.39.3] - 2026-07-23
 
 No user-facing changes — this release publishes Armada to Google Play for the first time and is otherwise the same app as 0.39.1.
+
+## [0.39.2] - 2026-07-23
+
+No user-facing changes — superseded by 0.39.3 before anything was published.
 
 ## [0.39.1] - 2026-07-23
 

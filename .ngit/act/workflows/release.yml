@@ -282,10 +282,13 @@ jobs:
       # Publish the AAB to Google Play in the SAME job (ported from ditto's
       # GitLab `publish-google-play` job). Cross-job artifact hand-off is broken
       # under act (see the Zapstore note above), so the AAB must stay on this
-      # runner's disk. Skipped entirely when the service-account secret isn't
-      # provisioned, so releases keep working before the operator sets it up.
+      # runner's disk. The publish step skips itself in-shell when the
+      # service-account secret isn't provisioned, so releases keep working
+      # before the operator sets it up. The skip CANNOT be a step-level
+      # `if: ${{ secrets.X != '' }}` — act's schema validator (like GitHub)
+      # rejects the `secrets` context in `if:` ("Unknown Variable Access
+      # secrets") and the whole workflow fails validation before running.
       - uses: ruby/setup-ruby@v1
-        if: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != '' }}
         with:
           ruby-version: "3.3"
 
