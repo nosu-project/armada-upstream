@@ -1,10 +1,13 @@
 import { useNostr } from "@nostrify/react";
 import { ArrowLeft, FolderGit2, Hash, Loader2, Search } from "lucide-react";
+import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useAuthor } from "@/hooks/useAuthor";
 import { toast } from "@/hooks/useToast";
 import { searchGitRepositories, useGitRepositoryDirectory } from "@/hooks/useGitRepositoryDirectory";
 import type { GitRepositoryAnnouncement } from "@/lib/gitActivity";
@@ -17,6 +20,42 @@ export interface WizardRepository {
   relayHints: string[];
   displayName: string;
   identifier: string;
+  owner: string;
+}
+
+/** The owner's profile name, or their truncated npub — never "Anonymous". */
+function useOwnerName(pubkey: string): string {
+  const author = useAuthor(pubkey);
+  const named = author.data?.metadata?.name || author.data?.metadata?.display_name;
+  if (named) return named;
+  try {
+    return nip19.npubEncode(pubkey).slice(0, 9);
+  } catch {
+    return pubkey.slice(0, 8);
+  }
+}
+
+function OwnerAvatar({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  const name = useOwnerName(pubkey);
+  return (
+    <Avatar className="size-8 shrink-0 border border-border/60">
+      <AvatarImage src={author.data?.metadata?.picture} alt={name} />
+      <AvatarFallback className="text-[10px] font-semibold">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+    </Avatar>
+  );
+}
+
+/** GitHub-style "owner / repo" title — same-named forks are otherwise indistinguishable. */
+function OwnerSlashRepo({ owner, name }: { owner: string; name: string }) {
+  const ownerName = useOwnerName(owner);
+  return (
+    <span className="block truncate text-sm">
+      <span className="text-muted-foreground">{ownerName}</span>
+      <span className="text-muted-foreground/60"> / </span>
+      <span className="font-semibold text-foreground">{name}</span>
+    </span>
+  );
 }
 
 type Step = "type" | "text" | "repo" | "confirm";
@@ -49,24 +88,21 @@ function TypeCard({ icon: Icon, title, description, onClick }: { icon: typeof Ha
 }
 
 function RepositoryRow({ repository, connected, onSelect }: { repository: GitRepositoryAnnouncement; connected: boolean; onSelect: () => void }) {
+  const subtitle = connected ? "Already connected to this community" : repository.description;
   return (
     <button
       type="button"
       disabled={connected}
       onClick={onSelect}
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors",
+        "flex w-full min-w-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors",
         connected ? "opacity-50" : "hover:bg-foreground/[0.05]",
       )}
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/40">
-        <FolderGit2 className="size-4 text-muted-foreground" />
-      </span>
+      <OwnerAvatar pubkey={repository.owner} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-foreground">{repository.name}</span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {connected ? "Already connected to this community" : repository.description || repository.identifier}
-        </span>
+        <OwnerSlashRepo owner={repository.owner} name={repository.name} />
+        {subtitle && <span className="block truncate text-xs text-muted-foreground">{subtitle}</span>}
       </span>
     </button>
   );
@@ -118,6 +154,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
       relayHints: repository.relays,
       displayName: repository.name,
       identifier: repository.identifier,
+      owner: repository.owner,
     });
     setName(repository.identifier.toLowerCase());
     setError(null);
@@ -134,6 +171,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
         relayHints: resolved.relayHints,
         displayName: resolved.announcement.name,
         identifier: resolved.address.identifier,
+        owner: resolved.address.owner,
       });
       setName(resolved.address.identifier.toLowerCase());
       setStep("confirm");
@@ -181,8 +219,10 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
           </DialogTitle>
         </DialogHeader>
 
+        {/* DialogContent is a grid; min-w-0 stops an unbreakable string (a
+            hex identifier, a long URL) from widening the whole dialog. */}
         {step === "type" && (
-          <div className="space-y-2.5">
+          <div className="min-w-0 space-y-2.5">
             <TypeCard
               icon={Hash}
               title="Text channel"
@@ -200,7 +240,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
 
         {step === "text" && (
           <form
-            className="space-y-3"
+            className="min-w-0 space-y-3"
             onSubmit={(event) => {
               event.preventDefault();
               void create();
@@ -223,7 +263,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
         )}
 
         {step === "repo" && (
-          <div className="space-y-2.5">
+          <div className="min-w-0 space-y-2.5">
             <div className="flex items-center gap-2 rounded-md border border-input px-2.5 focus-within:ring-1 focus-within:ring-ring">
               <Search className="size-4 shrink-0 text-muted-foreground" />
               <Input
@@ -282,18 +322,16 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
 
         {step === "confirm" && selected && (
           <form
-            className="space-y-3"
+            className="min-w-0 space-y-3"
             onSubmit={(event) => {
               event.preventDefault();
               void create();
             }}
           >
-            <div className="flex items-center gap-2.5 clip-corner-lg border border-border/60 bg-card p-2.5">
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40">
-                <FolderGit2 className="size-4 text-muted-foreground" />
-              </span>
+            <div className="flex min-w-0 items-center gap-2.5 clip-corner-lg border border-border/60 bg-card p-2.5">
+              <OwnerAvatar pubkey={selected.owner} />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold text-foreground">{selected.displayName}</span>
+                <OwnerSlashRepo owner={selected.owner} name={selected.displayName} />
                 <span className="block truncate text-xs text-muted-foreground">Activity will appear in the channel and in Projects.</span>
               </span>
             </div>
