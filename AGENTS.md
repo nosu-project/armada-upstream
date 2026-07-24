@@ -75,14 +75,29 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
   and install anything else explicitly (e.g. `rsync`, `wine`).
 - **`ubuntu-latest` runs in a pre-baked `armada-ci` image.** The coordinator
   maps the label to it via `NGIT_CI_ACT_PLATFORMS`; the Dockerfile lives in
-  `.ngit/ci-image/` and pre-installs the JDK/node/go toolcaches (setup-*
-  actions no-op), the Android SDK, ruby+fastlane, the zsp binary, and warm
-  `~/.gradle` / `~/.npm` caches for this repo. Cold runs on the stock act
-  image re-downloaded ~700 MB of toolchain+deps and blew the coordinator's
+  `.ngit/ci-image/` and pre-installs the JDK/node toolcaches (setup-* actions
+  no-op), the Android SDK, system ruby+fastlane, the zsp binary, wine, and
+  warm `~/.gradle` (incl. build cache) / `~/.npm` /
+  `~/.cache/electron{,-builder}` caches for this repo. Cold runs on the stock
+  act image re-downloaded ~700 MB of toolchain+deps and blew the coordinator's
   30-min default job timeout (`NGIT_CI_JOB_TIMEOUT_SECS`, raised to 3600
-  server-side). Rebuild and reload the image on the coordinator host when
-  `package-lock.json` or the android/gradle deps change; the setup-* actions
-  self-heal version drift in between.
+  server-side). Rebuild with `.ngit/ci-image/build.sh` on the coordinator host
+  when `package-lock.json`, `electron/package-lock.json`, or the android/gradle
+  deps change; the setup-* actions self-heal version drift in between.
+- **act mounts the persistent `act-toolcache` volume over
+  `/opt/hostedtoolcache`** in every job container, seeded from the image only
+  while empty. Toolcache content added by an image rebuild is invisible to
+  jobs until the volume is removed (`build.sh` does this) — and anything a
+  workflow invokes directly must live OUTSIDE `/opt/hostedtoolcache` (this is
+  how `fastlane: command not found` broke two releases; fastlane is now the
+  system-ruby gem with binstubs in `/usr/local/bin`).
+- **Workflow runs are parallel; jobs within one workflow are not.** The
+  coordinator runs up to `NGIT_CI_MAX_CONCURRENT_JOBS` (currently 2) workflow
+  runs at once, each in its own `/data/work/<run_id>/repo` checkout — but all
+  jobs of ONE workflow share that single bind-mounted checkout, so
+  multi-job workflows race on the working tree (why desktop.yml is one job
+  building both platforms). Job containers are capped by
+  `NGIT_CI_ACT_CONTAINER_OPTIONS` (currently `--cpus=8 --memory=10g`).
 
 ## How the client reaches backends (no build-time coupling)
 
