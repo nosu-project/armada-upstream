@@ -92,6 +92,16 @@ jobs:
   windows:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Serialize behind the linux job. act runs independent jobs in PARALLEL,
+    # but gives every job container the SAME bind-mounted workdir — so the two
+    # jobs' "Build standalone web bundle" steps collided: one job's
+    # `find electron/dist -mindepth 1 -delete` raced the other's `cp -rT`,
+    # failing non-deterministically with "cannot delete …: Directory not
+    # empty" or "cannot create directory …: File exists". (GitHub-hosted
+    # runners give each job a fresh VM; act shares the checkout.) `needs`
+    # forces ordering inside the one act invocation — no artifact hand-off
+    # involved, each job still builds its own bundle.
+    needs: linux
     steps:
       - uses: actions/checkout@v4
 
