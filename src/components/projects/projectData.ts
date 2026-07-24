@@ -46,6 +46,18 @@ export interface ProjectRepoSummary {
   issueCount: number;
 }
 
+/** How a list is ordered: newest first, or alphabetically. */
+export type ProjectSort = "updated" | "name";
+
+/** Order work items for display; ties break on id so the order is stable. */
+export function sortProjectWorkItems(items: readonly ProjectWorkItem[], sort: ProjectSort): ProjectWorkItem[] {
+  return [...items].sort((a, b) => (
+    sort === "name"
+      ? a.title.localeCompare(b.title) || a.id.localeCompare(b.id)
+      : b.createdAt - a.createdAt || a.id.localeCompare(b.id)
+  ));
+}
+
 /** PR/issue counts bucketed by repo coordinate (`30617:owner:d`). */
 export function repoSummaries(items: ProjectWorkItem[]): Map<string, ProjectRepoSummary> {
   const map = new Map<string, ProjectRepoSummary>();

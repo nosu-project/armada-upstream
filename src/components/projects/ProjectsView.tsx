@@ -18,8 +18,10 @@ import {
   activityByDay,
   projectPeople,
   repoSummaries,
+  sortProjectWorkItems,
   type ProjectRepo,
   type ProjectRepoSummary,
+  type ProjectSort,
   type ProjectWorkItem,
   type ProjectWorkKind,
 } from "@/components/projects/projectData";
@@ -661,7 +663,7 @@ export function ProjectsView({
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
-  const [sort, setSort] = useState<"updated" | "name">("updated");
+  const [sort, setSort] = useState<ProjectSort>("updated");
   const [statusFilter, setStatusFilter] = useState<"open" | "closed" | "all">("open");
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
 
@@ -688,8 +690,8 @@ export function ProjectsView({
     if (labelFilter && !(item.labels ?? []).includes(labelFilter)) return false;
     return true;
   }, [statusFilter, labelFilter]);
-  const filteredPrs = useMemo(() => prs.filter(matchesFilters), [prs, matchesFilters]);
-  const filteredIssues = useMemo(() => issues.filter(matchesFilters), [issues, matchesFilters]);
+  const filteredPrs = useMemo(() => sortProjectWorkItems(prs.filter(matchesFilters), sort), [prs, matchesFilters, sort]);
+  const filteredIssues = useMemo(() => sortProjectWorkItems(issues.filter(matchesFilters), sort), [issues, matchesFilters, sort]);
   const toggleLabel = useCallback((label: string) => setLabelFilter((current) => (current === label ? null : label)), []);
   const showAll = useCallback(() => {
     setStatusFilter("all");
@@ -739,35 +741,39 @@ export function ProjectsView({
             )}
             <select
               value={sort}
-              onChange={(e) => setSort(e.target.value as "updated" | "name")}
+              onChange={(e) => setSort(e.target.value as ProjectSort)}
               aria-label="Sort"
               className="h-8 clip-corner-lg bg-transparent px-2 text-xs text-foreground outline-none hover:bg-foreground/5 focus:ring-1 focus:ring-ring"
             >
               <option value="updated">Recent</option>
               <option value="name">Name</option>
             </select>
-            <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
-              <Button
-                variant={viewMode === "grid" ? "secondary" : "ghost"}
-                size="icon"
-                className="size-7"
-                aria-label="Grid layout"
-                aria-pressed={viewMode === "grid"}
-                onClick={() => setViewMode("grid")}
-              >
-                <LayoutGrid className="size-3.5" />
-              </Button>
-              <Button
-                variant={viewMode === "list" ? "secondary" : "ghost"}
-                size="icon"
-                className="size-7"
-                aria-label="List layout"
-                aria-pressed={viewMode === "list"}
-                onClick={() => setViewMode("list")}
-              >
-                <List className="size-3.5" />
-              </Button>
-            </div>
+            {/* Repositories are the only list with two layouts; work items
+                always read as rows, so the toggle would be inert there. */}
+            {filter === "repositories" && (
+              <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
+                <Button
+                  variant={viewMode === "grid" ? "secondary" : "ghost"}
+                  size="icon"
+                  className="size-7"
+                  aria-label="Grid layout"
+                  aria-pressed={viewMode === "grid"}
+                  onClick={() => setViewMode("grid")}
+                >
+                  <LayoutGrid className="size-3.5" />
+                </Button>
+                <Button
+                  variant={viewMode === "list" ? "secondary" : "ghost"}
+                  size="icon"
+                  className="size-7"
+                  aria-label="List layout"
+                  aria-pressed={viewMode === "list"}
+                  onClick={() => setViewMode("list")}
+                >
+                  <List className="size-3.5" />
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>
