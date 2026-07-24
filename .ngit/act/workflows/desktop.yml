@@ -9,9 +9,16 @@ name: Desktop release
 # and serves it over a custom secure scheme (electron/main.js). The bundle is
 # compiled with EMPTY platform relays so nothing is baked in.
 #
-# Each job builds its own web bundle rather than sharing an artifact: ngit-ci
-# resolves `needs` inside one act invocation, so a shared-build fan-in would
-# force both platforms onto one job — building twice keeps them independent.
+# ONE job builds both platforms. It used to be two jobs, but under act they
+# could not run in parallel anyway: every job container binds the SAME work
+# dir, so the two web-bundle builds raced each other and windows had to be
+# serialized behind linux with `needs`. Two serialized jobs meant two
+# container spin-ups, two `npm ci` + vite builds, and two electron dep
+# installs — a single job does each once and electron-builder produces both
+# targets from the same staged bundle. wine and the electron/electron-builder
+# download caches are baked into the armada-ci runner image
+# (.ngit/ci-image/Dockerfile); the wine step below is only a fallback for
+# running on a stock act image.
 # The version is carried by the git tag (vX.Y.Z), stamped into the Electron
 # app's package.json at build time.
 
@@ -24,9 +31,9 @@ permissions:
   contents: read
 
 jobs:
-  linux:
+  desktop:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -60,7 +67,19 @@ jobs:
           find electron/dist -mindepth 1 -delete
           cp -rT dist electron/dist
 
-      - name: Build Linux installers
+      # electron-builder needs wine for the Windows targets. wine is baked into
+      # the armada-ci runner image; this fallback only runs on a stock act
+      # image (e.g. someone else's coordinator without the custom image).
+      - name: Install wine (fallback for stock runner images)
+        run: |
+          set -eu
+          command -v wine >/dev/null 2>&1 && { echo "wine present: $(wine --version)"; exit 0; }
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends wine wine32 wine64 >/dev/null || \
+            sudo apt-get install -y --no-install-recommends wine >/dev/null
+
+      - name: Build Linux + Windows installers
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -68,96 +87,29 @@ jobs:
           VERSION="${TAG#v}"
           cd electron
           sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json
-          npm install --no-audit --no-fund
-          npx electron-builder --linux --config electron-builder.yml --publish never
+          npm ci --no-audit --no-fund
+          npx electron-builder --linux --win --config electron-builder.yml --publish never
 
       - name: Collect artifacts
         env:
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
-          out="$RUNNER_TEMP/armada-linux-$TAG"
-          mkdir -p "$out"
-          cp electron/release/*.AppImage "$out/Armada-$TAG-linux-x86_64.AppImage"
-          cp electron/release/*.deb "$out/Armada-$TAG-linux-amd64.deb"
-          ls -lh "$out"
+          out_linux="$RUNNER_TEMP/armada-linux-$TAG"
+          out_windows="$RUNNER_TEMP/armada-windows-$TAG"
+          mkdir -p "$out_linux" "$out_windows"
+          cp electron/release/*.AppImage "$out_linux/Armada-$TAG-linux-x86_64.AppImage"
+          cp electron/release/*.deb "$out_linux/Armada-$TAG-linux-amd64.deb"
+          cp electron/release/*Setup*.exe "$out_windows/Armada-$TAG-Setup.exe"
+          # The portable build is the non-Setup .exe.
+          cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out_windows/Armada-$TAG-windows-portable.exe"
+          ls -lh "$out_linux" "$out_windows"
 
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-linux-${{ github.ref_name }}
           path: ${{ runner.temp }}/armada-linux-${{ github.ref_name }}/*
           if-no-files-found: error
-
-  windows:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # Serialize behind the linux job. act runs independent jobs in PARALLEL,
-    # but gives every job container the SAME bind-mounted workdir — so the two
-    # jobs' "Build standalone web bundle" steps collided: one job's
-    # `find electron/dist -mindepth 1 -delete` raced the other's `cp -rT`,
-    # failing non-deterministically with "cannot delete …: Directory not
-    # empty" or "cannot create directory …: File exists". (GitHub-hosted
-    # runners give each job a fresh VM; act shares the checkout.) `needs`
-    # forces ordering inside the one act invocation — no artifact hand-off
-    # involved, each job still builds its own bundle.
-    needs: linux
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Build standalone web bundle
-        env:
-          VITE_PLATFORM_RELAYS: ""
-          # See the linux job: analytics off by default, opt-in via secret.
-          VITE_PLAUSIBLE_DOMAIN: ${{ secrets.VITE_PLAUSIBLE_DOMAIN }}
-          VITE_PLAUSIBLE_ENDPOINT: ${{ secrets.VITE_PLAUSIBLE_ENDPOINT }}
-        run: |
-          set -eu
-          npm ci
-          npx vite build
-          test -f dist/index.html || { echo "vite build produced no dist/index.html" >&2; ls -la dist || true; exit 1; }
-          cp dist/index.html dist/404.html
-          # See the linux job: copy by content, don't rm+cp the directory.
-          mkdir -p electron/dist
-          find electron/dist -mindepth 1 -delete
-          cp -rT dist electron/dist
-
-      # electron-builder needs wine to produce Windows installers on Linux.
-      # The act runner image is not the electronuserland/builder:wine image the
-      # GitLab job used, so install wine explicitly here.
-      - name: Install wine
-        run: |
-          set -eu
-          sudo dpkg --add-architecture i386
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends wine wine32 wine64 >/dev/null || \
-            sudo apt-get install -y --no-install-recommends wine >/dev/null
-
-      - name: Build Windows installers
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          VERSION="${TAG#v}"
-          cd electron
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json
-          npm install --no-audit --no-fund
-          npx electron-builder --win --config electron-builder.yml --publish never
-
-      - name: Collect artifacts
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          out="$RUNNER_TEMP/armada-windows-$TAG"
-          mkdir -p "$out"
-          cp electron/release/*Setup*.exe "$out/Armada-$TAG-Setup.exe"
-          # The portable build is the non-Setup .exe.
-          cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out/Armada-$TAG-windows-portable.exe"
-          ls -lh "$out"
 
       - uses: actions/upload-artifact@v4
         with:
