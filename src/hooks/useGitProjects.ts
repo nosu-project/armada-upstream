@@ -7,6 +7,7 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { ProjectRepo, ProjectWorkItem } from "@/components/projects/projectData";
 import { useEventStore } from "@/hooks/useEventStore";
 import {
+  EVENT_DELETION_KIND,
   GIT_ISSUE_KIND,
   GIT_PULL_REQUEST_KIND,
   GIT_REPOSITORY_ANNOUNCEMENT_KIND,
@@ -85,7 +86,9 @@ export interface GitProjects {
 /**
  * Assemble the Projects data from raw store events. Unlike the channel
  * timeline this is deliberately NOT gated on attachment intervals — the
- * Projects view is where a repository's complete history lives.
+ * Projects view is where a repository's complete history lives. `activities`
+ * are built by the shared timeline builder, so author-published NIP-09
+ * retractions in `events` remove their comments here too.
  */
 export function assembleGitProjects(sources: readonly GitProjectSource[], events: readonly NostrEvent[]): GitProjects {
   const coordinates = new Set(sources.map((source) => source.address.coordinate));
@@ -226,7 +229,9 @@ export function useGitProjects(
         { kinds: [NIP22_COMMENT_KIND], "#E": rootIds, limit: 8_000 },
         { kinds: [...GIT_STATUS_KINDS], "#e": rootIds, limit: 8_000 },
       ]);
-      return assembleGitProjects(sources, [...announcements, ...roots, ...children]);
+      const childIds = [...new Set(children.map((child) => child.id))].sort();
+      const deletions = childIds.length === 0 ? [] : await store.query([{ kinds: [EVENT_DELETION_KIND], "#e": childIds, limit: 8_000 }]);
+      return assembleGitProjects(sources, [...announcements, ...roots, ...children, ...deletions]);
     },
   });
 
@@ -300,11 +305,23 @@ export function useGitProjects(
               query(relay, { kinds: [...GIT_STATUS_KINDS], "#e": rootIds, limit: 4_000 }),
             ]))).flat();
             const rootIdSet = new Set(rootIds);
+            const childIds = new Set<string>();
             for (const event of children) {
               const comment = parseGitComment(event);
               const status = parseGitStatusEvent(event);
               if ((!comment || !rootIdSet.has(comment.ticketId)) && (!status || !rootIdSet.has(status.ticketId))) continue;
+              childIds.add(event.id);
               await store.event(event).catch(() => undefined);
+            }
+            // Author-published retractions of those children (NIP-09 deletes/edits).
+            if (childIds.size > 0) {
+              const ids = [...childIds].sort();
+              const retractions = (await Promise.all(relays.map((relay) =>
+                query(relay, { kinds: [EVENT_DELETION_KIND], "#e": ids, limit: 4_000 })))).flat();
+              for (const event of retractions) {
+                if (!event.tags.some(([name, value]) => name === "e" && value && childIds.has(value))) continue;
+                await store.event(event).catch(() => undefined);
+              }
             }
           }
 
@@ -355,6 +372,28 @@ export function useGitProjects(
         // The thread remains readable from the shared store if a relay is unavailable.
       }
     }));
+    // Retractions for every comment the store now holds for this ticket, so a
+    // comment deleted or edited from another device disappears here too.
+    const stored = await store.query([{ kinds: [NIP22_COMMENT_KIND], "#E": [ticket.id], limit: 4_000 }]);
+    const commentIds = new Set(stored.map((event) => event.id));
+    if (commentIds.size > 0) {
+      const ids = [...commentIds].sort();
+      await Promise.all(relays.map(async (relay) => {
+        try {
+          const retractions = await nostr.relay(relay).query(
+            [{ kinds: [EVENT_DELETION_KIND], "#e": ids, limit: 4_000 }],
+            { signal: AbortSignal.timeout(PULL_TIMEOUT_MS) },
+          );
+          for (const event of retractions) {
+            if (!event.tags.some(([name, value]) => name === "e" && value && commentIds.has(value))) continue;
+            await store.event(event).catch(() => undefined);
+            received++;
+          }
+        } catch {
+          // Best effort; local retractions still apply.
+        }
+      }));
+    }
     if (received) await queryClient.invalidateQueries({ queryKey });
     return received;
   }, [eventStore, nostr, queryClient, queryKey, sources]);

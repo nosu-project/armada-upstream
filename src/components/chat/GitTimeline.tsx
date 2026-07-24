@@ -1,4 +1,4 @@
-import { Braces, CircleDot, GitPullRequest, Loader2, MessageCircle, Paperclip, X } from "lucide-react";
+import { Braces, CircleDot, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, Trash2, X } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -6,6 +6,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import type { GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import { isCommunityGuest } from "@/components/chat/channelTimeline";
 import { ChatContent } from "@/components/chat/ChatContent";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -24,6 +25,7 @@ import {
   GIT_STATUS_DRAFT_KIND,
   GIT_STATUS_OPEN_KIND,
   gitStatusFromKind,
+  type GitComment,
   type GitStatusKind,
   type GitTicket,
   type GitTicketStatus,
@@ -33,8 +35,14 @@ import { cn } from "@/lib/utils";
 
 /** Callbacks that make the conversation panel writable. All optional: absent means read-only. */
 export interface TicketPanelActions {
+  /** The signed-in viewer; own comments get edit/delete controls. */
+  viewerPubkey?: string;
   /** Post a top-level comment on the ticket; `media` carries NIP-92 imeta tags for attached uploads. */
   onComment?: (ticket: GitTicket, content: string, media?: readonly string[][]) => Promise<unknown>;
+  /** Replace one of the viewer's own comments (new event + NIP-09 retraction of the old). */
+  onEditComment?: (ticket: GitTicket, comment: GitComment, content: string) => Promise<unknown>;
+  /** Retract one of the viewer's own comments (NIP-09). */
+  onDeleteComment?: (ticket: GitTicket, comment: GitComment) => Promise<unknown>;
   /** Publish a status change; only offered when `canSetStatus`. */
   onSetStatus?: (ticket: GitTicket, statusKind: GitStatusKind) => Promise<unknown>;
   /** Whether the viewer is in the ticket's trusted status-author set. */
@@ -235,11 +243,120 @@ function TicketPanelBody({ ticket, members, activities, actions }: { ticket: Git
   const status = gitStatusFromKind(latestStatus?.status.kind, ticket.kind);
   const repository = ticket.repositoryAddress?.identifier ?? "Unknown repository";
 
-  return <div className="flex min-h-0 flex-1 flex-col"><div className="min-h-0 flex-1 overflow-y-auto p-3"><div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><TicketIcon ticket={ticket} />{ticketType(ticket)}</div><h2 className="mt-2 break-words text-sm font-semibold">{ticket.subject}</h2><p className="mt-1 text-xs text-muted-foreground">{repository} · <span className="capitalize">{status}</span></p>{actions?.canSetStatus && actions.onSetStatus && <TicketStatusControls ticket={ticket} status={status} onSet={actions.onSetStatus} />}<div className="my-4 border-t border-border" /><p className="text-xs text-muted-foreground">This is the work item’s durable discussion. Its card in the channel is a contextual reference, not a chat thread.</p>{ticket.content && <DiscussionMessage pubkey={ticket.author} createdAt={ticket.createdAt} event={ticket.event} members={members} className="mt-4" />}<div className="mt-4 space-y-4">{comments.map(({ comment }) => <DiscussionMessage key={comment.id} pubkey={comment.author} createdAt={comment.createdAt} event={comment.event} members={members} />)}</div>{comments.length === 0 && <p className="mt-4 text-sm text-muted-foreground">No comments yet.</p>}<Button variant="ghost" size="sm" className="mt-4" onClick={() => setJsonOpen(true)}><Braces className="mr-2 size-4" />View event JSON</Button></div>{actions?.onComment && <TicketCommentComposer ticket={ticket} onComment={actions.onComment} />}<Dialog open={jsonOpen} onOpenChange={setJsonOpen}><DialogContent><DialogHeader><DialogTitle>Event JSON</DialogTitle></DialogHeader><pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(ticket.event, null, 2)}</pre></DialogContent></Dialog></div>;
+  return <div className="flex min-h-0 flex-1 flex-col"><div className="min-h-0 flex-1 overflow-y-auto p-3"><div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><TicketIcon ticket={ticket} />{ticketType(ticket)}</div><h2 className="mt-2 break-words text-sm font-semibold">{ticket.subject}</h2><p className="mt-1 text-xs text-muted-foreground">{repository} · <span className="capitalize">{status}</span></p>{actions?.canSetStatus && actions.onSetStatus && <TicketStatusControls ticket={ticket} status={status} onSet={actions.onSetStatus} />}<div className="my-4 border-t border-border" /><p className="text-xs text-muted-foreground">This is the work item’s durable discussion. Its card in the channel is a contextual reference, not a chat thread.</p>{ticket.content && <DiscussionMessage pubkey={ticket.author} createdAt={ticket.createdAt} event={ticket.event} members={members} className="mt-4" />}<div className="mt-4 space-y-4">{comments.map(({ comment }) => <DiscussionMessage key={comment.id} pubkey={comment.author} createdAt={comment.createdAt} event={comment.event} members={members} controls={actions?.viewerPubkey === comment.author && actions.onEditComment && actions.onDeleteComment ? { text: comment.content, onEdit: (content) => actions.onEditComment!(ticket, comment, content), onDelete: () => actions.onDeleteComment!(ticket, comment) } : undefined} />)}</div>{comments.length === 0 && <p className="mt-4 text-sm text-muted-foreground">No comments yet.</p>}<Button variant="ghost" size="sm" className="mt-4" onClick={() => setJsonOpen(true)}><Braces className="mr-2 size-4" />View event JSON</Button></div>{actions?.onComment && <TicketCommentComposer ticket={ticket} onComment={actions.onComment} />}<Dialog open={jsonOpen} onOpenChange={setJsonOpen}><DialogContent><DialogHeader><DialogTitle>Event JSON</DialogTitle></DialogHeader><pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(ticket.event, null, 2)}</pre></DialogContent></Dialog></div>;
 }
 
-function DiscussionMessage({ pubkey, createdAt, event, members, className }: { pubkey: string; createdAt: number; event: NostrEvent; members: ReadonlySet<string>; className?: string }) {
-  return <div className={cn("flex gap-2.5", className)}><Avatar className="size-8 shrink-0"><ActorAvatar pubkey={pubkey} /></Avatar><div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"><ActorName pubkey={pubkey} members={members} /><span className="text-xs text-muted-foreground">commented · {shortTimeAgo(createdAt)}</span></div><ChatContent event={event} disableNoteEmbeds documentMarkdown className="mt-1 break-words text-sm leading-5" /></div></div>;
+/** Own-comment controls: inline edit and confirmed delete. */
+interface DiscussionControls {
+  text: string;
+  onEdit: (content: string) => Promise<unknown>;
+  onDelete: () => Promise<unknown>;
+}
+
+function DiscussionMessage({ pubkey, createdAt, event, members, className, controls }: { pubkey: string; createdAt: number; event: NostrEvent; members: ReadonlySet<string>; className?: string; controls?: DiscussionControls }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const saveEdit = () => {
+    const content = draft.trim();
+    if (!controls || !content || busy) return;
+    if (content === controls.text.trim()) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    controls.onEdit(content)
+      .then(() => setEditing(false))
+      .catch((error) => toast({ title: "Couldn't edit comment", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
+      .finally(() => setBusy(false));
+  };
+  const runDelete = () => {
+    if (!controls || busy) return;
+    setBusy(true);
+    controls.onDelete()
+      .catch((error) => toast({ title: "Couldn't delete comment", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className={cn("group relative flex gap-2.5", className)}>
+      <Avatar className="size-8 shrink-0"><ActorAvatar pubkey={pubkey} /></Avatar>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"><ActorName pubkey={pubkey} members={members} /><span className="text-xs text-muted-foreground">commented · {shortTimeAgo(createdAt)}</span></div>
+        {editing && controls ? (
+          <div className="mt-1">
+            <Textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setEditing(false);
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  saveEdit();
+                }
+              }}
+              rows={3}
+              autoFocus
+              className="min-h-0 resize-none text-sm"
+            />
+            <div className="mt-1.5 flex justify-end gap-1.5">
+              <Button variant="ghost" size="sm" className="h-7 px-2.5 text-xs" disabled={busy} onClick={() => setEditing(false)}>Cancel</Button>
+              <Button size="sm" className="h-7 px-2.5 text-xs" disabled={busy || !draft.trim()} onClick={saveEdit}>
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <ChatContent event={event} disableNoteEmbeds documentMarkdown className="mt-1 break-words text-sm leading-5" />
+        )}
+      </div>
+      {controls && !editing && (
+        <div className="absolute -top-1 right-0 flex gap-0.5 rounded-md border border-border bg-card p-0.5 opacity-0 shadow-sm transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6 text-muted-foreground"
+            aria-label="Edit comment"
+            disabled={busy}
+            onClick={() => {
+              setDraft(controls.text);
+              setEditing(true);
+            }}
+          >
+            <Pencil className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6 text-muted-foreground hover:text-destructive"
+            aria-label="Delete comment"
+            disabled={busy}
+            onClick={() => setConfirmingDelete(true)}
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+          </Button>
+        </div>
+      )}
+      {controls && (
+        <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this comment?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This publishes a deletion request. Most clients will hide the comment, but relays and clients that ignore deletion requests may keep showing it.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={runDelete}>Delete</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+    </div>
+  );
 }
 
 export function TicketSidePanel({ ticket, members, activities, onClose, actions }: { ticket: GitTicket | undefined; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; onClose: () => void; actions?: TicketPanelActions }) {

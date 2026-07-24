@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useEventStore } from "@/hooks/useEventStore";
 import {
+  EVENT_DELETION_KIND,
   GIT_ISSUE_KIND,
   GIT_PULL_REQUEST_KIND,
   GIT_REPOSITORY_ANNOUNCEMENT_KIND,
@@ -27,9 +28,11 @@ export function useCommunityGitActivity(attachmentsByChannel: ReadonlyMap<string
       const roots = await store.query([{ kinds: [GIT_PULL_REQUEST_KIND, GIT_ISSUE_KIND], "#a": addresses, limit: 4_000 }]);
       const ids = roots.map((root) => root.id);
       const children = ids.length ? await store.query([{ kinds: [NIP22_COMMENT_KIND], "#E": ids, limit: 8_000 }, { kinds: [...GIT_STATUS_KINDS], "#e": ids, limit: 8_000 }]) : [];
+      const childIds = [...new Set(children.map((child) => child.id))].sort();
+      const deletions = childIds.length ? await store.query([{ kinds: [EVENT_DELETION_KIND], "#e": childIds, limit: 8_000 }]) : [];
       const announcements = await store.query([{ kinds: [GIT_REPOSITORY_ANNOUNCEMENT_KIND], "#d": [...new Set([...attachmentsByChannel.values()].flatMap((items) => items.map((item) => item.address.identifier)))], limit: 1_000 }]);
       const repos = announcements.map(parseGitRepositoryAnnouncement).filter((repo): repo is NonNullable<typeof repo> => Boolean(repo));
-      return new Map([...attachmentsByChannel].map(([id, attachments]) => [id, buildGitTimelineActivities([...roots, ...children], attachments, repos)]));
+      return new Map([...attachmentsByChannel].map(([id, attachments]) => [id, buildGitTimelineActivities([...roots, ...children, ...deletions], attachments, repos)]));
     },
   });
   useWireScopes((scopes) => {

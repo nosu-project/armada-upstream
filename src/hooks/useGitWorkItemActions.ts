@@ -7,8 +7,10 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import {
   buildGitCommentTemplate,
+  buildGitDeletionTemplate,
   buildGitIssueTemplate,
   buildGitStatusTemplate,
+  type GitComment,
   type GitEventTemplate,
   type GitRepositoryAddress,
   type GitStatusKind,
@@ -39,6 +41,7 @@ export function useGitWorkItemActions() {
     template: GitEventTemplate,
     relays: readonly string[],
     scopes: readonly string[],
+    createdAt?: number,
   ): Promise<NostrEvent> => {
     if (!user) throw new Error("Sign in to participate in repository discussions.");
     if (!relays.length) throw new Error("This repository has no reachable activity relays.");
@@ -49,7 +52,7 @@ export function useGitWorkItemActions() {
       kind: template.kind,
       content: template.content,
       tags,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: createdAt ?? Math.floor(Date.now() / 1000),
     });
     if (event.pubkey !== user.pubkey) {
       throw new Error("Signed event pubkey does not match the currently selected account.");
@@ -100,8 +103,45 @@ export function useGitWorkItemActions() {
     [publish],
   );
 
+  const deleteTicketComment = useCallback(
+    (ticket: GitTicket, comment: GitComment, relays: readonly string[]) =>
+      publish(
+        buildGitDeletionTemplate(comment.event),
+        relays,
+        ticket.repositoryAddresses.map((address) => `git:${address.coordinate}`),
+      ),
+    [publish],
+  );
+
+  // Kind 1111 is not replaceable, so an edit is a replacement comment at the
+  // ORIGINAL created_at (keeping its thread position) plus a NIP-09 retraction
+  // of the old event. Replacement publishes first: if the retraction then
+  // fails, the worst case is both versions visible on non-deleting clients.
+  const editTicketComment = useCallback(
+    async (ticket: GitTicket, comment: GitComment, content: string, relays: readonly string[]) => {
+      const media = comment.event.tags
+        .filter((tag) => tag[0] === "imeta" && tag.some((field) => {
+          const url = field.startsWith("url ") ? field.slice(4) : undefined;
+          return url !== undefined && content.includes(url);
+        }));
+      const replacement = await publish(
+        buildGitCommentTemplate(ticket, content, relays[0] ?? "", media),
+        relays,
+        ticket.repositoryAddresses.map((address) => `git:${address.coordinate}`),
+        comment.createdAt,
+      );
+      await publish(
+        buildGitDeletionTemplate(comment.event),
+        relays,
+        ticket.repositoryAddresses.map((address) => `git:${address.coordinate}`),
+      );
+      return replacement;
+    },
+    [publish],
+  );
+
   return useMemo(
-    () => ({ canWrite: Boolean(user), commentOnTicket, openIssue, setTicketStatus }),
-    [user, commentOnTicket, openIssue, setTicketStatus],
+    () => ({ canWrite: Boolean(user), commentOnTicket, openIssue, setTicketStatus, deleteTicketComment, editTicketComment }),
+    [user, commentOnTicket, openIssue, setTicketStatus, deleteTicketComment, editTicketComment],
   );
 }

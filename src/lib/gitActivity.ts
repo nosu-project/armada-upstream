@@ -22,6 +22,8 @@ export const GIT_STATUS_CLOSED_KIND = 1632;
 export const GIT_STATUS_DRAFT_KIND = 1633;
 /** NIP-22 comment. */
 export const NIP22_COMMENT_KIND = 1111;
+/** NIP-09 deletion request. */
+export const EVENT_DELETION_KIND = 5;
 
 export const GIT_STATUS_KINDS = [
   GIT_STATUS_OPEN_KIND,
@@ -348,6 +350,42 @@ export function buildGitIssueTemplate(
   };
 }
 
+/** A NIP-09 deletion request for one of the user's own git events. */
+export function buildGitDeletionTemplate(target: Pick<NostrEvent, "id" | "kind">): GitEventTemplate {
+  return {
+    kind: EVENT_DELETION_KIND,
+    content: "",
+    tags: [
+      ["e", target.id],
+      ["k", String(target.kind)],
+    ],
+  };
+}
+
+/**
+ * Deleted event ids by requester. A deletion only counts when its author is
+ * the target's author, so callers key acceptance on the pair — anyone can
+ * publish a kind 5 naming someone else's event.
+ */
+export function collectGitDeletions(events: readonly NostrEvent[]): Map<string, Set<string>> {
+  const deletions = new Map<string, Set<string>>();
+  for (const event of events) {
+    if (event.kind !== EVENT_DELETION_KIND || !isNostrId(event.pubkey)) continue;
+    for (const [name, value] of event.tags) {
+      if (name !== "e" || !value || !isNostrId(value)) continue;
+      const requesters = deletions.get(value);
+      if (requesters) requesters.add(event.pubkey);
+      else deletions.set(value, new Set([event.pubkey]));
+    }
+  }
+  return deletions;
+}
+
+/** True when the event's own author has requested its deletion. */
+export function isGitEventDeleted(deletions: ReadonlyMap<string, ReadonlySet<string>>, id: string, author: string): boolean {
+  return deletions.get(id)?.has(author) ?? false;
+}
+
 /** A NIP-34 status change rooted in a ticket. Display trust stays with `resolveGitTicketStatus`. */
 export function buildGitStatusTemplate(
   ticket: GitTicket,
@@ -402,6 +440,7 @@ export function buildGitTimelineActivities(
     ticketRepository.set(ticket.id, repository);
   }
   const repositoryByAddress = new Map(repositories.map((repository) => [repository.address.coordinate, repository]));
+  const deletions = collectGitDeletions(events);
   const activity: GitTimelineActivity[] = [];
   for (const ticket of tickets.values()) {
     const repository = ticketRepository.get(ticket.id)!;
@@ -413,6 +452,7 @@ export function buildGitTimelineActivities(
   for (const event of events) {
     const comment = parseGitComment(event);
     if (comment) {
+      if (isGitEventDeleted(deletions, comment.id, comment.author)) continue;
       const ticket = tickets.get(comment.ticketId);
       const repository = ticket && ticketRepository.get(ticket.id);
       if (ticket && repository && attached.get(repository.coordinate)?.some((interval) => isGitRepositoryAttachedAt(interval, comment.createdAt))) {

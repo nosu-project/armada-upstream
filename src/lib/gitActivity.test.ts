@@ -10,10 +10,13 @@ import {
   NIP22_COMMENT_KIND,
   attachGitRepository,
   buildGitCommentTemplate,
+  buildGitDeletionTemplate,
   buildGitIssueTemplate,
   buildGitStatusTemplate,
   buildGitTimelineActivities,
+  collectGitDeletions,
   detachGitRepository,
+  isGitEventDeleted,
   trustedGitStatusAuthors,
   gitStatusFromKind,
   isGitRepositoryAttachedAt,
@@ -336,5 +339,47 @@ describe("trustedGitStatusAuthors", () => {
     expect(trusted.has(OWNER)).toBe(true);
     expect(trusted.has(MAINTAINER)).toBe(true);
     expect(trusted.has(ATTACKER)).toBe(false);
+  });
+});
+
+describe("deletions", () => {
+  const ticket = parseGitTicket(event({
+    id: "2".repeat(64),
+    kind: GIT_ISSUE_KIND,
+    pubkey: AUTHOR,
+    created_at: 50,
+    tags: [["a", `30617:${OWNER}:armada`], ["subject", "A bug"]],
+  }))!;
+  const comment = event({
+    id: "3".repeat(64),
+    kind: NIP22_COMMENT_KIND,
+    pubkey: MAINTAINER,
+    created_at: 150,
+    content: "outdated remark",
+    tags: [["E", ticket.id, "", AUTHOR], ["K", String(GIT_ISSUE_KIND)]],
+  });
+  const deletionBy = (pubkey: string) => event({
+    id: "4".repeat(64),
+    kind: 5,
+    pubkey,
+    created_at: 200,
+    tags: [["e", comment.id], ["k", String(NIP22_COMMENT_KIND)]],
+  });
+
+  it("builds deletion requests that collect against their target", () => {
+    const template = buildGitDeletionTemplate(comment);
+    const signed = event({ id: "9".repeat(64), kind: template.kind, pubkey: MAINTAINER, created_at: 300, tags: template.tags });
+    const deletions = collectGitDeletions([signed]);
+    expect(isGitEventDeleted(deletions, comment.id, MAINTAINER)).toBe(true);
+  });
+
+  it("removes a comment only when its own author retracts it", () => {
+    const intervals = [{ address: parseGitRepositoryAddress(`30617:${OWNER}:armada`)!, relayHints: [], attachedAt: 0 }];
+    const spoofed = buildGitTimelineActivities([ticket.event, comment, deletionBy(ATTACKER)], intervals, [repository()]);
+    expect(spoofed.some((activity) => activity.type === "comment")).toBe(true);
+
+    const retracted = buildGitTimelineActivities([ticket.event, comment, deletionBy(MAINTAINER)], intervals, [repository()]);
+    expect(retracted.some((activity) => activity.type === "comment")).toBe(false);
+    expect(retracted.some((activity) => activity.type === "ticket-opened")).toBe(true);
   });
 });

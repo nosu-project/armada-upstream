@@ -98,7 +98,7 @@ import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2
 import { completeMemberlist } from "@/concord-v2/lib/guestbook";
 import { badgeOf, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import { channelGitRepositoryAttachments, type ChannelV2, type CommunityV2, type ImagePointer } from "@/concord-v2/lib/types";
-import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
+import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitComment, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
@@ -1025,9 +1025,20 @@ export function ConcordV2Page() {
     ).has(user.pubkey);
   }, [user?.pubkey, openTicket, ticketRepository]);
   const ticketActions = useMemo(() => ({
+    viewerPubkey: user?.pubkey,
     onComment: user
       ? async (ticket: GitTicket, content: string, media?: readonly string[][]) => {
           await gitActions.commentOnTicket(ticket, content, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)), media);
+        }
+      : undefined,
+    onEditComment: user
+      ? async (ticket: GitTicket, comment: GitComment, content: string) => {
+          await gitActions.editTicketComment(ticket, comment, content, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)));
+        }
+      : undefined,
+    onDeleteComment: user
+      ? async (ticket: GitTicket, comment: GitComment) => {
+          await gitActions.deleteTicketComment(ticket, comment, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)));
         }
       : undefined,
     onSetStatus: async (ticket: GitTicket, statusKind: GitStatusKind) => {

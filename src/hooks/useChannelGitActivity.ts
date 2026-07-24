@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { useEventStore } from "@/hooks/useEventStore";
 import {
+  EVENT_DELETION_KIND,
   GIT_ISSUE_KIND,
   GIT_PULL_REQUEST_KIND,
   GIT_REPOSITORY_ANNOUNCEMENT_KIND,
@@ -55,10 +56,13 @@ export function useChannelGitActivity(
         { kinds: [NIP22_COMMENT_KIND], "#E": rootIds, limit: 4_000 },
         { kinds: [...GIT_STATUS_KINDS], "#e": rootIds, limit: 4_000 },
       ]);
+      // Author-published NIP-09 retractions of those children (comment edits/deletes).
+      const childIds = [...new Set(children.map((child) => child.id))].sort();
+      const deletions = childIds.length === 0 ? [] : await store.query([{ kinds: [EVENT_DELETION_KIND], "#e": childIds, limit: 4_000 }]);
       const announcements = await store.query(normalized.map((attachment) => ({
         kinds: [GIT_REPOSITORY_ANNOUNCEMENT_KIND], authors: [attachment.address.owner], "#d": [attachment.address.identifier], limit: 1,
       })));
-      return buildGitTimelineActivities([...validRoots, ...children], normalized, announcements.map(parseGitRepositoryAnnouncement).filter((repository): repository is NonNullable<typeof repository> => Boolean(repository)));
+      return buildGitTimelineActivities([...validRoots, ...children, ...deletions], normalized, announcements.map(parseGitRepositoryAnnouncement).filter((repository): repository is NonNullable<typeof repository> => Boolean(repository)));
     },
   });
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
@@ -117,6 +121,27 @@ export function useChannelGitActivity(
         // The thread remains readable from the shared store if a relay is unavailable.
       }
     }));
+    // Retractions for the ticket's stored comments (NIP-09 deletes/edits).
+    const stored = await store.query([{ kinds: [NIP22_COMMENT_KIND], "#E": [ticket.id], limit: 4_000 }]);
+    const commentIds = new Set(stored.map((event) => event.id));
+    if (commentIds.size > 0) {
+      const ids = [...commentIds].sort();
+      await Promise.all(relays.map(async (relay) => {
+        try {
+          const retractions = await nostr.relay(relay).query(
+            [{ kinds: [EVENT_DELETION_KIND], "#e": ids, limit: 4_000 }],
+            { signal: AbortSignal.timeout(8_000) },
+          );
+          for (const event of retractions) {
+            if (!event.tags.some(([name, value]) => name === "e" && value && commentIds.has(value))) continue;
+            await store.event(event).catch(() => undefined);
+            received++;
+          }
+        } catch {
+          // Best effort; local retractions still apply.
+        }
+      }));
+    }
     if (received) await queryClient.invalidateQueries({ queryKey });
     return received;
   }, [eventStore, normalized, nostr, queryClient, queryKey]);
