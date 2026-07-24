@@ -4,6 +4,13 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.39.7] - 2026-07-24
+
+Fixes signing in with an external Android signer app, such as Amber, on relays that require authentication.
+
+### Fixed
+- Relays that require authentication now work when signed in with an external Android signer app
+
 ## [0.39.6] - 2026-07-24
 
 Fixes the background mesh connection on Android 14 and newer, where it could crash and repeatedly restart shortly after starting.
