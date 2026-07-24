@@ -4,6 +4,10 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.39.2] - 2026-07-23
+
+No user-facing changes — this release publishes Armada to Google Play for the first time and is otherwise the same app as 0.39.1.
+
 ## [0.39.1] - 2026-07-23
 
 Read state for Concord channels, mentions, and threads now syncs across your devices instead of living only on the one you read on, and there's a quick "mark all as read" action for servers, direct messages, and communities.
