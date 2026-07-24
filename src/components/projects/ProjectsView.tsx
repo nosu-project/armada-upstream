@@ -707,11 +707,14 @@ export function ProjectsView({
         {headerExtra}
       </div>
 
-      {/* Tabs + controls */}
-      <div className="flex items-end justify-between gap-3">
+      {/* Tabs + controls. Wrapping is measured from each item's content width,
+          so the controls drop to their own line the moment the tabs stop
+          fitting beside them — rather than squeezing the tabs, which no
+          viewport breakpoint could detect inside a narrow pane. */}
+      <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
         <Tabs filter={filter} onChange={setFilter} />
         {filter !== "all" && (
-          <div className="mb-2 flex items-center gap-2">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
             {(filter === "prs" || filter === "issues") && labelFilter && (
               <Button variant="secondary" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setLabelFilter(null)}>
                 {labelFilter}
