@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   resolve: vi.fn(),
 }));
 
+const OWNER = "a".repeat(64);
+
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: {} }) }));
 vi.mock("@/concord-v2/hooks/useControlPlane2", () => ({
   useChannels2: () => [{ idHex: "channel", name: "general" }],
@@ -23,12 +25,27 @@ vi.mock("@/lib/gitRepositoryResolver", () => ({
   fetchGitRepositoryAnnouncement: vi.fn(),
 }));
 vi.mock("@/hooks/useToast", () => ({ toast: vi.fn() }));
+// The picker's directory search is exercised by its own tests; here it stays
+// empty so the pasted-address path is what drives the flow.
+vi.mock("@/hooks/useGitRepositoryDirectory", () => ({
+  useGitRepositoryDirectory: () => ({ data: [], isLoading: false, isError: false }),
+  searchGitRepositories: () => [],
+}));
+vi.mock("@/hooks/useAuthor", () => ({ useAuthor: () => ({ data: undefined }) }));
 
 const community = { idHex: "community" } as CommunityV2;
+const SEARCH_PLACEHOLDER = "Search repositories, or paste an naddr / nostr:// address";
 
 function renderSection(canManage: boolean) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={queryClient}><ConnectedRepositoriesSection community={community} canManage={canManage} /></QueryClientProvider>);
+}
+
+/** Open the connect dialog and resolve a pasted address, landing on the channel step. */
+function pasteAddress(value: string) {
+  fireEvent.click(screen.getByRole("button", { name: "Connect repository" }));
+  fireEvent.change(screen.getByPlaceholderText(SEARCH_PLACEHOLDER), { target: { value } });
+  fireEvent.click(screen.getByRole("button", { name: /Use this repository address/ }));
 }
 
 describe("ConnectedRepositoriesSection", () => {
@@ -40,20 +57,24 @@ describe("ConnectedRepositoriesSection", () => {
     expect(screen.getByText("No repositories connected.")).toBeInTheDocument();
   });
 
-  it("resolves and attaches a repository to the chosen channel", async () => {
+  it("resolves a pasted address and attaches it to the chosen channel", async () => {
     h.attach.mockResolvedValue(undefined);
     h.resolve.mockResolvedValue({
-      address: { coordinate: `30617:${"a".repeat(64)}:armada` },
+      address: { coordinate: `30617:${OWNER}:armada`, owner: OWNER, identifier: "armada" },
       relayHints: ["wss://git.example"],
       announcement: { name: "Armada" },
     });
     renderSection(true);
-    fireEvent.click(screen.getByRole("button", { name: "Connect repository" }));
-    fireEvent.change(screen.getByPlaceholderText("naddr or nostr://owner/repository"), { target: { value: "naddr1example" } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    pasteAddress("naddr1example");
+
+    // Channel choice is its own step: attaching happens on that click, not on resolve.
+    const channel = await screen.findByRole("button", { name: /general/ });
+    expect(h.attach).not.toHaveBeenCalled();
+    fireEvent.click(channel);
+
     await waitFor(() => expect(h.attach).toHaveBeenCalledWith({
       channelIdHex: "channel",
-      address: `30617:${"a".repeat(64)}:armada`,
+      address: `30617:${OWNER}:armada`,
       relayHints: ["wss://git.example"],
     }));
   });
@@ -61,9 +82,7 @@ describe("ConnectedRepositoriesSection", () => {
   it("shows resolver errors without attempting an attachment", async () => {
     h.resolve.mockRejectedValue(new Error("Repository announcement not found."));
     renderSection(true);
-    fireEvent.click(screen.getByRole("button", { name: "Connect repository" }));
-    fireEvent.change(screen.getByPlaceholderText("naddr or nostr://owner/repository"), { target: { value: "bad" } });
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    pasteAddress("naddr1bad");
     expect(await screen.findByRole("alert")).toHaveTextContent("Repository announcement not found.");
     expect(h.attach).not.toHaveBeenCalled();
   });
