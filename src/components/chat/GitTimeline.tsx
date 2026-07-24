@@ -1,4 +1,5 @@
-import { Braces, CircleDot, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, Trash2, X } from "lucide-react";
+import { Braces, CircleDot, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, Trash2, X } from "lucide-react";
+import { nip19 } from "nostr-tools";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -113,7 +114,9 @@ export function GitTimelineRow({ entry, members, onOpen, commentEntries, activit
   }
 
   const status = gitStatusFromKind(entry.activity.status.kind, ticket.kind);
-  return <div className="my-3 px-2.5"><button data-git-entry type="button" onClick={() => onOpen(ticket)} className="flex w-full items-center gap-2 rounded-md border border-border bg-secondary/30 px-3 py-2 text-left text-xs hover:bg-secondary"><TicketIcon ticket={ticket} /><span className="inline-flex items-center gap-1"><ActorName pubkey={actor} members={members} /></span><span className="text-muted-foreground">changed status to</span><span className="font-medium capitalize">{status}</span><span className="truncate text-muted-foreground">· {ticket.subject}</span></button></div>;
+  // One flowing, truncating sentence: separate flex spans wrap internally on
+  // narrow layouts and stack the phrase three lines high.
+  return <div className="my-3 px-2.5"><button data-git-entry type="button" onClick={() => onOpen(ticket)} className="flex w-full items-center gap-2 rounded-md border border-border bg-secondary/30 px-3 py-2 text-left text-xs hover:bg-secondary"><TicketIcon ticket={ticket} /><p className="min-w-0 flex-1 truncate"><ActorName pubkey={actor} members={members} /><span className="text-muted-foreground"> changed status to </span><span className="font-medium capitalize">{status}</span><span className="text-muted-foreground"> · {ticket.subject}</span></p></button></div>;
 }
 
 function GitCommentRow({ entry, members }: { entry: Extract<GitChannelTimelineEntry, { type: "git-comment" }>; members: ReadonlySet<string> }) {
@@ -231,8 +234,22 @@ function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onCom
   );
 }
 
+/** The ticket's public home on gitworkshop.dev, the reference NIP-34 web client. */
+function gitworkshopUrl(ticket: GitTicket): string | undefined {
+  const address = ticket.repositoryAddress;
+  if (!address) return undefined;
+  try {
+    const npub = nip19.npubEncode(address.owner);
+    const nevent = nip19.neventEncode({ id: ticket.id, author: ticket.author, kind: ticket.kind });
+    return `https://gitworkshop.dev/${npub}/${encodeURIComponent(address.identifier)}/${ticket.type === "issue" ? "issues" : "prs"}/${nevent}`;
+  } catch {
+    return undefined;
+  }
+}
+
 function TicketPanelBody({ ticket, members, activities, actions }: { ticket: GitTicket; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; actions?: TicketPanelActions }) {
   const [jsonOpen, setJsonOpen] = useState(false);
+  const workshopUrl = useMemo(() => gitworkshopUrl(ticket), [ticket]);
   const { comments, latestStatus } = useMemo(() => {
     const related = activities.filter((activity) => activity.ticket.id === ticket.id);
     return {
@@ -243,7 +260,7 @@ function TicketPanelBody({ ticket, members, activities, actions }: { ticket: Git
   const status = gitStatusFromKind(latestStatus?.status.kind, ticket.kind);
   const repository = ticket.repositoryAddress?.identifier ?? "Unknown repository";
 
-  return <div className="flex min-h-0 flex-1 flex-col"><div className="min-h-0 flex-1 overflow-y-auto p-3"><div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><TicketIcon ticket={ticket} />{ticketType(ticket)}</div><h2 className="mt-2 break-words text-sm font-semibold">{ticket.subject}</h2><p className="mt-1 text-xs text-muted-foreground">{repository} · <span className="capitalize">{status}</span></p>{actions?.canSetStatus && actions.onSetStatus && <TicketStatusControls ticket={ticket} status={status} onSet={actions.onSetStatus} />}<div className="my-4 border-t border-border" /><p className="text-xs text-muted-foreground">This is the work item’s durable discussion. Its card in the channel is a contextual reference, not a chat thread.</p>{ticket.content && <DiscussionMessage pubkey={ticket.author} createdAt={ticket.createdAt} event={ticket.event} members={members} className="mt-4" />}<div className="mt-4 space-y-4">{comments.map(({ comment }) => <DiscussionMessage key={comment.id} pubkey={comment.author} createdAt={comment.createdAt} event={comment.event} members={members} controls={actions?.viewerPubkey === comment.author && actions.onEditComment && actions.onDeleteComment ? { text: comment.content, onEdit: (content) => actions.onEditComment!(ticket, comment, content), onDelete: () => actions.onDeleteComment!(ticket, comment) } : undefined} />)}</div>{comments.length === 0 && <p className="mt-4 text-sm text-muted-foreground">No comments yet.</p>}<Button variant="ghost" size="sm" className="mt-4" onClick={() => setJsonOpen(true)}><Braces className="mr-2 size-4" />View event JSON</Button></div>{actions?.onComment && <TicketCommentComposer ticket={ticket} onComment={actions.onComment} />}<Dialog open={jsonOpen} onOpenChange={setJsonOpen}><DialogContent><DialogHeader><DialogTitle>Event JSON</DialogTitle></DialogHeader><pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(ticket.event, null, 2)}</pre></DialogContent></Dialog></div>;
+  return <div className="flex min-h-0 flex-1 flex-col"><div className="min-h-0 flex-1 overflow-y-auto p-3"><div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><TicketIcon ticket={ticket} />{ticketType(ticket)}</div><h2 className="mt-2 break-words text-sm font-semibold">{ticket.subject}</h2><p className="mt-1 text-xs text-muted-foreground">{repository} · <span className="capitalize">{status}</span></p>{actions?.canSetStatus && actions.onSetStatus && <TicketStatusControls ticket={ticket} status={status} onSet={actions.onSetStatus} />}<div className="my-4 border-t border-border" /><p className="text-xs text-muted-foreground">This is the work item’s durable discussion. Its card in the channel is a contextual reference, not a chat thread.</p>{ticket.content && <DiscussionMessage pubkey={ticket.author} createdAt={ticket.createdAt} event={ticket.event} members={members} className="mt-4" />}<div className="mt-4 space-y-4">{comments.map(({ comment }) => <DiscussionMessage key={comment.id} pubkey={comment.author} createdAt={comment.createdAt} event={comment.event} members={members} controls={actions?.viewerPubkey === comment.author && actions.onEditComment && actions.onDeleteComment ? { text: comment.content, onEdit: (content) => actions.onEditComment!(ticket, comment, content), onDelete: () => actions.onDeleteComment!(ticket, comment) } : undefined} />)}</div>{comments.length === 0 && <p className="mt-4 text-sm text-muted-foreground">No comments yet.</p>}<div className="mt-4 flex flex-wrap gap-1.5">{workshopUrl && <Button variant="ghost" size="sm" asChild><a href={workshopUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="mr-2 size-4" />Open on gitworkshop</a></Button>}<Button variant="ghost" size="sm" onClick={() => setJsonOpen(true)}><Braces className="mr-2 size-4" />View event JSON</Button></div></div>{actions?.onComment && <TicketCommentComposer ticket={ticket} onComment={actions.onComment} />}<Dialog open={jsonOpen} onOpenChange={setJsonOpen}><DialogContent><DialogHeader><DialogTitle>Event JSON</DialogTitle></DialogHeader><pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(ticket.event, null, 2)}</pre></DialogContent></Dialog></div>;
 }
 
 /** Own-comment controls: inline edit and confirmed delete. */
