@@ -60,13 +60,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
-          cache: gradle
 
       # No setup-android / setup-go / setup-ruby steps: the Android SDK, the
       # zsp binary, and ruby+fastlane are baked into the coordinator's
