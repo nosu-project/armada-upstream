@@ -58,6 +58,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelGitActivity } from "@/hooks/useChannelGitActivity";
 import { useGitProjects } from "@/hooks/useGitProjects";
 import { useGitWorkItemActions, type GitWorkItemRepository } from "@/hooks/useGitWorkItemActions";
+import { NewChannelDialog2, type WizardRepository } from "@/concord-v2/components/NewChannelDialog2";
 import { NewIssueDialog } from "@/components/projects/NewIssueDialog";
 import { ProjectsView } from "@/components/projects/ProjectsView";
 import type { ProjectWorkItem } from "@/components/projects/projectData";
@@ -1119,7 +1120,30 @@ export function ConcordV2Page() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead]);
 
-  const { leave, isLeaving, dissolve, createChannel, isAddingChannel } = useCommunityManagement2(community);
+  const { leave, isLeaving, dissolve, createChannel, attachRepository } = useCommunityManagement2(community);
+  const handleCreateTextChannel = useCallback(async (name: string) => {
+    const { channelIdHex: created } = await createChannel({ name });
+    selectChannel(created);
+  }, [createChannel, selectChannel]);
+  const handleCreateRepositoryChannel = useCallback(async (name: string, repository: WizardRepository) => {
+    const { channelIdHex: created } = await createChannel({ name });
+    try {
+      await attachRepository({ channelIdHex: created, address: repository.coordinate, relayHints: repository.relayHints });
+    } catch {
+      // The channel exists either way; the repository can be retried from Community Info.
+      toast({
+        title: "Channel created, but the repository didn't connect",
+        description: "Retry from Community Info under Connected repositories.",
+        variant: "destructive",
+      });
+    }
+    selectChannel(created);
+  }, [createChannel, attachRepository, selectChannel]);
+  // Repositories already connected anywhere in this community (wizard dedupe).
+  const connectedCoordinates = useMemo(
+    () => new Set([...gitAttachmentsByChannel.values()].flatMap((list) => list.filter((a) => a.detachedAt === undefined).map((a) => a.address.coordinate))),
+    [gitAttachmentsByChannel],
+  );
   const { coalesced } = useGuestbook2(community);
 
   // Voice (CORD-07): the active channel's live presence + rendezvous broker
@@ -1162,13 +1186,11 @@ export function ConcordV2Page() {
   // down the local copy and route home (CORD-04 §4).
   useBanSelfRemove2(baseCommunity, useCallback(() => navigateTo("/"), [navigateTo]));
   const [creatingChannel, setCreatingChannel] = useState(false);
-  const [newChannelName, setNewChannelName] = useState("");
 
-  // Close the inline create-channel form when switching communities — the
-  // user's MANAGE_CHANNELS permission doesn't carry over.
+  // Close the create-channel wizard when switching communities — the user's
+  // MANAGE_CHANNELS permission doesn't carry over.
   useEffect(() => {
     setCreatingChannel(false);
-    setNewChannelName("");
     setCommunityMenuOpen(false);
   }, [communityId]);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -1496,19 +1518,6 @@ export function ConcordV2Page() {
     setReplyTo(undefined);
   };
 
-  const handleCreateChannel = async () => {
-    const name = newChannelName.trim();
-    if (!name || !community) return;
-    try {
-      const { channelIdHex: created } = await createChannel({ name });
-      selectChannel(created);
-      setNewChannelName("");
-      setCreatingChannel(false);
-    } catch {
-      // keep the input open so the user can retry
-    }
-  };
-
   const handleLeave = async () => {
     try {
       await leave();
@@ -1792,42 +1801,6 @@ export function ConcordV2Page() {
               </button>
             )}
           </>
-        ) : undefined
-      }
-      channelsHeaderExtra={
-        creatingChannel ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleCreateChannel();
-            }}
-            className="mx-2 my-1 p-1.5 space-y-1.5 clip-corner-lg bg-foreground/5"
-          >
-            <div className="flex items-center gap-1">
-              <Input
-                value={newChannelName}
-                onChange={(e) => setNewChannelName(e.target.value)}
-                placeholder="e.g. general, memes, dev-talk"
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setCreatingChannel(false);
-                    setNewChannelName("");
-                  }
-                }}
-                className="h-7 text-sm"
-              />
-              <Button
-                type="submit"
-                size="icon"
-                className="size-7 shrink-0 clip-corner-lg"
-                aria-label="Create channel"
-                disabled={isAddingChannel || !newChannelName.trim()}
-              >
-                {isAddingChannel ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
-              </Button>
-            </div>
-          </form>
         ) : undefined
       }
     >
@@ -2399,6 +2372,13 @@ export function ConcordV2Page() {
             </div>
 
             <TicketSidePanel ticket={openTicket} members={new Set(memberPubkeys)} activities={panelActivities} onClose={() => setOpenTicket(undefined)} actions={ticketActions} />
+            <NewChannelDialog2
+              open={creatingChannel}
+              onOpenChange={setCreatingChannel}
+              connectedCoordinates={connectedCoordinates}
+              onCreateText={handleCreateTextChannel}
+              onCreateRepository={handleCreateRepositoryChannel}
+            />
             </ComposerBoundsProvider>
 
             {/* Thread panel. Desktop: in-flow sibling whose width animates open.
