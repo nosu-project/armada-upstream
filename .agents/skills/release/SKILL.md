@@ -195,8 +195,9 @@ After pushing, tell the user:
 - The new version number
 - A brief summary of what was released
 - That CI will build and publish the artifacts: ngit-ci results and artifacts
-  appear on gitworkshop.dev against the tagged commit, and the Android APK is
-  published to Zapstore
+  appear on gitworkshop.dev against the tagged commit, the Android APK is
+  published to Zapstore, and the AAB is published to Google Play (skipped if
+  the Play service-account secret isn't provisioned)
 - That the **macOS** `.dmg` and the GitLab Release/package links would come from
   the GitLab mirror pipeline, but we do NOT push to GitLab — the maintainer
   handles GitLab manually, if at all
@@ -208,14 +209,19 @@ After pushing, tell the user:
 Runs on the `vX.Y.Z` tag via `act` (GitHub Actions syntax), one Linux container
 per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 
-1. **release.yml → build** — signed Android APK + AAB, then Zapstore publish,
-   all in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
+1. **release.yml → build** — signed Android APK + AAB, then Zapstore publish
+   and Google Play publish, all in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
    from `ANDROID_KEYSTORE_BASE64`, migrate to PKCS12,
    `versionCode = major*1_000_000 + minor*1_000 + patch` (from the tag), build web assets,
    `cap sync android`, then `assembleRelease bundleRelease`; the signed APK/AAB
    are uploaded to Blossom, then (same job, no cross-job artifact hand-off)
    `setup-go` + `zsp` sign with the NIP-46 bunker and upload the APK to
-   Zapstore. Build and publish share one job on purpose: act's local artifact
+   Zapstore, then `setup-ruby` + `fastlane supply` upload the AAB to Google
+   Play (production track) with the changelog summary as the "What's new" text
+   (extracted from CHANGELOG.md by `scripts/extract-release-notes.mjs
+   --summary`, keyed to the tag-derived versionCode). The Play publish is
+   skipped when `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` isn't provisioned.
+   Build and publish share one job on purpose: act's local artifact
    server round-trips a multi-file wildcard upload back as a 3-byte stub, so a
    separate `publish-zapstore` job used to receive an empty APK and fail.
 2. **desktop.yml → linux** — Electron AppImage + deb.
@@ -258,6 +264,12 @@ secrets notes.
 | `KEY_PASSWORD` | key password (**must equal** the store password — CI migrates JKS→PKCS12, which uses one password) |
 | `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer for Zapstore |
 | `ZAPSTORE_CLIENT_KEY` | persistent zsp NIP-46 client key (hex) for that bunker |
+
+Optional (Google Play publish on tags, ngit-ci `release.yml`):
+
+| Variable | What |
+|----------|------|
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | base64 (one line) of the Play Console service-account JSON key with release permission on `buzz.armada.app`. Unprovisioned → the Play publish is skipped, not failed. |
 
 Optional (web deploy on push to `main`, ngit-ci `deploy-web.yml`):
 

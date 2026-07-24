@@ -42,7 +42,7 @@ commit/PR.
 |----------|---------|------|
 | `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build) and `npm audit --audit-level=high` |
 | `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
-| `release.yml` | tag `v*` | signed Android APK + AAB, then Zapstore publish |
+| `release.yml` | tag `v*` | signed Android APK + AAB, then Zapstore publish, then Google Play publish (skips Play if the service-account secret isn't provisioned) |
 | `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb) and Windows (NSIS + portable) |
 
 Notes specific to ngit-ci (vs the old GitLab pipeline):
@@ -63,6 +63,9 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
   `KEYSTORE_PASSWORD`, `KEY_PASSWORD`, `ZAPSTORE_BUNKER_URL`,
   `ZAPSTORE_CLIENT_KEY`, and for web deploy `DEPLOY_SSH_KEY_BASE64`
   (+ optional `DEPLOY_SSH_CONFIG_BASE64`, `DEPLOY_TARGET`, `VITE_PLATFORM_RELAYS`).
+  Optional: `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (base64 of the Play Console
+  service-account JSON for `buzz.armada.app`; unprovisioned skips the Play
+  publish).
 - **No macOS.** act runs Linux containers only; the macOS `.dmg` and the GitLab
   Release / generic-package links stay on the GitLab mirror (`.gitlab-ci.yml`)
   until switch-over. Keep `.gitlab-ci.yml` working as a mirror; do not delete it

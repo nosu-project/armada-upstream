@@ -1,8 +1,9 @@
 name: Android release
 
-# Signed Android APK + AAB on version tags (vX.Y.Z), then a Zapstore publish —
-# all in ONE job. Ported from the GitLab `build-apk` + `publish-zapstore` jobs
-# to ngit-ci (act / GitHub Actions syntax). We keep build+publish in a single
+# Signed Android APK + AAB on version tags (vX.Y.Z), then a Zapstore publish and
+# a Google Play publish — all in ONE job. Ported from the GitLab `build-apk` +
+# `publish-zapstore` jobs (+ ditto's `publish-google-play`) to ngit-ci (act /
+# GitHub Actions syntax). We keep build+publish in a single
 # job on purpose: act's local artifact server round-trips a multi-file wildcard
 # upload back as a 3-byte stub, so handing the APK across jobs via
 # upload/download-artifact fed zsp an empty file. Results and artifacts surface
@@ -25,6 +26,11 @@ name: Android release
 #                            uses a single password, so the two must match)
 #   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer for Zapstore
 #   ZAPSTORE_CLIENT_KEY      persistent zsp NIP-46 client key (hex) for it
+#   GOOGLE_PLAY_SERVICE_ACCOUNT_JSON  (optional) base64 of the Play Console
+#                            service-account JSON key with release permission on
+#                            buzz.armada.app. Empty (unprovisioned) skips the
+#                            Google Play publish instead of failing — same
+#                            pattern as deploy-web.yml's SSH key.
 
 on:
   push:
@@ -272,3 +278,81 @@ jobs:
           name: zsp-output-${{ steps.version.outputs.name }}
           path: ${{ runner.temp }}/zsp-output.txt
           if-no-files-found: warn
+
+      # Publish the AAB to Google Play in the SAME job (ported from ditto's
+      # GitLab `publish-google-play` job). Cross-job artifact hand-off is broken
+      # under act (see the Zapstore note above), so the AAB must stay on this
+      # runner's disk. Skipped entirely when the service-account secret isn't
+      # provisioned, so releases keep working before the operator sets it up.
+      - uses: ruby/setup-ruby@v1
+        if: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        with:
+          ruby-version: "3.3"
+
+      - name: Publish to Google Play
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          ARTIFACT_DIR: ${{ steps.artifacts.outputs.dir }}
+        run: |
+          set -eu
+
+          # No key provisioned (or non-maintainer trigger): skip the publish.
+          if [ -z "${GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:-}" ]; then
+            echo "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON not set; skipping Google Play publish."
+            exit 0
+          fi
+
+          aab_path="$ARTIFACT_DIR/Armada-v$VERSION_NAME.aab"
+          test -f "$aab_path"
+
+          # representable (loaded by fastlane's Google Play client) does a
+          # top-level `require "multi_json"` but never declares it as a
+          # dependency -- it relied on multi_json being pulled in transitively
+          # via the Google API auth stack. A recent upstream release dropped
+          # that path, so unpinned `gem install fastlane` crashes
+          # `fastlane supply` with Gem::MissingSpecError. Install multi_json
+          # explicitly to restore it.
+          gem install fastlane multi_json --no-document
+
+          # Build the fastlane supply metadata layout for the changelog. supply
+          # maps changelogs/<versionCode>.txt to the Play Console "What's new in
+          # this version" field. versionCode matches what was stamped into
+          # build.gradle above (derived from the tag).
+          summary="$(node scripts/extract-release-notes.mjs "$GITHUB_REF_NAME" --summary)"
+          changelog_dir="android/fastlane/metadata/android/en-US/changelogs"
+          mkdir -p "$changelog_dir"
+          printf '%s\n' "$summary" > "$changelog_dir/$VERSION_CODE.txt"
+          echo "--- $changelog_dir/$VERSION_CODE.txt ---"
+          cat "$changelog_dir/$VERSION_CODE.txt"
+          echo "-------------------------------------------"
+          # Warn (don't fail) over the documented 500-character limit so it's
+          # spotted before the Play Console rejects the upload.
+          summary_len=$(wc -c < "$changelog_dir/$VERSION_CODE.txt")
+          if [ "$summary_len" -gt 501 ]; then
+            echo "WARNING: changelog is $summary_len bytes; convention is <=500."
+          fi
+
+          # Decode the base64 service-account JSON to a temp file for fastlane.
+          umask 077
+          json_key="$RUNNER_TEMP/play-service-account.json"
+          printf '%s' "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" | base64 -d > "$json_key"
+
+          # Upload the AAB to the production track with the changelog. The other
+          # metadata (title, description, images, screenshots) is managed in the
+          # Play Console and left untouched.
+          fastlane supply \
+            --aab "$aab_path" \
+            --package_name buzz.armada.app \
+            --track production \
+            --json_key "$json_key" \
+            --metadata_path android/fastlane/metadata/android \
+            --skip_upload_metadata \
+            --skip_upload_images \
+            --skip_upload_screenshots \
+            --skip_upload_apk
+
+      - name: Remove Google Play service account key
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/play-service-account.json"
