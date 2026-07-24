@@ -1,11 +1,12 @@
-import { CircleDot, Loader2, Plus } from "lucide-react";
-import { useState } from "react";
+import { CircleDot, Loader2, Paperclip, Plus } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useGitAttachmentUploads } from "@/hooks/useGitAttachmentUploads";
 import { toast } from "@/hooks/useToast";
 
 import type { ProjectRepo } from "@/components/projects/projectData";
@@ -13,21 +14,27 @@ import type { ProjectRepo } from "@/components/projects/projectData";
 /** Open a new issue against one of the project's repositories. */
 export function NewIssueDialog({ repos, onCreate }: {
   repos: ProjectRepo[];
-  onCreate: (repoCoord: string, subject: string, body: string) => Promise<unknown>;
+  onCreate: (repoCoord: string, subject: string, body: string, media?: readonly string[][]) => Promise<unknown>;
 }) {
   const [open, setOpen] = useState(false);
   const [repoCoord, setRepoCoord] = useState<string | undefined>(undefined);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const appendUrl = useCallback((url: string) => {
+    setBody((prev) => (prev.trim() ? `${prev.trimEnd()}\n${url}\n` : `${url}\n`));
+  }, []);
+  const { attach, isUploading, mediaFor } = useGitAttachmentUploads(appendUrl);
 
   const selected = repoCoord ?? repos[0]?.coord;
   if (repos.length === 0) return null;
 
   const submit = () => {
-    if (!selected || !subject.trim() || sending) return;
+    if (!selected || !subject.trim() || sending || isUploading) return;
     setSending(true);
-    onCreate(selected, subject.trim(), body.trim())
+    const trimmedBody = body.trim();
+    onCreate(selected, subject.trim(), trimmedBody, mediaFor(trimmedBody))
       .then(() => {
         toast({ title: "Issue opened" });
         setOpen(false);
@@ -79,8 +86,28 @@ export function NewIssueDialog({ repos, onCreate }: {
             rows={5}
             className="resize-none text-sm"
           />
-          <div className="flex justify-end">
-            <Button size="sm" disabled={sending || !subject.trim()} onClick={submit}>
+          <div className="flex items-center justify-end gap-1.5">
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                void attach(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 text-muted-foreground"
+              aria-label="Attach files"
+              disabled={isUploading}
+              onClick={() => fileInput.current?.click()}
+            >
+              {isUploading ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
+            </Button>
+            <Button size="sm" disabled={sending || isUploading || !subject.trim()} onClick={submit}>
               {sending ? <Loader2 className="size-4 animate-spin" /> : "Open issue"}
             </Button>
           </div>

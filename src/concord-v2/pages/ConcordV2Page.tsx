@@ -1026,8 +1026,8 @@ export function ConcordV2Page() {
   }, [user?.pubkey, openTicket, ticketRepository]);
   const ticketActions = useMemo(() => ({
     onComment: user
-      ? async (ticket: GitTicket, content: string) => {
-          await gitActions.commentOnTicket(ticket, content, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)));
+      ? async (ticket: GitTicket, content: string, media?: readonly string[][]) => {
+          await gitActions.commentOnTicket(ticket, content, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)), media);
         }
       : undefined,
     onSetStatus: async (ticket: GitTicket, statusKind: GitStatusKind) => {
@@ -1037,11 +1037,11 @@ export function ConcordV2Page() {
     },
     canSetStatus: canSetTicketStatus,
   }), [user, gitActions, projects, ticketRepository, canSetTicketStatus]);
-  const handleCreateIssue = useCallback(async (repoCoord: string, subject: string, body: string) => {
+  const handleCreateIssue = useCallback(async (repoCoord: string, subject: string, body: string, media?: readonly string[][]) => {
     const address = parseGitRepositoryAddress(repoCoord);
     if (!address) throw new Error("Unknown repository.");
     const repo = projects.repos.find((candidate) => candidate.coord === repoCoord);
-    await gitActions.openIssue({ address, maintainers: repo?.contributors ?? [] }, subject, body, projects.relaysForCoordinates([repoCoord]));
+    await gitActions.openIssue({ address, maintainers: repo?.contributors ?? [] }, subject, body, projects.relaysForCoordinates([repoCoord]), media);
   }, [gitActions, projects]);
   const { mutateAsync: send } = useSendMessage2(community, channel);
 

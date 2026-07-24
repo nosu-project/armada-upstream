@@ -235,7 +235,8 @@ function isOnlyEmojisOrCustom(text: string, emojiMap: Map<string, string>): bool
  * `decryption-key`/`decryption-nonce`), so it must be parsed for the body to
  * emit — and decrypt — the embed.
  */
-const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 14, 15, 1111, 1222, 1244, 3300]);
+// 1618/1621: NIP-34 pull requests and issues carry imeta for their attachments.
+const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 14, 15, 1111, 1222, 1244, 1618, 1621, 3300]);
 
 /**
  * Plain-text length (of the raw content, before tokenizing/rendering) past

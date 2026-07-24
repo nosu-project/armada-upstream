@@ -71,9 +71,9 @@ export function useGitWorkItemActions() {
   }, [eventStore, nostr, user]);
 
   const commentOnTicket = useCallback(
-    (ticket: GitTicket, content: string, relays: readonly string[]) =>
+    (ticket: GitTicket, content: string, relays: readonly string[], media: readonly string[][] = []) =>
       publish(
-        buildGitCommentTemplate(ticket, content, relays[0] ?? ""),
+        buildGitCommentTemplate(ticket, content, relays[0] ?? "", media),
         relays,
         ticket.repositoryAddresses.map((address) => `git:${address.coordinate}`),
       ),
@@ -81,9 +81,9 @@ export function useGitWorkItemActions() {
   );
 
   const openIssue = useCallback(
-    (repository: GitWorkItemRepository, subject: string, body: string, relays: readonly string[]) =>
+    (repository: GitWorkItemRepository, subject: string, body: string, relays: readonly string[], media: readonly string[][] = []) =>
       publish(
-        buildGitIssueTemplate(repository, subject, body, relays[0] ?? ""),
+        buildGitIssueTemplate(repository, subject, body, relays[0] ?? "", media),
         relays,
         [`git:${repository.address.coordinate}`],
       ),

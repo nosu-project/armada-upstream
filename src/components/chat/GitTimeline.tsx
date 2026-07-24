@@ -1,5 +1,5 @@
-import { Braces, CircleDot, GitPullRequest, Loader2, MessageCircle, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Braces, CircleDot, GitPullRequest, Loader2, MessageCircle, Paperclip, X } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useGitAttachmentUploads } from "@/hooks/useGitAttachmentUploads";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
@@ -32,8 +33,8 @@ import { cn } from "@/lib/utils";
 
 /** Callbacks that make the conversation panel writable. All optional: absent means read-only. */
 export interface TicketPanelActions {
-  /** Post a top-level comment on the ticket. */
-  onComment?: (ticket: GitTicket, content: string) => Promise<unknown>;
+  /** Post a top-level comment on the ticket; `media` carries NIP-92 imeta tags for attached uploads. */
+  onComment?: (ticket: GitTicket, content: string, media?: readonly string[][]) => Promise<unknown>;
   /** Publish a status change; only offered when `canSetStatus`. */
   onSetStatus?: (ticket: GitTicket, statusKind: GitStatusKind) => Promise<unknown>;
   /** Whether the viewer is in the ticket's trusted status-author set. */
@@ -164,11 +165,16 @@ function TicketStatusControls({ ticket, status, onSet }: { ticket: GitTicket; st
 function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onComment: NonNullable<TicketPanelActions["onComment"]> }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const appendUrl = useCallback((url: string) => {
+    setText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${url}\n` : `${url}\n`));
+  }, []);
+  const { attach, isUploading, mediaFor } = useGitAttachmentUploads(appendUrl);
   const submit = () => {
     const content = text.trim();
-    if (!content || sending) return;
+    if (!content || sending || isUploading) return;
     setSending(true);
-    onComment(ticket, content)
+    onComment(ticket, content, mediaFor(content))
       .then(() => setText(""))
       .catch((error) => toast({ title: "Couldn't post comment", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
       .finally(() => setSending(false));
@@ -188,8 +194,28 @@ function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onCom
         rows={2}
         className="min-h-0 resize-none text-sm"
       />
-      <div className="mt-2 flex justify-end">
-        <Button size="sm" className="h-7 px-3 text-xs" disabled={sending || !text.trim()} onClick={submit}>
+      <div className="mt-2 flex items-center justify-end gap-1.5">
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            void attach(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 text-muted-foreground"
+          aria-label="Attach files"
+          disabled={isUploading}
+          onClick={() => fileInput.current?.click()}
+        >
+          {isUploading ? <Loader2 className="size-3.5 animate-spin" /> : <Paperclip className="size-3.5" />}
+        </Button>
+        <Button size="sm" className="h-7 px-3 text-xs" disabled={sending || isUploading || !text.trim()} onClick={submit}>
           {sending ? <Loader2 className="size-3.5 animate-spin" /> : "Comment"}
         </Button>
       </div>

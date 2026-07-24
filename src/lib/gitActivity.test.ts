@@ -299,6 +299,18 @@ describe("event template builders", () => {
     expect(recipients).toEqual([OWNER, MAINTAINER]);
   });
 
+  it("carries attachment imeta tags without breaking its own parsers", () => {
+    const media = [["imeta", "url https://blossom.example/abc.png", "m image/png", "x " + "f".repeat(64)]];
+    const comment = buildGitCommentTemplate(ticket, "See screenshot", "", media);
+    expect(parseGitComment(signedAs(comment, MAINTAINER))).toBeDefined();
+    expect(comment.tags.filter(([name]) => name === "imeta")).toHaveLength(1);
+
+    const issue = buildGitIssueTemplate({ address: repo.address, maintainers: [] }, "Broken layout", "https://blossom.example/abc.png", "", media);
+    const parsed = parseGitTicket(signedAs(issue, AUTHOR));
+    expect(parsed).toBeDefined();
+    expect(issue.tags.filter(([name]) => name === "imeta")).toHaveLength(1);
+  });
+
   it("builds statuses its own parser and trust resolution accept", () => {
     const template = buildGitStatusTemplate(ticket, { address: repo.address, maintainers: repo.maintainers }, GIT_STATUS_CLOSED_KIND, "wss://relay.example/");
     const signed = signedAs(template, MAINTAINER);

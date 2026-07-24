@@ -302,9 +302,15 @@ export interface GitEventTemplate {
 
 /**
  * A top-level NIP-22 comment on an issue or pull request. The root and parent
- * scopes coincide because the ticket itself is the parent.
+ * scopes coincide because the ticket itself is the parent. `media` carries
+ * NIP-92 imeta tags for attachment URLs embedded in the content.
  */
-export function buildGitCommentTemplate(ticket: GitTicket, content: string, relayHint = ""): GitEventTemplate {
+export function buildGitCommentTemplate(
+  ticket: GitTicket,
+  content: string,
+  relayHint = "",
+  media: readonly string[][] = [],
+): GitEventTemplate {
   return {
     kind: NIP22_COMMENT_KIND,
     content,
@@ -315,6 +321,7 @@ export function buildGitCommentTemplate(ticket: GitTicket, content: string, rela
       ["e", ticket.id, relayHint, ticket.author],
       ["k", String(ticket.kind)],
       ["p", ticket.author],
+      ...media.map((tag) => [...tag]),
     ],
   };
 }
@@ -325,6 +332,7 @@ export function buildGitIssueTemplate(
   subject: string,
   body: string,
   relayHint = "",
+  media: readonly string[][] = [],
 ): GitEventTemplate {
   const recipients = [...new Set([repository.address.owner, ...repository.maintainers])].filter(isNostrId);
   return {
@@ -335,6 +343,7 @@ export function buildGitIssueTemplate(
       ["subject", subject],
       ["alt", `git repository issue: ${subject}`],
       ...recipients.map((pubkey) => ["p", pubkey]),
+      ...media.map((tag) => [...tag]),
     ],
   };
 }
