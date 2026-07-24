@@ -84,7 +84,7 @@
         <service
             android:name=".MeshForegroundService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|dataSync" />
+            android:foregroundServiceType="connectedDevice" />
     </application>
 
     <!-- Permissions -->
