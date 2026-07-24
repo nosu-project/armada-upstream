@@ -1,13 +1,21 @@
 name: Android release
 
-# Signed Android APK + AAB on version tags (vX.Y.Z), then a Zapstore publish and
-# a Google Play publish — all in ONE job. Ported from the GitLab `build-apk` +
-# `publish-zapstore` jobs (+ ditto's `publish-google-play`) to ngit-ci (act /
-# GitHub Actions syntax). We keep build+publish in a single
+# Signed Android APK + AAB on version tags (vX.Y.Z), published as run
+# artifacts, to Zapstore, and to Google Play — all in ONE job. Ported from the
+# GitLab `build-apk` + `publish-zapstore` jobs (+ ditto's `publish-google-play`)
+# to ngit-ci (act / GitHub Actions syntax). We keep build+publish in a single
 # job on purpose: act's local artifact server round-trips a multi-file wildcard
 # upload back as a 3-byte stub, so handing the APK across jobs via
 # upload/download-artifact fed zsp an empty file. Results and artifacts surface
 # on gitworkshop.dev against the tagged commit.
+#
+# ── Runner image ─────────────────────────────────────────────────────────────
+# Jobs run in the coordinator's armada-ci image (NGIT_CI_ACT_PLATFORMS maps
+# ubuntu-latest to it), which pre-bakes the JDK/node/go toolcaches, the
+# Android SDK, ruby+fastlane, the zsp binary, and warm ~/.gradle + ~/.npm
+# dependency caches — see .ngit/ci-image/Dockerfile. Without it every run
+# re-downloaded ~700 MB of toolchain+deps and blew the coordinator's 30-min
+# default job timeout (NGIT_CI_JOB_TIMEOUT_SECS).
 #
 # ── Version ──────────────────────────────────────────────────────────────────
 # The version is carried by the git tag (vX.Y.Z), never a committed field:
@@ -60,7 +68,10 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - uses: android-actions/setup-android@v3
+      # No setup-android / setup-go / setup-ruby steps: the Android SDK, the
+      # zsp binary, and ruby+fastlane are baked into the coordinator's
+      # armada-ci runner image (see .ngit/ci-image/Dockerfile), along with the
+      # toolcaches that make the setup-node/setup-java actions above no-ops.
 
       - name: Derive version
         id: version
@@ -173,16 +184,26 @@ jobs:
         run: |
           rm -f android/key.properties android/app/my-upload-key.keystore
 
+      # Publish the APK + AAB as run artifacts (they surface on gitworkshop.dev
+      # against the tagged commit). Done BEFORE the store publishes so the
+      # artifacts exist even if Zapstore or Google Play fails. Upload is safe
+      # here — act's broken artifact path is cross-job DOWNLOAD (see the
+      # Zapstore note below), not same-job upload.
+      - name: Upload APK + AAB artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: armada-android-v${{ steps.version.outputs.name }}
+          path: |
+            ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}.apk
+            ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}.aab
+
       # Publish to Zapstore in the SAME job. We deliberately do NOT hand the APK
       # off via upload/download-artifact: under act's local artifact server the
       # multi-file wildcard upload round-trips back as a 3-byte stub (digests
       # match on upload, but the download is empty), which then makes `zsp`
       # choke on a non-APK. Building and publishing in one job keeps the real
-      # 7 MB signed APK on disk the whole time.
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-
+      # 7 MB signed APK on disk the whole time. zsp itself is baked into the
+      # runner image, version-pinned there (see .ngit/ci-image/Dockerfile).
       - name: Publish to Zapstore
         env:
           SIGN_WITH: ${{ secrets.ZAPSTORE_BUNKER_URL }}
@@ -211,11 +232,6 @@ jobs:
             echo "APK at $apk_path is not a valid ZIP/APK archive. Aborting." >&2
             exit 1
           }
-
-          # Pin zsp rather than @latest so a bad upstream release can't break a
-          # tagged build, and so the version is reproducible from the logs.
-          go install github.com/zapstore/zsp@v0.4.12
-          export PATH="$(go env GOPATH)/bin:$PATH"
 
           # Everything from here (bunker parsing, config prep, zsp) is traced
           # into a single file that a later step ALWAYS uploads as an artifact.
@@ -288,10 +304,9 @@ jobs:
       # `if: ${{ secrets.X != '' }}` — act's schema validator (like GitHub)
       # rejects the `secrets` context in `if:` ("Unknown Variable Access
       # secrets") and the whole workflow fails validation before running.
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-
+      # ruby + fastlane are baked into the runner image (incl. multi_json,
+      # which representable in fastlane's Play client requires without
+      # declaring — see .ngit/ci-image/Dockerfile).
       - name: Publish to Google Play
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
@@ -309,15 +324,6 @@ jobs:
 
           aab_path="$ARTIFACT_DIR/Armada-v$VERSION_NAME.aab"
           test -f "$aab_path"
-
-          # representable (loaded by fastlane's Google Play client) does a
-          # top-level `require "multi_json"` but never declares it as a
-          # dependency -- it relied on multi_json being pulled in transitively
-          # via the Google API auth stack. A recent upstream release dropped
-          # that path, so unpinned `gem install fastlane` crashes
-          # `fastlane supply` with Gem::MissingSpecError. Install multi_json
-          # explicitly to restore it.
-          gem install fastlane multi_json --no-document
 
           # Build the fastlane supply metadata layout for the changelog. supply
           # maps changelogs/<versionCode>.txt to the Play Console "What's new in
@@ -344,11 +350,16 @@ jobs:
 
           # Upload the AAB to the production track with the changelog. The other
           # metadata (title, description, images, screenshots) is managed in the
-          # Play Console and left untouched.
+          # Play Console and left untouched. release_status=draft: while the app
+          # itself is still a draft in Play Console (never published), the API
+          # refuses to create "completed" releases — the upload lands as a draft
+          # release for a human to review and roll out. Switch to "completed"
+          # (or drop the flag) once the app is live to auto-publish.
           fastlane supply \
             --aab "$aab_path" \
             --package_name buzz.armada.app \
             --track production \
+            --release_status draft \
             --json_key "$json_key" \
             --metadata_path android/fastlane/metadata/android \
             --skip_upload_metadata \
