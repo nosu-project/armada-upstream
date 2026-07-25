@@ -73,6 +73,7 @@ import { deriveDmRoomId } from "@/lib/dmVoice";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
+import { readDmListSnapshot, writeDmListSnapshot } from "@/lib/dmListSnapshot";
 import { DM_VOICE_RELAYS, PLATFORM_RELAYS } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
@@ -1269,6 +1270,31 @@ function NewDMPane({
  * The DM conversation-list pane: header, conversation rows, and the
  * new-message dialog. Reused by both the desktop aside and the mobile drawer.
  */
+/**
+ * Placeholder rows shown only when there is no snapshot to restore — a genuine
+ * cold start for this account on this device. Mirrors ConversationRow's
+ * geometry (size-9 avatar, name line, preview line) so the real list doesn't
+ * shift when it replaces these. Widths are fixed rather than random so the
+ * placeholders don't reflow on re-render.
+ */
+const SKELETON_WIDTHS = ["70%", "45%", "58%", "38%", "64%", "50%", "72%", "42%"] as const;
+
+function ConversationRowSkeletons() {
+  return (
+    <div aria-hidden>
+      {SKELETON_WIDTHS.map((width, i) => (
+        <div key={i} className="flex items-center gap-2.5 w-full px-2 py-2">
+          <Skeleton className="size-9 shrink-0 rounded-full" />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <Skeleton className="h-3.5 w-24 max-w-full" />
+            <Skeleton className="h-3 max-w-full" style={{ width }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ConversationList({
   rows,
   previews,
@@ -1480,9 +1506,7 @@ function ConversationList({
             Your signer doesn't support encryption, so direct messages are unavailable.
           </p>
         ) : isLoading ? (
-          <div className="flex justify-center py-8">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
+          <ConversationRowSkeletons />
         ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground p-3">
             No conversations yet. Start one with the + button.
@@ -1574,14 +1598,13 @@ export function DMsPage() {
     [followData?.pubkeys],
   );
 
-  // Hold the list until EVERY input to `rows` has settled. All three are local
-  // reads that resolve in milliseconds (the IndexedDB event store, the NIP-17
-  // rumor store, and the follow list — cache-seeded from the store), but each
-  // one changes the list's contents or its order: NIP-17 rumors supply the
-  // newest message for many peers, and an unresolved follow set hides every row
-  // the viewer didn't send the last message in. Painting before they land shows
-  // a deterministically wrong list that re-sorts a beat later, which is exactly
-  // what this gate exists to prevent. (`kind4Loading` also covers the mute set.)
+  // True until EVERY input to `rows` has settled. Each one changes the list's
+  // contents or its order — NIP-17 rumors supply the newest message for many
+  // peers, and an unresolved follow set hides every row the viewer didn't send
+  // the last message in — so a partially-loaded `rows` is a deterministically
+  // wrong list that re-sorts a beat later. While this holds we show the
+  // restored snapshot (or skeletons) instead of that partial view.
+  // (`kind4Loading` also covers the mute set, which gates upstream.)
   const isLoading = kind4Loading || dm17Loading || followsLoading;
 
   const activePeer = rawPeer ? resolvePubkey(rawPeer) : undefined;
@@ -1661,6 +1684,66 @@ export function DMsPage() {
     return list;
   }, [conversations, dm17Conversations, activePeer, followedPubkeys]);
 
+  // The list as it was last rendered, restored synchronously. Because what was
+  // stored is the merged/filtered/sorted OUTCOME — not any one source's partial
+  // view — this paints in the final order, so when the live rows replace it
+  // nothing moves except conversations that genuinely got new messages.
+  const restoredRows = useMemo(() => {
+    const snapshot = readDmListSnapshot(user?.pubkey);
+    return (snapshot ?? []).map((r) => ({
+      peer: r.peer,
+      latest: {
+        id: `dmlist-snapshot:${r.peer}`,
+        pubkey: r.author,
+        created_at: r.createdAt,
+        kind: 4,
+        content: "",
+        tags: [],
+        sig: "",
+      } as NostrEvent,
+      plaintext: r.preview,
+      mine: r.mine,
+    }));
+  }, [user?.pubkey]);
+
+  // Skeletons are for a genuine cold start only: with a snapshot we show the
+  // restored list instead, which is real content in the right order.
+  const showSkeletons = isLoading && restoredRows.length === 0;
+  const displayRows = useMemo(() => {
+    if (!isLoading || restoredRows.length === 0) return rows;
+    // Keep the open thread's row present even if it predates the snapshot.
+    if (!activePeer || restoredRows.some((r) => r.peer === activePeer)) return restoredRows;
+    return [
+      { peer: activePeer, latest: undefined as unknown as NostrEvent, mine: false },
+      ...restoredRows,
+    ];
+  }, [isLoading, restoredRows, rows, activePeer]);
+
+  // Persist the settled list for the next launch, debounced so a burst of live
+  // messages coalesces. Gated on `!isLoading`, so a partial view is never
+  // stored, and taken AFTER the mute/follow filters, so a muted or unfollowed
+  // peer can't be painted back on the next cold start. An empty settled list
+  // clears the snapshot rather than leaving stale rows to be restored.
+  useEffect(() => {
+    const self = user?.pubkey;
+    if (isLoading || !self) return;
+    const timer = setTimeout(() => {
+      writeDmListSnapshot(
+        self,
+        rows
+          .filter((c) => c.latest)
+          .map((c) => ({
+            peer: c.peer,
+            createdAt: c.latest.created_at,
+            author: c.latest.pubkey,
+            preview: c.plaintext ?? previews[c.peer],
+            mine: c.mine,
+          })),
+      );
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [isLoading, rows, previews, user?.pubkey]);
+
   const openPeer = useCallback(
     (pubkey: string) => {
       setComposing(false);
@@ -1725,12 +1808,12 @@ export function DMsPage() {
               revealed underneath as the thread slides away. */}
           <ServerRail />
           <ConversationList
-            rows={rows}
+            rows={displayRows}
             previews={previews}
             events={events}
             activePeer={activePeer}
             dmSupported={dmSupported || dm17Supported}
-            isLoading={isLoading}
+            isLoading={showSkeletons}
             hasUnread={hasUnreadDms}
             onMarkAllRead={markAllDmsRead}
             onCompose={startComposing}
