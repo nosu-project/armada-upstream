@@ -134,6 +134,7 @@ export function useDmTransport(peer: string): {
               sig,
               msg: toChatMsg({
                 id: m.id,
+                renderKey: m.renderKey,
                 pubkey: m.pubkey,
                 created_at: m.created_at,
                 kind: KIND_DM,

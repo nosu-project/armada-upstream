@@ -376,15 +376,19 @@ export function MessageTimeline({
     for (let i = startIndex; i < messages.length; i++) {
       const msg = messages[i];
       const prev = messages[i - 1];
+      // `renderKey` where the transport has one: an optimistic row's `id`
+      // changes when it adopts the signed event id, and keying on that would
+      // remount the row (and its date separator) mid-send.
+      const rowKey = msg.renderKey ?? msg.id;
       const newDay = !!prev && !isSameDay(prev.created_at, msg.created_at);
-      if (newDay) out.push({ type: "date", ts: msg.created_at, key: `date-${msg.id}` });
+      if (newDay) out.push({ type: "date", ts: msg.created_at, key: `date-${rowKey}` });
       if (newDividerId === msg.id) out.push({ type: "unread", key: "unread-divider" });
       const continuation =
         !!prev &&
         !newDay &&
         prev.pubkey === msg.pubkey &&
         msg.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
-      out.push({ type: "message", msg, continuation, key: msg.id });
+      out.push({ type: "message", msg, continuation, key: rowKey });
     }
     return out;
   }, [messages, startIndex, newDividerId]);

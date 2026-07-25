@@ -129,6 +129,13 @@ export interface DecryptedDM {
    * it scrolls into view (see `decryptVisible`). `content` is empty until then.
    */
   encrypted?: boolean;
+  /**
+   * Stable render key for a message whose `id` changes during its lifetime: an
+   * optimistic send starts with a placeholder id and adopts the signed event id
+   * once signing finishes. Set to the placeholder id at insert and carried
+   * across the swap, so the row is never remounted mid-send.
+   */
+  renderKey?: string;
 }
 
 /**
@@ -1043,6 +1050,9 @@ export function useDirectMessages(peer: string | undefined) {
           ...old,
           {
             id: tempId,
+            // Pinned for the row's whole life, including across the id swap
+            // below, so signing doesn't remount the row.
+            renderKey: tempId,
             pubkey: self,
             created_at: createdAt,
             content: trimmed,

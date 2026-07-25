@@ -27,7 +27,19 @@ export type { ReactInput, ReactionTally, SendStatus };
  * `OpenedMessage` into this shape (`openedToEvent`). Rendering never re-verifies
  * the signature, so a synthetic `sig: ""` is acceptable for adapted messages.
  */
-export type ChatMsg = NostrEvent;
+export type ChatMsg = NostrEvent & {
+  /**
+   * Stable React key, when the message's `id` is not stable for its lifetime.
+   *
+   * An optimistically-rendered message is shown before it can be signed, so it
+   * starts with a placeholder id and adopts the real event id once signing
+   * completes. Keying rows on `id` alone made that swap unmount and remount the
+   * row — the send read as "message appears, disappears, reappears", and the
+   * timeline's scroll-anchor bookkeeping (which tracks rows by key) lost its
+   * anchor. Transports that swap ids set this once and keep it across the swap.
+   */
+  renderKey?: string;
+};
 
 /**
  * Participants ordered by how recently they last spoke, most recent first,
@@ -60,6 +72,7 @@ export function toChatMsg(m: {
   content: string;
   tags?: string[][];
   sig?: string;
+  renderKey?: string;
 }): ChatMsg {
   return {
     id: m.id,
@@ -69,6 +82,7 @@ export function toChatMsg(m: {
     content: m.content,
     tags: m.tags ?? [],
     sig: m.sig ?? "",
+    ...(m.renderKey ? { renderKey: m.renderKey } : {}),
   };
 }
 
