@@ -24,6 +24,7 @@ import { ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { firstImageRef } from "@/components/chat/messageHelpers";
 import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
 import { GifPicker } from "@/components/chat/GifPicker";
+import { Lightbox } from "@/components/chat/Lightbox";
 import { MentionAutocomplete } from "@/components/chat/MentionAutocomplete";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { StickerPicker } from "@/components/chat/StickerPicker";
@@ -686,10 +687,52 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         const encryption = enc
           ? { algorithm: enc.algorithm, key: enc.key, nonce: enc.nonce }
           : undefined;
-        return { url, mime, isImage: mime.startsWith("image/"), encryption };
+        // dim/blurhash come from the upload-time NIP-94 tags; the lightbox uses
+        // them to size and blur-up its placeholder before the image resolves.
+        const dim = tags.find((t) => t[0] === "dim")?.[1];
+        const blurhash = tags.find((t) => t[0] === "blurhash")?.[1];
+        return { url, mime, isImage: mime.startsWith("image/"), encryption, dim, blurhash };
       }),
     [uploadedFileGroups],
   );
+
+  /** Image-only attachments, in chip order — the composer lightbox gallery. */
+  const imageAttachments = useMemo(
+    () =>
+      attachments
+        .filter((att) => att.isImage)
+        .map(({ url, mime, encryption, dim, blurhash }) => ({
+          url,
+          mime,
+          encryption,
+          dim,
+          blurhash,
+        })),
+    [attachments],
+  );
+
+  // The open lightbox image is tracked by URL rather than index so that removing
+  // an attachment while it's open resolves to -1 and closes the lightbox instead
+  // of silently showing a different image.
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const lightboxIndex = lightboxUrl
+    ? imageAttachments.findIndex((img) => img.url === lightboxUrl)
+    : -1;
+  const closeLightbox = useCallback(() => setLightboxUrl(null), []);
+  const stepLightbox = useCallback(
+    (delta: number) => {
+      setLightboxUrl((prev) => {
+        if (prev === null) return prev;
+        const at = imageAttachments.findIndex((img) => img.url === prev);
+        if (at === -1) return null;
+        const len = imageAttachments.length;
+        return imageAttachments[(at + delta + len) % len].url;
+      });
+    },
+    [imageAttachments],
+  );
+  const lightboxNext = useCallback(() => stepLightbox(1), [stepLightbox]);
+  const lightboxPrev = useCallback(() => stepLightbox(-1), [stepLightbox]);
 
   const removeAttachment = useCallback((url: string) => {
     setUploadedFileGroups((prev) => {
@@ -724,6 +767,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setRemovedEmbeds(new Set());
     setUploadedFileGroups(new Map());
     attachmentEncryption.current.clear();
+    setLightboxUrl(null);
     setMode("post");
     setPollOptions([{ id: pollOptionId(), label: "" }, { id: pollOptionId(), label: "" }]);
     setPollType("singlechoice");
@@ -1523,7 +1567,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               className="group relative size-20 rounded-lg overflow-hidden border border-border bg-secondary/40 shrink-0"
             >
               {att.isImage ? (
-                <AttachmentPreviewImage url={att.url} mime={att.mime} encryption={att.encryption} />
+                <button
+                  type="button"
+                  aria-label="Preview attachment"
+                  onClick={() => setLightboxUrl(att.url)}
+                  className="size-full cursor-zoom-in"
+                >
+                  <AttachmentPreviewImage
+                    url={att.url}
+                    mime={att.mime}
+                    encryption={att.encryption}
+                  />
+                </button>
               ) : (
                 <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
                   <Paperclip className="size-5" />
@@ -2074,6 +2129,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           )}
           </div>
         </div>
+      )}
+
+      {/* Tap an attachment chip to preview it full-screen before sending. */}
+      {lightboxIndex !== -1 && (
+        <Lightbox
+          images={imageAttachments}
+          currentIndex={lightboxIndex}
+          onClose={closeLightbox}
+          onNext={lightboxNext}
+          onPrev={lightboxPrev}
+        />
       )}
     </div>
   );
