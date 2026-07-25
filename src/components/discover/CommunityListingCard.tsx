@@ -33,11 +33,11 @@ export function CommunityListingCard({ listing, className }: CommunityListingCar
   return (
     <div
       className={cn(
-        "block w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden",
+        "flex flex-col w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden",
         className,
       )}
     >
-      <div className="px-3.5 py-3 space-y-2.5">
+      <div className="px-3.5 py-3 space-y-2.5 flex flex-col flex-1">
         {/* Header: icon + name */}
         <div className="flex items-center gap-2.5 min-w-0">
           <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-success">
@@ -89,7 +89,7 @@ export function CommunityListingCard({ listing, className }: CommunityListingCar
           </button>
         </ProfilePreviewCard>
 
-        <Button className="w-full clip-corner-lg" onClick={onJoin}>
+        <Button className="mt-auto w-full clip-corner-lg" onClick={onJoin}>
           Join
           <ArrowRight className="size-4" />
         </Button>
