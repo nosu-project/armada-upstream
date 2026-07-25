@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-import { labelSuggestions, sortProjectWorkItems, type ProjectWorkItem } from "./projectData";
+import { labelSuggestions, sortProjectWorkItems, workItemActivityAt, type ProjectWorkItem } from "./projectData";
 
 const event = { id: "", pubkey: "", created_at: 0, kind: 1621, content: "", tags: [], sig: "" } as NostrEvent;
 
@@ -66,5 +66,28 @@ describe("labelSuggestions", () => {
 
   it("offers presets alone when nothing has been labelled yet", () => {
     expect(labelSuggestions([], "repo1", ["bug", "enhancement"])).toEqual(["bug", "enhancement"]);
+  });
+});
+
+describe("workItemActivityAt", () => {
+  it("falls back to the opening when nothing followed", () => {
+    expect(workItemActivityAt(item("a", "A", 100))).toBe(100);
+  });
+
+  it("never reports activity older than the opening", () => {
+    expect(workItemActivityAt({ ...item("a", "A", 100), updatedAt: 50 })).toBe(100);
+  });
+});
+
+describe("sortProjectWorkItems by activity", () => {
+  it("lifts an old item that was just commented on above a newer quiet one", () => {
+    const commented = { ...item("old", "Old", 100), updatedAt: 900 };
+    const quiet = item("new", "New", 500);
+    expect(sortProjectWorkItems([quiet, commented], "updated").map((i) => i.id)).toEqual(["old", "new"]);
+  });
+
+  it("leaves sources that track no discussion ordered by their opening", () => {
+    const items = [item("a", "A", 100), item("b", "B", 300)];
+    expect(sortProjectWorkItems(items, "updated").map((i) => i.id)).toEqual(["b", "a"]);
   });
 });

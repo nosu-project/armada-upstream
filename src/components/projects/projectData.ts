@@ -39,6 +39,12 @@ export interface ProjectWorkItem {
   labels?: string[];
   /** Known discussion size; hidden when the source doesn't count. */
   commentCount?: number;
+  /**
+   * Newest comment or status change, absent when the source tracks no
+   * discussion. Comment edits keep their original timestamp so a thread does
+   * not reorder under readers, which means an edit alone never bumps this.
+   */
+  updatedAt?: number;
 }
 
 export interface ProjectRepoSummary {
@@ -76,12 +82,17 @@ export function labelSuggestions(
   return [...own, ...presets.filter((preset) => !uses.has(preset))];
 }
 
+/** When a work item last saw activity; its opening when nothing followed. */
+export function workItemActivityAt(item: ProjectWorkItem): number {
+  return Math.max(item.updatedAt ?? 0, item.createdAt);
+}
+
 /** Order work items for display; ties break on id so the order is stable. */
 export function sortProjectWorkItems(items: readonly ProjectWorkItem[], sort: ProjectSort): ProjectWorkItem[] {
   return [...items].sort((a, b) => (
     sort === "name"
       ? a.title.localeCompare(b.title) || a.id.localeCompare(b.id)
-      : b.createdAt - a.createdAt || a.id.localeCompare(b.id)
+      : workItemActivityAt(b) - workItemActivityAt(a) || a.id.localeCompare(b.id)
   ));
 }
 

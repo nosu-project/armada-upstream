@@ -19,6 +19,7 @@ import {
   projectPeople,
   repoSummaries,
   sortProjectWorkItems,
+  workItemActivityAt,
   type ProjectRepo,
   type ProjectRepoSummary,
   type ProjectSort,
@@ -243,6 +244,10 @@ function StatusChip({ status }: { status: ProjectWorkItem["status"] }) {
 function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWorkItem; repoName?: string; onOpen?: () => void; onLabelClick?: (label: string) => void }) {
   const Comp = onOpen ? "button" : "article";
   const labels = item.labels ?? [];
+  // Rows are ordered by last activity, so a stale opening date beside a
+  // freshly bumped item would read as a sorting bug.
+  const activityAt = workItemActivityAt(item);
+  const bumped = activityAt > item.createdAt;
   return (
     <Comp
       {...(onOpen ? { type: "button" as const, onClick: onOpen } : {})}
@@ -258,7 +263,16 @@ function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWo
           <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-4 text-muted-foreground">
             {repoName && <span className="truncate">{repoName}</span>}
             {repoName && <span aria-hidden>·</span>}
-            <span>{relativeTime(item.createdAt)}</span>
+            {bumped ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>updated {relativeTime(activityAt)}</span>
+                </TooltipTrigger>
+                <TooltipContent>Opened {relativeTime(item.createdAt)}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <span>{relativeTime(item.createdAt)}</span>
+            )}
             <span aria-hidden>·</span>
             <span>by <AuthorName pubkey={item.author} /></span>
             {labels.slice(0, 3).map((label) => (
@@ -546,7 +560,9 @@ function Overview({
   const prCount = items.filter((i) => i.kind !== "issue").length;
   const issueCount = items.filter((i) => i.kind === "issue").length;
   const repoNameByCoord = useMemo(() => new Map(repos.map((r) => [r.coord, r.name])), [repos]);
-  const feed = useMemo(() => items.slice(0, 20), [items]);
+  // "Recent activity" means exactly that: a long-quiet issue that just got a
+  // comment belongs above a newer one nobody has touched.
+  const feed = useMemo(() => sortProjectWorkItems(items, "updated").slice(0, 20), [items]);
 
   return (
     <div className="space-y-6">

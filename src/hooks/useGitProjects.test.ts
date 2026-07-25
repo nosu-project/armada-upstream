@@ -226,3 +226,48 @@ describe("labels and comment counts", () => {
     expect(items[0].commentCount).toBe(1);
   });
 });
+
+describe("last activity", () => {
+  const sources = gitProjectSources(
+    new Map([["chan1", [attachment()]]]),
+    new Map([["chan1", "engineering"]]),
+  );
+  const comment = (id: string, createdAt: number) => event({
+    id: id.repeat(64).slice(0, 64),
+    kind: NIP22_COMMENT_KIND,
+    pubkey: STRANGER,
+    created_at: createdAt,
+    tags: [["E", "2".repeat(64), "", AUTHOR], ["K", String(GIT_ISSUE_KIND)]],
+  });
+
+  it("is the opening when nothing followed", () => {
+    const { items } = assembleGitProjects(sources, [announcement(), issue("2", 10)]);
+    expect(items[0].updatedAt).toBe(10);
+  });
+
+  it("tracks the newest comment", () => {
+    const { items } = assembleGitProjects(sources, [announcement(), issue("2", 10), comment("7", 30), comment("8", 20)]);
+    expect(items[0].updatedAt).toBe(30);
+  });
+
+  it("tracks a trusted status change", () => {
+    const { items } = assembleGitProjects(sources, [
+      announcement(),
+      issue("2", 10),
+      status("4", "2", GIT_STATUS_CLOSED_KIND, MAINTAINER, 45),
+    ]);
+    expect(items[0].updatedAt).toBe(45);
+  });
+
+  it("falls back once the newest comment is retracted", () => {
+    const retraction = event({
+      id: "9".repeat(64),
+      kind: 5,
+      pubkey: STRANGER,
+      created_at: 60,
+      tags: [["e", "7".repeat(64)]],
+    });
+    const { items } = assembleGitProjects(sources, [announcement(), issue("2", 10), comment("7", 30), comment("8", 20), retraction]);
+    expect(items[0].updatedAt).toBe(20);
+  });
+});

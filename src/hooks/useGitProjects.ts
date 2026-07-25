@@ -155,11 +155,17 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
     [...announcements.values()].filter((a): a is NonNullable<typeof a> => Boolean(a)),
   );
 
-  // Discussion sizes from the built activities, so retracted comments don't count.
+  // Discussion sizes and last-activity times from the built activities, so a
+  // retracted comment stops counting and stops holding a ticket at the top.
   const commentCounts = new Map<string, number>();
+  const lastActivity = new Map<string, number>();
   for (const activity of activities) {
-    if (activity.type !== "comment") continue;
-    commentCounts.set(activity.ticket.id, (commentCounts.get(activity.ticket.id) ?? 0) + 1);
+    if (activity.type === "comment") {
+      commentCounts.set(activity.ticket.id, (commentCounts.get(activity.ticket.id) ?? 0) + 1);
+    }
+    if (activity.createdAt > (lastActivity.get(activity.ticket.id) ?? 0)) {
+      lastActivity.set(activity.ticket.id, activity.createdAt);
+    }
   }
 
   const items: ProjectWorkItem[] = [...tickets.values()]
@@ -183,6 +189,7 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
         event: ticket.event,
         labels: ticket.labels,
         commentCount: commentCounts.get(ticket.id) ?? 0,
+        updatedAt: Math.max(ticket.createdAt, lastActivity.get(ticket.id) ?? 0),
       };
     })
     .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
