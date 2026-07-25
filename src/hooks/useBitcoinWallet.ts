@@ -5,11 +5,22 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useEsploraApis } from '@/hooks/useEsploraApis';
 import { nostrPubkeyToBitcoinAddress, fetchAddressData, fetchBtcPrice, fetchTransactions } from '@/lib/bitcoin';
 
+interface UseBitcoinWalletOptions {
+  /**
+   * Whether to actually hit the network. Callers that stay mounted while their
+   * UI is hidden (e.g. a dialog rendered unconditionally with `open={false}`)
+   * must pass their visibility here — otherwise the polling below runs for the
+   * whole session against a third-party Esplora backend the user never asked
+   * to contact.
+   */
+  enabled?: boolean;
+}
+
 /**
  * Derives a Bitcoin Taproot address from the current user's Nostr pubkey and
  * fetches the on-chain balance + tx history from Esplora.
  */
-export function useBitcoinWallet() {
+export function useBitcoinWallet({ enabled = true }: UseBitcoinWalletOptions = {}) {
   const { user } = useCurrentUser();
   const esploraApis = useEsploraApis();
 
@@ -17,6 +28,8 @@ export function useBitcoinWallet() {
     if (!user) return '';
     return nostrPubkeyToBitcoinAddress(user.pubkey);
   }, [user]);
+
+  const active = enabled && !!bitcoinAddress;
 
   const {
     data: addressData,
@@ -26,8 +39,9 @@ export function useBitcoinWallet() {
   } = useQuery({
     queryKey: ['bitcoin-balance', esploraApis, bitcoinAddress],
     queryFn: ({ signal }) => fetchAddressData(bitcoinAddress, esploraApis, signal),
-    enabled: !!bitcoinAddress,
-    refetchInterval: 30_000,
+    enabled: active,
+    refetchInterval: active ? 30_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const { data: btcPrice } = useQuery({
@@ -37,7 +51,9 @@ export function useBitcoinWallet() {
     // no reason to refetch faster than that, and treating the value as fresh
     // for the same window stops us from firing off a new request every time
     // the wallet page mounts.
-    refetchInterval: 60_000,
+    enabled,
+    refetchInterval: enabled ? 60_000 : false,
+    refetchIntervalInBackground: false,
     staleTime: 60_000,
   });
 
@@ -47,8 +63,9 @@ export function useBitcoinWallet() {
   } = useQuery({
     queryKey: ['bitcoin-txs', esploraApis, bitcoinAddress],
     queryFn: ({ signal }) => fetchTransactions(bitcoinAddress, esploraApis, signal),
-    enabled: !!bitcoinAddress,
-    refetchInterval: 30_000,
+    enabled: active,
+    refetchInterval: active ? 30_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   return {
