@@ -12,21 +12,38 @@ import type { NostrEvent } from "@nostrify/nostrify";
 export const KIND_EMOJI_SET = 30030;
 
 /** The outcome of reading the user's kind-10030 list. */
-interface EmojiListRead {
+export interface EmojiListRead {
   /** Newest list from the relays or the local event store, if one was found. */
   event: NostrEvent | null;
   /**
-   * Whether the read actually completed. `NPool.req` yields `EOSE` only after
-   * every routed relay has sent one (and `CLOSED` only after every relay
-   * closed), so `conclusive` means the full relay set reported
-   * end-of-stored-events. `NPool.query` can't provide this: it wraps its read
-   * loop in `try {} catch {}`, so an abort, a dead socket and a genuinely
-   * empty result are all just `[]`. Absence is never provable on Nostr, but
-   * this is the difference between "the relays told us there is nothing" and
-   * "we learned nothing".
+   * Whether the read reached an EOSE at all, rather than being aborted or
+   * timing out. This is a WEAK signal, and weaker than it looks: the pool runs
+   * with `eoseTimeout` (300ms globally, widened here), so the merged EOSE fires
+   * once the FIRST relay finishes plus the grace window — not once every routed
+   * relay has answered. So `conclusive` means "a round completed", NOT "the
+   * relay set proved there is no list". Never let it alone authorise blanking
+   * or recreating a list; pair it with the local store and whatever is already
+   * on screen.
    */
   conclusive: boolean;
 }
+
+/**
+ * How long to keep listening after the first relay's EOSE.
+ *
+ * The pool's global `eoseTimeout` is 300ms (NostrProvider) — tuned for
+ * timelines, where the fastest relay is representative of the rest. A user's
+ * emoji list is a SINGLE replaceable event that may live on only one, slower
+ * relay (and on a cold page load every socket is still connecting, possibly
+ * mid-NIP-42), so 300ms routinely cuts it off and the palette comes up empty.
+ * The batcher's ReplaceableCollector widens the same window to 1s for kind 0
+ * for exactly this reason; a list that only loads sometimes is worth more
+ * patience than that.
+ */
+const EMOJI_LIST_EOSE_GRACE_MS = 2500;
+
+/** Hard ceiling, so a relay that never EOSEs can't hang the read forever. */
+const EMOJI_LIST_READ_TIMEOUT_MS = 8000;
 
 /**
  * Read the current user's kind-10030 list, newest of (relays, local store).
@@ -36,20 +53,26 @@ interface EmojiListRead {
  * ReplaceableCollector merges replaceable kinds into one REQ and resolves at
  * the first EOSE, which races out a slow relay holding the 10030. The local
  * store is applied as a floor so a relay miss falls back to the last list we
- * actually observed.
+ * actually observed, and events that arrived before an abort/timeout still
+ * count (only `conclusive` is lost).
  */
-async function readEmojiList(
+export async function readEmojiList(
   nostr: ReturnType<typeof useNostr>["nostr"],
   store: Awaited<ReturnType<typeof useEventStore>>,
   pubkey: string,
   signal?: AbortSignal,
 ): Promise<EmojiListRead> {
   const filter = { kinds: [KIND_USER_EMOJIS], authors: [pubkey] };
+  const deadline = AbortSignal.timeout(EMOJI_LIST_READ_TIMEOUT_MS);
+  const readSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
 
   const relayEvents: NostrEvent[] = [];
   let conclusive = false;
   try {
-    for await (const msg of nostr.req([filter], { signal })) {
+    for await (const msg of nostr.req([filter], {
+      signal: readSignal,
+      eoseTimeout: EMOJI_LIST_EOSE_GRACE_MS,
+    })) {
       if (msg[0] === "EVENT") relayEvents.push(msg[2]);
       else if (msg[0] === "EOSE") {
         conclusive = true;
@@ -146,16 +169,29 @@ export function useAddEmojiPack(): UseMutationResult<
       // is only allowed when a relay completed the read and reported nothing,
       // the local store has nothing, and nothing we've already rendered says
       // otherwise. Short of all three we publish nothing and say so.
-      if (!prev) {
+      let base = prev;
+      if (!base) {
         const knownRefs = queryClient.getQueryData<string[]>(["emoji-pack-refs", user.pubkey]);
         const knownEmojis = queryClient.getQueryData<unknown[]>(["custom-emojis", user.pubkey]);
         const seenAList = (knownRefs?.length ?? 0) > 0 || (knownEmojis?.length ?? 0) > 0;
         if (!conclusive || seenAList) {
           throw new Error("Couldn't read your emoji list. Check your connection and try again.");
         }
+        // `conclusive` is only "a round finished": the pool emits its merged
+        // EOSE once the FIRST relay is done plus a grace window, so one relay
+        // without a copy can end the round while the relay holding the list is
+        // still connecting. That is far too thin to build a from-scratch list
+        // on, which would replace every emoji the user has. Confirm with a
+        // second, independent read before treating the absence as real.
+        const confirm = await readEmojiList(nostr, store, user.pubkey, AbortSignal.timeout(15_000));
+        if (confirm.event) {
+          base = confirm.event;
+        } else if (!confirm.conclusive) {
+          throw new Error("Couldn't read your emoji list. Check your connection and try again.");
+        }
       }
 
-      const tags: string[][] = prev ? prev.tags.map((t) => [...t]) : [];
+      const tags: string[][] = base ? base.tags.map((t) => [...t]) : [];
 
       // Already added? Nothing to do.
       if (tags.some((t) => t[0] === "a" && t[1] === coord)) return;
@@ -164,9 +200,9 @@ export function useAddEmojiPack(): UseMutationResult<
 
       await publish.mutateAsync({
         kind: KIND_USER_EMOJIS,
-        content: prev?.content ?? "",
+        content: base?.content ?? "",
         tags,
-        prev: prev ?? undefined,
+        prev: base ?? undefined,
       });
 
       void queryClient.invalidateQueries({ queryKey: ["emoji-pack-refs"] });
@@ -182,11 +218,29 @@ export function emojiPackEntries(event: NostrEvent): { shortcode: string; url: s
     .map((t) => ({ shortcode: t[1], url: t[2] }));
 }
 
-/** The pack's human name (`title` tag), falling back to its `d` identifier. */
+/**
+ * The pack's human name. Reads `title` and `name` (clients disagree on which
+ * they emit — we publish both), falling back to the `d` identifier.
+ */
 export function emojiPackName(event: NostrEvent): string {
   return (
     event.tags.find((t) => t[0] === "title")?.[1] ||
+    event.tags.find((t) => t[0] === "name")?.[1] ||
     event.tags.find((t) => t[0] === "d")?.[1] ||
     "Emoji pack"
+  );
+}
+
+/** The pack's description (`about` tag), if any. */
+export function emojiPackAbout(event: NostrEvent): string | undefined {
+  return event.tags.find((t) => t[0] === "about")?.[1] || undefined;
+}
+
+/** The pack's cover image (`image` or `picture` tag), if any. */
+export function emojiPackPicture(event: NostrEvent): string | undefined {
+  return (
+    event.tags.find((t) => t[0] === "image")?.[1] ||
+    event.tags.find((t) => t[0] === "picture")?.[1] ||
+    undefined
   );
 }

@@ -1,4 +1,4 @@
-import { Compass, Loader2, Palette, Plus, Search, Smile, Users } from "lucide-react";
+import { Compass, Palette, Plus, Search, Smile, Users, X } from "lucide-react";
 import { lazy, Suspense, useState, type ReactNode } from "react";
 
 import { CommunityListingCard } from "@/components/discover/CommunityListingCard";
@@ -7,6 +7,7 @@ import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   useDiscoverCommunities,
@@ -30,6 +31,8 @@ const TABS: { id: DiscoverTab; label: string; icon: typeof Users; placeholder: s
 /**
  * Discover: browse and search public directory events on Nostr — opt-in Concord
  * community listings (join links), NIP-30 emoji packs, and shareable themes.
+ * Framed in the app's chrome idiom: a floating command bar, cut-corner tab
+ * pills, and a chrome search vessel over a card grid.
  */
 export function DiscoverPage() {
   const { user } = useCurrentUser();
@@ -48,62 +51,99 @@ export function DiscoverPage() {
   return (
     <>
       <ServerRail />
-      <main className="flex flex-col flex-1 min-w-0 h-full bg-background">
-        {/* Header — top padding matches the channel sidebar so the title lines
-            up with the rail's first icon. */}
-        <div className="flex items-center gap-2 px-4 pb-2.5 pt-[calc(1.5rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]">
-          <Compass className="size-5 shrink-0 text-primary" />
-          <h1 className="text-base font-semibold tracking-wide">Discover</h1>
-        </div>
+      <main className="flex flex-col flex-1 min-w-0 h-full safe-area-top">
+        {/* Header — the floating command bar shared with Inbox / Mesh / Group.
+            Dropped on a phone, where the tab pills carry the page identity and
+            the vertical space is better spent on results. */}
+        <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 hidden sm:flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+          <Compass className="size-5 shrink-0 text-muted-foreground" />
+          <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">Discover</h1>
+        </header>
 
-        {/* Tabs (underline) */}
-        <div className="flex items-center gap-5 px-4 border-b border-chrome-divider">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const isActive = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setTab(t.id)}
-                aria-pressed={isActive}
-                className={cn(
-                  "relative flex items-center gap-1.5 py-2.5 text-sm font-medium transition-colors touch:py-3",
-                  isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Icon className="size-4" />
-                {t.label}
-                {isActive && (
-                  <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-primary" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Search + tab action */}
-        <div className="flex items-center gap-2 px-4 py-2.5">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={active.placeholder}
-              className="h-9 pl-9"
-              aria-label={active.placeholder}
-            />
+        {/* Tab pills + search — one row from sm up, stacked on a phone. */}
+        <div className="mx-2 mt-3 sm:mt-2 flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
+          {/* Three icon+label pills don't fit a 320px phone, and truncating
+              "Communities" is worse than not showing it. So below sm only the
+              active pill carries its label: it grows to fill the rail while the
+              others collapse to their icon. The label animates via a 0fr→1fr
+              grid column, which reaches its exact content width without any
+              measuring or hardcoded max-width (and merely snaps, rather than
+              breaking, where that interpolation is unsupported). */}
+          <div className="flex w-full items-center gap-1 p-1 clip-corner-lg bg-chrome sm:w-auto sm:shrink-0">
+            {TABS.map((t) => {
+              const Icon = t.icon;
+              const isActive = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTab(t.id)}
+                  aria-pressed={isActive}
+                  aria-label={t.label}
+                  className={cn(
+                    "flex items-center justify-center overflow-hidden px-2 py-1.5 text-sm clip-corner-lg transition-all duration-200 ease-out motion-reduce:transition-none touch:py-2.5 sm:flex-none sm:px-3",
+                    isActive
+                      ? "flex-1 bg-primary font-medium text-primary-foreground sm:flex-none"
+                      : "flex-none text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                  )}
+                >
+                  <Icon className="size-4 shrink-0" />
+                  <span
+                    className={cn(
+                      "grid transition-[grid-template-columns] duration-200 ease-out motion-reduce:transition-none",
+                      isActive ? "grid-cols-[1fr]" : "grid-cols-[0fr] sm:grid-cols-[1fr]",
+                    )}
+                  >
+                    <span className="overflow-hidden whitespace-nowrap pl-1.5">{t.label}</span>
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          {tab === "emojis" && user && (
-            <Button size="sm" className="h-9 shrink-0 clip-corner-lg" onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" />
-              Create
-            </Button>
-          )}
+
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="flex h-9 touch:h-11 min-w-0 flex-1 items-center gap-1.5 px-2 sidebar:px-3 clip-corner-lg bg-chrome">
+              <Search className="size-4 shrink-0 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setQuery("");
+                }}
+                placeholder={active.placeholder}
+                aria-label={active.placeholder}
+                className="h-full flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
+              {query && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Clear search"
+                  className="size-7 touch:size-9 shrink-0 text-muted-foreground"
+                  onClick={() => setQuery("")}
+                >
+                  <X className="size-4" />
+                </Button>
+              )}
+            </div>
+
+            {/* Lives beside the search, not in the header, so it survives the
+                header being dropped on a phone. */}
+            {tab === "emojis" && user && (
+              <Button
+                className="h-9 touch:h-11 shrink-0 clip-corner-lg"
+                onClick={() => setCreateOpen(true)}
+              >
+                <Plus className="size-4" />
+                <span className="hidden sm:inline">New pack</span>
+                <span className="sr-only sm:hidden">Create emoji pack</span>
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* Results */}
-        <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable px-4 pb-8">
+        <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable px-2 pb-8 pt-4 sm:pt-2">
           {tab === "communities" && <CommunitiesTab query={query} />}
           {tab === "emojis" && <EmojisTab query={query} />}
           {tab === "themes" && <ThemesTab query={query} />}
@@ -119,36 +159,50 @@ export function DiscoverPage() {
   );
 }
 
-/** Centered loader / empty-state scaffold shared by the tabs. */
-function TabState({ children }: { children: ReactNode }) {
+const GRID = "grid gap-2 sm:grid-cols-2 xl:grid-cols-3 items-stretch";
+
+/**
+ * Card-shaped placeholders while the first page loads — the grid keeps its
+ * final shape instead of collapsing to a centred spinner and jumping.
+ */
+function TabSkeleton() {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center text-muted-foreground">
-      {children}
+    <div className={GRID} aria-hidden>
+      {Array.from({ length: 6 }, (_, i) => (
+        <Skeleton key={i} className="h-40 w-full rounded-xl" />
+      ))}
     </div>
   );
 }
 
-const GRID = "grid gap-3 pt-3 sm:grid-cols-2 xl:grid-cols-3";
+/** Centered empty / error state, in the cut-corner vessel idiom. */
+function TabState({ icon: Icon, children }: { icon: typeof Users; children: ReactNode }) {
+  return (
+    <div className="mx-auto mt-6 flex max-w-sm flex-col items-center gap-3 clip-corner-lg bg-chrome px-6 py-10 text-center">
+      <span className="flex size-12 items-center justify-center clip-corner-lg bg-foreground/5 text-muted-foreground">
+        <Icon className="size-6" />
+      </span>
+      <p className="text-sm text-muted-foreground">{children}</p>
+    </div>
+  );
+}
 
 function CommunitiesTab({ query }: { query: string }) {
   const { data, isLoading, isError } = useDiscoverCommunities(query);
 
-  if (isLoading && !data) return <TabState><Loader2 className="size-6 animate-spin" /></TabState>;
-  if (isError) return <TabState><p>Couldn't reach the relays. Try again.</p></TabState>;
+  if (isLoading && !data) return <TabSkeleton />;
+  if (isError) return <TabState icon={Users}>Couldn't reach the relays. Try again.</TabState>;
   if (!data || data.length === 0) {
     return (
-      <TabState>
-        <Users className="size-8 opacity-40" />
-        <p className="max-w-xs text-sm">
-          {query.trim()
-            ? "No public communities matched your search."
-            : "No public communities found yet. Share an invite link in a note (or from the invite dialog) to list one here."}
-        </p>
+      <TabState icon={Users}>
+        {query.trim()
+          ? "No public communities matched your search."
+          : "No public communities found yet. Share an invite link in a note (or from the invite dialog) to list one here."}
       </TabState>
     );
   }
   return (
-    <div className={cn(GRID, "items-stretch")}>
+    <div className={GRID}>
       {data.map((invite) => (
         <CommunityListingCard key={invite.linkSigner} invite={invite} />
       ))}
@@ -159,20 +213,19 @@ function CommunitiesTab({ query }: { query: string }) {
 function EmojisTab({ query }: { query: string }) {
   const { data, isLoading, isError } = useDiscoverEmojiPacks(query);
 
-  if (isLoading && !data) return <TabState><Loader2 className="size-6 animate-spin" /></TabState>;
-  if (isError) return <TabState><p>Couldn't reach the relays. Try again.</p></TabState>;
+  if (isLoading && !data) return <TabSkeleton />;
+  if (isError) return <TabState icon={Smile}>Couldn't reach the relays. Try again.</TabState>;
   if (!data || data.length === 0) {
     return (
-      <TabState>
-        <Smile className="size-8 opacity-40" />
-        <p className="max-w-xs text-sm">
-          {query.trim() ? "No emoji packs matched your search." : "No emoji packs found."}
-        </p>
+      <TabState icon={Smile}>
+        {query.trim()
+          ? "No emoji packs matched your search."
+          : "No emoji packs found. Publish one with New pack and it'll show up here."}
       </TabState>
     );
   }
   return (
-    <div className={cn(GRID, "items-stretch")}>
+    <div className={GRID}>
       {data.map((event) => (
         <EmojiPackCard key={event.id} event={event} className="my-0 max-w-none" />
       ))}
@@ -183,20 +236,19 @@ function EmojisTab({ query }: { query: string }) {
 function ThemesTab({ query }: { query: string }) {
   const { data, isLoading, isError } = useDiscoverThemes(query);
 
-  if (isLoading && !data) return <TabState><Loader2 className="size-6 animate-spin" /></TabState>;
-  if (isError) return <TabState><p>Couldn't reach the relays. Try again.</p></TabState>;
+  if (isLoading && !data) return <TabSkeleton />;
+  if (isError) return <TabState icon={Palette}>Couldn't reach the relays. Try again.</TabState>;
   if (!data || data.length === 0) {
     return (
-      <TabState>
-        <Palette className="size-8 opacity-40" />
-        <p className="max-w-xs text-sm">
-          {query.trim() ? "No themes matched your search." : "No shared themes found."}
-        </p>
+      <TabState icon={Palette}>
+        {query.trim()
+          ? "No themes matched your search."
+          : "No shared themes found. Share one from Settings → Appearance."}
       </TabState>
     );
   }
   return (
-    <div className={cn(GRID, "items-stretch")}>
+    <div className={GRID}>
       {data.map((event) => (
         <ThemeDiscoverCard key={event.id} event={event} />
       ))}

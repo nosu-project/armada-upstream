@@ -6,8 +6,10 @@ import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
+  emojiPackAbout,
   emojiPackEntries,
   emojiPackName,
+  emojiPackPicture,
   useAddEmojiPack,
   useHasEmojiPack,
 } from "@/hooks/useEmojiPacks";
@@ -41,6 +43,8 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
   const displayName = getDisplayName(metadata, event.pubkey);
 
   const name = emojiPackName(event);
+  const about = emojiPackAbout(event);
+  const picture = emojiPackPicture(event);
   const identifier = event.tags.find((t) => t[0] === "d")?.[1] ?? "";
   const entries = emojiPackEntries(event);
 
@@ -75,20 +79,39 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
   return (
     <div
       className={cn(
-        "flex flex-col max-w-sm w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden my-1.5",
+        "flex flex-col max-w-sm w-full rounded-xl border border-border/60 bg-card overflow-hidden my-1.5",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
-        {/* Header: pack name + author */}
+        {/* Header: pack icon + name + author */}
         <div className="flex items-center gap-2 min-w-0">
-          <Smile className="size-4 shrink-0 text-primary" />
+          {picture ? (
+            <img
+              src={picture}
+              alt=""
+              className="size-8 shrink-0 rounded-md object-cover border border-border/60"
+            />
+          ) : (
+            <Smile className="size-4 shrink-0 text-primary" />
+          )}
           <p className="font-semibold truncate leading-tight flex-1">{name}</p>
-          <span className="text-[10px] px-1.5 py-px rounded-full bg-secondary text-muted-foreground shrink-0">
-            Emoji pack
+          {/* Legible while scanning a Discover grid, where the Add button at
+              the card's foot is the only other signal. */}
+          <span
+            className={cn(
+              "text-[10px] px-1.5 py-px rounded-full shrink-0",
+              isAdded ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground",
+            )}
+          >
+            {isAdded ? "Added" : "Emoji pack"}
           </span>
         </div>
+
+        {about && (
+          <p className="text-xs text-muted-foreground line-clamp-2 -mt-1">{about}</p>
+        )}
 
         <ProfilePreviewCard pubkey={event.pubkey}>
           <button
