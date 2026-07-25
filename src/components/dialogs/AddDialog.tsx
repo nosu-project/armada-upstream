@@ -31,6 +31,7 @@ import { classifyAddInput, type ConcordInvite } from "@/concord-v1/lib/concord";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
 import { parseGroupNaddr } from "@/lib/nip29";
 import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
+import { clearServerTombstone } from "@/lib/serverTombstone";
 import { cn } from "@/lib/utils";
 
 interface AddDialogProps {
@@ -417,6 +418,10 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
             ? current
             : { ...current, addedRelays: [...current.addedRelays, target.relay] },
         );
+        // Accepting an invite is explicit intent, so any prior removal of this
+        // server is superseded — drop its tombstone or the sync hydration
+        // would keep vetoing it right back out of the rail.
+        clearServerTombstone(user.pubkey, target.relay);
         updateList({ type: "add-server", url: target.relay }).catch((err) =>
           console.warn("Failed to sync server to group list:", err));
         onDone();
@@ -455,6 +460,8 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         addedRelays: [...current.addedRelays, target.relay],
       }));
       if (user) {
+        // Adding a server the user had removed supersedes that removal.
+        clearServerTombstone(user.pubkey, target.relay);
         updateList({ type: "add-server", url: target.relay }).catch((err) =>
           console.warn("Failed to sync server to group list:", err));
       }

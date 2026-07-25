@@ -16,6 +16,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
+import { clearServerTombstone } from "@/lib/serverTombstone";
 
 /**
  * Landing page for a Buzz relay invite on the Armada host —
@@ -91,6 +92,10 @@ export function BuzzInvitePage() {
             ? current
             : { ...current, addedRelays: [...current.addedRelays, invite.relayUrl] },
         );
+        // Claiming an invite is explicit intent, so it supersedes any prior
+        // removal of this server; without dropping the tombstone the sync
+        // hydration would veto it straight back out of the rail.
+        clearServerTombstone(user.pubkey, invite.relayUrl);
         updateList({ type: "add-server", url: invite.relayUrl }).catch((err) =>
           console.warn("Failed to sync server to group list:", err));
         toast({ title: "Joined", description: previewName || invite.host });

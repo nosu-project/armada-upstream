@@ -229,6 +229,18 @@ export function NostrSync() {
           (merged as Record<string, unknown>)[key] = value;
         }
       }
+      // The settings blob carries `addedRelays`, which makes it a server
+      // re-add channel in its own right: a blob written before a removal still
+      // lists the removed server, and the union below would faithfully put it
+      // back on every device, forever. Apply the same removal veto as 1b —
+      // clearing any tombstone this blob proves was superseded (created after
+      // the removal and still carrying the server, i.e. a real re-add
+      // elsewhere).
+      const tombstoned = reconcileServerTombstones(
+        user.pubkey,
+        Array.isArray(merged.addedRelays) ? merged.addedRelays : [],
+        remoteTs,
+      );
       // addedRelays is a union cache, never a wholesale replace (a partial
       // remote list must not drop servers we know about locally).
       updateConfig((current) => {
@@ -237,7 +249,9 @@ export function NostrSync() {
           const have = new Set(current.addedRelays);
           next.addedRelays = [
             ...current.addedRelays,
-            ...merged.addedRelays.filter((url) => !have.has(url)),
+            ...merged.addedRelays.filter(
+              (url) => !have.has(url) && !tombstoned.has(normalizeRelayUrl(url) ?? url),
+            ),
           ];
         }
         // Record what we just applied so the publish watcher treats it as
@@ -365,11 +379,16 @@ export function NostrSync() {
     // failed to decrypt (servers would read empty). Wait for a real list.
     if (!groupList.event || groupList.decryptFailed) return;
 
-    // Reconcile tombstones against this read: any removed server the list no
-    // longer contains has propagated, so its tombstone is cleared. The returned
-    // set is the still-pending removals (servers the — possibly stale — list
-    // still carries) that we must keep filtering out of the merge.
-    const tombstoned = reconcileServerTombstones(user.pubkey, groupList.servers);
+    // Reconcile tombstones against this read. A removed server that this list
+    // still carries is only allowed back if the list event was created AFTER
+    // the removal — that means another device genuinely re-added it. An older
+    // event is a stale echo of the pre-removal list, and gets filtered out of
+    // the merge below.
+    const tombstoned = reconcileServerTombstones(
+      user.pubkey,
+      groupList.servers,
+      groupList.event.created_at * 1000,
+    );
 
     // Opt-in auto-pinned relays (`PINNED_RAIL_RELAYS`, empty by default) are
     // always in the rail regardless of the list, so they needn't be cached;

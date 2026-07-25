@@ -56,11 +56,13 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { relayRejectionMessage, type Nip29Admin } from "@/lib/nip29";
+import { clearServerTombstone, isServerTombstoned } from "@/lib/serverTombstone";
 import { cn } from "@/lib/utils";
 
 function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId: string; isClosed: boolean }) {
   const join = useJoinGroup(relayUrl, groupId);
   const { mutateAsync: updateList } = useUpdateUserGroupList();
+  const { user } = useCurrentUser();
   const [searchParams] = useSearchParams();
   // Accept Armada's `?code=`, Flotilla/Coracle's `?c=`, and the standardized
   // NIP-29 `?invite=` (the naddr invite-code suffix, see buildGroupNaddr).
@@ -71,6 +73,11 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   const handleJoin = useCallback(async () => {
     try {
       await join.mutateAsync({ code: code.trim() || undefined });
+      // Joining a channel is explicit intent to have this server, and
+      // `add-group` carries the server into the 10009 list — so a prior
+      // removal is superseded. Drop its tombstone, or the sync hydration
+      // would keep vetoing the server the user just opted back into.
+      if (user) clearServerTombstone(user.pubkey, relayUrl);
       updateList({ type: "add-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
       toast({ title: "Join request sent", description: "The relay will admit you automatically or after review." });
     } catch (e) {
@@ -80,7 +87,7 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
         variant: "destructive",
       });
     }
-  }, [join, code, updateList, groupId, relayUrl]);
+  }, [join, code, updateList, groupId, relayUrl, user]);
 
   // Shared invite link → join automatically once on arrival.
   useEffect(() => {
@@ -304,9 +311,17 @@ export function GroupPage() {
   // instant rail visibility). This is LOCAL-ONLY: the kind 10009 list is never
   // published from a passive visit — the server rides into the list only via
   // an explicit action (joining a channel, adding a server in Settings/Add).
+  //
+  // A server the user has REMOVED is exempt: this effect fires on any mount of
+  // the route, including ones the user didn't choose — a notification tap, the
+  // last-channel restore, back-navigation, the quick switcher — so without the
+  // veto a passive visit silently undoes the removal and the icon reappears in
+  // the rail. Explicitly joining a channel here clears the tombstone (see
+  // JoinBanner), which is the intentional way back in.
   const addedServerRef = useRef<string | null>(null);
   useEffect(() => {
     if (!relayUrl || PINNED_RAIL_RELAYS.includes(relayUrl)) return;
+    if (user && isServerTombstoned(user.pubkey, relayUrl)) return;
     if (addedServerRef.current !== relayUrl) {
       addedServerRef.current = relayUrl;
       updateConfig((c) =>
@@ -315,7 +330,7 @@ export function GroupPage() {
           : { ...c, addedRelays: [...c.addedRelays, relayUrl] },
       );
     }
-  }, [relayUrl, updateConfig]);
+  }, [relayUrl, updateConfig, user]);
 
   const group = details?.group;
   // Buzz channel type (stream/forum/dm/workflow) from the 39000 `t` tag.
