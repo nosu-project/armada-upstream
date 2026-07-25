@@ -26,6 +26,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
   const [body, setBody] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [labelDraft, setLabelDraft] = useState("");
+  const [addingLabel, setAddingLabel] = useState(false);
   const [sending, setSending] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const appendUrl = useCallback((url: string) => {
@@ -45,7 +46,12 @@ export function NewIssueDialog({ repos, items, onCreate }: {
     const [added] = normalizeGitLabels([labelDraft]);
     if (added) setLabels((current) => (current.includes(added) ? current : normalizeGitLabels([...current, added])));
     setLabelDraft("");
+    setAddingLabel(false);
   }, [labelDraft]);
+  const cancelLabelDraft = useCallback(() => {
+    setLabelDraft("");
+    setAddingLabel(false);
+  }, []);
   if (repos.length === 0) return null;
 
   const submit = () => {
@@ -63,6 +69,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
         setBody("");
         setLabels([]);
         setLabelDraft("");
+        setAddingLabel(false);
       })
       .catch((error) => toast({ title: "Couldn't open issue", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
       .finally(() => setSending(false));
@@ -76,7 +83,15 @@ export function NewIssueDialog({ repos, items, onCreate }: {
           New issue
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent
+        className="sm:max-w-md"
+        onEscapeKeyDown={(event) => {
+          // While the label field is open, Escape dismisses it, not the dialog.
+          if (!addingLabel) return;
+          event.preventDefault();
+          cancelLabelDraft();
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <CircleDot className="size-4 text-orange-500" />
@@ -148,22 +163,49 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                   <X className="size-2.5" />
                 </button>
               ))}
+
+              {/* Typing a new label is occasional, so it borrows a chip's
+                  space only while in use rather than holding a field open. */}
+              {addingLabel ? (
+                <input
+                  autoFocus
+                  value={labelDraft}
+                  size={Math.max(labelDraft.length + 1, 10)}
+                  maxLength={MAX_GIT_LABEL_LENGTH}
+                  aria-label="New label"
+                  placeholder="new label"
+                  disabled={sending}
+                  onChange={(e) => setLabelDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Escape is handled by the dialog's own onEscapeKeyDown:
+                    // Radix listens for it at the document, above this field.
+                    if (e.key === "Enter" || e.key === ",") {
+                      e.preventDefault();
+                      if (labelDraft.trim()) commitLabelDraft();
+                      else cancelLabelDraft();
+                      return;
+                    }
+                    // Erasing past the start of an empty field dismisses it.
+                    if ((e.key === "Backspace" || e.key === "Delete") && !labelDraft) {
+                      e.preventDefault();
+                      cancelLabelDraft();
+                    }
+                  }}
+                  onBlur={commitLabelDraft}
+                  className="min-w-0 rounded-full border border-primary/60 bg-transparent px-2 py-0.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring"
+                />
+              ) : labels.length < MAX_GIT_LABELS && (
+                <button
+                  type="button"
+                  aria-label="Add a label"
+                  disabled={sending}
+                  onClick={() => setAddingLabel(true)}
+                  className="flex items-center rounded-full border border-dashed border-border/70 px-2 py-0.5 text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground disabled:opacity-40"
+                >
+                  <Plus className="size-3" />
+                </button>
+              )}
             </div>
-            <Input
-              value={labelDraft}
-              onChange={(e) => setLabelDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === ",") {
-                  e.preventDefault();
-                  commitLabelDraft();
-                }
-              }}
-              onBlur={commitLabelDraft}
-              maxLength={MAX_GIT_LABEL_LENGTH}
-              placeholder={labels.length >= MAX_GIT_LABELS ? `Label limit reached (${MAX_GIT_LABELS})` : "Add a label, then press Enter"}
-              disabled={sending || labels.length >= MAX_GIT_LABELS}
-              className="h-8 text-xs"
-            />
           </div>
           <div className="flex items-center justify-between gap-1.5">
             <p className="min-w-0 truncate text-[10px] text-muted-foreground">Public: issues are visible outside this community.</p>
