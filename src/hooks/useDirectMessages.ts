@@ -427,8 +427,20 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   // joined into a stable key so effects/queries don't churn on set reordering.
   const follows = useMemo(() => [...(followData?.pubkeys ?? [])].sort(), [followData?.pubkeys]);
   const followsKey = follows.join(",");
+  // Read inside the queryFn (and the un-awaited background pull) so both always
+  // see the current set without `follows` being a queryFn dependency.
+  const followsRef = useRef(follows);
+  followsRef.current = follows;
 
-  const queryKey = ["dm", "conversations", user?.pubkey, relayKey, followsKey];
+  // NOTE: `followsKey` is deliberately NOT part of the query key. The follow
+  // list resolves asynchronously, so on every cold load it goes empty → real,
+  // and keying on it made that transition swap TanStack to a fresh cache entry
+  // with no placeholder — dropping the merged event set back to the 30-item
+  // `initialData` snapshot and visibly collapsing/re-sorting the conversation
+  // list a beat after it painted. Follows are read from a ref instead, and a
+  // change re-runs THIS entry's queryFn (below), so the wider author set merges
+  // on top of what's already rendered.
+  const queryKey = ["dm", "conversations", user?.pubkey, relayKey];
   // Last-known-good localStorage snapshot (newest kind-4 per counterparty) so
   // the conversation list paints on the first frame of a cold launch, before
   // the IndexedDB cold-open. Ciphertext only — previews decrypt as usual.
@@ -443,11 +455,24 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
   const lastPullRef = useRef(0);
+  // Tracks the follow set the cache was last fetched with. `undefined` means
+  // "this hook instance hasn't observed one yet" — the mount pass must not
+  // invalidate, since the query is already fetching with the current set.
+  const fetchedFollowsRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     cursorsRef.current = {};
     lastPullRef.current = 0;
     setHasMore(true);
-  }, [user?.pubkey, relayKey, followsKey]);
+    // Follows aren't in the query key, so a follow-list change has to re-run
+    // the queryFn explicitly: the received-DM filters widen to the new authors
+    // and the results merge (append-only) into the rendered list.
+    const prevFollows = fetchedFollowsRef.current;
+    fetchedFollowsRef.current = followsKey;
+    if (prevFollows !== undefined && prevFollows !== followsKey && user?.pubkey) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.pubkey, relayKey, followsKey, queryClient]);
 
   const query = useQuery<NostrEvent[]>({
     queryKey,
@@ -455,6 +480,8 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
       const store = await eventStore;
+      // Newest known follow set at execution time (not fetch-scheduling time).
+      const scopedFollows = followsRef.current;
 
       // 1. LOCAL-FIRST: the wire funnels every kind-4 into IndexedDB (and
       //    NostrBatcher mirrors pull results), so the conversation list paints
@@ -462,8 +489,8 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       //    authors (friends-only), matching the relay queries below.
       const cachedEvents = await store.query([
         { kinds: [KIND_DM], authors: [pubkey], limit: DM_PAGE_SIZE },
-        ...(follows.length > 0
-          ? [{ kinds: [KIND_DM], authors: follows, "#p": [pubkey], limit: DM_PAGE_SIZE }]
+        ...(scopedFollows.length > 0
+          ? [{ kinds: [KIND_DM], authors: scopedFollows, "#p": [pubkey], limit: DM_PAGE_SIZE }]
           : []),
       ]);
       const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
@@ -484,7 +511,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
             relays,
             pubkey,
             {}, // first page per relay (no `until`)
-            follows,
+            scopedFollows,
             AbortSignal.any([signal, AbortSignal.timeout(8000)]),
           );
           if (signal.aborted) return;
