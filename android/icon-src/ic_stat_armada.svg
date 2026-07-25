@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="41.60 41.60 172.80 172.80">
+  <!--
+    Source art for the Android notification small icon (res/drawable-*dpi/
+    ic_stat_armada.png). Status-bar icons are alpha masks tinted by the
+    system, so this is one white shape on transparency: the simplified
+    Armada A (public/simple.svg) — the advancing-A wedge with the ship's
+    waterline notched into its legs, no crest frame and no wake.
+
+    Sizing: the art (136x144 in the 256 crest space) is centered on the 24dp
+    canvas at 20dp tall, leaving ~2dp of transparency on every side. That is
+    the Material system-icon live area; art run to the canvas edge collides
+    with the circular chip the shade draws the small icon inside on Android
+    12+, and with launcher badge scaling.
+
+    Regenerate the density set with:
+      for d in mdpi:24 hdpi:36 xhdpi:48 xxhdpi:72 xxxhdpi:96; do
+        inkscape android/icon-src/ic_stat_armada.svg -w ${d#*:} -h ${d#*:} \
+          -o android/app/src/main/res/drawable-${d%:*}/ic_stat_armada.png
+      done
+  -->
+  <path fill="#fff"
+        d="M 128,56 60,200 h 28.000488 l 9.091187,-19.99878 -3.092651,-2.00134
+           -1.999512,-20.00061 H 107.09119 L 128,112 l 20.90881,45.99975 h 15.09156
+           l -1.99952,20.00061 -3.09265,2.00134 9.09119,19.99878 h 28.00049 z"/>
+</svg>
