@@ -433,7 +433,13 @@ function useDm17SyncCtx(): SyncCtx | undefined {
 /** An optimistic (not yet relay-confirmed) outgoing rumor. */
 interface PendingRumor {
   opened: OpenedDm;
-  status: SendStatus;
+  /**
+   * `undefined` means confirmed: published and written to the store, but the
+   * store-backed query hasn't repainted with it yet. The row keeps rendering
+   * from here (with no send badge) until it does — see the prune effect in
+   * `useDm17Thread`.
+   */
+  status: SendStatus | undefined;
 }
 
 export interface Dm17Thread {
@@ -585,14 +591,46 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
 
   const setStatus = useCallback((id: string, status: SendStatus | undefined) => {
     setPending((old) => {
-      const next = new Map(old);
-      const entry = next.get(id);
+      const entry = old.get(id);
       if (!entry) return old;
-      if (status === undefined) next.delete(id);
-      else next.set(id, { ...entry, status });
+      const next = new Map(old);
+      next.set(id, { ...entry, status });
       return next;
     });
   }, []);
+
+  /** Forget an optimistic rumor entirely (discard, or superseded by the store). */
+  const dropPending = useCallback((id: string) => {
+    setPending((old) => {
+      if (!old.has(id)) return old;
+      const next = new Map(old);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  // Retire confirmed optimistic rows only once the store-backed query actually
+  // contains them. Dropping one at publish time instead left a visible hole:
+  // the store write rings the `dm` scope, but that ring is debounced by the
+  // wire bus and the repaint then costs an IndexedDB read, so the row was
+  // removed and re-inserted tens of milliseconds later on every send. The fold
+  // above dedupes by rumor id, so holding the row here renders it exactly once.
+  useEffect(() => {
+    const rows = query.data;
+    if (!rows || rows.length === 0) return;
+    setPending((old) => {
+      if (old.size === 0) return old;
+      const stored = new Set(rows.map((r) => r.rumorId));
+      let next: Map<string, PendingRumor> | undefined;
+      for (const [id, entry] of old) {
+        // A failed row is not in the store; it stays until retried or discarded.
+        if (entry.status !== undefined || !stored.has(id)) continue;
+        next ??= new Map(old);
+        next.delete(id);
+      }
+      return next ?? old;
+    });
+  }, [query.data]);
 
   /**
    * Seal + wrap + publish one rumor: the peer's copy to their kind-10050
@@ -644,8 +682,11 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       void (async () => {
         try {
           await publishRumor(rumor, opts);
-          // Durable + confirmed: persist and drop the optimistic row (the
-          // store write rings `dm`, so the query repaints with the real row).
+          // Durable + confirmed: persist and clear the send badge, but KEEP the
+          // optimistic row. It is retired only once the query has actually read
+          // it back (see the prune effect) — the store write's `dm` ring is
+          // debounced and the repaint costs an IndexedDB read, so dropping it
+          // here would blank the row for that whole window.
           await writeDm17Rumors([opened]);
           setStatus(rumor.id, undefined);
         } catch {
@@ -753,14 +794,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     [pending, dispatchRumor],
   );
 
-  const discard = useCallback((id: string) => {
-    setPending((old) => {
-      if (!old.has(id)) return old;
-      const next = new Map(old);
-      next.delete(id);
-      return next;
-    });
-  }, []);
+  const discard = dropPending;
 
   // ── Older-history backfill ──────────────────────────────────────────────
   // Pages the global `#p` gift-wrap stream with `until`, decrypting each wrap
