@@ -4,6 +4,16 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.39.9] - 2026-07-24
+
+Adds a Discover page for browsing public communities, emoji packs, and themes. Communities are found by mining invite notes shared on app relays, so there's no central listing to maintain. You can also create and share emoji packs and themes directly from the Discover page.
+
+### Added
+- Discover page for browsing public communities, emoji packs, and themes
+- Community discovery by scanning shared invite notes on app relays
+- Create and publish custom emoji packs from the Discover page
+- Save and share custom themes from the Discover page
+
 ## [0.39.8] - 2026-07-24
 
 Reworks how chat is rendered. Channels open and switch without the pause that used to come with a long timeline, scrolling back through history keeps your place, and jumping to a message lands on it in one step.
