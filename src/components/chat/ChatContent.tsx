@@ -235,6 +235,12 @@ function isOnlyEmojisOrCustom(text: string, emojiMap: Map<string, string>): bool
   return true;
 }
 
+/** Counts emoji / custom-shortcode units in an emoji-only string. */
+const EMOJI_OR_CUSTOM_UNIT_REGEX = new RegExp(`${CUSTOM_EMOJI_SHORTCODE}|${EMOJI_UNIT}`, "gu");
+function countEmojiUnits(text: string): number {
+  return [...text.matchAll(EMOJI_OR_CUSTOM_UNIT_REGEX)].length;
+}
+
 /**
  * Kinds whose imeta tags describe attached media for the content body.
  * Includes NIP-17 DM rumors (14 chat, 15 file): like Concord (3300), an
@@ -766,10 +772,13 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     return map;
   }, [groupedTokens]);
 
-  // Emoji-only messages render extra large
+  // Emoji-only messages render extra large; a lone single emoji a touch larger.
   const isEmojiOnly = groupedTokens.length === 1
     && groupedTokens[0].type === "text"
     && isOnlyEmojisOrCustom(groupedTokens[0].value, emojiMap);
+  const isSingleEmoji = isEmojiOnly
+    && groupedTokens[0].type === "text"
+    && countEmojiUnits(groupedTokens[0].value) === 1;
 
   // A line clamp (display: -webkit-box) would break block-level media, so only
   // honor `clampLines` when every token is inline text-ish.
@@ -814,7 +823,9 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
   const renderToken = (token: ContentToken, key: React.Key, topIndex: number | null, inQuote = false): ReactNode => {
     switch (token.type) {
       case "text": {
-        const imgClass = isEmojiOnly ? "inline h-10 w-10 object-contain align-text-bottom" : undefined;
+        const imgClass = isEmojiOnly
+          ? cn("inline object-contain align-text-bottom", isSingleEmoji ? "h-12 w-12" : "h-10 w-10")
+          : undefined;
         return (
           <span key={key}>
             {renderInlineMarkdown(
@@ -1071,7 +1082,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
   };
 
   const body = (
-    <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, clampClass, isEmojiOnly && "text-4xl leading-tight")}>
+    <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, clampClass, isEmojiOnly && "leading-tight", isEmojiOnly && (isSingleEmoji ? "text-5xl" : "text-4xl"))}>
       {groupedTokens.map((token, i) => renderToken(token, i, i))}
 
       {lightboxIndex !== null && (
