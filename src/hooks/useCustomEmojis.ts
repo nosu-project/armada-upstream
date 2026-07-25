@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { useBuzzEmojiPalette } from "@/buzz/useBuzzEmojiPalette";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { readEmojiList } from "@/hooks/useEmojiPacks";
+import { emojiPackCoord, emojiPackName, readEmojiList } from "@/hooks/useEmojiPacks";
 import { useEventStore } from "@/hooks/useEventStore";
 import { parseAddr } from "@/lib/parseAddr";
 
@@ -14,6 +14,15 @@ import type { NostrEvent } from "@nostrify/nostrify";
 export interface CustomEmoji {
   shortcode: string;
   url: string;
+  /**
+   * The `30030:pubkey:dtag` coordinate of the pack this emoji came from, when
+   * it came from one. Absent for emojis inlined directly on the kind-10030
+   * list. Drives the "which pack is this from?" affordances (per-pack picker
+   * categories, the reaction detail popover).
+   */
+  packCoord?: string;
+  /** The source pack's human name, resolved at read time for display. */
+  packName?: string;
 }
 
 /**
@@ -61,14 +70,24 @@ function newestPerAddr(events: NostrEvent[]): NostrEvent[] {
  * prefixed with the pack id so both stay reachable.
  */
 function paletteFrom(listEvent: NostrEvent, packEvents: NostrEvent[]): CustomEmoji[] {
-  const raw: { shortcode: string; url: string; packId: string }[] = [];
+  const raw: {
+    shortcode: string;
+    url: string;
+    packId: string;
+    packCoord?: string;
+    packName?: string;
+  }[] = [];
   for (const t of listEvent.tags) {
     if (t[0] === "emoji" && t[1] && t[2]) raw.push({ shortcode: t[1], url: t[2], packId: "" });
   }
   for (const pack of packEvents) {
     const packId = pack.tags.find(([n]) => n === "d")?.[1] ?? "";
+    const packCoord = emojiPackCoord(pack.pubkey, packId);
+    const packName = emojiPackName(pack);
     for (const t of pack.tags) {
-      if (t[0] === "emoji" && t[1] && t[2]) raw.push({ shortcode: t[1], url: t[2], packId });
+      if (t[0] === "emoji" && t[1] && t[2]) {
+        raw.push({ shortcode: t[1], url: t[2], packId, packCoord, packName });
+      }
     }
   }
 
@@ -86,7 +105,7 @@ function paletteFrom(listEvent: NostrEvent, packEvents: NostrEvent[]): CustomEmo
       urlsByCode.get(e.shortcode)!.size > 1 && e.packId ? `${e.packId}-${e.shortcode}` : e.shortcode;
     if (!seen.has(code)) {
       seen.add(code);
-      out.push({ shortcode: code, url: e.url });
+      out.push({ shortcode: code, url: e.url, packCoord: e.packCoord, packName: e.packName });
     }
   }
   return out;

@@ -3,6 +3,7 @@ import { Picker } from "emoji-mart";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { syncEmojiMartCategories } from "@/lib/emojiMartCategories";
 
 import type { CustomEmoji } from "@/hooks/useCustomEmojis";
 
@@ -25,6 +26,14 @@ interface EmojiPickerProps {
   onSelect: (selection: EmojiSelection) => void;
   /** NIP-30 custom emojis to display in a dedicated tab. */
   customEmojis?: CustomEmoji[];
+}
+
+/** An entry in an emoji-mart `custom` category. */
+interface EmojiMartCustomEmoji {
+  id: string;
+  name: string;
+  keywords: string[];
+  skins: { src: string }[];
 }
 
 interface EmojiMartEmoji {
@@ -68,21 +77,42 @@ export function EmojiPicker({ onSelect, customEmojis }: EmojiPickerProps) {
     }
   }, []);
 
-  // Build emoji-mart custom categories from the NIP-30 emoji list
+  // Build emoji-mart custom categories from the NIP-30 emoji list — ONE
+  // CATEGORY PER SOURCE PACK, so the picker's sticky heading and nav answer
+  // "which pack is this emoji from?" the same way Discord separates each
+  // server's emoji. Emojis inlined on the kind-10030 list have no pack and
+  // fall into a generic "Custom" group.
   const customCategories = useMemo(() => {
     if (!customEmojis || customEmojis.length === 0) return undefined;
-    return [
-      {
-        id: "custom-nostr",
-        name: "Custom",
-        emojis: customEmojis.map((e) => ({
-          id: e.shortcode,
-          name: e.shortcode,
-          keywords: [e.shortcode],
-          skins: [{ src: e.url }],
-        })),
-      },
-    ];
+
+    const groups = new Map<string, { id: string; name: string; emojis: EmojiMartCustomEmoji[] }>();
+    for (const e of customEmojis) {
+      const key = e.packCoord ?? "";
+      let group = groups.get(key);
+      if (!group) {
+        groups.set(
+          key,
+          (group = {
+            // emoji-mart keys DOM ids and its category index off this, so keep
+            // it to a safe charset rather than passing a raw `kind:pubkey:d`.
+            id: key ? `custom-${key.replace(/[^a-zA-Z0-9]+/g, "-")}` : "custom-nostr",
+            name: (key && e.packName) || "Custom",
+            emojis: [],
+          }),
+        );
+      }
+      group.emojis.push({
+        id: e.shortcode,
+        name: e.shortcode,
+        keywords: [e.shortcode],
+        skins: [{ src: e.url }],
+      });
+    }
+
+    // Give each pack its own nav icon (its first emoji). Without an `icon`,
+    // emoji-mart chains a custom category onto the previous one's nav button,
+    // so every pack would share a single generic entry.
+    return [...groups.values()].map((g) => ({ ...g, icon: { src: g.emojis[0]?.skins[0]?.src } }));
   }, [customEmojis]);
 
   useEffect(() => {
@@ -104,10 +134,14 @@ export function EmojiPicker({ onSelect, customEmojis }: EmojiPickerProps) {
     };
 
     if (customCategories) {
+      // Must run before the Picker constructor: it reconciles emoji-mart's
+      // module-global category table, which the `categories` ordering below is
+      // filtered from (see syncEmojiMartCategories).
+      syncEmojiMartCategories(customCategories);
       pickerOptions.custom = customCategories;
       pickerOptions.categories = [
         "frequent",
-        "custom-nostr",
+        ...customCategories.map((c) => c.id),
         "people",
         "nature",
         "foods",

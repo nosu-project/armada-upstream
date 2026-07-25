@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { BUZZ_EMOJI_SET_D, KIND_EMOJI_SET } from "@/buzz/kinds";
 import { useIsBuzzRelay } from "@/buzz/detect";
+import { emojiPackCoord, emojiPackName } from "@/hooks/useEmojiPacks";
 
 import type { CustomEmoji } from "@/hooks/useCustomEmojis";
 
@@ -32,10 +33,12 @@ export function useBuzzEmojiPalette(relayUrl: string | undefined): CustomEmoji[]
       const seen = new Set<string>();
       // Oldest-first so an established shortcode isn't hijacked by a newer set.
       for (const ev of [...events].sort((a, b) => a.created_at - b.created_at)) {
+        const packCoord = emojiPackCoord(ev.pubkey, BUZZ_EMOJI_SET_D);
+        const packName = emojiPackName(ev);
         for (const [n, shortcode, url] of ev.tags) {
           if (n === "emoji" && shortcode && url && !seen.has(shortcode)) {
             seen.add(shortcode);
-            out.push({ shortcode, url });
+            out.push({ shortcode, url, packCoord, packName });
           }
         }
       }
