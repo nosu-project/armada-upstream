@@ -101,3 +101,28 @@ describe("ProjectsView search", () => {
     elsewhere.remove();
   });
 });
+
+describe("ProjectsView repository scope", () => {
+  it("scopes the workspace to one repository and offers a way back", () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show client activity" }));
+
+    // Back on the overview, showing only that repository's work.
+    expect(screen.getByText("Other project bug")).toBeInTheDocument();
+    expect(screen.queryByText("Stale thing")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show every repository" }));
+    expect(screen.getByText("Stale thing")).toBeInTheDocument();
+  });
+
+  it("keeps every repository listed while one is the active scope", () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show client activity" }));
+    fireEvent.click(screen.getByRole("button", { name: "Repositories" }));
+
+    expect(screen.getByRole("button", { name: "Show armada activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show client activity" })).toHaveAttribute("aria-pressed", "true");
+  });
+});

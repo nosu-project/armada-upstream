@@ -393,10 +393,34 @@ function StatsRow({ summary }: { summary: ProjectRepoSummary }) {
   );
 }
 
-function RepoCard({ repo, summary, people }: { repo: ProjectRepo; summary: ProjectRepoSummary; people: string[] }) {
+function RepoCard({ repo, summary, people, selected, onOpen }: {
+  repo: ProjectRepo;
+  summary: ProjectRepoSummary;
+  people: string[];
+  selected?: boolean;
+  onOpen?: () => void;
+}) {
   const web = safeWeb(repo.webUrl);
   return (
-    <Card className="relative flex min-h-44 flex-col overflow-hidden border-border/60 bg-card shadow-none transition-colors hover:bg-foreground/[0.02]">
+    <Card
+      className={cn(
+        "relative flex min-h-44 flex-col overflow-hidden border-border/60 bg-card shadow-none transition-colors",
+        onOpen && "hover:bg-foreground/[0.02]",
+        selected && "ring-1 ring-primary/60",
+      )}
+    >
+      {/* A full-card overlay rather than a wrapping button: the card holds a
+          link and copy control, which may not nest inside one. Anything that
+          needs its own pointer target sits above it. */}
+      {onOpen && (
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label={`Show ${repo.name} activity`}
+          aria-pressed={selected}
+          className="absolute inset-0 z-0 cursor-pointer rounded-[inherit] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
+      )}
       <div className="flex min-w-0 items-center justify-between gap-3 px-4 pt-3">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <RepoIcon />
@@ -405,7 +429,7 @@ function RepoCard({ repo, summary, people }: { repo: ProjectRepo; summary: Proje
             {repo.subtitle && <span className="block min-w-0 truncate text-xs text-muted-foreground">{repo.subtitle}</span>}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="relative z-10 flex shrink-0 items-center gap-1">
           <span className="whitespace-nowrap text-xs text-muted-foreground/70">{relativeTime(repo.createdAt)}</span>
           {web && (
             <Tooltip>
@@ -427,7 +451,7 @@ function RepoCard({ repo, summary, people }: { repo: ProjectRepo; summary: Proje
         {repo.description || "A shared space for git work."}
       </p>
 
-      <div className="flex items-center px-4 pb-1">
+      <div className="relative z-10 flex w-fit items-center px-4 pb-1">
         <PeopleStack pubkeys={people} />
       </div>
 
@@ -435,7 +459,7 @@ function RepoCard({ repo, summary, people }: { repo: ProjectRepo; summary: Proje
         <div className="flex min-w-0 items-center px-4 pb-2 pt-1">
           <StatsRow summary={summary} />
         </div>
-        <div className="px-4 pb-3">
+        <div className="relative z-10 px-4 pb-3">
           <ActivityBar summary={summary} />
         </div>
       </div>
@@ -449,10 +473,31 @@ function RepoCard({ repo, summary, people }: { repo: ProjectRepo; summary: Proje
  * community pane and crush the repository name — the one thing the row exists
  * to show — to zero width.
  */
-function RepoRow({ repo, summary, people }: { repo: ProjectRepo; summary: ProjectRepoSummary; people: string[] }) {
+function RepoRow({ repo, summary, people, selected, onOpen }: {
+  repo: ProjectRepo;
+  summary: ProjectRepoSummary;
+  people: string[];
+  selected?: boolean;
+  onOpen?: () => void;
+}) {
   const web = safeWeb(repo.webUrl);
   return (
-    <div className="flex min-w-0 items-start gap-2.5 px-3 py-2.5 transition-colors hover:bg-foreground/[0.03]">
+    <div
+      className={cn(
+        "relative flex min-w-0 items-start gap-2.5 px-3 py-2.5 transition-colors",
+        onOpen && "hover:bg-foreground/[0.03]",
+        selected && "bg-primary/[0.06]",
+      )}
+    >
+      {onOpen && (
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label={`Show ${repo.name} activity`}
+          aria-pressed={selected}
+          className="absolute inset-0 z-0 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+        />
+      )}
       <RepoIcon />
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex min-w-0 items-baseline gap-2">
@@ -463,13 +508,13 @@ function RepoRow({ repo, summary, people }: { repo: ProjectRepo; summary: Projec
           {repo.subtitle ? `${repo.subtitle} · ` : ""}
           {repo.description || "A shared space for git work."}
         </p>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="relative z-10 flex w-fit flex-wrap items-center gap-x-3 gap-y-1">
           <StatsRow summary={summary} />
           <div className="w-20 shrink-0"><ActivityBar summary={summary} /></div>
           <PeopleStack pubkeys={people} />
         </div>
       </div>
-      <div className="flex shrink-0 items-center">
+      <div className="relative z-10 flex shrink-0 items-center">
         {web && (
           <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground" asChild>
             <a href={web} target="_blank" rel="noopener noreferrer" aria-label="View on web">
@@ -551,12 +596,15 @@ function Overview({
   people,
   onSelect,
   onOpenItem,
+  onLabelClick,
 }: {
   repos: ProjectRepo[];
   items: ProjectWorkItem[];
   people: string[];
   onSelect: (f: Filter) => void;
   onOpenItem?: (item: ProjectWorkItem) => void;
+  /** The tab is part of the request: the overview cannot show a label filter. */
+  onLabelClick?: (label: string, target: Filter) => void;
 }) {
   const graph = useMemo(() => activityByDay(repos, items), [repos, items]);
   const prCount = items.filter((i) => i.kind !== "issue").length;
@@ -588,6 +636,7 @@ function Overview({
                   item={item}
                   repoName={item.repoCoord ? repoNameByCoord.get(item.repoCoord) : undefined}
                   onOpen={onOpenItem && (() => onOpenItem(item))}
+                  onLabelClick={onLabelClick && ((label) => onLabelClick(label, item.kind === "issue" ? "issues" : "prs"))}
                 />
               ))}
             </div>
@@ -644,6 +693,16 @@ function FilteredOutNotice({ onShowAll }: { onShowAll: () => void }) {
       <p className="text-sm text-muted-foreground">Nothing matches the current filters.</p>
       <Button variant="outline" size="sm" onClick={onShowAll}>Show all</Button>
     </div>
+  );
+}
+
+/** A dismissable "you are filtered" pill. Clicking anywhere on it clears. */
+function FilterChip({ label, clearLabel, onClear }: { label: string; clearLabel: string; onClear: () => void }) {
+  return (
+    <Button variant="secondary" size="sm" className="h-7 max-w-48 gap-1 px-2 text-xs" aria-label={clearLabel} onClick={onClear}>
+      <span className="truncate">{label}</span>
+      <X className="size-3 shrink-0" />
+    </Button>
   );
 }
 
@@ -727,12 +786,33 @@ export function ProjectsView({
   const [sort, setSort] = useState<ProjectSort>("updated");
   const [statusFilter, setStatusFilter] = useState<"open" | "closed" | "all">("open");
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
+  const [repoFilter, setRepoFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const items = workItems;
-  const summaries = useMemo(() => repoSummaries(items), [items]);
-  const people = useMemo(() => projectPeople(repos, items), [repos, items]);
+  // A repository can be detached while it is the active scope; falling back to
+  // the whole workspace beats showing an empty view with no way out.
+  const activeRepo = useMemo(
+    () => (repoFilter && repos.some((repo) => repo.coord === repoFilter) ? repoFilter : null),
+    [repoFilter, repos],
+  );
+  const activeRepoName = useMemo(
+    () => repos.find((repo) => repo.coord === activeRepo)?.name,
+    [repos, activeRepo],
+  );
+  const items = useMemo(
+    () => (activeRepo ? workItems.filter((item) => item.repoCoord === activeRepo) : workItems),
+    [workItems, activeRepo],
+  );
+  const scopedRepos = useMemo(
+    () => (activeRepo ? repos.filter((repo) => repo.coord === activeRepo) : repos),
+    [repos, activeRepo],
+  );
+
+  // Summaries stay workspace-wide: the repository cards keep their real counts
+  // while one of them is the active scope.
+  const summaries = useMemo(() => repoSummaries(workItems), [workItems]);
+  const people = useMemo(() => projectPeople(scopedRepos, items), [scopedRepos, items]);
   const repoNameByCoord = useMemo(() => new Map(repos.map((r) => [r.coord, r.name])), [repos]);
 
   const visibleRepos = useMemo(() => {
@@ -744,6 +824,10 @@ export function ProjectsView({
 
   const prs = useMemo(() => items.filter((i) => i.kind !== "issue"), [items]);
   const issues = useMemo(() => items.filter((i) => i.kind === "issue"), [items]);
+  // Empty-vs-filtered is judged workspace-wide: a repository scope that hides
+  // every pull request is a filter to clear, not an empty tracker.
+  const anyPrs = useMemo(() => workItems.some((item) => item.kind !== "issue"), [workItems]);
+  const anyIssues = useMemo(() => workItems.some((item) => item.kind === "issue"), [workItems]);
   // Drafts count as open (they are unresolved work), matching the trackers
   // people come from.
   const matchesFilters = useCallback((item: ProjectWorkItem) => {
@@ -757,9 +841,21 @@ export function ProjectsView({
   const filteredPrs = useMemo(() => sortProjectWorkItems(prs.filter(matchesFilters), sort), [prs, matchesFilters, sort]);
   const filteredIssues = useMemo(() => sortProjectWorkItems(issues.filter(matchesFilters), sort), [issues, matchesFilters, sort]);
   const toggleLabel = useCallback((label: string) => setLabelFilter((current) => (current === label ? null : label)), []);
+  // From the overview a label click has to land somewhere it is visible, so it
+  // opens the matching tab with the status gate released.
+  const openLabel = useCallback((label: string, target: Filter) => {
+    setLabelFilter(label);
+    setStatusFilter("all");
+    setFilter(target);
+  }, []);
+  const openRepo = useCallback((coord: string) => {
+    setRepoFilter((current) => (current === coord ? null : coord));
+    setFilter("all");
+  }, []);
   const showAll = useCallback(() => {
     setStatusFilter("all");
     setLabelFilter(null);
+    setRepoFilter(null);
     setQuery("");
   }, []);
 
@@ -797,15 +893,19 @@ export function ProjectsView({
           viewport breakpoint could detect inside a narrow pane. */}
       <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
         <Tabs filter={filter} onChange={setFilter} />
-        {filter !== "all" && (
+        {(filter !== "all" || activeRepo) && (
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            {(filter === "prs" || filter === "issues") && labelFilter && (
-              <Button variant="secondary" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setLabelFilter(null)}>
-                {labelFilter}
-                <X className="size-3" />
-              </Button>
+            {activeRepo && (
+              <FilterChip
+                label={activeRepoName ?? activeRepo}
+                clearLabel="Show every repository"
+                onClear={() => setRepoFilter(null)}
+              />
             )}
-            <SearchField value={query} onChange={setQuery} inputRef={searchRef} />
+            {(filter === "prs" || filter === "issues") && labelFilter && (
+              <FilterChip label={labelFilter} clearLabel="Clear the label filter" onClear={() => setLabelFilter(null)} />
+            )}
+            {filter !== "all" && <SearchField value={query} onChange={setQuery} inputRef={searchRef} />}
             {(filter === "prs" || filter === "issues") && (
               <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
                 {(["open", "closed", "all"] as const).map((value) => (
@@ -822,15 +922,17 @@ export function ProjectsView({
                 ))}
               </div>
             )}
-            <select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as ProjectSort)}
-              aria-label="Sort"
-              className="h-8 clip-corner-lg bg-transparent px-2 text-xs text-foreground outline-none hover:bg-foreground/5 focus:ring-1 focus:ring-ring"
-            >
-              <option value="updated">Recent</option>
-              <option value="name">Name</option>
-            </select>
+            {filter !== "all" && (
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value as ProjectSort)}
+                aria-label="Sort"
+                className="h-8 clip-corner-lg bg-transparent px-2 text-xs text-foreground outline-none hover:bg-foreground/5 focus:ring-1 focus:ring-ring"
+              >
+                <option value="updated">Recent</option>
+                <option value="name">Name</option>
+              </select>
+            )}
             {/* Repositories are the only list with two layouts; work items
                 always read as rows, so the toggle would be inert there. */}
             {filter === "repositories" && (
@@ -867,20 +969,34 @@ export function ProjectsView({
         ) : repos.length === 0 ? (
           <EmptyState icon={FolderGit2} title="No projects yet" hint={emptyHint} />
         ) : filter === "all" ? (
-          <Overview repos={repos} items={items} people={people} onSelect={setFilter} onOpenItem={onOpenItem} />
+          <Overview repos={scopedRepos} items={items} people={people} onSelect={setFilter} onOpenItem={onOpenItem} onLabelClick={openLabel} />
         ) : filter === "repositories" ? (
           visibleRepos.length === 0 ? (
             <FilteredOutNotice onShowAll={showAll} />
           ) : viewMode === "grid" ? (
             <div className={CARD_GRID}>
               {visibleRepos.map((repo) => (
-                <RepoCard key={repo.coord} repo={repo} summary={summaryOf(repo.coord)} people={peopleOf(repo)} />
+                <RepoCard
+                  key={repo.coord}
+                  repo={repo}
+                  summary={summaryOf(repo.coord)}
+                  people={peopleOf(repo)}
+                  selected={repo.coord === activeRepo}
+                  onOpen={() => openRepo(repo.coord)}
+                />
               ))}
             </div>
           ) : (
             <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
               {visibleRepos.map((repo) => (
-                <RepoRow key={repo.coord} repo={repo} summary={summaryOf(repo.coord)} people={peopleOf(repo)} />
+                <RepoRow
+                  key={repo.coord}
+                  repo={repo}
+                  summary={summaryOf(repo.coord)}
+                  people={peopleOf(repo)}
+                  selected={repo.coord === activeRepo}
+                  onOpen={() => openRepo(repo.coord)}
+                />
               ))}
             </div>
           )
@@ -897,7 +1013,7 @@ export function ProjectsView({
                 />
               ))}
             </div>
-          ) : prs.length > 0 ? (
+          ) : anyPrs ? (
             <FilteredOutNotice onShowAll={showAll} />
           ) : (
             <EmptyState icon={GitPullRequest} title="No pull requests" hint="Patches and PRs opened on this workspace will appear here." />
@@ -914,7 +1030,7 @@ export function ProjectsView({
               />
             ))}
           </div>
-        ) : issues.length > 0 ? (
+        ) : anyIssues ? (
           <FilteredOutNotice onShowAll={showAll} />
         ) : (
           <EmptyState icon={CircleDot} title="No issues" hint="Issues opened on this workspace will appear here." />
