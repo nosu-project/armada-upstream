@@ -71,10 +71,22 @@ describe("ConnectedRepositoriesSection", () => {
     h.fold.channels.set("channel", { metadata: { name: "general", private: false } });
   });
 
-  it("only shows repository management controls to channel managers", () => {
+  it("stays out of a community that has no repositories and no manager", () => {
+    const { container } = renderSection(false);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("offers a manager the empty section, so a first repository can be connected", () => {
+    renderSection(true);
+    expect(screen.getByRole("button", { name: "Connect repository" })).toBeInTheDocument();
+    expect(screen.getByText("No repositories connected.")).toBeInTheDocument();
+  });
+
+  it("shows a connected repository to a member, without management controls", () => {
+    channelHoldsRepository();
     renderSection(false);
     expect(screen.queryByRole("button", { name: "Connect repository" })).not.toBeInTheDocument();
-    expect(screen.getByText("No repositories connected.")).toBeInTheDocument();
+    expect(screen.queryByText("No repositories connected.")).not.toBeInTheDocument();
   });
 
   it("resolves a pasted address and attaches it to the chosen channel", async () => {

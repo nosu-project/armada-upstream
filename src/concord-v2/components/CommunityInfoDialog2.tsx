@@ -396,6 +396,10 @@ export function ConnectedRepositoriesSection({
       : [];
   });
 
+  // Nothing connected and no right to connect anything: a community that never
+  // touches git shouldn't carry a permanently empty git section.
+  if (repositories.length === 0 && !canManage) return null;
+
   const connectedCoordinates = new Set(repositories.map(({ attachment }) => attachment.address.coordinate));
   // A channel already holding a repository is spoken for: a second one would
   // blend two projects into one timeline. Shown, but not selectable.

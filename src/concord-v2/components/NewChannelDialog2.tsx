@@ -26,9 +26,9 @@ function TypeCard({ icon: Icon, title, description, onClick }: { icon: typeof Ha
     <button
       type="button"
       onClick={onClick}
-      className="group flex w-full items-center gap-3 clip-corner-lg border border-border/60 bg-card p-3.5 text-left transition-colors hover:border-primary/50 hover:bg-foreground/[0.03]"
+      className="group flex w-full items-center gap-3 clip-corner-lg bg-card p-3.5 text-left transition-colors hover:bg-foreground/[0.03]"
     >
-      <span className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40 transition-colors group-hover:border-primary/40">
+      <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-muted/40">
         <Icon className="size-5 text-muted-foreground transition-colors group-hover:text-foreground" />
       </span>
       <span className="min-w-0 flex-1">
