@@ -17,7 +17,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { emojiPackCoord, useAddEmojiPack, useHasEmojiPack } from "@/hooks/useEmojiPacks";
+import {
+  emojiPackCoord,
+  useAddEmojiPack,
+  useHasEmojiPack,
+  useRemoveEmojiPack,
+} from "@/hooks/useEmojiPacks";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { ReactNode } from "react";
@@ -239,6 +244,114 @@ describe("useAddEmojiPack (kind 10030 read-modify-write)", () => {
     expect(tags).toContainEqual(["a", OTHER_COORD]);
     expect(tags).toContainEqual(["a", THIRD]);
     expect(tags).toContainEqual(["a", COORD]);
+  });
+});
+
+describe("useRemoveEmojiPack (kind 10030 read-modify-write)", () => {
+  function renderRemove(client?: QueryClient) {
+    const w = client
+      ? { client, wrapper: ({ children }: { children: ReactNode }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ) }
+      : makeWrapper();
+    return renderHook(() => useRemoveEmojiPack(), { wrapper: w.wrapper }).result;
+  }
+
+  it("strips only the target pack, preserving other refs and inline emojis", async () => {
+    h.req.mockImplementation(
+      reqConclusive([
+        listEvent({
+          createdAt: 100,
+          tags: [["a", OTHER_COORD], ["a", COORD], ["emoji", "cat", "https://x/cat.png"]],
+          content: "keep",
+        }),
+      ]),
+    );
+
+    const result = renderRemove();
+    await act(async () => {
+      await result.current.mutateAsync({ coord: COORD });
+    });
+
+    expect(h.publish).toHaveBeenCalledTimes(1);
+    const arg = h.publish.mock.calls[0][0] as { tags: string[][]; content: string };
+    expect(arg.tags).toContainEqual(["a", OTHER_COORD]);
+    expect(arg.tags).toContainEqual(["emoji", "cat", "https://x/cat.png"]);
+    expect(arg.tags).not.toContainEqual(["a", COORD]);
+    expect(arg.content).toBe("keep");
+  });
+
+  it("REFUSES to publish when the read failed and a list is known to exist (the wipe)", async () => {
+    h.req.mockImplementation(reqFailed());
+    const { client, wrapper } = makeWrapper();
+    client.setQueryData(["emoji-pack-refs", SELF], [COORD]);
+
+    const result = renderHook(() => useRemoveEmojiPack(), { wrapper }).result;
+    await act(async () => {
+      await expect(result.current.mutateAsync({ coord: COORD })).rejects.toThrow(/couldn't read/i);
+    });
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES to publish on an inconclusive read even when the caches look empty", async () => {
+    h.req.mockImplementation(reqFailed());
+
+    const result = renderRemove();
+    await act(async () => {
+      await expect(result.current.mutateAsync({ coord: COORD })).rejects.toThrow(/couldn't read/i);
+    });
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("is a silent no-op when a relay confirms there is no list", async () => {
+    h.req.mockImplementation(reqConclusive([])); // EOSE, no events
+
+    const result = renderRemove();
+    await act(async () => {
+      await result.current.mutateAsync({ coord: COORD });
+    });
+
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when the pack isn't in the list", async () => {
+    h.req.mockImplementation(reqConclusive([listEvent({ createdAt: 100, tags: [["a", OTHER_COORD]] })]));
+
+    const result = renderRemove();
+    await act(async () => {
+      await result.current.mutateAsync({ coord: COORD });
+    });
+
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("uses the cached list as a floor when the relay read fails (removes off the real list)", async () => {
+    h.req.mockImplementation(reqFailed());
+    h.storeQuery.mockResolvedValue([
+      listEvent({ createdAt: 100, tags: [["a", OTHER_COORD], ["a", COORD]] }),
+    ]);
+
+    const result = renderRemove();
+    await act(async () => {
+      await result.current.mutateAsync({ coord: COORD });
+    });
+
+    expect(h.publish).toHaveBeenCalledTimes(1);
+    const tags = publishedTags();
+    expect(tags).toContainEqual(["a", OTHER_COORD]);
+    expect(tags).not.toContainEqual(["a", COORD]);
+  });
+
+  it("can remove the last pack, publishing an empty ref list on a real read", async () => {
+    h.req.mockImplementation(reqConclusive([listEvent({ createdAt: 100, tags: [["a", COORD]] })]));
+
+    const result = renderRemove();
+    await act(async () => {
+      await result.current.mutateAsync({ coord: COORD });
+    });
+
+    expect(h.publish).toHaveBeenCalledTimes(1);
+    expect(publishedTags()).toEqual([]);
   });
 });
 

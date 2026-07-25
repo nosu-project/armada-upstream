@@ -1,4 +1,4 @@
-import { Check, Loader2, Plus, Smile } from "lucide-react";
+import { Loader2, Plus, Smile, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -13,6 +13,7 @@ import {
   emojiPackPicture,
   useAddEmojiPack,
   useHasEmojiPack,
+  useRemoveEmojiPack,
 } from "@/hooks/useEmojiPacks";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -51,8 +52,11 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
 
   const coord = `30030:${event.pubkey}:${identifier}`;
   const alreadyAdded = useHasEmojiPack(coord);
-  const { mutateAsync: addPack, isPending } = useAddEmojiPack();
-  const [added, setAdded] = useState(false);
+  const { mutateAsync: addPack, isPending: isAdding } = useAddEmojiPack();
+  const { mutateAsync: removePack, isPending: isRemoving } = useRemoveEmojiPack();
+  // Local override of the read-back state so the button flips instantly on a
+  // successful add/remove without waiting for the list re-read to settle.
+  const [override, setOverride] = useState<"added" | "removed" | null>(null);
 
   const visible = entries.slice(0, PREVIEW_LIMIT);
   const extra = entries.length - visible.length;
@@ -64,7 +68,7 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
     }
     try {
       await addPack({ pubkey: event.pubkey, identifier });
-      setAdded(true);
+      setOverride("added");
       toast({ title: "Emoji pack added", description: name });
     } catch (e) {
       toast({
@@ -75,7 +79,21 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
     }
   };
 
-  const isAdded = alreadyAdded || added;
+  const onRemove = async () => {
+    try {
+      await removePack({ coord });
+      setOverride("removed");
+      toast({ title: "Emoji pack removed", description: name });
+    } catch (e) {
+      toast({
+        title: "Couldn't remove pack",
+        description: e instanceof Error ? e.message : "Publishing failed.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const isAdded = override ? override === "added" : alreadyAdded;
 
   return (
     <div
@@ -153,19 +171,34 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
           <p className="text-xs text-muted-foreground">This pack has no emojis.</p>
         )}
 
-        {/* Add button — pinned to the card bottom so cards align in a grid. */}
+        {/* Add / Remove button — pinned to the card bottom so cards align in a
+            grid. Added packs offer a one-tap remove instead of a dead "Added". */}
         {isAdded ? (
-          <Button variant="secondary" className="mt-auto w-full clip-corner-lg" disabled>
-            <Check className="size-4" />
-            Added
+          <Button
+            variant="outline"
+            className="mt-auto w-full clip-corner-lg hover:border-destructive/50 hover:text-destructive"
+            onClick={onRemove}
+            disabled={isRemoving}
+          >
+            {isRemoving ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                Removing…
+              </>
+            ) : (
+              <>
+                <Trash2 className="size-4" />
+                Remove
+              </>
+            )}
           </Button>
         ) : (
           <Button
             className="mt-auto w-full clip-corner-lg"
             onClick={onAdd}
-            disabled={isPending || entries.length === 0}
+            disabled={isAdding || entries.length === 0}
           >
-            {isPending ? (
+            {isAdding ? (
               <>
                 <Loader2 className="size-4 animate-spin" />
                 Adding…
