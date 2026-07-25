@@ -229,11 +229,18 @@ describe("buildWireSpec", () => {
     });
     expect(spec.subs.map((sub) => sub.relay)).toEqual(["wss://a.relay", "wss://b.relay"]);
     // Roots and CI runs share the repository's coordinate filter: both address
-    // the repository directly, unlike comments and statuses.
+    // the repository directly, unlike comments and statuses. The CI filter
+    // carries the live attachment time so the bootstrap round can reach runs
+    // published before this client started.
     expect(spec.subs[0].filters).toEqual([
       { kinds: [1618, 1621], "#a": [address] },
-      { kinds: [9841, 9842, 39842], "#a": [address] },
+      { kinds: [9841, 9842, 39842], "#a": [address], since: 20 },
     ]);
+    // A relay cursor far ahead of the attachment must not win the first round,
+    // or a channel never sees the runs it is entitled to show.
+    const bootstrapped = stampRoundSince(spec.subs[0].filters, 9_000, 9_100, true);
+    expect(bootstrapped[1].since).toBe(20);
+    expect(stampRoundSince(spec.subs[0].filters, 9_000, 9_100)[1].since).toBe(9_000);
     expect(spec.gitByRepository.get(address)?.map((entry) => entry.channelId)).toEqual(["channel-a", "channel-b"]);
 
     const detached = buildWireSpec({

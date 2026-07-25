@@ -296,19 +296,24 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
   // but never keep a standing socket subscription alive.
   const gitByRepository = new Map<string, Array<{ channelId: string; communityId?: string; attachment: GitRepositoryAttachment }>>();
   const reposByRelay = new Map<string, Set<string>>();
+  // Earliest live attachment per relay: the CI filter's bootstrap `since`.
+  const ciSinceByRelay = new Map<string, number>();
   for (const repository of inputs.gitRepositories ?? []) {
     const attachments = repository.attachments
       .filter(({ attachment }) => attachment.address.coordinate === repository.address)
       .sort((a, b) => a.channelId.localeCompare(b.channelId) || a.attachment.attachedAt - b.attachment.attachedAt);
     if (attachments.length === 0) continue;
     gitByRepository.set(repository.address, attachments);
-    if (!attachments.some(({ attachment }) => attachment.detachedAt === undefined)) continue;
+    const live = attachments.filter(({ attachment }) => attachment.detachedAt === undefined);
+    if (live.length === 0) continue;
+    const attachedAt = Math.min(...live.map(({ attachment }) => attachment.attachedAt));
     for (const url of repository.relays) {
       const relay = normalizeRelayUrl(url);
       if (!relay) continue;
       let addresses = reposByRelay.get(relay);
       if (!addresses) reposByRelay.set(relay, (addresses = new Set()));
       addresses.add(repository.address);
+      ciSinceByRelay.set(relay, Math.min(ciSinceByRelay.get(relay) ?? attachedAt, attachedAt));
     }
   }
   for (const [relay, addresses] of reposByRelay) {
@@ -317,8 +322,13 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     // CI runs carry the repository `a` tags directly, so they ride the same
     // coordinate filter as roots — but they are activity, not announcements,
     // so the discovery relay is excluded exactly as it is for children.
+    //
+    // The explicit `since` is the attachment time, honored on the bootstrap
+    // round (see stampRoundSince): without it the relay cursor (≈ now) would
+    // apply and runs published before the client started — everything the
+    // channel is entitled to show — would never be requested at all.
     if (!isGitAnnouncementDiscoveryRelay(relay)) {
-      add(relay, { kinds: [...CI_EVENT_KINDS], "#a": sorted });
+      add(relay, { kinds: [...CI_EVENT_KINDS], "#a": sorted, since: ciSinceByRelay.get(relay) ?? 0 });
     }
   }
 
