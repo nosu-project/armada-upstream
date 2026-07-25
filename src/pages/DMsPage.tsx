@@ -179,19 +179,22 @@ function ConversationRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex items-center gap-2.5 w-full px-2 py-2 rounded-lg text-left transition-colors",
+        // Scaled up relative to a channel row: this is a contact list, so the
+        // avatar carries recognition and the preview line has to be readable at
+        // a glance rather than merely present.
+        "flex items-center gap-3 w-full px-2.5 py-2.5 rounded-lg text-left transition-colors",
         active ? "bg-secondary" : "hover:bg-secondary/60",
       )}
     >
-      <Avatar shape={getAvatarShape(metadata)} className="size-9 shrink-0">
+      <Avatar shape={getAvatarShape(metadata)} className="size-12 shrink-0">
         <AvatarImage src={metadata?.picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-primary text-xs">
+        <AvatarFallback className="bg-primary/20 text-primary text-base">
           {name[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 space-y-0.5">
         <div className="flex items-center gap-1.5 min-w-0">
-          <div className={cn("text-sm truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
+          <div className={cn("text-[15px] truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
             {/* Search highlighting operates on the raw name, so custom emoji
                 shortcodes only render as images when no query is active. */}
             {q ? <Highlight text={name} query={query} /> : <DisplayName pubkey={peer} name={name} />}
@@ -199,7 +202,7 @@ function ConversationRow({
           <BotPill metadata={metadata} />
         </div>
         {(preview || secondLine) && (
-          <div className={cn("text-xs truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
+          <div className={cn("text-sm truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
             {secondLine ? (
               <Highlight text={secondLine} query={secondLineHighlight ? query : ""} />
             ) : (
@@ -210,15 +213,15 @@ function ConversationRow({
       </div>
       {inCall ? (
         <span
-          className="shrink-0 flex size-5 items-center justify-center rounded-full bg-success text-success-foreground"
+          className="shrink-0 flex size-6 items-center justify-center rounded-full bg-success text-success-foreground"
           aria-label="Voice call in progress"
         >
-          <Headphones className="size-3" />
+          <Headphones className="size-3.5" />
         </span>
       ) : othersInVoice ? (
         <VoicePresence participants={others} className="text-success/90" />
       ) : unread ? (
-        <span className="shrink-0 size-2 rounded-full bg-primary" aria-label="Unread messages" />
+        <span className="shrink-0 size-2.5 rounded-full bg-primary" aria-label="Unread messages" />
       ) : null}
     </button>
   );
@@ -1289,10 +1292,11 @@ function NewDMPane({
 /**
  * Placeholder rows shown only when there is no snapshot to restore — a genuine
  * cold start for this account on this device. Mirrors ConversationRow's
- * geometry (size-9 avatar, name line, preview line) so the real list doesn't
- * shift when it replaces these. Widths are fixed rather than random so the
- * placeholders don't reflow on re-render, and there are enough of them to fill
- * a tall viewport rather than trailing off into blank space.
+ * geometry (gap-3, px-2.5 py-2.5, size-12 avatar, name line, preview line) so
+ * the real list doesn't shift when it replaces these. Widths are fixed rather
+ * than random so the placeholders don't reflow on re-render, and there are
+ * enough of them to fill a tall viewport rather than trailing off into blank
+ * space.
  */
 const SKELETON_WIDTHS = [
   "70%", "45%", "58%", "38%", "64%", "50%", "72%", "42%",
@@ -1303,11 +1307,11 @@ function ConversationRowSkeletons() {
   return (
     <div aria-hidden>
       {SKELETON_WIDTHS.map((width, i) => (
-        <div key={i} className="flex items-center gap-2.5 w-full px-2 py-2">
-          <Skeleton className="size-9 shrink-0 rounded-full" />
-          <div className="min-w-0 flex-1 space-y-1.5">
-            <Skeleton className="h-3.5 w-24 max-w-full" />
-            <Skeleton className="h-3 max-w-full" style={{ width }} />
+        <div key={i} className="flex items-center gap-3 w-full px-2.5 py-2.5">
+          <Skeleton className="size-12 shrink-0 rounded-full" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-4 w-28 max-w-full" />
+            <Skeleton className="h-3.5 max-w-full" style={{ width }} />
           </div>
         </div>
       ))}
