@@ -1,7 +1,12 @@
 /**
  * Synchronous last-known-good timeline snapshots, shared by every chat
- * transport (NIP-29 groups, Concord channels, DM threads, the DM conversation
- * list).
+ * transport (NIP-29 groups, Concord channels, DM threads).
+ *
+ * Note the DM CONVERSATION LIST deliberately does not use this. A snapshot is
+ * a truncated tail of ONE timeline, which is fine for a thread (the newest
+ * screenful is what you see first) but wrong for a list whose order depends on
+ * every conversation at once — it painted a wrong order that the store read
+ * then visibly corrected. That list blocks on IndexedDB instead.
  *
  * Why this exists: the durable event store is IndexedDB, and the FIRST
  * IndexedDB read after a cold Android WebView launch pays a multi-second
@@ -57,11 +62,6 @@ export function concordSnapshotScope(channelIdHex: string): string {
 /** Snapshot scope for a 1:1 DM thread (self-scoped: DMs are per-account). */
 export function dmThreadSnapshotScope(self: string, peer: string): string {
   return `dm:${self}|${peer}`;
-}
-
-/** Snapshot scope for the DM conversation list (newest event per peer). */
-export function dmConversationsSnapshotScope(self: string): string {
-  return `dmlist:${self}`;
 }
 
 // ── read / write ──────────────────────────────────────────────────────────────

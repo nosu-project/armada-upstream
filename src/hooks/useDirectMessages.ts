@@ -17,11 +17,8 @@ import { useDecryptConsent } from "@/hooks/useDecryptConsent";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { setDecryptConsent } from "@/lib/decryptConsent";
 import { useWireScopes } from "@/wire/useWireScopes";
-import {
-  dmConversationsSnapshotScope,
-  dmThreadSnapshotScope,
-  readTimelineSnapshot,
-} from "@/lib/timelineSnapshot";
+import { dmThreadSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
+import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -441,10 +438,6 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   // change re-runs THIS entry's queryFn (below), so the wider author set merges
   // on top of what's already rendered.
   const queryKey = ["dm", "conversations", user?.pubkey, relayKey];
-  // Last-known-good localStorage snapshot (newest kind-4 per counterparty) so
-  // the conversation list paints on the first frame of a cold launch, before
-  // the IndexedDB cold-open. Ciphertext only — previews decrypt as usual.
-  const snapshotScope = user?.pubkey ? dmConversationsSnapshotScope(user.pubkey) : undefined;
 
   // Per-relay, per-direction pagination cursors for the "load older
   // conversations" backfill. Kept in a ref (not state) so advancing them
@@ -479,14 +472,17 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
     enabled: !!user?.pubkey,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
+      const firstSync = !isDmSynced("nip04", pubkey);
       const store = await eventStore;
       // Newest known follow set at execution time (not fetch-scheduling time).
       const scopedFollows = followsRef.current;
 
       // 1. LOCAL-FIRST: the wire funnels every kind-4 into IndexedDB (and
       //    NostrBatcher mirrors pull results), so the conversation list paints
-      //    instantly from the store. Received DMs are scoped to followed
-      //    authors (friends-only), matching the relay queries below.
+      //    from the store — the query stays pending until this read resolves,
+      //    so the list's first paint is already correctly ordered. Received DMs
+      //    are scoped to followed authors (friends-only), matching the relay
+      //    queries below.
       const cachedEvents = await store.query([
         { kinds: [KIND_DM], authors: [pubkey], limit: DM_PAGE_SIZE },
         ...(scopedFollows.length > 0
@@ -503,7 +499,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       //    list. Throttled so wire-bus invalidations stay local-only.
       const pullDue = Date.now() - lastPullRef.current >= PULL_MIN_INTERVAL_MS;
       if (pullDue) lastPullRef.current = Date.now();
-      void (async () => {
+      const pull = (async () => {
         if (!pullDue || signal.aborted || relays.length === 0) return;
         try {
           const { events, cursors } = await queryRelaysDmPage(
@@ -517,22 +513,37 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
           if (signal.aborted) return;
           cursorsRef.current = cursors;
           setHasMore(hasMoreCursor(cursors));
+          // Completed without throwing: the store has now seen whatever the
+          // relays hold, so later loads may trust it and render store-first.
+          markDmSynced("nip04", pubkey);
           if (events.length === 0) return;
           queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) => mergeDmEvents(old, events));
         } catch {
-          // Best-effort; the local-first list already rendered.
+          // Best-effort; the local-first list already rendered. Deliberately
+          // NOT marked synced — a timeout or offline start must not latch the
+          // flag, or the next load would paint a false empty list.
         }
       })();
+
+      // On the FIRST sync this device has nothing local to show, so the network
+      // is the only source: await it rather than resolving to an empty list
+      // that the pull then re-orders under the user. The pull writes its merge
+      // through `setQueryData`, so re-read the cache and union it in — returning
+      // the pre-pull `local` here would clobber that write.
+      if (firstSync) {
+        await pull;
+        return mergeDmEvents(local, queryClient.getQueryData<NostrEvent[]>(queryKey) ?? []);
+      }
 
       return local;
     },
     staleTime: 15_000,
-    // Seed from the localStorage snapshot (newest event per conversation) —
-    // a pure first-paint read cache, marked already-stale so the store-reading
-    // queryFn still runs immediately. The merge floor (mergeDmEvents) is
-    // append-only, so the seed can never shrink or mask fresher data.
-    initialData: () => readTimelineSnapshot<NostrEvent>(snapshotScope),
-    initialDataUpdatedAt: 0,
+    // No `initialData`. A localStorage snapshot used to seed the first frame
+    // here, but it held only the newest 30 kind-4 events — a truncated,
+    // NIP-17-blind slice of the list — so every load painted a deterministically
+    // WRONG order that the store read then corrected a beat later. The
+    // IndexedDB read is fast enough to block on; the list now paints once, in
+    // its final order.
     // Backstop the live socket: a backgrounded mobile WebSocket can wedge with
     // no error and no event, silently stalling delivery. A periodic local-first
     // re-read heals the gap (matches the NIP-29/Concord hooks, which DMs had
@@ -542,22 +553,6 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
-
-  // Keep the conversation-list snapshot fresh: the newest event per
-  // counterparty (ascending, so the shared writer's tail-slice keeps the most
-  // recent conversations). Ciphertext only.
-  const snapshotItems = useMemo(() => {
-    if (!user?.pubkey || !query.data || query.data.length === 0) return undefined;
-    const newestByPeer = new Map<string, NostrEvent>();
-    for (const e of query.data) {
-      const peer = dmCounterparty(e, user.pubkey);
-      if (!peer) continue;
-      const cur = newestByPeer.get(peer);
-      if (!cur || cur.created_at < e.created_at) newestByPeer.set(peer, e);
-    }
-    return [...newestByPeer.values()].sort((a, b) => a.created_at - b.created_at);
-  }, [query.data, user?.pubkey]);
-  useTimelineSnapshotWriter(snapshotScope, snapshotItems);
 
   // Load an older page of conversations: advance each non-exhausted relay's
   // cursor one page and merge. Because each relay pages independently, a dense

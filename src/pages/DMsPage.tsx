@@ -1545,17 +1545,26 @@ export function DMsPage() {
   // Either plane makes DMs usable: kind-4 needs nip04, NIP-17 needs nip44.
   const dmSupported = useDMSupport();
   const dm17Supported = useDm17Support();
-  const { conversations, previews, events, isLoading, loadMore, hasMore, isLoadingMore } =
-    useDMConversations({ decryptPreviews: true });
+  const {
+    conversations,
+    previews,
+    events,
+    isLoading: kind4Loading,
+    loadMore,
+    hasMore,
+    isLoadingMore,
+  } = useDMConversations({ decryptPreviews: true });
   // NIP-17 conversations (decrypted rumors from the local store). Interactive:
   // opening the DMs page is where the one-time decrypt-consent prompt may
   // legitimately appear (same moment the kind-4 previews could open it).
-  const { conversations: dm17Conversations } = useDm17Conversations({ interactive: true });
+  const { conversations: dm17Conversations, isLoading: dm17Loading } = useDm17Conversations({
+    interactive: true,
+  });
   // Adopt the viewer's published kind-10050 inbox as the local DM relay set
   // (local config only — NEVER publishes; a 10050 list is only ever written by
   // an explicit save in Settings).
   useAdoptDmInbox();
-  const { data: followData } = useFollowList();
+  const { data: followData, isLoading: followsLoading } = useFollowList();
   const [composing, setComposing] = useState(false);
   // The conversation list is narrowed to people the user follows (kind 3) plus
   // anyone the user has messaged — unsolicited DMs from strangers are never
@@ -1564,6 +1573,16 @@ export function DMsPage() {
     () => new Set(followData?.pubkeys ?? []),
     [followData?.pubkeys],
   );
+
+  // Hold the list until EVERY input to `rows` has settled. All three are local
+  // reads that resolve in milliseconds (the IndexedDB event store, the NIP-17
+  // rumor store, and the follow list — cache-seeded from the store), but each
+  // one changes the list's contents or its order: NIP-17 rumors supply the
+  // newest message for many peers, and an unresolved follow set hides every row
+  // the viewer didn't send the last message in. Painting before they land shows
+  // a deterministically wrong list that re-sorts a beat later, which is exactly
+  // what this gate exists to prevent. (`kind4Loading` also covers the mute set.)
+  const isLoading = kind4Loading || dm17Loading || followsLoading;
 
   const activePeer = rawPeer ? resolvePubkey(rawPeer) : undefined;
 

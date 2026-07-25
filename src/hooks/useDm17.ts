@@ -40,6 +40,7 @@ import { effectiveDmRelays } from "@/contexts/AppContext";
 import { APP_RELAYS } from "@/lib/platform";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
+import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
 import {
   buildDmRumor,
   DM_RUMOR_KINDS,
@@ -157,6 +158,8 @@ interface SyncCtx {
 /** Per-viewer sync throttling + seen wrap ids (skip re-decrypt churn). */
 const lastSyncAt = new Map<string, number>();
 const lastSyncDeclined = new Map<string, boolean>();
+/** In-flight inbox passes per viewer, so concurrent callers await the same one. */
+const inflightSync = new Map<string, Promise<boolean>>();
 const seenWrapIds = new Map<string, Set<string>>();
 const seenWrapsLoaded = new Map<string, Promise<void>>();
 
@@ -326,8 +329,15 @@ async function runLiveDm17Pass(
  * viewer; a consent decline leaves the cursor unadvanced so the wraps are
  * retried once consent flips.
  */
-export async function syncDm17Inbox(ctx: SyncCtx, opts?: { force?: boolean; interactive?: boolean }): Promise<void> {
-  if (!ctx.self || !ctx.signer.nip44 || ctx.relays.length === 0) return;
+export async function syncDm17Inbox(ctx: SyncCtx, opts?: { force?: boolean; interactive?: boolean }): Promise<boolean> {
+  if (!ctx.self || !ctx.signer.nip44 || ctx.relays.length === 0) return false;
+  // Concurrent callers coalesce onto ONE pass. The unread dot and the DMs page
+  // each mount their own conversations query, so both call this on a cold
+  // start; without this the loser returns immediately on the throttle below
+  // while the winner is still fetching, and a first sync waiting on it would
+  // resolve against a store the pass hasn't filled yet.
+  const inflight = inflightSync.get(ctx.self);
+  if (inflight) return inflight;
   const now = Date.now();
   const last = lastSyncAt.get(ctx.self) ?? 0;
   // A deferred/declined pass left wraps unconsumed: bypass the throttle only
@@ -336,9 +346,28 @@ export async function syncDm17Inbox(ctx: SyncCtx, opts?: { force?: boolean; inte
   const retryDeclined =
     (lastSyncDeclined.get(ctx.self) ?? false) &&
     (opts?.interactive || getDecryptConsent() === "allowed" || !signerNeedsApproval(ctx.method));
-  if (!opts?.force && !retryDeclined && now - last < SYNC_MIN_INTERVAL_MS) return;
+  if (!opts?.force && !retryDeclined && now - last < SYNC_MIN_INTERVAL_MS) return false;
   lastSyncAt.set(ctx.self, now);
 
+  const pass = runInboxSync(ctx, opts, now);
+  inflightSync.set(ctx.self, pass);
+  try {
+    return await pass;
+  } finally {
+    inflightSync.delete(ctx.self);
+  }
+}
+
+/**
+ * One inbox pass. Resolves true only when the relay query completed and its
+ * wraps were consumed — a throw, or a consent deferral, resolves false so
+ * callers never mistake a failed pass for "synced".
+ */
+async function runInboxSync(
+  ctx: SyncCtx,
+  opts: { force?: boolean; interactive?: boolean } | undefined,
+  now: number,
+): Promise<boolean> {
   try {
     const [cursor] = await Promise.all([readDm17Cursor(ctx.self), loadSeenWraps(ctx.self)]);
     const since = cursor?.newest ? Math.max(0, cursor.newest - RESYNC_SLACK_SECS) : undefined;
@@ -355,7 +384,7 @@ export async function syncDm17Inbox(ctx: SyncCtx, opts?: { force?: boolean; inte
     const seen = seenSetFor(ctx.self);
     const fresh = wraps.filter((w) => !seen.has(w.id));
 
-    if (!(await openAndStore(ctx, fresh, opts?.interactive ?? false))) return; // deferred: retry later
+    if (!(await openAndStore(ctx, fresh, opts?.interactive ?? false))) return false; // deferred: retry later
 
     if (wraps.length > 0) {
       const newest = Math.max(...wraps.map((w) => w.created_at));
@@ -369,8 +398,10 @@ export async function syncDm17Inbox(ctx: SyncCtx, opts?: { force?: boolean; inte
     } else if (!cursor) {
       await updateDm17Cursor(ctx.self, { newest: Math.floor(now / 1000), oldest: Math.floor(now / 1000), exhausted: true });
     }
+    return true;
   } catch {
     // Best-effort background sync; local-first reads already rendered.
+    return false;
   }
 }
 
@@ -840,8 +871,19 @@ export function useDm17Conversations(opts?: { interactive?: boolean }): {
     enabled: !!self && support,
     queryFn: async ({ signal }) => {
       const rows = await queryDm17Conversations({ self, signal });
-      if (ctx) void syncDm17Inbox(ctx, { interactive });
-      return rows;
+      if (!ctx) return rows;
+
+      // On the FIRST sync this device's rumor store is empty, so `rows` is not
+      // "no conversations" — it's "not synced yet". Await the inbox pass and
+      // re-read, rather than resolving to an empty list the pass then fills in
+      // underneath the user. Every later load renders store-first and lets the
+      // pass correct it in the background.
+      if (isDmSynced("nip17", self)) {
+        void syncDm17Inbox(ctx, { interactive });
+        return rows;
+      }
+      if (await syncDm17Inbox(ctx, { interactive })) markDmSynced("nip17", self);
+      return await queryDm17Conversations({ self, signal });
     },
     staleTime: 15_000,
     refetchInterval: 60_000,
