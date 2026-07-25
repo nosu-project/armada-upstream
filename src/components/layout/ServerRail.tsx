@@ -1774,47 +1774,6 @@ export function ServerRail({
           </Tooltip>
         )}
 
-        {/* Discover — browse/search public communities, emoji packs and themes.
-            Public (no account needed), so it sits outside the `user &&` gate. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <NavLink
-              to="/discover"
-              aria-label="Discover"
-              onClick={onNavigate}
-              className="group relative flex items-center justify-center shrink-0"
-            >
-              <span
-                className={cn(
-                  "absolute -left-2 w-[3px] bg-primary transition-all",
-                  "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
-                  "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
-                )}
-              />
-              <span
-                className={cn(
-                  "relative block size-12 transition-all duration-150",
-                  "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
-                )}
-              >
-                <span
-                  className={cn(
-                    "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
-                    "bg-muted text-primary opacity-50 saturate-50",
-                    "group-hover:opacity-100 group-hover:saturate-100",
-                    "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
-                  )}
-                >
-                  <Compass className="size-5" />
-                </span>
-              </span>
-            </NavLink>
-          </TooltipTrigger>
-          <RailTooltipContent side="right" className="font-medium">
-            Discover
-          </RailTooltipContent>
-        </Tooltip>
-
         {/* One unified, user-arranged community list: NIP-29 servers and Concord
             (V1/V2) communities intermixed, with Discord-style folders. */}
         {renderNodes.map((node) =>
@@ -1859,6 +1818,47 @@ export function ServerRail({
             </Button>
           </TooltipTrigger>
           <RailTooltipContent side="right">Add a server or chat</RailTooltipContent>
+        </Tooltip>
+
+        {/* Discover — browse/search public communities, emoji packs and themes.
+            Public (no account needed), so it sits outside the `user &&` gate. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <NavLink
+              to="/discover"
+              aria-label="Discover"
+              onClick={onNavigate}
+              className="group relative flex items-center justify-center shrink-0"
+            >
+              <span
+                className={cn(
+                  "absolute -left-2 w-[3px] bg-primary transition-all",
+                  "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                  "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                )}
+              />
+              <span
+                className={cn(
+                  "relative block size-12 transition-all duration-150",
+                  "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                    "bg-muted text-primary opacity-50 saturate-50",
+                    "group-hover:opacity-100 group-hover:saturate-100",
+                    "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                  )}
+                >
+                  <Compass className="size-5" />
+                </span>
+              </span>
+            </NavLink>
+          </TooltipTrigger>
+          <RailTooltipContent side="right" className="font-medium">
+            Discover
+          </RailTooltipContent>
         </Tooltip>
       </nav>
 
