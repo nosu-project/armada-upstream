@@ -20,6 +20,7 @@ import {
   type GitTicket,
   type GitTimelineActivity,
 } from "@/lib/gitActivity";
+import { CI_EVENT_KINDS } from "@/lib/ci";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 /**
@@ -46,6 +47,9 @@ export function useChannelGitActivity(
     queryFn: async (): Promise<GitTimelineActivity[]> => {
       const store = await eventStore;
       const roots = await store.query([{ kinds: [GIT_PULL_REQUEST_KIND, GIT_ISSUE_KIND], "#a": addresses, limit: 2_000 }]);
+      // CI runs address the repository directly, so they read alongside roots
+      // rather than hanging off a discovered ticket.
+      const ci = await store.query([{ kinds: [...CI_EVENT_KINDS], "#a": addresses, limit: 4_000 }]);
       const addressSet = new Set(addresses);
       const validRoots = roots.filter((event) => {
         const ticket = parseGitTicket(event);
@@ -62,7 +66,7 @@ export function useChannelGitActivity(
       const announcements = await store.query(normalized.map((attachment) => ({
         kinds: [GIT_REPOSITORY_ANNOUNCEMENT_KIND], authors: [attachment.address.owner], "#d": [attachment.address.identifier], limit: 1,
       })));
-      return buildGitTimelineActivities([...validRoots, ...children, ...deletions], normalized, announcements.map(parseGitRepositoryAnnouncement).filter((repository): repository is NonNullable<typeof repository> => Boolean(repository)));
+      return buildGitTimelineActivities([...validRoots, ...children, ...deletions, ...ci], normalized, announcements.map(parseGitRepositoryAnnouncement).filter((repository): repository is NonNullable<typeof repository> => Boolean(repository)));
     },
   });
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);

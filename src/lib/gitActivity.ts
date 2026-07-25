@@ -1,5 +1,6 @@
 import type { NostrEvent } from "@nostrify/nostrify";
 
+import { assembleCIRuns, matchCIRepository, type CIRun } from "@/lib/ci";
 import { isNostrId } from "@/lib/nostrId";
 import { parseAddr } from "@/lib/parseAddr";
 import { normalizeRelayUrl } from "@/lib/platform";
@@ -431,7 +432,8 @@ export function buildGitStatusTemplate(
 export type GitTimelineActivity =
   | { type: "ticket-opened"; ticket: GitTicket; repository: GitRepositoryAddress; createdAt: number }
   | { type: "comment"; comment: GitComment; ticket: GitTicket; repository: GitRepositoryAddress; createdAt: number }
-  | { type: "status-change"; status: GitStatusEvent; ticket: GitTicket; repository: GitRepositoryAddress; createdAt: number };
+  | { type: "status-change"; status: GitStatusEvent; ticket: GitTicket; repository: GitRepositoryAddress; createdAt: number }
+  | { type: "ci-run"; run: CIRun; repository: GitRepositoryAddress; createdAt: number };
 
 /**
  * Build a channel's render-ready Git activity from one batched store read.
@@ -502,6 +504,18 @@ export function buildGitTimelineActivities(
     const trust = new Set([ticket.author, announced?.owner ?? repository.owner, ...(announced?.maintainers ?? [])]);
     if (trust.has(status.author)) activity.push({ type: "status-change", status, ticket, repository, createdAt: status.createdAt });
   }
+  // CI runs are assembled across events (a result plus the job results it
+  // quotes), so they are collapsed first and then gated like anything else —
+  // a run outside the attachment's interval is not this channel's history.
+  // Deliberately NOT trust-filtered: the extension leaves signer policy to
+  // clients and no on-relay designation exists, so the signer is rendered
+  // instead (see lib/ci.ts).
+  for (const run of assembleCIRuns(events)) {
+    const repository = matchCIRepository(run, attached);
+    if (!repository) continue;
+    if (!attached.get(repository.coordinate)?.some((interval) => isGitRepositoryAttachedAt(interval, run.createdAt))) continue;
+    activity.push({ type: "ci-run", run, repository, createdAt: run.createdAt });
+  }
   return sortAndDedupeGitTimelineActivities(activity);
 }
 
@@ -521,7 +535,12 @@ export function sortAndDedupeGitTimelineActivities(
 }
 
 function activityId(activity: GitTimelineActivity): string {
-  return activity.type === "ticket-opened" ? activity.ticket.id : activity.type === "comment" ? activity.comment.id : activity.status.event.id;
+  switch (activity.type) {
+    case "ticket-opened": return activity.ticket.id;
+    case "comment": return activity.comment.id;
+    case "ci-run": return activity.run.id;
+    default: return activity.status.event.id;
+  }
 }
 
 function compareNewestFirst(a: { createdAt: number; event: NostrEvent }, b: { createdAt: number; event: NostrEvent }): number {

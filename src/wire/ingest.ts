@@ -10,6 +10,7 @@ import { KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { emitWireScopes } from "@/wire/bus";
 import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
+import { isCIEventKind, matchCIEventRepository } from "@/lib/ci";
 import { isGitRepositoryAttachedAt, matchGitTicketRepository, parseGitComment, parseGitStatusEvent, parseGitTicket } from "@/lib/gitActivity";
 
 import type { OpenedChat } from "@/concord-v2/lib/chat";
@@ -71,6 +72,10 @@ function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined
     const address = spec?.gitRootById.get(status.ticketId);
     if (address) return `git:${address}`;
   }
+  // CI runs and job results carry the repository coordinates themselves, so
+  // they scope without waiting for a root to be discovered first.
+  const ciRepository = spec ? matchCIEventRepository(ev, spec.gitByRepository) : undefined;
+  if (ciRepository) return `git:${ciRepository.coordinate}`;
   const h = tagValue(ev, "h");
   if (h) return `nip29:${h}`;
   if (ev.kind === 4) return "dm";
@@ -234,7 +239,7 @@ export async function ingestWireEvents(
     // so the writes below stay one batched burst (see the note above).
     const storable = plain.filter(
       (ev) =>
-        !(ev.kind === 1618 || ev.kind === 1621 || ev.kind === 1111 || (ev.kind >= 1630 && ev.kind <= 1633)) ||
+        !(ev.kind === 1618 || ev.kind === 1621 || ev.kind === 1111 || (ev.kind >= 1630 && ev.kind <= 1633) || isCIEventKind(ev.kind)) ||
         scopeOf(ev, spec),
     );
     const writes = storable.map((ev) =>

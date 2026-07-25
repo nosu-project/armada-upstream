@@ -162,6 +162,9 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
   const commentCounts = new Map<string, number>();
   const lastActivity = new Map<string, number>();
   for (const activity of activities) {
+    // A CI run belongs to a repository, not a work item, so it neither counts
+    // as discussion nor bumps a ticket's last-activity ordering.
+    if (activity.type === "ci-run") continue;
     if (activity.type === "comment") {
       commentCounts.set(activity.ticket.id, (commentCounts.get(activity.ticket.id) ?? 0) + 1);
     }

@@ -1,3 +1,4 @@
+import { CI_EVENT_KINDS } from "@/lib/ci";
 import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platform";
 import { BUZZ_WIRE_KINDS } from "@/buzz/kinds";
 import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
@@ -311,7 +312,14 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     }
   }
   for (const [relay, addresses] of reposByRelay) {
-    add(relay, { kinds: [GIT_PULL_REQUEST_KIND, GIT_ISSUE_KIND], "#a": [...addresses].sort() });
+    const sorted = [...addresses].sort();
+    add(relay, { kinds: [GIT_PULL_REQUEST_KIND, GIT_ISSUE_KIND], "#a": sorted });
+    // CI runs carry the repository `a` tags directly, so they ride the same
+    // coordinate filter as roots — but they are activity, not announcements,
+    // so the discovery relay is excluded exactly as it is for children.
+    if (!isGitAnnouncementDiscoveryRelay(relay)) {
+      add(relay, { kinds: [...CI_EVENT_KINDS], "#a": sorted });
+    }
   }
 
   // ── NIP-22 comments + NIP-34 statuses: dynamic root-id filters ───────────

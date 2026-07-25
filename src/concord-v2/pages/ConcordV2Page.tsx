@@ -989,7 +989,7 @@ export function ConcordV2Page() {
     mixedEntries.map((entry) => ({
       id: entry.id,
       createdAt: entry.createdAt,
-      author: entry.type === "chat" ? entry.message.pubkey : entry.type === "git-ticket-opened" ? entry.activity.ticket.author : entry.type === "git-comment" ? entry.activity.comment.author : entry.activity.status.author,
+      author: entry.type === "chat" ? entry.message.pubkey : entry.type === "git-ticket-opened" ? entry.activity.ticket.author : entry.type === "git-comment" ? entry.activity.comment.author : entry.type === "git-ci-run" ? entry.activity.run.author : entry.activity.status.author,
     })),
     user?.pubkey,
   );
@@ -1370,8 +1370,8 @@ export function ConcordV2Page() {
   // local activity query, focus the matching panel, then consume the parameter.
   useEffect(() => {
     if (!ticketParam || openTicket) return;
-    const activity = gitActivity.activities.find((item) => item.ticket.id === ticketParam);
-    if (!activity) return;
+    const activity = gitActivity.activities.find((item) => item.type !== "ci-run" && item.ticket.id === ticketParam);
+    if (!activity || activity.type === "ci-run") return;
     setOpenTicket(activity.ticket);
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);

@@ -5,7 +5,8 @@ import type { GitTimelineActivity } from "@/lib/gitActivity";
 export type GitChannelTimelineEntry =
   | { type: "git-ticket-opened"; id: string; createdAt: number; activity: Extract<GitTimelineActivity, { type: "ticket-opened" }> }
   | { type: "git-comment"; id: string; createdAt: number; activity: Extract<GitTimelineActivity, { type: "comment" }> }
-  | { type: "git-status"; id: string; createdAt: number; activity: Extract<GitTimelineActivity, { type: "status-change" }> };
+  | { type: "git-status"; id: string; createdAt: number; activity: Extract<GitTimelineActivity, { type: "status-change" }> }
+  | { type: "git-ci-run"; id: string; createdAt: number; activity: Extract<GitTimelineActivity, { type: "ci-run" }> };
 
 /**
  * A channel timeline is deliberately broader than `ChatTransport`: Git events
@@ -18,6 +19,7 @@ export type ChannelTimelineEntry =
 export function gitActivityEntry(activity: GitTimelineActivity): GitChannelTimelineEntry {
   if (activity.type === "ticket-opened") return { type: "git-ticket-opened", id: `git:${activity.ticket.id}`, createdAt: activity.createdAt, activity };
   if (activity.type === "comment") return { type: "git-comment", id: `git:${activity.comment.id}`, createdAt: activity.createdAt, activity };
+  if (activity.type === "ci-run") return { type: "git-ci-run", id: `git:${activity.run.id}`, createdAt: activity.createdAt, activity };
   return { type: "git-status", id: `git:${activity.status.event.id}`, createdAt: activity.createdAt, activity };
 }
 

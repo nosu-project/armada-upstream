@@ -228,7 +228,12 @@ describe("buildWireSpec", () => {
       }],
     });
     expect(spec.subs.map((sub) => sub.relay)).toEqual(["wss://a.relay", "wss://b.relay"]);
-    expect(spec.subs[0].filters).toEqual([{ kinds: [1618, 1621], "#a": [address] }]);
+    // Roots and CI runs share the repository's coordinate filter: both address
+    // the repository directly, unlike comments and statuses.
+    expect(spec.subs[0].filters).toEqual([
+      { kinds: [1618, 1621], "#a": [address] },
+      { kinds: [9841, 9842, 39842], "#a": [address] },
+    ]);
     expect(spec.gitByRepository.get(address)?.map((entry) => entry.channelId)).toEqual(["channel-a", "channel-b"]);
 
     const detached = buildWireSpec({

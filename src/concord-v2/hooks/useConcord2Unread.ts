@@ -67,7 +67,13 @@ export function useConcord2Unread(
         }
       }
       for (const activity of gitByChannel.get(idHex) ?? []) {
-        const author = activity.type === "ticket-opened" ? activity.ticket.author : activity.type === "comment" ? activity.comment.author : activity.status.author;
+        const author = activity.type === "ticket-opened"
+          ? activity.ticket.author
+          : activity.type === "comment"
+            ? activity.comment.author
+            : activity.type === "ci-run"
+              ? activity.run.author
+              : activity.status.author;
         if (author === pubkey) continue;
         if (activity.createdAt > latest) latest = activity.createdAt;
       }

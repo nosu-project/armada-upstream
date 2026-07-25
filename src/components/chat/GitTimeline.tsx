@@ -1,4 +1,4 @@
-import { Braces, CircleDot, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, Trash2, X } from "lucide-react";
+import { Braces, CheckCircle2, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, Trash2, X, XCircle } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useMemo, useRef, useState } from "react";
 
@@ -18,6 +18,7 @@ import { useGitAttachmentUploads } from "@/hooks/useGitAttachmentUploads";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
+import { ciRunOutcome, ciWorkflowName } from "@/lib/ci";
 import { shortTimeAgo } from "@/lib/formatTime";
 import {
   GIT_ISSUE_KIND,
@@ -64,7 +65,15 @@ export function WorkItemContextHeader({ ticket, repository, onOpen }: { ticket: 
 }
 
 /** A Git event rendered as a contextual channel reference. The underlying NIP-34/NIP-22 event remains the source of truth. */
-export function GitTimelineRow({ entry, members, onOpen, commentEntries, activities = [] }: { entry: GitChannelTimelineEntry; members: ReadonlySet<string>; onOpen: (ticket: GitTicket) => void; commentEntries?: readonly Extract<GitChannelTimelineEntry, { type: "git-comment" }>[]; activities?: readonly GitTimelineActivity[] }) {
+export function GitTimelineRow(props: { entry: GitChannelTimelineEntry; members: ReadonlySet<string>; onOpen: (ticket: GitTicket) => void; commentEntries?: readonly Extract<GitChannelTimelineEntry, { type: "git-comment" }>[]; activities?: readonly GitTimelineActivity[] }) {
+  // A dispatcher, deliberately hook-free: a CI run shares no shape with a
+  // ticket row, and branching inside one component would reorder its hooks.
+  const { entry, members } = props;
+  if (entry.type === "git-ci-run") return <CIRunRow activity={entry.activity} members={members} />;
+  return <TicketTimelineRow {...props} entry={entry} />;
+}
+
+function TicketTimelineRow({ entry, members, onOpen, commentEntries, activities = [] }: { entry: Exclude<GitChannelTimelineEntry, { type: "git-ci-run" }>; members: ReadonlySet<string>; onOpen: (ticket: GitTicket) => void; commentEntries?: readonly Extract<GitChannelTimelineEntry, { type: "git-comment" }>[]; activities?: readonly GitTimelineActivity[] }) {
   const { activity } = entry;
   const ticket = activity.ticket;
   const repository = activity.repository.identifier;
@@ -128,6 +137,52 @@ function ActorAvatar({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
   return <><AvatarImage src={author.data?.metadata?.picture} alt={name} /><AvatarFallback className="text-[10px] font-semibold">{name.slice(0, 1)}</AvatarFallback></>;
+}
+
+/** Icon + tone + phrasing for a run's outcome. Unknown values read as neutral. */
+function ciOutcomePresentation(outcome: string): { Icon: typeof CheckCircle2; tone: string; label: string } {
+  switch (outcome) {
+    case "success": return { Icon: CheckCircle2, tone: "text-emerald-500", label: "succeeded" };
+    case "failure": return { Icon: XCircle, tone: "text-destructive", label: "failed" };
+    case "timed_out": return { Icon: Clock, tone: "text-destructive", label: "timed out" };
+    case "startup_failure": return { Icon: XCircle, tone: "text-destructive", label: "failed to start" };
+    case "cancelled": return { Icon: CircleSlash, tone: "text-muted-foreground", label: "was cancelled" };
+    case "skipped": return { Icon: CircleSlash, tone: "text-muted-foreground", label: "was skipped" };
+    case "queued": return { Icon: Clock, tone: "text-muted-foreground", label: "is queued" };
+    case "in_progress": return { Icon: Loader2, tone: "text-muted-foreground", label: "is running" };
+    default: return { Icon: CircleDot, tone: "text-muted-foreground", label: "finished" };
+  }
+}
+
+/**
+ * A CI workflow run. The signer is always shown: the CI extension leaves
+ * publisher trust to the client and nothing on-relay binds a coordinator to a
+ * repository, so this row reports a claim rather than a verified fact.
+ */
+function CIRunRow({ activity, members }: { activity: Extract<GitTimelineActivity, { type: "ci-run" }>; members: ReadonlySet<string> }) {
+  const { run } = activity;
+  const { Icon, tone, label } = ciOutcomePresentation(ciRunOutcome(run));
+  const logs = run.jobs.find((job) => job.result?.logs)?.result?.logs;
+  return (
+    <div className="my-3 px-2.5">
+      <div className="flex w-full items-center gap-2 rounded-md border border-border bg-secondary/30 px-3 py-2 text-left text-xs">
+        <Icon className={`size-3.5 shrink-0 ${tone}${ciRunOutcome(run) === "in_progress" ? " animate-spin" : ""}`} />
+        <p className="min-w-0 flex-1 truncate">
+          <span className="font-medium">{ciWorkflowName(run)}</span>
+          <span className="text-muted-foreground"> {label}</span>
+          {run.commit && <span className="text-muted-foreground"> on <span className="font-mono">{run.commit.slice(0, 7)}</span></span>}
+          {run.trigger && <span className="text-muted-foreground"> · {run.trigger}</span>}
+          <span className="text-muted-foreground"> · reported by </span>
+          <ActorName pubkey={run.author} members={members} />
+        </p>
+        {logs && (
+          <a href={logs} target="_blank" rel="noreferrer" className="shrink-0 text-primary hover:underline" onClick={(e) => e.stopPropagation()}>
+            logs
+          </a>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ActorName({ pubkey, members }: { pubkey: string; members: ReadonlySet<string> }) {
@@ -254,7 +309,10 @@ function TicketPanelBody({ ticket, members, activities, actions }: { ticket: Git
   const [jsonOpen, setJsonOpen] = useState(false);
   const workshopUrl = useMemo(() => gitworkshopUrl(ticket), [ticket]);
   const { comments, latestStatus } = useMemo(() => {
-    const related = activities.filter((activity) => activity.ticket.id === ticket.id);
+    const related = activities.filter(
+      (activity): activity is Exclude<GitTimelineActivity, { type: "ci-run" }> =>
+        activity.type !== "ci-run" && activity.ticket.id === ticket.id,
+    );
     return {
       comments: related.filter((activity): activity is Extract<GitTimelineActivity, { type: "comment" }> => activity.type === "comment").sort((a, b) => a.createdAt - b.createdAt || a.comment.id.localeCompare(b.comment.id)),
       latestStatus: related.filter((activity): activity is Extract<GitTimelineActivity, { type: "status-change" }> => activity.type === "status-change").sort((a, b) => b.createdAt - a.createdAt || a.status.event.id.localeCompare(b.status.event.id))[0],
