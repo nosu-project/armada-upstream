@@ -41,7 +41,10 @@ const DrawerContent = React.forwardRef<
     <DrawerPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col rounded-t-[10px] border bg-background",
+        // No border: a sheet's sides and bottom sit against the screen edge, so
+        // a full outline only ever draws a stray hairline there. The rounded
+        // top plus the overlay is what separates it from the page.
+        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col rounded-t-2xl bg-background shadow-[0_-8px_30px_rgba(0,0,0,0.25)]",
         className
       )}
       onClick={(e) => {
@@ -50,7 +53,7 @@ const DrawerContent = React.forwardRef<
       }}
       {...props}
     >
-      <div className="mx-auto mt-4 h-2 w-[100px] rounded-full bg-muted" />
+      <div className="mx-auto mt-3 h-1 w-9 shrink-0 rounded-full bg-muted-foreground/30" />
       {children}
     </DrawerPrimitive.Content>
   </DrawerPortal>
