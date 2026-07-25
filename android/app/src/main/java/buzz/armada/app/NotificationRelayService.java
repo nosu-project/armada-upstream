@@ -531,6 +531,75 @@ public class NotificationRelayService extends Service {
         if (BuildConfig.DEBUG) Log.d(TAG, "setActiveRooms: " + concurrent);
     }
 
+    /**
+     * Cancel the tray notifications for conversations the WebView reports as
+     * read (the in-app read state advanced — the user read them here, or it
+     * synced from another device). Called from the plugin's {@code dismissRead}
+     * bridge method. The reverse of a "Mark read" action tap: read state → tray,
+     * instead of a tray tap → read state.
+     *
+     * @param readByKey WebView read-state key → last-read unix seconds
+     *                  ({@code dm:<pk>}, {@code c2:<id>}, {@code c1:<id>},
+     *                  {@code <relayUrl>::<groupId>}).
+     */
+    static void dismissRead(java.util.Map<String, Long> readByKey) {
+        NotificationRelayService svc = instance;
+        if (svc == null || readByKey == null || readByKey.isEmpty()) return;
+        // roomNotifs is confined to the main handler thread (onRelayMessage
+        // posts there), so mutate it there too — never from the bridge thread.
+        svc.handler.post(() -> svc.applyDismissRead(readByKey));
+    }
+
+    /**
+     * Cancel each posted room whose newest notified message is at/older than
+     * the read timestamp the WebView reports for that conversation, and drop its
+     * accumulated history so a later message starts fresh rather than
+     * resurrecting read lines. A room with a newer unread message is left up.
+     */
+    private void applyDismissRead(java.util.Map<String, Long> readByKey) {
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+        java.util.Iterator<Map.Entry<String, RoomNotif>> it = roomNotifs.entrySet().iterator();
+        while (it.hasNext()) {
+            RoomNotif r = it.next().getValue();
+            String readKey = readKeyForRoom(r.roomKey);
+            if (readKey == null) continue;
+            Long readTsSec = readByKey.get(readKey);
+            if (readTsSec == null) continue;
+            if (readTsSec * 1000L >= r.lastTimestampMs) {
+                manager.cancel(r.notifId);
+                it.remove();
+                if (BuildConfig.DEBUG) Log.d(TAG, "DISMISS (read): " + r.roomKey);
+            }
+        }
+    }
+
+    /**
+     * The WebView read-state key for a notification room, or null when the room
+     * can't be attributed to a conversation (an opaque NIP-17 wrap the service
+     * couldn't unwrap). Inverse of {@code NativeReadMarkerSync}'s mapping:
+     *   {@code dm:<pk>}            → {@code dm:<pk>}            (unchanged)
+     *   {@code c2:<channelId>}     → {@code c2:<channelId>}    (unchanged)
+     *   {@code h:<relayUrl>|<gid>} → {@code <relayUrl>::<gid>}
+     *   {@code z:<pseudonym>}      → {@code c1:<channelId>}    (per-epoch `z`
+     *                               resolved to its channel id via zToKey)
+     */
+    private String readKeyForRoom(String roomKey) {
+        if (roomKey == null) return null;
+        if (roomKey.startsWith("dm:") || roomKey.startsWith("c2:")) return roomKey;
+        if (roomKey.startsWith("h:")) {
+            String rest = roomKey.substring(2);
+            int i = rest.lastIndexOf('|');
+            return i > 0 ? rest.substring(0, i) + "::" + rest.substring(i + 1) : null;
+        }
+        if (roomKey.startsWith("z:")) {
+            ConcordKey ck = zToKey.get(roomKey.substring(2));
+            return (ck != null && ck.channelId != null && !ck.channelId.isEmpty())
+                    ? "c1:" + ck.channelId : null;
+        }
+        return null;
+    }
+
     private void deliverAuth(String relayUrl, String eventJson) {
         for (RelayConnection rc : connections) {
             if (rc.relayUrl.equals(relayUrl)) {

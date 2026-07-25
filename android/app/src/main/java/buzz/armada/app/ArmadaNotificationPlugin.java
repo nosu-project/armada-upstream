@@ -528,6 +528,39 @@ public class ArmadaNotificationPlugin extends Plugin {
         call.resolve();
     }
 
+    /**
+     * Cancel tray notifications for conversations the WebView reports as read.
+     * Payload: {@code { markers: [{ room, ts }, …] }} where {@code room} is the
+     * WebView's read-state key (`dm:<pk>` / `c2:<id>` / `c1:<id>` /
+     * `<relayUrl>::<groupId>`) and {@code ts} the last-read unix seconds. The
+     * running service cancels each matching room whose newest notified message
+     * is at/older than that stamp — the reverse of a "Mark read" tap. No-op when
+     * the service isn't running (nothing posted) or on web/iOS.
+     */
+    @PluginMethod
+    public void dismissRead(PluginCall call) {
+        JSArray arr = call.getArray("markers");
+        java.util.Map<String, Long> map = new java.util.HashMap<>();
+        if (arr != null) {
+            try {
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.optJSONObject(i);
+                    if (o == null) continue;
+                    String room = o.optString("room", null);
+                    if (room == null || room.isEmpty()) continue;
+                    long ts = o.optLong("ts", 0L);
+                    if (ts <= 0) continue;
+                    Long prev = map.get(room);
+                    if (prev == null || ts > prev) map.put(room, ts);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "dismissRead parse failed", e);
+            }
+        }
+        if (!map.isEmpty()) NotificationRelayService.dismissRead(map);
+        call.resolve();
+    }
+
     @PluginMethod
     public void configure(PluginCall call) {
         boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", false));

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 
@@ -87,6 +87,81 @@ export function NativeReadMarkerSync() {
       handle?.remove();
     };
   }, [user, markRead]);
+
+  return null;
+}
+
+/**
+ * Read-state keys the Android service can attribute to a posted notification:
+ * DMs, Concord V1/V2 channels, and NIP-29 channels (`<relayUrl>::<groupId>`).
+ * The Concord V2 mention (`c2m:`) and thread (`c2t:`) sub-keys never key a
+ * notification room, so they're dropped (a channel's notifications clear on its
+ * channel-level `c2:` read). `c2:`.startsWith excludes both by construction.
+ */
+function dismissibleReadKey(key: string): boolean {
+  return (
+    key.startsWith("dm:") ||
+    key.startsWith("c1:") ||
+    key.startsWith("c2:") ||
+    key.includes("::")
+  );
+}
+
+/**
+ * Headless mount (reverse of {@link NativeReadMarkerSync}): pushes the in-app
+ * read state down to the Android background service so it dismisses tray
+ * notifications for conversations already read — whether read here or synced in
+ * from another device (the read state mirrors through the encrypted NIP-78
+ * settings). The service cancels a room's notification once its newest notified
+ * message is at/older than the read stamp, leaving rooms with newer unread
+ * messages up. Inert off Android (the plugin call no-ops). Must sit under
+ * ReadStateProvider.
+ */
+export function NativeReadDismiss() {
+  const { readState } = useReadState();
+  const readStateRef = useRef(readState);
+  readStateRef.current = readState;
+
+  const send = useCallback(() => {
+    const markers = Object.entries(readStateRef.current)
+      .filter(([room]) => dismissibleReadKey(room))
+      .map(([room, ts]) => ({ room, ts: Math.floor(ts) }))
+      .filter((m) => Number.isFinite(m.ts) && m.ts > 0);
+    if (markers.length === 0) return;
+    ArmadaNotification.dismissRead({ markers }).catch(() => {
+      // Bridge unavailable / older native binary — the notification just stays
+      // until the user swipes or taps it. Read state is unaffected.
+    });
+  }, []);
+
+  // Debounced push on every read-state advance (opening a conversation, or a
+  // hydrate merge from synced settings settles into one bridge call).
+  useEffect(() => {
+    if (Capacitor.getPlatform() !== "android") return;
+    const t = setTimeout(send, 400);
+    return () => clearTimeout(t);
+  }, [readState, send]);
+
+  // Re-push on resume: a notification may have been posted while backgrounded
+  // for a conversation that's already read (e.g. read on another device and
+  // synced in), which no in-session read-state change would otherwise clear.
+  useEffect(() => {
+    if (Capacitor.getPlatform() !== "android") return;
+    let cancelled = false;
+    let handle: { remove: () => void } | undefined;
+    CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+      if (isActive) send();
+    })
+      .then((h) => {
+        if (cancelled) h.remove();
+        else handle = h;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      handle?.remove();
+    };
+  }, [send]);
 
   return null;
 }

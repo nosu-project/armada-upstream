@@ -153,6 +153,18 @@ export interface ArmadaNotificationPlugin {
    */
   setActiveRooms(options: { roomKeys: string[] }): Promise<void>;
   /**
+   * Cancel tray notifications for conversations the in-app read state now
+   * covers (read here, or synced in from another device). Each marker is a
+   * read-state key (`dm:<pk>` / `c2:<id>` / `c1:<id>` / `<relayUrl>::<groupId>`)
+   * and its last-read unix seconds; the running service cancels the matching
+   * room's notification when the room's newest notified message is at/older than
+   * that stamp — the reverse of a notification's "Mark read" tap. No-ops on
+   * web/iOS and when the service posted nothing. Concord V1's `c1:<id>` is
+   * resolved to its per-epoch `z` room(s) natively (the WebView doesn't hold
+   * the pseudonyms).
+   */
+  dismissRead(options: { markers: Array<{ room: string; ts: number }> }): Promise<void>;
+  /**
    * Configure (and start/stop) the background service. Passing `enabled: false`
    * or omitting pubkey/relays stops the service and clears stored config.
    */
