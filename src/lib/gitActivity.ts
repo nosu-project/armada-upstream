@@ -335,6 +335,7 @@ export function buildGitIssueTemplate(
   body: string,
   relayHint = "",
   media: readonly string[][] = [],
+  labels: readonly string[] = [],
 ): GitEventTemplate {
   const recipients = [...new Set([repository.address.owner, ...repository.maintainers])].filter(isNostrId);
   return {
@@ -345,9 +346,30 @@ export function buildGitIssueTemplate(
       ["subject", subject],
       ["alt", `git repository issue: ${subject}`],
       ...recipients.map((pubkey) => ["p", pubkey]),
+      ...normalizeGitLabels(labels).map((label) => ["t", label]),
       ...media.map((tag) => [...tag]),
     ],
   };
+}
+
+/** Longest label we will publish; longer entries are meaningless as filters. */
+export const MAX_GIT_LABEL_LENGTH = 40;
+/** Most labels one ticket may carry. */
+export const MAX_GIT_LABELS = 8;
+
+/**
+ * Normalize labels for publication: lowercased and de-duplicated to match how
+ * `parseGitTicket` reads them back, whitespace collapsed, and both length and
+ * count bounded so a typo can't publish an unusable tag.
+ */
+export function normalizeGitLabels(labels: readonly string[]): string[] {
+  const seen = new Set<string>();
+  for (const value of labels) {
+    const label = value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, MAX_GIT_LABEL_LENGTH);
+    if (label) seen.add(label);
+    if (seen.size >= MAX_GIT_LABELS) break;
+  }
+  return [...seen];
 }
 
 /** A NIP-09 deletion request for one of the user's own git events. */

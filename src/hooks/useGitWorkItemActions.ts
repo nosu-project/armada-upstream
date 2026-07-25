@@ -90,9 +90,9 @@ export function useGitWorkItemActions() {
   );
 
   const openIssue = useCallback(
-    (repository: GitWorkItemRepository, subject: string, body: string, relays: readonly string[], media: readonly string[][] = []) =>
+    (repository: GitWorkItemRepository, subject: string, body: string, relays: readonly string[], media: readonly string[][] = [], labels: readonly string[] = []) =>
       publish(
-        buildGitIssueTemplate(repository, subject, body, relays[0] ?? "", media),
+        buildGitIssueTemplate(repository, subject, body, relays[0] ?? "", media, labels),
         relays,
         [`git:${repository.address.coordinate}`],
       ),

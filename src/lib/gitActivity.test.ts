@@ -14,6 +14,9 @@ import {
   buildGitIssueTemplate,
   buildGitStatusTemplate,
   buildGitTimelineActivities,
+  normalizeGitLabels,
+  MAX_GIT_LABELS,
+  MAX_GIT_LABEL_LENGTH,
   collectGitDeletions,
   detachGitRepository,
   isGitEventDeleted,
@@ -438,5 +441,36 @@ describe("announcement folding in the builder", () => {
     const status = event({ id: "6".repeat(64), kind: GIT_STATUS_CLOSED_KIND, pubkey: ATTACKER, created_at: 60, tags: [["e", ticket.id, "", "root"]] });
     const activities = buildGitTimelineActivities([ticket, status], intervals, [fresh, stale]);
     expect(activities.some((activity) => activity.type === "status-change")).toBe(false);
+  });
+});
+
+describe("labels on issues", () => {
+  const repo = () => parseGitRepositoryAnnouncement(event({
+    kind: GIT_REPOSITORY_ANNOUNCEMENT_KIND,
+    tags: [["d", "armada"]],
+  }))!;
+
+  it("normalizes for publication the way the parser reads labels back", () => {
+    expect(normalizeGitLabels([" Bug ", "bug", "Feature  Request", "", "   "])).toEqual(["bug", "feature request"]);
+  });
+
+  it("bounds label length and count", () => {
+    const long = "x".repeat(MAX_GIT_LABEL_LENGTH + 20);
+    expect(normalizeGitLabels([long])[0]).toHaveLength(MAX_GIT_LABEL_LENGTH);
+    const many = Array.from({ length: MAX_GIT_LABELS + 5 }, (_, i) => `label${i}`);
+    expect(normalizeGitLabels(many)).toHaveLength(MAX_GIT_LABELS);
+  });
+
+  it("emits t tags its own ticket parser reads back", () => {
+    const template = buildGitIssueTemplate(
+      { address: repo().address, maintainers: [] },
+      "Crash on boot",
+      "",
+      "",
+      [],
+      ["Bug", "bug", "UI"],
+    );
+    const parsed = parseGitTicket(event({ id: "9".repeat(64), kind: template.kind, pubkey: AUTHOR, created_at: 500, tags: template.tags }));
+    expect(parsed?.labels).toEqual(["bug", "ui"]);
   });
 });

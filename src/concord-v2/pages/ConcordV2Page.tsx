@@ -1052,11 +1052,11 @@ export function ConcordV2Page() {
     },
     canSetStatus: canSetTicketStatus,
   }), [user, gitActions, projects, ticketRepository, canSetTicketStatus]);
-  const handleCreateIssue = useCallback(async (repoCoord: string, subject: string, body: string, media?: readonly string[][]) => {
+  const handleCreateIssue = useCallback(async (repoCoord: string, subject: string, body: string, media?: readonly string[][], labels?: readonly string[]) => {
     const address = parseGitRepositoryAddress(repoCoord);
     if (!address) throw new Error("Unknown repository.");
     const repo = projects.repos.find((candidate) => candidate.coord === repoCoord);
-    await gitActions.openIssue({ address, maintainers: repo?.contributors ?? [] }, subject, body, projects.relaysForCoordinates([repoCoord]), media);
+    await gitActions.openIssue({ address, maintainers: repo?.contributors ?? [] }, subject, body, projects.relaysForCoordinates([repoCoord]), media, labels);
   }, [gitActions, projects]);
   const { mutateAsync: send } = useSendMessage2(community, channel);
 
@@ -2215,7 +2215,7 @@ export function ConcordV2Page() {
                           </TooltipTrigger>
                           <TooltipContent>Refresh repository activity</TooltipContent>
                         </Tooltip>
-                        {user && <NewIssueDialog repos={projects.repos} onCreate={handleCreateIssue} />}
+                        {user && <NewIssueDialog repos={projects.repos} items={projects.items} onCreate={handleCreateIssue} />}
                       </div>
                     }
                   />

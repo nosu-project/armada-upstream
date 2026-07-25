@@ -49,6 +49,33 @@ export interface ProjectRepoSummary {
 /** How a list is ordered: newest first, or alphabetically. */
 export type ProjectSort = "updated" | "name";
 
+/**
+ * Universal starting vocabulary, offered only to fill gaps: a repository that
+ * has settled on its own words (`enhancement`) should not be nudged toward
+ * ours (`feature request`).
+ */
+export const DEFAULT_LABEL_PRESETS = ["bug", "enhancement", "documentation", "question"] as const;
+
+/**
+ * Labels to offer when filing against `repoCoord`: the repository's own, most
+ * used first, then presets it hasn't already got a word for.
+ */
+export function labelSuggestions(
+  items: readonly ProjectWorkItem[],
+  repoCoord: string | undefined,
+  presets: readonly string[] = DEFAULT_LABEL_PRESETS,
+): string[] {
+  const uses = new Map<string, number>();
+  for (const item of items) {
+    if (repoCoord && item.repoCoord !== repoCoord) continue;
+    for (const label of item.labels ?? []) uses.set(label, (uses.get(label) ?? 0) + 1);
+  }
+  const own = [...uses.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([label]) => label);
+  return [...own, ...presets.filter((preset) => !uses.has(preset))];
+}
+
 /** Order work items for display; ties break on id so the order is stable. */
 export function sortProjectWorkItems(items: readonly ProjectWorkItem[], sort: ProjectSort): ProjectWorkItem[] {
   return [...items].sort((a, b) => (
