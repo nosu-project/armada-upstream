@@ -61,6 +61,7 @@ import { useAdoptDmInbox, useDm17Conversations, useDm17Support } from "@/hooks/u
 import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
@@ -470,6 +471,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const { activeCall, joinDmCall, voiceRoomPubkeys } = useCall();
   const muteUser = useMuteUser();
   const { pref: dmProtocol, setPref: setDmProtocol } = useDmProtocolPref(peer);
+  const isTouch = useIsTouch();
 
   // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no
   // in-band convention, so the control is hidden on legacy threads).
@@ -1064,6 +1066,11 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           // Legacy kind-4 has no imeta channel to carry the decryption key, so
           // an encrypted upload there would be an undecryptable blob.
           encryptAttachments={dm17Enabled}
+          // Land the caret in the composer on opening a conversation (this
+          // component is keyed on `peer`, so it re-fires per conversation).
+          // Not on touch: there the soft keyboard would spring up over the
+          // thread mid slide-in, before the reader has seen any of it.
+          autoFocus={!isTouch}
           sendOverride={handleSubmit}
         />
       )}
