@@ -75,7 +75,7 @@ export function MessageActionSheet({
         <DrawerTitle className="sr-only">Message actions</DrawerTitle>
 
         {pickerOpen ? (
-          <div className="flex h-[60dvh] w-full flex-col pt-2">
+          <div className="flex w-full flex-col pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
             <Suspense fallback={<div className="w-full" />}>
               <LazyEmojiPicker
                 customEmojis={customEmojis}
