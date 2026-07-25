@@ -28,9 +28,14 @@ import { KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { buildRumor, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
-import { useControlEvents2 } from "./useControlPlane2";
+import { useControlEvents2, useControlFold2 } from "./useControlPlane2";
 
-import { _configureAuthWaitForTests } from "@/concord-v2/lib/planeSync";
+import {
+  _configureAuthWaitForTests,
+  _configureSweepPagingForTests,
+  _resetPlaneSweepMemoForTests,
+  controlSweepTruncated,
+} from "@/concord-v2/lib/planeSync";
 
 // These tests exercise the on-open sweep, not planeSync's NIP-42 auth gate
 // (planeSync.test.ts owns that) — let the sweep's REQs fly immediately.
@@ -40,13 +45,20 @@ beforeAll(() => {
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
-const h = vi.hoisted(() => ({ pool: undefined as unknown }));
+const h = vi.hoisted(() => ({
+  pool: undefined as unknown,
+  /** The latest fold thunk handed to useDeferredFold, so a test can run it. */
+  compute: undefined as (() => unknown) | undefined,
+}));
 
 vi.mock("@nostrify/react", () => ({
   useNostr: () => ({ nostr: h.pool }),
 }));
 vi.mock("@/concord-v2/hooks/useDeferredFold2", () => ({
-  useDeferredFold: () => undefined,
+  useDeferredFold: (_key: string | null, compute: () => unknown) => {
+    h.compute = compute;
+    return undefined;
+  },
 }));
 
 // ── Fake relay ───────────────────────────────────────────────────────────────
@@ -200,5 +212,67 @@ describe("useControlEvents2 — on-open sweep (no standing socket)", () => {
 
     expect(relayA.queries.length + relayB.queries.length, "inactive hook must not sweep").toBe(0);
     expect(relayA.reqCount + relayB.reqCount).toBe(0);
+  });
+});
+
+describe("useControlFold2 — a short sweep is never folded", () => {
+  /**
+   * Render the fold hook, wait for its sweep to settle, and hand back a
+   * re-render trigger — the truncation verdict is read during render, so the
+   * thunk captured before the sweep still holds the pre-sweep answer.
+   */
+  async function renderFold(community: CommunityV2, relay: FakeRelay) {
+    h.compute = undefined;
+    h.pool = { relay: () => relay };
+    const { wrapper } = makeWrapper();
+    const { rerender } = renderHook(() => useControlFold2(community), { wrapper });
+    await waitFor(() => expect(relay.queries.length).toBeGreaterThan(0), { timeout: 10_000 });
+    await waitFor(() => expect(h.compute).toBeDefined(), { timeout: 10_000 });
+    return rerender;
+  }
+
+  it("folds normally when the sweep reached the whole plane", { timeout: 30_000 }, async () => {
+    _resetPlaneSweepMemoForTests();
+    _configureSweepPagingForTests({ pageLimit: 500, maxPages: 8 });
+    const owner = signer();
+    const community = communityOf(61, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    relay.events = [(await editionWrapAt(control, owner, "ab".repeat(32), now - 100)).wrap];
+
+    const rerender = await renderFold(community, relay);
+    await waitFor(
+      () => {
+        rerender();
+        expect(h.compute!(), "a complete sweep must produce a fold").toBeDefined();
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it("yields no fold when the sweep was truncated", { timeout: 30_000 }, async () => {
+    // The reported ban evasion: any member can inflate the plane past the
+    // pager's reach. Folding what survived would render a partial banlist as
+    // authoritative AND persist it as this key's snapshot.
+    _resetPlaneSweepMemoForTests();
+    _configureSweepPagingForTests({ pageLimit: 2, maxPages: 1 });
+    const owner = signer();
+    const community = communityOf(62, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    relay.events = await Promise.all(
+      [0, 1, 2, 3, 4, 5].map(async (i) =>
+        (await editionWrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)).wrap,
+      ),
+    );
+
+    const rerender = await renderFold(community, relay);
+    await waitFor(() => expect(controlSweepTruncated(community)).toBe(true), { timeout: 10_000 });
+    rerender();
+    expect(h.compute!(), "a truncated sweep must hold the last complete fold instead").toBeUndefined();
+
+    _configureSweepPagingForTests({ pageLimit: 500, maxPages: 8 });
   });
 });
