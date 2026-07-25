@@ -1,6 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { channelsView } from "@/concord-v2/lib/community";
+import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
@@ -46,6 +47,8 @@ export interface Concord2Sub {
    * community has no icon.
    */
   communityImage?: { url: string; key: string; nonce: string; hash: string };
+  /** Public repository attachments folded from this channel's local metadata. */
+  gitAttachments: ReturnType<typeof channelGitRepositoryAttachments>;
 }
 
 /**
@@ -85,6 +88,7 @@ export function buildConcord2Subs(
         epoch: s.epoch.toString(),
       })),
       communityImage,
+      gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),
     });
   }
   // Deterministic order (ids, not display names) so a mere refetch/rename

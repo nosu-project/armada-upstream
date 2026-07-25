@@ -121,8 +121,20 @@ describe("useCustomEmojis", () => {
 
     const result = renderEmojis();
     await waitFor(() => expect(result.current.emojis).toHaveLength(2));
-    expect(result.current.emojis).toContainEqual({ shortcode: "wave", url: "https://e/wave.png" });
-    expect(result.current.emojis).toContainEqual({ shortcode: "cat", url: "https://e/cat.png" });
+    // Inline list emojis have no source pack; pack emojis carry theirs, which
+    // is what the picker groups by and the reaction detail attributes.
+    expect(result.current.emojis).toContainEqual({
+      shortcode: "wave",
+      url: "https://e/wave.png",
+      packCoord: undefined,
+      packName: undefined,
+    });
+    expect(result.current.emojis).toContainEqual({
+      shortcode: "cat",
+      url: "https://e/cat.png",
+      packCoord: `30030:${PACK_PK}:mypack`,
+      packName: "mypack",
+    });
     // The resolved palette is written to the durable store.
     await waitFor(() => expect(stored()).toHaveLength(2));
   });
@@ -157,9 +169,13 @@ describe("useCustomEmojis", () => {
 
     const result = renderEmojis();
     await waitFor(() =>
-      expect(result.current.emojis).toContainEqual({ shortcode: "v", url: "https://e/new.png" }),
+      expect(result.current.emojis).toContainEqual(
+        expect.objectContaining({ shortcode: "v", url: "https://e/new.png" }),
+      ),
     );
-    expect(result.current.emojis).not.toContainEqual({ shortcode: "v", url: "https://e/old.png" });
+    expect(result.current.emojis).not.toContainEqual(
+      expect.objectContaining({ shortcode: "v", url: "https://e/old.png" }),
+    );
   });
 });
 
@@ -206,11 +222,16 @@ describe("useCustomEmojis — the persisted palette survives a bad read", () => 
         : [],
     );
 
+    const resolved = {
+      shortcode: "v",
+      url: "https://e/v.png",
+      packCoord: `30030:${PACK_PK}:mypack`,
+      packName: "mypack",
+    };
+
     const result = renderEmojis();
-    await waitFor(() =>
-      expect(result.current.emojis).toEqual([{ shortcode: "v", url: "https://e/v.png" }]),
-    );
-    expect(stored()).toEqual([{ shortcode: "v", url: "https://e/v.png" }]);
+    await waitFor(() => expect(result.current.emojis).toEqual([resolved]));
+    expect(stored()).toEqual([resolved]);
   });
 
   it("clears it when the list is genuinely empty (a real removal)", async () => {

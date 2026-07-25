@@ -13,6 +13,7 @@ import { APP_RELAYS } from "@/lib/platform";
 import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
 import { toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord-v2/lib/communityList";
 import { mintCommunity } from "@/concord-v2/lib/community";
+import { isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import {
   buildChannelEdition,
   buildMetadataEdition,
@@ -28,10 +29,17 @@ import {
   type ParsedInviteLink,
 } from "@/concord-v2/lib/invite";
 import { KIND_INVITE_BUNDLE } from "@/concord-v2/lib/kinds";
-import { capRelays, type CommunityV2 } from "@/concord-v2/lib/types";
+import {
+  capRelays,
+  channelGitRepositoryAttachments,
+  withChannelGitRepositoryAttachments,
+  type ChannelMetadata,
+  type CommunityV2,
+} from "@/concord-v2/lib/types";
 import { controlGroups, foldControlState, openControlWraps } from "@/concord-v2/lib/control";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
+import { attachGitRepository, detachGitRepository, parseGitRepositoryAddress } from "@/lib/gitActivity";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -383,19 +391,37 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     },
   });
 
-  const createChannel = useMutation<{ channelIdHex: string }, Error, { name: string }>({
-    mutationFn: async ({ name }) => {
+  const createChannel = useMutation<
+    { channelIdHex: string },
+    Error,
+    { name: string; repository?: { address: string; relayHints: string[] } }
+  >({
+    mutationFn: async ({ name, repository }) => {
       if (!user || !community) throw new Error("Not ready.");
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Channel name is required.");
       const channelId = random32();
+      // A repository rides the channel's FIRST edition rather than a follow-up
+      // attachRepository: that path resolves the channel out of the control
+      // fold, which this mutation only invalidates in the background, so a
+      // just-created channel is absent from it and the attach throws. Building
+      // one edition leaves the channel born attached instead.
+      let metadata: ChannelMetadata = { name: trimmed, private: false };
+      if (repository) {
+        const address = parseGitRepositoryAddress(repository.address);
+        if (!address) throw new Error("Repository address must be a canonical 30617 coordinate.");
+        metadata = withChannelGitRepositoryAttachments(
+          metadata,
+          attachGitRepository([], address, repository.relayHints, Math.floor(Date.now() / 1000)),
+        );
+      }
       await publishEdition2(
         nostr,
         community,
         user.signer,
         buildChannelEdition(
           channelId,
-          { name: trimmed, private: false },
+          metadata,
           { actorPubkey: user.pubkey, version: 1n, authority: citationFor(community, folded, user.pubkey) },
         ),
       );
@@ -417,8 +443,8 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
         user.signer,
         buildChannelEdition(
           hex32(channelIdHex),
-          // Round-trip the flags a rename doesn't touch (CORD-02 §6 discipline).
-          { name: trimmed, private: def?.isPrivate ?? false },
+          // Round-trip all metadata a rename doesn't touch (CORD-02 §6 discipline).
+          { ...(def?.metadata ?? { private: false }), name: trimmed },
           {
             actorPubkey: user.pubkey,
             version: head ? head.version + 1n : 1n,
@@ -442,15 +468,75 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
         user.signer,
         buildChannelEdition(
           hex32(channelIdHex),
-          {
-            name: def?.name ?? "deleted",
-            private: def?.isPrivate ?? false,
-            deleted: true,
-          },
+          { ...(def?.metadata ?? { name: "deleted", private: false }), deleted: true },
           {
             actorPubkey: user.pubkey,
             version: head ? head.version + 1n : 1n,
             prevHash: head?.hash,
+            authority: citationFor(community, folded, user.pubkey),
+          },
+        ),
+      );
+      invalidateControl2(queryClient, community.idHex);
+    },
+  });
+
+  const attachRepository = useMutation<void, Error, { channelIdHex: string; address: string; relayHints: string[] }>({
+    mutationFn: async ({ channelIdHex, address: rawAddress, relayHints }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      if (!folded || !isAuthorized(folded.roster, user.pubkey, community.owner, Permissions.MANAGE_CHANNELS)) {
+        throw new Error("You don't have permission to manage channels.");
+      }
+      const address = parseGitRepositoryAddress(rawAddress);
+      if (!address) throw new Error("Repository address must be a canonical 30617 coordinate.");
+      const def = folded?.channels.get(channelIdHex);
+      if (!def) throw new Error("Channel not found.");
+      const head = folded?.heads.get(channelIdHex);
+      const createdAtSecs = Math.floor(Date.now() / 1000);
+      const attachments = channelGitRepositoryAttachments(def.metadata);
+      // Preserve the original active interval (and its hints) on repeat requests.
+      if (attachments.some((attachment) => attachment.address.coordinate === address.coordinate && attachment.detachedAt === undefined)) return;
+      const next = attachGitRepository(attachments, address, relayHints, createdAtSecs);
+      await publishEdition2(
+        nostr,
+        community,
+        user.signer,
+        buildChannelEdition(hex32(channelIdHex), withChannelGitRepositoryAttachments(def.metadata, next), {
+          actorPubkey: user.pubkey,
+          version: head ? head.version + 1n : 1n,
+          prevHash: head?.hash,
+          createdAtSecs,
+          authority: citationFor(community, folded, user.pubkey),
+        }),
+      );
+      invalidateControl2(queryClient, community.idHex);
+    },
+  });
+
+  const detachRepository = useMutation<void, Error, { channelIdHex: string; address: string }>({
+    mutationFn: async ({ channelIdHex, address: rawAddress }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      if (!folded || !isAuthorized(folded.roster, user.pubkey, community.owner, Permissions.MANAGE_CHANNELS)) {
+        throw new Error("You don't have permission to manage channels.");
+      }
+      const address = parseGitRepositoryAddress(rawAddress);
+      if (!address) throw new Error("Repository address must be a canonical 30617 coordinate.");
+      const def = folded?.channels.get(channelIdHex);
+      if (!def) throw new Error("Channel not found.");
+      const head = folded?.heads.get(channelIdHex);
+      const createdAtSecs = Math.floor(Date.now() / 1000);
+      await publishEdition2(
+        nostr,
+        community,
+        user.signer,
+        buildChannelEdition(
+          hex32(channelIdHex),
+          withChannelGitRepositoryAttachments(def.metadata, detachGitRepository(channelGitRepositoryAttachments(def.metadata), address, createdAtSecs)),
+          {
+            actorPubkey: user.pubkey,
+            version: head ? head.version + 1n : 1n,
+            prevHash: head?.hash,
+            createdAtSecs,
             authority: citationFor(community, folded, user.pubkey),
           },
         ),
@@ -469,6 +555,8 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     renameChannel: renameChannel.mutateAsync,
     isRenaming: renameChannel.isPending,
     deleteChannel: deleteChannel.mutateAsync,
+    attachRepository: attachRepository.mutateAsync,
+    detachRepository: detachRepository.mutateAsync,
     entry,
   };
 }

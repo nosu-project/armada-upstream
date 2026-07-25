@@ -46,14 +46,14 @@ function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl
   const author = useAuthor(event?.pubkey);
   const displayName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
 
-  // Render the line even before the relay answers: `ReplyContextLine` holds a
-  // fixed height, so the row doesn't grow when the parent lands mid-scroll.
-  const image = event ? firstImageRef(event) : undefined;
+  if (!event) return null;
+
+  const image = firstImageRef(event);
   return (
     <ReplyContextLine
-      name={event ? displayName : undefined}
-      pubkey={event?.pubkey}
-      preview={event ? <ReplyPreview content={event.content} hideMediaPlaceholder={!!image} /> : undefined}
+      name={displayName}
+      pubkey={event.pubkey}
+      preview={<ReplyPreview content={event.content} hideMediaPlaceholder={!!image} />}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
       onClick={() => onJump(eventId)}
     />
@@ -253,7 +253,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   // stamps the channel below, frozen until the channel changes).
   const newDividerId = useNewMessagesDivider(
     channelReadKey(relayUrl, groupId),
-    messages,
+    messages.map((message) => ({ id: message.id, createdAt: message.created_at, author: message.pubkey })),
     user?.pubkey,
   );
   const { results: searchResults, isLoading: searchLoading, active: searching } = useGroupSearch(

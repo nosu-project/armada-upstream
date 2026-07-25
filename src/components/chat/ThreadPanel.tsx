@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
-import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
+import { ReactionActions, ReactionBar } from "@/components/chat/ReactionBar";
 import { ZapButton } from "@/components/chat/ZapButton";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
@@ -245,7 +245,15 @@ function ThreadMessage({
                   <Pencil className="size-4" />
                 </button>
               )}
-              {canReact && reactions && !isEditing && <ReactionPicker onReact={reactions.react} />}
+              {canReact && reactions && !isEditing && (
+                // No quick row here: this strip is inline at the end of a
+                // narrow panel row, not floated, so it has no width to spare.
+                <ReactionActions
+                  onReact={reactions.react}
+                  tallies={reactions.tallies}
+                  quickSlots={0}
+                />
+              )}
               {canZap && !isEditing && <ZapButton disabled={zapDisabled} onOpen={() => setZapOpen(true)} />}
             </div>
           ) : null}

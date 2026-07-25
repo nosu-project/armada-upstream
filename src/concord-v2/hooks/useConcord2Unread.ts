@@ -5,6 +5,7 @@ import { useCommunityRumors } from "@/concord-v2/hooks/useCommunityRumors";
 import { KIND_MESSAGE } from "@/concord-v2/lib/kinds";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import { concord2ReadKey, useReadState } from "@/hooks/useReadState";
+import type { GitTimelineActivity } from "@/lib/gitActivity";
 
 /** Per-channel unread summary (mirrors NIP-29's `GroupUnread`). */
 export interface Concord2Unread {
@@ -29,7 +30,10 @@ export interface Concord2Unread {
  * Returns `byChannel[channelIdHex]` (present ⇒ unread), a `markRead(channel,
  * ts)` to advance a channel's read stamp, and a `getLastRead` accessor.
  */
-export function useConcord2Unread(channels: ChannelV2[]): {
+export function useConcord2Unread(
+  channels: ChannelV2[],
+  gitByChannel: ReadonlyMap<string, readonly GitTimelineActivity[]> = new Map(),
+): {
   byChannel: Record<string, Concord2Unread>;
   markRead: (channelIdHex: string, timestamp: number) => void;
   getLastRead: (channelIdHex: string) => number;
@@ -62,10 +66,21 @@ export function useConcord2Unread(channels: ChannelV2[]): {
           latestMention = r.createdAt;
         }
       }
+      for (const activity of gitByChannel.get(idHex) ?? []) {
+        const author = activity.type === "ticket-opened"
+          ? activity.ticket.author
+          : activity.type === "comment"
+            ? activity.comment.author
+            : activity.type === "ci-run"
+              ? activity.run.author
+              : activity.status.author;
+        if (author === pubkey) continue;
+        if (activity.createdAt > latest) latest = activity.createdAt;
+      }
       if (latest > lastRead) next[idHex] = { latest, mention: latestMention > lastRead };
     }
     return next;
-  }, [rumorsByChannel, readState, pubkey]);
+  }, [rumorsByChannel, readState, pubkey, gitByChannel]);
 
   const markRead = useCallback(
     (channelIdHex: string, timestamp: number) => {

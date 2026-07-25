@@ -2,7 +2,12 @@ import { useRef } from "react";
 
 import { useReadState } from "@/hooks/useReadState";
 
-import type { ChatMsg } from "@/components/chat/transport";
+/** The metadata required to place an unread divider in any channel timeline. */
+export interface ReadableTimelineEntry {
+  id: string;
+  createdAt: number;
+  author: string;
+}
 
 /**
  * Computes where the red "NEW" unread divider belongs for a conversation: the
@@ -19,7 +24,7 @@ import type { ChatMsg } from "@/components/chat/transport";
  */
 export function useNewMessagesDivider(
   readKey: string,
-  messages: ChatMsg[],
+  messages: readonly ReadableTimelineEntry[],
   selfPubkey?: string,
 ): string | undefined {
   const { getLastRead } = useReadState();
@@ -46,7 +51,7 @@ export function useNewMessagesDivider(
     state.settled = true;
     if (state.lastRead > 0) {
       state.dividerId = messages.find(
-        (m) => m.created_at > state.lastRead && m.pubkey !== selfPubkey,
+        (m) => m.createdAt > state.lastRead && m.author !== selfPubkey,
       )?.id;
     }
   }

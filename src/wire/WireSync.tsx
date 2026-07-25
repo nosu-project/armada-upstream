@@ -1,6 +1,6 @@
 import { App as CapacitorApp } from "@capacitor/app";
 import { useNostr } from "@nostrify/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
@@ -9,6 +9,7 @@ import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView } from "@/concord-v2/lib/community";
+import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { controlGroups } from "@/concord-v2/lib/control";
 import { openPlaneWrapsChunked } from "@/concord-v2/lib/planeSync";
@@ -20,9 +21,10 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
+import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { readFolded } from "@/lib/foldedCache";
+import { onFoldedWrite, readFolded } from "@/lib/foldedCache";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { onRelayReopened } from "@/lib/relayReopen";
 import { logSync } from "@/lib/syncLog";
@@ -30,6 +32,7 @@ import { emitWireScopes } from "@/wire/bus";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 import { ingestWireEvents } from "@/wire/ingest";
 import { buildWireSpec, stampRoundSince, type WireSpec } from "@/wire/spec";
+import type { GitRepositoryWireInput } from "@/wire/spec";
 
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { GroupKey } from "@/concord-v2/lib/derive";
@@ -120,7 +123,7 @@ function writeCursor(relay: string, createdAt: number): void {
  * wire's kind-1059 REQs pass auth-gating relays. Mirrors useConcord2Subs, but
  * keeps the full ChannelV2 (the wire decrypts; the native service can't).
  */
-function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string }> {
+function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> {
   const { data } = useCommunityList2();
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
   const listSig = useMemo(
@@ -132,7 +135,22 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
     [entries],
   );
 
-  const query = useQuery<Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string }>>({
+  // `listSig` only moves on a new community, a rotated epoch, or a channel
+  // count change — a control edition that alters neither (attaching a
+  // repository, renaming a channel) leaves the key identical, so the spec would
+  // keep its stale view until the poll below. The fold snapshot IS this query's
+  // input, so re-read the moment one lands.
+  const queryClient = useQueryClient();
+  useEffect(
+    () =>
+      onFoldedWrite((key) => {
+        if (!key.startsWith("concord2-fold:")) return;
+        void queryClient.invalidateQueries({ queryKey: ["wire", "concord2-channels"] });
+      }),
+    [queryClient],
+  );
+
+  const query = useQuery<Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>>({
     queryKey: ["wire", "concord2-channels", listSig],
     enabled: entries.length > 0,
     staleTime: 30_000,
@@ -142,7 +160,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
     refetchInterval: 2 * 60_000,
     refetchIntervalInBackground: false,
     queryFn: async () => {
-      const out: Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string }> = [];
+      const out: Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> = [];
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
         if (!community || community.relays.length === 0) continue;
@@ -150,7 +168,12 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
         const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
         for (const channel of channelsView(community, folded)) {
           if (channel.streams.length === 0) continue;
-          out.push({ relays: community.relays, channel, communityIdHex: community.idHex });
+          out.push({
+            relays: community.relays,
+            channel,
+            communityIdHex: community.idHex,
+            gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),
+          });
           keys.push(...channel.streams.map((s) => s.group));
         }
         // Scoped per community, so a relay's NIP-42 challenge only signs the
@@ -162,6 +185,31 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
   });
 
   return query.data ?? [];
+}
+
+/** Folded channel metadata → canonical repository activity targets for the wire. */
+function wireGitRepositories(
+  channels: Array<{ channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>,
+): GitRepositoryWireInput[] {
+  const byAddress = new Map<string, GitRepositoryWireInput>();
+  for (const { channel, communityIdHex, gitAttachments } of channels) {
+    for (const attachment of gitAttachments) {
+      let repository = byAddress.get(attachment.address.coordinate);
+      if (!repository) {
+        repository = { address: attachment.address.coordinate, relays: [], attachments: [] };
+        byAddress.set(repository.address, repository);
+      }
+      repository.relays.push(...attachment.relayHints);
+      repository.attachments.push({ channelId: channel.idHex, communityId: communityIdHex, attachment });
+    }
+  }
+  return [...byAddress.values()]
+    .map((repository) => ({
+      ...repository,
+      relays: [...new Set(repository.relays)].sort(),
+      attachments: repository.attachments.sort((a, b) => a.channelId.localeCompare(b.channelId) || a.attachment.attachedAt - b.attachment.attachedAt),
+    }))
+    .sort((a, b) => a.address.localeCompare(b.address));
 }
 
 /**
@@ -226,6 +274,8 @@ export function WireSync() {
   const concord2 = useWireConcord2Channels();
   const concord2Control = useWireConcord2Control();
   const nip29Groups = useWireNip29Groups();
+  const gitRepositories = useMemo(() => wireGitRepositories(concord2), [concord2]);
+  const gitTicketRoots = useWireGitTicketRoots(gitRepositories);
 
   // NIP-29 groups to subscribe to: the per-server directory discovery (the
   // primary source — see useWireNip29Groups) UNIONed with the kind-10009
@@ -270,8 +320,10 @@ export function WireSync() {
         concord1Control: buildConcordControlSubs(concordData?.list),
         concord2,
         concord2Control,
+        gitRepositories,
+        gitTicketRoots,
       }),
-    [user?.pubkey, groups, dmRelays, followData?.pubkeys, concordData, concord2, concord2Control],
+    [user?.pubkey, groups, dmRelays, followData?.pubkeys, concordData, concord2, concord2Control, gitRepositories, gitTicketRoots],
   );
 
   // The ingest path reads the spec lazily so long-lived subscriptions always
@@ -387,7 +439,8 @@ export function WireSync() {
               round.abort();
             }
           }, WATCHDOG_TICK_MS);
-          if (firstRound) {
+          const bootstrapRound = firstRound;
+          if (bootstrapRound) {
             logSync("wire", `${relay}: round open (since=${since}, ${filters.length} filter(s))`);
             firstRound = false;
           }
@@ -406,7 +459,10 @@ export function WireSync() {
           try {
             try {
               for await (const msg of nostr.relay(relay).req(
-                stampRoundSince(filters, since, now),
+                // A newly-added Git child filter carries a root-based bootstrap
+                // timestamp. Honor it for this first round; later rotations use
+                // the relay cursor as normal.
+                stampRoundSince(filters, since, now, bootstrapRound),
                 { signal: roundSignal },
               )) {
                 sawAnything = true;

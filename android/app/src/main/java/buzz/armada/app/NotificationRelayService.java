@@ -210,6 +210,11 @@ public class NotificationRelayService extends Service {
     // relays — the sender is hidden, so it can't be authors-scoped) and signs
     // NIP-42 AUTH natively; null when the WebView shipped no credential.
     private volatile NativeSigner nativeSigner;
+    // Public Git activity is subscribed on announcement activity relays only.
+    // The repository -> C2 route mapping never enters a relay filter.
+    private final Map<String, GitRepository> gitRepositories = new HashMap<>();
+    private final Map<String, Set<String>> gitRepositoriesByRelay = new HashMap<>();
+    private static final int GIT_ROOT_FILTER_CHUNK_SIZE = 100;
     // De-dupe notifications across relays/reconnects for this service lifetime.
     private final Set<String> notifiedIds = new HashSet<>();
     // Connect time; we only notify for events at/after this to avoid backfill spam.
@@ -375,6 +380,27 @@ public class NotificationRelayService extends Service {
             this.url = url;
             this.community = community;
         }
+    }
+
+    private static final class GitAttachment {
+        final String communityId, channelId; final long attachedAt, detachedAt;
+        GitAttachment(String communityId, String channelId, long attachedAt, long detachedAt) {
+            this.communityId = communityId; this.channelId = channelId;
+            this.attachedAt = attachedAt; this.detachedAt = detachedAt;
+        }
+        boolean activeAt(long timestamp) { return timestamp >= attachedAt && (detachedAt < 0 || timestamp < detachedAt); }
+        boolean live() { return detachedAt < 0; }
+    }
+    private static final class GitRoot {
+        final String id, author; final int kind;
+        GitRoot(String id, String author, int kind) { this.id = id; this.author = author; this.kind = kind; }
+    }
+    private static final class GitRepository {
+        final String address, owner; final Set<String> maintainers = new HashSet<>();
+        final List<GitAttachment> attachments = new ArrayList<>();
+        final Map<String, GitRoot> roots = new HashMap<>();
+        GitRepository(String address, String owner) { this.address = address; this.owner = owner; }
+        boolean live() { for (GitAttachment a : attachments) if (a.live()) return true; return false; }
     }
 
     private interface GroupNameCallback {
@@ -723,6 +749,7 @@ public class NotificationRelayService extends Service {
         }
         parseConcordSubs(sp.getString("concordSubs", null));
         parseConcord2Subs(sp.getString("concord2Subs", null));
+        parseGitSubs(sp.getString("gitSubs", null));
 
         // The user's shared signer credential (Keystore-sealed by the plugin):
         // lets the service open ANY gift wrap addressed to the user and answer
@@ -750,6 +777,7 @@ public class NotificationRelayService extends Service {
         allRelays.addAll(dmRelays);
         allRelays.addAll(relayToZs.keySet());
         allRelays.addAll(relayToPks2.keySet());
+        allRelays.addAll(gitRepositoriesByRelay.keySet());
 
         if (userPubkey == null || allRelays.isEmpty()) {
             Log.d(TAG, "No pubkey/relays; not connecting.");
@@ -976,6 +1004,58 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /** Parse additive schema-v2 Git configuration. Bad/old records are ignored,
+     * preserving the original notification planes. */
+    private void parseGitSubs(String json) {
+        gitRepositories.clear(); gitRepositoriesByRelay.clear();
+        if (json == null) return;
+        try {
+            JSONArray all = new JSONArray(json);
+            for (int i = 0; i < all.length(); i++) {
+                JSONObject value = all.optJSONObject(i); if (value == null) continue;
+                String address = value.optString("address", "");
+                String owner = value.optString("owner", "");
+                if (!validRepositoryAddress(address) || !validHex(owner) || !owner.equals(address.split(":", 3)[1])) continue;
+                GitRepository repository = new GitRepository(address, owner);
+                JSONArray maintainers = value.optJSONArray("maintainers");
+                if (maintainers != null) for (int j = 0; j < maintainers.length(); j++) {
+                    String pk = maintainers.optString(j); if (validHex(pk)) repository.maintainers.add(pk);
+                }
+                JSONArray attachments = value.optJSONArray("attachments");
+                if (attachments != null) for (int j = 0; j < attachments.length(); j++) {
+                    JSONObject a = attachments.optJSONObject(j); if (a == null) continue;
+                    String community = a.optString("communityId", ""), channel = a.optString("channelId", "");
+                    long attached = a.optLong("attachedAt", -1), detached = a.has("detachedAt") ? a.optLong("detachedAt", -1) : -1;
+                    if (!community.isEmpty() && !channel.isEmpty() && attached >= 0 && (detached < 0 || detached >= attached)) repository.attachments.add(new GitAttachment(community, channel, attached, detached));
+                }
+                JSONArray roots = value.optJSONArray("ticketRoots");
+                if (roots != null) for (int j = 0; j < roots.length(); j++) {
+                    JSONObject root = roots.optJSONObject(j); if (root == null) continue;
+                    String id = root.optString("id", ""), author = root.optString("author", ""); int kind = root.optInt("kind", 0);
+                    if (validHex(id) && validHex(author) && (kind == 1618 || kind == 1621)) repository.roots.put(id, new GitRoot(id, author, kind));
+                }
+                if (repository.attachments.isEmpty()) continue;
+                gitRepositories.put(address, repository);
+                JSONArray relays = value.optJSONArray("relays");
+                if (relays != null && repository.live()) for (int j = 0; j < relays.length(); j++) {
+                    String relay = relays.optString(j, "");
+                    // The client resolves which relay is the discovery index and
+                    // drops it before writing gitSubs, so these are activity
+                    // relays only; the service holds no host of its own.
+                    if (relay.isEmpty()) continue;
+                    Set<String> addresses = gitRepositoriesByRelay.get(relay);
+                    if (addresses == null) gitRepositoriesByRelay.put(relay, addresses = new LinkedHashSet<>());
+                    addresses.add(address);
+                }
+            }
+        } catch (JSONException e) { Log.w(TAG, "Failed to parse gitSubs", e); }
+    }
+
+    private static boolean validHex(String value) { return value != null && value.matches("[0-9a-f]{64}"); }
+    private static boolean validRepositoryAddress(String value) {
+        return value != null && value.matches("30617:[0-9a-f]{64}:.+");
+    }
+
     // ── Per-relay connection ────────────────────────────────────────────────
 
     private class RelayConnection {
@@ -1007,6 +1087,8 @@ public class NotificationRelayService extends Service {
         final String groupPrefix = "ah-" + Long.toHexString(System.nanoTime() + 5) + "-";
         final String subConcord2 = "a2-" + Long.toHexString(System.nanoTime() + 6);
         final String subDm17 = "a7-" + Long.toHexString(System.nanoTime() + 7);
+        final String subGitRoots = "ag-" + Long.toHexString(System.nanoTime() + 8);
+        final String subGitChildren = "ai-" + Long.toHexString(System.nanoTime() + 9);
         // One-shot lookup sub id → the full pubkey / group id it was issued
         // for. Entries are removed when the lookup resolves; capped clears
         // protect against relays that never answer.
@@ -1169,6 +1251,25 @@ public class NotificationRelayService extends Service {
                     f5.put("authors", authors);
                     f5.put("since", sinceSec);
                     webSocket.send(reqMessage(subConcord2, f5));
+                }
+                Set<String> repositories = gitRepositoriesByRelay.get(relayUrl);
+                if (repositories != null && !repositories.isEmpty()) {
+                    JSONObject roots = new JSONObject(); roots.put("kinds", new JSONArray().put(1618).put(1621));
+                    JSONArray addresses = new JSONArray(); for (String address : repositories) addresses.put(address);
+                    roots.put("#a", addresses); roots.put("since", sinceSec);
+                    webSocket.send(reqMessage(subGitRoots, roots));
+                    // Root children are bounded like the TS wire (100 ids/filter), with
+                    // NIP-22's uppercase E and NIP-34 status's lowercase e kept separate.
+                    List<String> ids = new ArrayList<>();
+                    for (String address : repositories) { GitRepository repo = gitRepositories.get(address); if (repo != null) ids.addAll(repo.roots.keySet()); }
+                    java.util.Collections.sort(ids);
+                    for (int offset = 0; offset < ids.size(); offset += GIT_ROOT_FILTER_CHUNK_SIZE) {
+                        JSONArray chunk = new JSONArray(); for (String root : ids.subList(offset, Math.min(ids.size(), offset + GIT_ROOT_FILTER_CHUNK_SIZE))) chunk.put(root);
+                        JSONObject comments = new JSONObject(); comments.put("kinds", new JSONArray().put(1111)); comments.put("#E", chunk); comments.put("since", sinceSec);
+                        webSocket.send(reqMessage(subGitChildren + "c" + offset, comments));
+                        JSONObject statuses = new JSONObject(); statuses.put("kinds", new JSONArray().put(1630).put(1631).put(1632).put(1633)); statuses.put("#e", chunk); statuses.put("since", sinceSec);
+                        webSocket.send(reqMessage(subGitChildren + "s" + offset, statuses));
+                    }
                 }
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to build REQ", e);
@@ -1978,6 +2079,113 @@ public class NotificationRelayService extends Service {
         return h != null ? "h:" + h : null;
     }
 
+    /** Validate and route public NIP-34/NIP-22 activity without ever leaking
+     * private C2 metadata to a relay. Accepted raw events use the same bridge as
+     * normal plaintext wire events, where IndexedDB de-dupes by event id. */
+    private void handleGitActivity(JSONObject event, String relayUrl, String id, int kind) {
+        String address = null, ticketId = null, title = null, action = null;
+        GitRoot root = null;
+        if (kind == 1618 || kind == 1621) {
+            address = tagValue(event, "a");
+            GitRepository repository = gitRepositories.get(address);
+            if (repository == null || !validTicketRoot(event, repository, kind)) return;
+            root = new GitRoot(id, event.optString("pubkey"), kind);
+            if (!repository.roots.containsKey(id)) {
+                repository.roots.put(id, root);
+                // Persisting the root reconnects through the config listener,
+                // the same path every other subscription change takes, so the
+                // new root's child filters go live without a WebView.
+                persistGitRoot(address, root);
+            }
+            title = tagValue(event, "subject"); action = kind == 1618 ? "opened a pull request" : "opened an issue";
+            ticketId = id;
+        } else {
+            ticketId = kind == 1111 ? rootTag(event, "E") : rootTag(event, "e");
+            if (!validHex(ticketId)) return;
+            for (GitRepository candidate : gitRepositories.values()) {
+                root = candidate.roots.get(ticketId);
+                if (root != null) { address = candidate.address; break; }
+            }
+            if (root == null || address == null) return;
+            if (kind == 1111) {
+                if (!validNip22Root(event, root)) return;
+                action = "commented on a ticket";
+            } else {
+                GitRepository repository = gitRepositories.get(address);
+                String author = event.optString("pubkey", "");
+                if (repository == null || !(author.equals(root.author) || author.equals(repository.owner) || repository.maintainers.contains(author))) return;
+                action = "changed a ticket status";
+            }
+        }
+        GitRepository repository = gitRepositories.get(address);
+        if (repository == null || !repository.live()) return;
+        long timestamp = event.optLong("created_at", 0);
+        if (timestamp <= 0 || notifiedIds.contains(id)) return;
+        notifiedIds.add(id);
+        ArmadaNotificationPlugin.feedRelayEvent("git:" + address, event.toString());
+        for (GitAttachment attachment : repository.attachments) {
+            if (!attachment.activeAt(timestamp)) continue;
+            String url = "/c/" + uriEncode(attachment.communityId) + "/" + uriEncode(attachment.channelId)
+                    + "?ticket=" + uriEncode(ticketId);
+            String line = action + (title != null && !title.trim().isEmpty() ? ": " + truncate(title) : "");
+            // Share the channel's own room, community and title with chat, so
+            // git activity appends to that conversation instead of opening a
+            // second notification with a conflicting name.
+            Concord2Stream stream = streamForChannel(attachment.channelId);
+            enqueueRoomMessage(
+                    stream != null ? stream.community : null, "c2:" + attachment.channelId,
+                    stream != null ? stream.name : "Git activity", url,
+                    event.optString("pubkey", null), "Git activity", /*picture=*/null,
+                    line, timestamp * 1000L, /*mention=*/false);
+        }
+    }
+
+    /** The subscribed stream for a channel, if any; git activity borrows its
+     * community and display name. Streams are per (channel, epoch), so the
+     * first match is enough — every epoch carries the same two. */
+    private Concord2Stream streamForChannel(String channelId) {
+        for (Concord2Stream stream : pkToStream2.values()) if (stream.channelId.equals(channelId)) return stream;
+        return null;
+    }
+
+    /** NIP-22 encodes the root in uppercase tags, where — unlike NIP-10's
+     * lowercase `e` — the fourth value is the root author's pubkey rather than a
+     * "root" marker. Mirrors the TypeScript parser: an uppercase root counts
+     * only when it is unambiguous. */
+    private static String rootTag(JSONObject event, String name) {
+        boolean nip22 = "E".equals(name);
+        String found = null;
+        try { JSONArray tags = event.optJSONArray("tags"); if (tags == null) return null;
+            for (int i = 0; i < tags.length(); i++) { JSONArray tag = tags.optJSONArray(i);
+                if (tag == null || !name.equals(tag.optString(0))) continue;
+                if (!nip22) { if ("root".equals(tag.optString(3))) return tag.optString(1); continue; }
+                if (found != null) return null;
+                found = tag.optString(1);
+            }
+        } catch (Exception ignored) {} return found;
+    }
+    private static boolean validTicketRoot(JSONObject event, GitRepository repository, int kind) {
+        return validHex(event.optString("id", "")) && validHex(event.optString("pubkey", ""))
+                && repository.address.equals(tagValue(event, "a")) && (kind == 1618 || kind == 1621);
+    }
+    private static boolean validNip22Root(JSONObject event, GitRoot root) {
+        String kind = tagValue(event, "K");
+        return root.id.equals(rootTag(event, "E")) && Integer.toString(root.kind).equals(kind);
+    }
+    private void persistGitRoot(String address, GitRoot root) {
+        SharedPreferences sp = getSharedPreferences(ArmadaNotificationPlugin.PREFS_NAME, Context.MODE_PRIVATE);
+        try {
+            JSONArray repositories = new JSONArray(sp.getString("gitSubs", "[]"));
+            for (int i = 0; i < repositories.length(); i++) { JSONObject repository = repositories.optJSONObject(i);
+                if (repository == null || !address.equals(repository.optString("address"))) continue;
+                JSONArray roots = repository.optJSONArray("ticketRoots"); if (roots == null) repository.put("ticketRoots", roots = new JSONArray());
+                boolean exists = false; for (int j = 0; j < roots.length(); j++) if (root.id.equals(roots.optJSONObject(j).optString("id"))) exists = true;
+                if (!exists) roots.put(new JSONObject().put("id", root.id).put("author", root.author).put("kind", root.kind));
+                sp.edit().putString("gitSubs", repositories.toString()).putLong("rev", System.currentTimeMillis()).apply(); return;
+            }
+        } catch (JSONException e) { Log.w(TAG, "Failed to persist Git root", e); }
+    }
+
     private void handleEvent(JSONObject event, String relayUrl) {
         String id = event.optString("id");
         if (id.isEmpty() || notifiedIds.contains(id)) {
@@ -2004,6 +2212,16 @@ public class NotificationRelayService extends Service {
         }
         if (kind != 1059 && kind != 21059 && !NostrCrypto.verifyEvent(event)) {
             if (BuildConfig.DEBUG) Log.d(TAG, "DROP bad signature kind=" + kind + " id=" + id);
+            return;
+        }
+
+        // Git-exclusive NIP-34 kinds stop here; the switch below has no case
+        // for them. 1111 is deliberately excluded: it doubles as an ordinary
+        // NIP-22 reply, and handleGitActivity drops non-git comments silently.
+        // After the security gate, so a git event is filter-checked and
+        // signature-verified before it is acted on.
+        if (kind == 1618 || kind == 1621 || (kind >= 1630 && kind <= 1633)) {
+            handleGitActivity(event, relayUrl, id, kind);
             return;
         }
 

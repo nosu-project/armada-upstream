@@ -352,7 +352,7 @@ describe("Concord V2 end to end", () => {
     const fold = foldControlState(openControlWraps([], controlGroups(joiner)), joiner.id, joiner.owner);
     const [general] = channelsView(joiner, {
       ...fold,
-      channels: new Map([[e0.idHex, { channelIdHex: e0.idHex, name: "general", isPrivate: false, deleted: false }]]),
+      channels: new Map([[e0.idHex, { channelIdHex: e0.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } }]]),
     });
     expect(joiner.rootEpoch).toBe(1n);
     expect(general.current.epoch).toBe(1n);

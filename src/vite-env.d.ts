@@ -6,6 +6,8 @@ interface ImportMetaEnv {
   readonly VITE_PIN_PLATFORM_RELAYS?: string;
   readonly VITE_APP_RELAYS?: string;
   readonly VITE_SEARCH_RELAYS?: string;
+  /** NIP-34 repository directory relay. Empty = no directory search. */
+  readonly VITE_GIT_DISCOVERY_RELAY?: string;
   readonly VITE_APP_BLOSSOM_SERVERS?: string;
   readonly VITE_CONCORD_AV_SERVERS?: string;
   readonly VITE_DM_VOICE_RELAYS?: string;

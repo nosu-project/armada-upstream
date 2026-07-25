@@ -1,9 +1,16 @@
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { parseAddr } from "@/lib/parseAddr";
 import { KIND_USER_EMOJIS } from "@/lib/selfSyncKinds";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -207,6 +214,141 @@ export function useAddEmojiPack(): UseMutationResult<
 
       void queryClient.invalidateQueries({ queryKey: ["emoji-pack-refs"] });
       void queryClient.invalidateQueries({ queryKey: ["custom-emojis"] });
+      void queryClient.invalidateQueries({ queryKey: ["my-emoji-packs"] });
+    },
+  });
+}
+
+/**
+ * Remove a NIP-30 emoji pack from the current user's kind-10030 list by
+ * stripping its `["a", "30030:pubkey:dtag"]` coordinate. Read-modify-write, so
+ * inline emojis and every other referenced pack are preserved.
+ *
+ * Removal never creates a list from scratch — it only ever publishes a strictly
+ * smaller version of a list we actually read back. It therefore refuses to
+ * publish when the list can't be read but evidence says one exists: republishing
+ * an empty base would wipe every emoji rather than remove one pack (AGENTS.md
+ * "Never publish a user's Nostr lists without an explicit user action"). When a
+ * relay conclusively reports no list, there is genuinely nothing to remove and
+ * the mutation is a silent no-op.
+ */
+export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: string }> {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const eventStore = useEventStore();
+  const queryClient = useQueryClient();
+  const publish = useNostrPublish();
+
+  return useMutation({
+    mutationFn: async ({ coord }) => {
+      if (!user) throw new Error("Sign in to manage emoji packs.");
+
+      const store = await eventStore;
+
+      // Fetch the freshest list so we edit the real thing, not a stale copy.
+      const { event: prev, conclusive } = await readEmojiList(
+        nostr,
+        store,
+        user.pubkey,
+        AbortSignal.timeout(15_000),
+      );
+
+      if (!prev) {
+        // No list came back. Treating that as "already empty, nothing to
+        // remove" is only safe when a relay actually completed the read AND
+        // nothing we hold says a list exists — otherwise a failed read would
+        // silently report success at removing nothing (and leave the pack in
+        // place on the network). Short of that, surface the failure.
+        const knownRefs = queryClient.getQueryData<string[]>(["emoji-pack-refs", user.pubkey]);
+        const knownEmojis = queryClient.getQueryData<unknown[]>(["custom-emojis", user.pubkey]);
+        const seenAList = (knownRefs?.length ?? 0) > 0 || (knownEmojis?.length ?? 0) > 0;
+        if (!conclusive || seenAList) {
+          throw new Error("Couldn't read your emoji list. Check your connection and try again.");
+        }
+        return; // genuinely nothing to remove
+      }
+
+      // Not referenced? Nothing to do.
+      if (!prev.tags.some((t) => t[0] === "a" && t[1] === coord)) return;
+
+      const tags = prev.tags.filter((t) => !(t[0] === "a" && t[1] === coord));
+
+      await publish.mutateAsync({
+        kind: KIND_USER_EMOJIS,
+        content: prev.content,
+        tags,
+        prev,
+      });
+
+      void queryClient.invalidateQueries({ queryKey: ["emoji-pack-refs"] });
+      void queryClient.invalidateQueries({ queryKey: ["custom-emojis"] });
+      void queryClient.invalidateQueries({ queryKey: ["my-emoji-packs"] });
+    },
+  });
+}
+
+/** A pack referenced by the user's kind-10030 list, with its resolved event. */
+export interface MyEmojiPack {
+  /** The `30030:pubkey:dtag` coordinate from the user's list. */
+  coord: string;
+  /** Relay hint carried on the `a` tag, if any. */
+  relay?: string;
+  /** The resolved kind-30030 event, or null if it couldn't be fetched. */
+  event: NostrEvent | null;
+}
+
+/**
+ * The emoji packs the current user has added (kind-10030 `["a", …]` refs
+ * resolved to their kind-30030 events), for a management UI. Unresolved packs
+ * are still returned (with `event: null`) so a pack whose set didn't load can
+ * still be listed and removed by coordinate.
+ */
+export function useMyEmojiPacks(): UseQueryResult<MyEmojiPack[]> {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const eventStore = useEventStore();
+
+  return useQuery({
+    queryKey: ["my-emoji-packs", user?.pubkey ?? ""],
+    enabled: !!user,
+    staleTime: 5 * 60_000,
+    queryFn: async ({ signal }): Promise<MyEmojiPack[]> => {
+      if (!user) return [];
+      const store = await eventStore;
+
+      const { event: list } = await readEmojiList(nostr, store, user.pubkey, signal);
+      if (!list) return [];
+
+      const refs = list.tags
+        .filter((t) => t[0] === "a" && t[1])
+        .map((t) => ({ coord: t[1], relay: t[2] as string | undefined, addr: parseAddr(t[1]) }))
+        .filter((r) => !!r.addr && r.addr.kind === KIND_EMOJI_SET);
+      if (refs.length === 0) return [];
+
+      const filters = refs.map((r) => ({
+        kinds: [KIND_EMOJI_SET],
+        authors: [r.addr!.pubkey],
+        "#d": [r.addr!.identifier],
+        limit: 1,
+      }));
+      const [relay, cached] = await Promise.all([
+        nostr.query(filters, { signal }).catch(() => [] as NostrEvent[]),
+        store.query(filters).catch(() => [] as NostrEvent[]),
+      ]);
+
+      const byCoord = new Map<string, NostrEvent>();
+      for (const ev of [...relay, ...cached]) {
+        const d = ev.tags.find(([n]) => n === "d")?.[1] ?? "";
+        const coord = emojiPackCoord(ev.pubkey, d);
+        const existing = byCoord.get(coord);
+        if (!existing || ev.created_at > existing.created_at) byCoord.set(coord, ev);
+      }
+
+      return refs.map((r) => ({
+        coord: r.coord,
+        relay: r.relay,
+        event: byCoord.get(r.coord) ?? null,
+      }));
     },
   });
 }

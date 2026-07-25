@@ -1,15 +1,27 @@
 import { AlertCircle, Braces, Copy, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
+import { MessageActionSheet } from "@/components/chat/MessageActionSheet";
+import { MessageOverflowMenu } from "@/components/chat/MessageOverflowMenu";
 import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
 import { PollCard } from "@/components/chat/PollCard";
-import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
+import { ReactionActions, ReactionBar } from "@/components/chat/ReactionBar";
 import { ZapButton } from "@/components/chat/ZapButton";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
 import { DisplayName } from "@/components/DisplayName";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +54,7 @@ import { isMeAction, meActionText } from "@/lib/slashCommands";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
+import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ChatMsg, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ReactNode } from "react";
@@ -118,22 +131,19 @@ export function ReplyPreview({ content, hideMediaPlaceholder = false }: { conten
 /**
  * A small square image thumbnail for the reply preview. Resolves the media the
  * same way the message body does ({@link useResolvedMediaSrc}) so Concord's
- * encrypted attachments decrypt too.
- *
- * Fixed-size and inline: it sits on the reply line's single text row rather
- * than below it, and occupies its square from the moment it mounts. It used to
- * be an `h-10 w-auto` block that rendered nothing until the media resolved,
- * which grew the row by 40px mid-scroll — inside a virtualized timeline that
- * shoves everything below it.
+ * encrypted attachments decrypt too; renders nothing until it's ready (so the
+ * line never flashes a broken image).
  */
 export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
   const resolved = useResolvedMediaSrc(image);
+  if (resolved.status !== "ready") return null;
   return (
-    <span className="size-4 shrink-0 overflow-hidden rounded-[3px] bg-muted">
-      {resolved.status === "ready" && (
-        <img src={resolved.src} alt="" className="size-full object-cover" />
-      )}
-    </span>
+    <img
+      src={resolved.src}
+      alt=""
+      className="h-10 w-auto max-w-[6rem] shrink-0 rounded object-cover"
+      loading="lazy"
+    />
   );
 }
 
@@ -143,18 +153,9 @@ export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
  * content preview) — relay-fetched for NIP-29, the in-memory sealed author for
  * Concord — and hands the resolved `name`/`preview` here so the chrome (a
  * Discord-style quoted bar with the bold name + truncated preview) is defined
- * once. When `onClick` is supplied the line jumps the timeline to the
+ * once. Renders nothing until a name is resolved (avoids a flash of an empty
+ * line). When `onClick` is supplied the line jumps the timeline to the
  * replied-to message.
- *
- * ALWAYS EXACTLY ONE LINE TALL, in every state. The parent message is resolved
- * asynchronously (a relay round-trip for NIP-29, a profile lookup for the
- * author name, a decrypt for the thumbnail), and this line previously rendered
- * `null` until the name landed and then wrapped its preview across up to two
- * lines with the thumbnail on a third. Each of those steps resized the row
- * after mount, which inside the virtualized timeline shifts everything below —
- * the judder when scrolling back through a conversation full of replies. So
- * the row reserves its height from mount and shows a muted placeholder until
- * the name arrives, and the preview truncates rather than wrapping.
  */
 export function ReplyContextLine({
   name,
@@ -171,27 +172,20 @@ export function ReplyContextLine({
   thumbnail?: ReactNode;
   onClick?: () => void;
 }) {
-  const className =
-    "flex items-center gap-1.5 h-5 overflow-hidden text-xs text-muted-foreground/80 mb-0.5 min-w-0 max-w-full border-l-2 border-muted-foreground/30 pl-2";
-  // Unresolved: hold the row open with a static placeholder. Deliberately not
-  // an animated skeleton — a reply whose parent has fallen out of the loaded
-  // window never resolves, and a permanent shimmer would be worse than a label.
-  if (!name) {
-    return (
-      <div className={cn(className, "italic text-muted-foreground/50")}>
-        <span className="truncate">Replying to a message</span>
-      </div>
-    );
-  }
+  if (!name) return null;
   const content = (
     <>
-      {thumbnail}
-      <span className="font-semibold shrink-0">
-        {pubkey ? <DisplayName pubkey={pubkey} name={name} /> : name}
+      <span className="flex items-baseline gap-1.5 min-w-0 max-w-full">
+        <span className="font-semibold shrink-0">
+          {pubkey ? <DisplayName pubkey={pubkey} name={name} /> : name}
+        </span>
+        {preview && <span className="line-clamp-2 break-words min-w-0">{preview}</span>}
       </span>
-      {preview && <span className="truncate min-w-0">{preview}</span>}
+      {thumbnail && <span className="mt-0.5">{thumbnail}</span>}
     </>
   );
+  const className =
+    "flex flex-col text-xs text-muted-foreground/80 mb-0.5 min-w-0 max-w-full border-l-2 border-muted-foreground/30 pl-2";
   if (!onClick) {
     return <div className={className}>{content}</div>;
   }
@@ -199,7 +193,7 @@ export function ReplyContextLine({
     <button
       type="button"
       onClick={onClick}
-      className={cn(className, "text-left hover:text-foreground hover:border-muted-foreground/60 transition-colors cursor-pointer")}
+      className={cn(className, "items-start text-left hover:text-foreground hover:border-muted-foreground/60 transition-colors cursor-pointer")}
     >
       {content}
     </button>
@@ -465,11 +459,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const canPin = Boolean(onTogglePin) && canModerate && !isPending && !isFailed;
   const wasEdited = event.tags.some(([name]) => name === "edited");
   const [editText, setEditText] = useState(event.content);
-  // Two-step delete: the first click arms (highlights) the trash button, the
-  // second click within the timeout actually deletes. Prevents fat-finger
-  // deletes from a single misclick.
-  const [deleteArmed, setDeleteArmed] = useState(false);
-  const disarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Deleting is irreversible and now sits one tap away in the action sheet, so
+  // it confirms. (It used to be a two-step "arm the trash icon" gesture, which
+  // only worked because it WAS a bare icon on the hover strip.)
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  // The touch long-press menu.
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   // Raw-event JSON viewer (rumor context menu).
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -489,46 +484,109 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // stringifying every message's event on mount is pure cost on a channel switch.
   const sourceJson = jsonOpen ? JSON.stringify(rumor ?? event, null, 2) : "";
 
-  const disarmDelete = useCallback(() => {
-    if (disarmTimer.current) clearTimeout(disarmTimer.current);
-    disarmTimer.current = null;
-    setDeleteArmed(false);
-  }, []);
-
-  const handleDeleteClick = useCallback(() => {
-    if (deleteArmed) {
-      disarmDelete();
-      onDelete?.(event);
-    } else {
-      setDeleteArmed(true);
-      if (disarmTimer.current) clearTimeout(disarmTimer.current);
-      disarmTimer.current = setTimeout(() => setDeleteArmed(false), 3000);
-    }
-  }, [deleteArmed, disarmDelete, onDelete, event]);
-
-  // Clean up the disarm timer on unmount.
-  useEffect(() => () => {
-    if (disarmTimer.current) clearTimeout(disarmTimer.current);
-  }, []);
-
   // Reset the draft whenever an edit (re)starts.
   useEffect(() => {
     if (isEditing) setEditText(event.content);
   }, [isEditing, event.content]);
 
-  // Toggle the toolbar on tap (touch devices only — desktop reveals it on
-  // hover, so a click must not highlight the row), but ignore taps that land on
-  // interactive children (buttons, links, inputs, mention chips) so those still
-  // act normally instead of being swallowed.
-  const handleRowClick = useCallback((e: React.MouseEvent) => {
-    if (!isTouch) return;
-    if ((e.target as HTMLElement).closest("button, a, input, textarea, [role='button']")) return;
-    onToggleActive?.(event.id);
-  }, [isTouch, onToggleActive, event.id]);
+  // The long-press sheet also marks the row active, so the message you pressed
+  // stays visibly picked out behind the sheet.
+  const openSheet = useCallback(() => {
+    setSheetOpen(true);
+    if (!active) onToggleActive?.(event.id);
+  }, [active, onToggleActive, event.id]);
+
+  const handleSheetOpenChange = useCallback((open: boolean) => {
+    setSheetOpen(open);
+    if (!open && active) onToggleActive?.(event.id);
+  }, [active, onToggleActive, event.id]);
+
+  const copyMessageId = useCallback(() => {
+    try {
+      writeClipboardText(
+        `nostr:${nip19.neventEncode({ id: event.id, author: event.pubkey })}`,
+      ).catch(() => undefined);
+    } catch {
+      writeClipboardText(event.id).catch(() => undefined);
+    }
+  }, [event.id, event.pubkey]);
+
+  // Every action the message offers, in menu order. One list drives the touch
+  // sheet, the desktop `⋯` overflow and the right-click menu, so they can't
+  // drift apart.
+  const menuActions: MessageActionItem[] = [];
+  if (canWrite && !isEditing && onReply) {
+    menuActions.push({ id: "reply", label: "Reply", icon: Reply, onSelect: () => onReply(event) });
+  }
+  if (canWrite && !isEditing && onOpenThread) {
+    menuActions.push({
+      id: "thread",
+      label: "Reply in thread",
+      icon: MessagesSquare,
+      onSelect: () => onOpenThread(event),
+    });
+  }
+  if (canZap && !isEditing && !zapDisabled) {
+    menuActions.push({ id: "zap", label: "Zap message", icon: Zap, onSelect: () => setZapOpen(true) });
+  }
+  if (canEdit && !isEditing) {
+    menuActions.push({
+      id: "edit",
+      label: "Edit message",
+      icon: Pencil,
+      onSelect: () => onEdit?.(event),
+    });
+  }
+  if (canPin && !isEditing) {
+    menuActions.push({
+      id: "pin",
+      label: isPinned ? "Unpin message" : "Pin message",
+      icon: isPinned ? PinOff : Pin,
+      onSelect: () => onTogglePin?.(event),
+    });
+  }
+  menuActions.push({
+    id: "copy-text",
+    label: "Copy text",
+    icon: Copy,
+    groupStart: true,
+    onSelect: () => writeClipboardText(event.content).catch(() => undefined),
+  });
+  if (!identityOverride && !rumor) {
+    menuActions.push({
+      id: "copy-id",
+      label: "Copy message ID",
+      icon: Link2,
+      onSelect: copyMessageId,
+    });
+  }
+  menuActions.push({
+    id: "json",
+    label: "View event JSON",
+    icon: Braces,
+    onSelect: () => setJsonOpen(true),
+  });
+  if (canDelete && !isEditing) {
+    menuActions.push({
+      id: "delete",
+      label: "Delete message",
+      icon: Trash2,
+      destructive: true,
+      groupStart: true,
+      onSelect: () => setConfirmDelete(true),
+    });
+  }
+
+  // What the desktop hover strip doesn't show as its own button.
+  const overflowActions = menuActions.filter(
+    (a) => !["reply", "thread", "zap"].includes(a.id),
+  );
 
   const toolbar = (
     <>
-      {canWrite && !isEditing && reactions && <ReactionPicker onReact={reactions.react} />}
+      {canWrite && !isEditing && reactions && (
+        <ReactionActions onReact={reactions.react} tallies={reactions.tallies} />
+      )}
       {canZap && !isEditing && <ZapButton disabled={zapDisabled} onOpen={() => setZapOpen(true)} />}
       {canWrite && !isEditing && onOpenThread && (
         <Tooltip>
@@ -562,66 +620,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
           <TooltipContent>Reply</TooltipContent>
         </Tooltip>
       )}
-      {canEdit && !isEditing && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Edit message"
-              className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
-              onClick={() => onEdit?.(event)}
-            >
-              <Pencil className="size-[18px] md:size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Edit message</TooltipContent>
-        </Tooltip>
-      )}
-      {canPin && !isEditing && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={isPinned ? "Unpin message" : "Pin message"}
-              aria-pressed={isPinned}
-              className={cn(
-                "size-9 md:size-7 touch:size-11 touch:md:size-11",
-                isPinned
-                  ? "text-primary hover:text-primary"
-                  : "text-muted-foreground hover:text-primary",
-              )}
-              onClick={() => onTogglePin?.(event)}
-            >
-              {isPinned ? <PinOff className="size-[18px] md:size-3.5" /> : <Pin className="size-[18px] md:size-3.5" />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{isPinned ? "Unpin message" : "Pin message"}</TooltipContent>
-        </Tooltip>
-      )}
-      {canDelete && !isEditing && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={deleteArmed ? "Confirm delete message" : "Delete message"}
-              aria-pressed={deleteArmed}
-              className={cn(
-                "size-9 md:size-7 touch:size-11 touch:md:size-11 transition-colors",
-                deleteArmed
-                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  : "text-muted-foreground hover:text-destructive",
-              )}
-              onClick={handleDeleteClick}
-            >
-              <Trash2 className="size-[18px] md:size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{deleteArmed ? "Click again to delete" : "Delete message"}</TooltipContent>
-        </Tooltip>
-      )}
+      <MessageOverflowMenu actions={overflowActions} />
     </>
   );
 
@@ -766,7 +765,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
   return (
     <>
     <ContextMenu>
-      <ContextMenuTrigger className="block">
+      {/* On touch the long-press gesture belongs to the action sheet; Radix's
+          own long-press would otherwise open this menu at the same time. */}
+      <ContextMenuTrigger className="block" disabled={isTouch}>
         <MessageRow
           pubkey={event.pubkey}
           identityOverride={identityOverride}
@@ -774,7 +775,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
           pending={isPending}
           edited={wasEdited && !isEditing}
           nameBadge={nameBadge}
-          actions={toolbar}
+          // Touch gets the long-press sheet instead: a horizontal strip of
+          // icon buttons floated over the row can't hold this many actions on
+          // a phone without wrapping across the message.
+          actions={isTouch ? undefined : toolbar}
           beforeBody={hasReplyContext ? replyContext : undefined}
           afterBody={afterBody}
           continuation={
@@ -783,88 +787,66 @@ const ChatMessageInner = memo(function ChatMessageInner({
             continuation && !hasReplyContext && !isEditing && !isPinned && !mentionsMe
           }
           className={cn(
-            active && "bg-secondary/40",
+            (active || sheetOpen) && "bg-secondary/40",
             isPinned && "bg-amber-500/5",
             mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
             isPending && "opacity-60",
             isFailed && "bg-destructive/5",
           )}
           containerProps={{
-            onMouseLeave: disarmDelete,
-            onClick: handleRowClick,
-            "data-active": active || undefined,
+            "data-active": active || sheetOpen || undefined,
             "data-event-id": event.id,
           } as React.HTMLAttributes<HTMLDivElement>}
           onSwipeReply={isTouch && onReply ? () => onReply(event) : undefined}
+          onLongPress={isTouch && menuActions.length > 0 ? openSheet : undefined}
         >
           {body}
         </MessageRow>
       </ContextMenuTrigger>
-      {/* Discord-style right-click menu, mirroring the hover toolbar's
-          capability gating. */}
+      {/* Discord-style right-click menu: the same actions as the `⋯` overflow
+          and the touch sheet, from one list. */}
       <ContextMenuContent className="w-52" collisionPadding={getComposerCollisionPadding(composerBoundsRef)}>
-        {canWrite && !isEditing && onOpenThread && (
-          <ContextMenuItem onSelect={() => onOpenThread(event)}>
-            <Reply className="mr-2 size-4" /> Reply
-          </ContextMenuItem>
-        )}
-        {canWrite && !isEditing && onReply && (
-          <ContextMenuItem onSelect={() => onReply(event)}>
-            <MessagesSquare className="mr-2 size-4" /> Quote
-          </ContextMenuItem>
-        )}
-        {canZap && !isEditing && !zapDisabled && (
-          <ContextMenuItem onSelect={() => setZapOpen(true)}>
-            <Zap className="mr-2 size-4" /> Zap message
-          </ContextMenuItem>
-        )}
-        {canEdit && !isEditing && (
-          <ContextMenuItem onSelect={() => onEdit?.(event)}>
-            <Pencil className="mr-2 size-4" /> Edit message
-          </ContextMenuItem>
-        )}
-        {canPin && !isEditing && (
-          <ContextMenuItem onSelect={() => onTogglePin?.(event)}>
-            {isPinned
-              ? <><PinOff className="mr-2 size-4" /> Unpin message</>
-              : <><Pin className="mr-2 size-4" /> Pin message</>}
-          </ContextMenuItem>
-        )}
-        <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => writeClipboardText(event.content).catch(() => undefined)}>
-          <Copy className="mr-2 size-4" /> Copy text
-        </ContextMenuItem>
-        {!identityOverride && !rumor && (
-          <ContextMenuItem
-            onSelect={() => {
-              try {
-                writeClipboardText(
-                  `nostr:${nip19.neventEncode({ id: event.id, author: event.pubkey })}`,
-                ).catch(() => undefined);
-              } catch {
-                writeClipboardText(event.id).catch(() => undefined);
-              }
-            }}
-          >
-            <Link2 className="mr-2 size-4" /> Copy message ID
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem onSelect={() => setJsonOpen(true)}>
-          <Braces className="mr-2 size-4" /> View event JSON
-        </ContextMenuItem>
-        {canDelete && !isEditing && (
-          <>
-            <ContextMenuSeparator />
+        {menuActions.map((action) => (
+          <div key={action.id}>
+            {action.groupStart && <ContextMenuSeparator />}
             <ContextMenuItem
-              className="text-destructive focus:text-destructive"
-              onSelect={() => onDelete?.(event)}
+              className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
+              onSelect={action.onSelect}
             >
-              <Trash2 className="mr-2 size-4" /> Delete message
+              <action.icon className="mr-2 size-4" />
+              {action.label}
             </ContextMenuItem>
-          </>
-        )}
+          </div>
+        ))}
       </ContextMenuContent>
     </ContextMenu>
+    {isTouch && (
+      <MessageActionSheet
+        open={sheetOpen}
+        onOpenChange={handleSheetOpenChange}
+        actions={menuActions}
+        reactions={canWrite && !isEditing && reactions ? reactions : undefined}
+      />
+    )}
+    <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete message?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This can't be undone. Relays and clients that already have it may keep their copy.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={() => onDelete?.(event)}
+          >
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     {zapOpen && (
       <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} sendOnchainZap={onSendOnchainZap} />
     )}

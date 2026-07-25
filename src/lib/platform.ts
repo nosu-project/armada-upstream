@@ -127,6 +127,22 @@ export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "w
   .filter((url: string | undefined): url is string => Boolean(url));
 
 /**
+ * The NIP-34 repository directory: an index of kind-30617 announcements, read
+ * to search for a repository by name and as a fallback when an address carries
+ * no usable hint. Discovery only — it is never subscribed to for ongoing
+ * activity and never persisted as a repository's activity relay. Operators can
+ * point `VITE_GIT_DISCOVERY_RELAY` at their own index, or set it empty to
+ * disable directory search (pasted addresses still resolve from their hints).
+ */
+export const GIT_ANNOUNCEMENT_DISCOVERY_RELAY: string =
+  normalizeRelayUrl(import.meta.env.VITE_GIT_DISCOVERY_RELAY ?? "wss://index.ngit.dev") ?? "";
+
+/** Whether a relay is the discovery index, compared as normalized URLs rather than by substring. */
+export function isGitAnnouncementDiscoveryRelay(url: string): boolean {
+  return GIT_ANNOUNCEMENT_DISCOVERY_RELAY !== "" && normalizeRelayUrl(url) === GIT_ANNOUNCEMENT_DISCOVERY_RELAY;
+}
+
+/**
  * Default Concord AV brokers (CORD-07 §2): blind LiveKit token brokers (https
  * origins) used to START a call in an empty voice channel — once anyone is in
  * a call, their presence-announced broker is the rendezvous point (§5). The

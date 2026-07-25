@@ -3,6 +3,7 @@ import { useNostrLogin } from "@nostrify/react/login";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -20,7 +21,11 @@ import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
 import { signStreamAuthsChunked } from "@/concord-v2/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { normalizeRelayUrl } from "@/lib/platform";
+import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platform";
+import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
+import type { GitRepositoryWireInput } from "@/wire/spec";
+import { useEventStore } from "@/hooks/useEventStore";
+import { GIT_REPOSITORY_ANNOUNCEMENT_KIND, parseGitRepositoryAnnouncement } from "@/lib/gitActivity";
 
 /** localStorage key for the native background-notification intent (toggle). */
 const NATIVE_INTENT_KEY = "armada:native-notif-intent";
@@ -288,6 +293,48 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         .map(({ sub, level }) => ({ ...sub, mentionOnly: level === "mentions" })),
     [allConcord2Subs, concordChannelLevel],
   );
+  // Match the web wire's canonical repository grouping. The channel/community
+  // route remains in this local payload and is never copied into relay filters.
+  const gitRepositories = useMemo<GitRepositoryWireInput[]>(() => {
+    const byAddress = new Map<string, GitRepositoryWireInput>();
+    for (const sub of concord2Subs) {
+      // Git events have no encrypted @-mention signal. A channel set to
+      // mentions-only must therefore not receive background Git alerts.
+      if (sub.mentionOnly) continue;
+      for (const attachment of sub.gitAttachments) {
+        let repository = byAddress.get(attachment.address.coordinate);
+        if (!repository) {
+          repository = { address: attachment.address.coordinate, relays: [], attachments: [] };
+          byAddress.set(repository.address, repository);
+        }
+        repository.relays.push(...attachment.relayHints);
+        repository.attachments.push({ channelId: sub.channelId, communityId: sub.communityId, attachment });
+      }
+    }
+    return [...byAddress.values()].map((repository) => ({ ...repository, relays: [...new Set(repository.relays)].sort() }));
+  }, [concord2Subs]);
+  const gitTicketRoots = useWireGitTicketRoots(gitRepositories);
+  const eventStore = useEventStore();
+  const gitAnnouncements = useQuery({
+    queryKey: ["native-notifications", "git-announcements", gitRepositories.map((repository) => repository.address).join("|")],
+    enabled: gitRepositories.length > 0,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const store = await eventStore;
+      const identifiers = [...new Set(gitRepositories.map((repository) => repository.address.split(":")[2]!))];
+      const events = await store.query([{ kinds: [GIT_REPOSITORY_ANNOUNCEMENT_KIND], "#d": identifiers, limit: 1_000 }]);
+      return new Map(events.map(parseGitRepositoryAnnouncement).filter((repository): repository is NonNullable<typeof repository> => Boolean(repository)).map((repository) => [repository.address.coordinate, repository]));
+    },
+  });
+  const gitSubs = useMemo(() => gitRepositories.map((repository) => ({
+    address: repository.address,
+    relays: repository.relays.filter((relay) => !isGitAnnouncementDiscoveryRelay(relay)),
+    owner: repository.address.split(":")[1]!,
+    // Only a parsed announcement with the exact coordinate contributes trust.
+    maintainers: gitAnnouncements.data?.get(repository.address)?.maintainers ?? [],
+    attachments: repository.attachments.map(({ channelId, communityId, attachment }) => ({ communityId: communityId ?? "", channelId, attachedAt: attachment.attachedAt, ...(attachment.detachedAt !== undefined ? { detachedAt: attachment.detachedAt } : {}) })),
+    ticketRoots: gitTicketRoots.filter((event) => event.tags.some(([name, value]) => name === "a" && value === repository.address)).map((event) => ({ id: event.id, author: event.pubkey, kind: event.kind as 1618 | 1621 })),
+  })), [gitRepositories, gitTicketRoots, gitAnnouncements.data]);
 
   // Push the current config to the native service whenever the relevant inputs
   // change. Three cases:
@@ -328,6 +375,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         dmRelays,
         dmFollows,
         signer: signerCfg,
+        gitSubs,
       };
     }
 
@@ -339,7 +387,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, signerCfg]);
+  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, signerCfg, gitSubs]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off, start the background service. Android lets us request the OS

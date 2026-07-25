@@ -137,6 +137,7 @@ export function useForegroundNotifications(): void {
   // Per-room high-water mark of what we've already notified, so overlapping
   // transports / re-ingests don't double-alert.
   const lastNotified = useRef(new Map<string, number>());
+  const notifiedEvents = useRef(new Set<string>());
 
   useEffect(() => {
     if (!user) return;
@@ -230,9 +231,15 @@ export function useForegroundNotifications(): void {
         if (isRoomActive(roomKey)) continue;
 
         // Dedupe against what we've already surfaced for this room.
+        const eventKey = cand.eventId ? `${roomKey}:${cand.eventId}` : "";
+        if (eventKey && notifiedEvents.current.has(eventKey)) continue;
         const mark = lastNotified.current.get(roomKey) ?? 0;
-        if (cand.createdAt <= mark) continue;
+        // Legacy candidates lack an event id, so retain their timestamp-based
+        // protection. Git events use source ids: multiple accepted actions in
+        // the same second are distinct notification candidates.
+        if (!eventKey && cand.createdAt <= mark) continue;
         lastNotified.current.set(roomKey, cand.createdAt);
+        if (eventKey) notifiedEvents.current.add(eventKey);
 
         // Resolve the title (async — needs the author's profile) then fire the
         // OS notification. Errors are swallowed so one bad event never breaks
@@ -253,6 +260,9 @@ export function useForegroundNotifications(): void {
               // string: "Reacted 👍 to your message".
               title = name;
               body = `Reacted ${cand.reactionEmoji ?? "👍"} to your message`;
+            } else if (cand.git) {
+              title = `${name} ${cand.git.action} in ${cand.git.repository}`;
+              body = cand.git.ticketTitle ?? `New activity in the destination channel`;
             } else {
               title = cand.mention ? `${name} mentioned you` : name;
             }

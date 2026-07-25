@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   Check,
   Hash,
   ImagePlus,
@@ -12,18 +13,20 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useNostr } from "@nostrify/react";
 
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
-import { useChannels2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { refreshInviteBundlesFor } from "@/concord-v2/hooks/useRekey2";
 import { useMetadataActions2 } from "@/concord-v2/hooks/useRoles2";
@@ -43,6 +46,9 @@ import {
   type ImagePointer,
 } from "@/concord-v2/lib/types";
 import { cn } from "@/lib/utils";
+import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
+import { fetchGitRepositoryAnnouncement } from "@/lib/gitRepositoryResolver";
+import { parseGitRepositoryAddress } from "@/lib/gitActivity";
 
 /**
  * The single "community" surface: the same view is shown to everyone (icon,
@@ -331,6 +337,8 @@ function InfoBody({
 
         <ChannelsSection community={community} canManage={canManageChannels} />
 
+        <ConnectedRepositoriesSection community={community} canManage={canManageChannels} />
+
         <RelaysSection
           community={community}
           metadata={metadata}
@@ -363,6 +371,236 @@ function InfoBody({
       />
     </div>
   );
+}
+
+/** Active NIP-34 attachments across this community's channels. Historical, detached
+ * intervals remain in the control-plane metadata but intentionally aren't listed. */
+export function ConnectedRepositoriesSection({
+  community,
+  canManage,
+}: {
+  community: CommunityV2;
+  canManage: boolean;
+}) {
+  const channels = useChannels2(community);
+  const { data: folded } = useControlFold2(community);
+  const { attachRepository, detachRepository } = useCommunityManagement2(community);
+  const [connectOpen, setConnectOpen] = useState(false);
+
+  const repositories = channels.flatMap((channel) => {
+    const metadata = folded?.channels.get(channel.idHex)?.metadata;
+    return metadata
+      ? channelGitRepositoryAttachments(metadata)
+          .filter((attachment) => attachment.detachedAt === undefined)
+          .map((attachment) => ({ channel, attachment }))
+      : [];
+  });
+
+  // Nothing connected and no right to connect anything: a community that never
+  // touches git shouldn't carry a permanently empty git section.
+  if (repositories.length === 0 && !canManage) return null;
+
+  const connectedCoordinates = new Set(repositories.map(({ attachment }) => attachment.address.coordinate));
+  // A channel already holding a repository is spoken for: a second one would
+  // blend two projects into one timeline. Shown, but not selectable.
+  const repositoryByChannel = new Map<string, { owner: string; name: string }>();
+  for (const { channel, attachment } of repositories) {
+    if (!repositoryByChannel.has(channel.idHex)) {
+      repositoryByChannel.set(channel.idHex, { owner: attachment.address.owner, name: attachment.address.identifier });
+    }
+  }
+
+  const connect = async (channelIdHex: string, repository: PickedRepository) => {
+    // The announcement is authoritative for activity relays; any address the
+    // user pasted contributes only additional discovery hints.
+    await attachRepository({ channelIdHex, address: repository.coordinate, relayHints: repository.relayHints });
+    toast({ title: "Repository connected", description: repository.displayName });
+  };
+
+  const detach = async (channel: ChannelV2, address: string, name: string) => {
+    if (!confirm(`Disconnect ${name} from #${channel.name}? Historical activity remains attached to its original interval.`)) return;
+    try {
+      await detachRepository({ channelIdHex: channel.idHex, address });
+      toast({ title: "Repository disconnected", description: name });
+    } catch (e) {
+      toast({ title: "Couldn't disconnect repository", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Connected repositories</span>
+        {canManage && channels.length > 0 && (
+          <Button type="button" size="icon" variant="ghost" className="size-6 shrink-0 text-muted-foreground" aria-label="Connect repository" onClick={() => setConnectOpen(true)}>
+            <Plus className="size-3.5" />
+          </Button>
+        )}
+      </div>
+      <div className="space-y-1 rounded-lg bg-secondary/40 p-1">
+        {repositories.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">No repositories connected.</p>}
+        {repositories.map(({ channel, attachment }) => (
+          <ConnectedRepositoryRow
+            key={`${channel.idHex}:${attachment.address.coordinate}`}
+            channel={channel}
+            address={attachment.address.coordinate}
+            owner={attachment.address.owner}
+            relayHints={attachment.relayHints}
+            fallbackName={attachment.address.identifier}
+            canManage={canManage}
+            onDetach={() => detach(channel, attachment.address.coordinate, attachment.address.identifier)}
+          />
+        ))}
+      </div>
+      {canManage && (
+        <ConnectRepositoryDialog
+          open={connectOpen}
+          onOpenChange={setConnectOpen}
+          channels={channels}
+          connectedCoordinates={connectedCoordinates}
+          repositoryByChannel={repositoryByChannel}
+          onConnect={connect}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Pick a repository, then the channel it belongs to. Mirrors the create-channel wizard. */
+function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordinates, repositoryByChannel, onConnect }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  channels: ChannelV2[];
+  connectedCoordinates: ReadonlySet<string>;
+  repositoryByChannel: ReadonlyMap<string, { owner: string; name: string }>;
+  onConnect: (channelIdHex: string, repository: PickedRepository) => Promise<unknown>;
+}) {
+  const [picked, setPicked] = useState<PickedRepository | null>(null);
+  // The channel a write is in flight for. The control plane folds our own
+  // attachment before the publish resolves, so this row must keep reading as
+  // pending rather than flipping to "already connected" under the cursor.
+  const [pendingChannelId, setPendingChannelId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const connecting = pendingChannelId !== null;
+
+  useEffect(() => {
+    if (!open) return;
+    setPicked(null);
+    setPendingChannelId(null);
+    setError(null);
+  }, [open]);
+
+  const connect = async (channelIdHex: string) => {
+    if (!picked || connecting) return;
+    setError(null);
+    setPendingChannelId(channelIdHex);
+    try {
+      await onConnect(channelIdHex, picked);
+      onOpenChange(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't connect repository.");
+    } finally {
+      setPendingChannelId(null);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !connecting && onOpenChange(next)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-1.5">
+            {picked && (
+              <Button variant="ghost" size="icon" className="-ml-1.5 size-7" aria-label="Back" disabled={connecting} onClick={() => setPicked(null)}>
+                <ArrowLeft className="size-4" />
+              </Button>
+            )}
+            {picked ? "Choose a channel" : "Connect a repository"}
+          </DialogTitle>
+        </DialogHeader>
+
+        {!picked ? (
+          <RepositoryPicker connectedCoordinates={connectedCoordinates} onSelect={setPicked} />
+        ) : (
+          <div className="min-w-0 space-y-3">
+            <div className="flex min-w-0 items-center gap-2.5 clip-corner-lg border border-border/60 bg-card p-2.5">
+              <OwnerAvatar pubkey={picked.owner} />
+              <span className="min-w-0 flex-1">
+                <OwnerSlashRepo owner={picked.owner} name={picked.displayName} />
+                <span className="block truncate text-xs text-muted-foreground">Pick the channel its activity should appear in.</span>
+              </span>
+            </div>
+            <div className="max-h-56 space-y-0.5 overflow-y-auto rounded-lg bg-secondary/40 p-1">
+              {channels.map((channel) => {
+                const pending = pendingChannelId === channel.idHex;
+                // While our own write lands, the row stays "Connecting…".
+                const taken = pending ? undefined : repositoryByChannel.get(channel.idHex);
+                return (
+                  <button
+                    key={channel.idHex}
+                    type="button"
+                    disabled={connecting || Boolean(taken)}
+                    onClick={() => void connect(channel.idHex)}
+                    className={cn(
+                      "flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                      taken ? "opacity-50" : "hover:bg-foreground/[0.05] disabled:opacity-50",
+                    )}
+                  >
+                    {channel.isPrivate ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <Hash className="size-4 shrink-0 text-muted-foreground" />}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{channel.name}</span>
+                      {pending
+                        ? <span className="block truncate text-xs text-muted-foreground">Connecting…</span>
+                        : taken && <span className="block truncate text-xs text-muted-foreground">Already connected to {taken.name}</span>}
+                    </span>
+                    {pending && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Not while connecting: our own in-flight attachment would make
+                every channel look spoken for mid-write. */}
+            {!connecting && channels.every((channel) => repositoryByChannel.has(channel.idHex)) && (
+              <p className="text-xs text-muted-foreground">
+                Every channel already has a repository. Add a channel first, or create a repository channel from the channel list.
+              </p>
+            )}
+            {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ConnectedRepositoryRow({ channel, address, owner, relayHints, fallbackName, canManage, onDetach }: {
+  channel: ChannelV2;
+  address: string;
+  owner: string;
+  relayHints: string[];
+  fallbackName: string;
+  canManage: boolean;
+  onDetach: () => void;
+}) {
+  const { nostr } = useNostr();
+  const { data } = useQuery({
+    queryKey: ["git-repository-announcement", address, relayHints],
+    queryFn: () => {
+      const parsed = parseGitRepositoryAddress(address);
+      if (!parsed) throw new Error("Invalid connected repository address.");
+      return fetchGitRepositoryAnnouncement(nostr, {
+        address: parsed,
+        relayHints,
+      });
+    },
+    staleTime: 60_000,
+  });
+  const name = data?.announcement.name || fallbackName;
+  return <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5">
+    <OwnerAvatar pubkey={owner} className="size-6" />
+    <span className="min-w-0 flex-1"><OwnerSlashRepo owner={owner} name={name} /></span>
+    <span className="shrink-0 text-[11px] text-muted-foreground">#{channel.name}</span>
+    {canManage && <Button type="button" size="icon" variant="ghost" className="size-6 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`Disconnect ${name}`} title={address} onClick={onDetach}><Trash2 className="size-3.5" /></Button>}
+  </div>;
 }
 
 /** An inline text/textarea editor with save + cancel, used for name & description. */

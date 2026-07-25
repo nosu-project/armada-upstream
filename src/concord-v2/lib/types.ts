@@ -8,6 +8,11 @@
  */
 
 import type { GroupKey } from "@/concord-v2/lib/derive";
+import {
+  normalizeGitRepositoryAttachments,
+  parseGitRepositoryAddress,
+  type GitRepositoryAttachment,
+} from "@/lib/gitActivity";
 
 /** Protocol recommendation for a community's relay set (CORD-02 §6). */
 export const MAX_COMMUNITY_RELAYS = 5;
@@ -20,6 +25,21 @@ export const DESCRIPTION_MAX_BYTES = 10_000;
 export const MAX_BUNDLE_CHANNELS = 256;
 /** The Community List caps at 50 memberships (CORD-02 §8). */
 export const MAX_LIST_MEMBERSHIPS = 50;
+/** Bound hostile channel metadata while retaining a useful attachment history. */
+export const MAX_CHANNEL_GIT_ATTACHMENTS = 128;
+/** Relay hints are hints, not an unbounded metadata transport. */
+export const MAX_CHANNEL_GIT_RELAY_HINTS = 8;
+
+/** Armada's namespaced channel-custom member for Git repository attachments. */
+export const ARMADA_GIT_CHANNEL_METADATA_KEY = "armada.git";
+
+/** The wire form deliberately stores the canonical address rather than a parsed object. */
+export interface ChannelGitRepositoryAttachment {
+  address: string;
+  relayHints: string[];
+  attachedAt: number;
+  detachedAt?: number;
+}
 
 /** Dedupe (order-preserving) + truncate a relay set to the recommended cap. */
 export function capRelays(relays: string[], cap = MAX_COMMUNITY_RELAYS): string[] {
@@ -89,6 +109,96 @@ export interface ChannelMetadata {
   deleted?: boolean;
   custom?: Record<string, unknown>;
   [k: string]: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Read valid, bounded Git attachment intervals from a channel's opaque custom
+ * metadata. Bad extension data is ignored rather than invalidating the channel.
+ */
+export function channelGitRepositoryAttachments(metadata: ChannelMetadata): GitRepositoryAttachment[] {
+  const extension = isRecord(metadata.custom) ? metadata.custom[ARMADA_GIT_CHANNEL_METADATA_KEY] : undefined;
+  if (!isRecord(extension) || !Array.isArray(extension.repositories)) return [];
+
+  const attachments: GitRepositoryAttachment[] = [];
+  for (const value of extension.repositories) {
+    if (!isRecord(value) || typeof value.address !== "string" || !Array.isArray(value.relayHints)) continue;
+    const address = parseGitRepositoryAddress(value.address);
+    const attachedAt = value.attachedAt;
+    const detachedAt = value.detachedAt;
+    if (!address || typeof attachedAt !== "number" || !Number.isSafeInteger(attachedAt) || attachedAt < 0) continue;
+    if (detachedAt !== undefined && (typeof detachedAt !== "number" || !Number.isSafeInteger(detachedAt) || detachedAt < attachedAt)) continue;
+    attachments.push({
+      address,
+      relayHints: value.relayHints.filter((relay): relay is string => typeof relay === "string").slice(0, MAX_CHANNEL_GIT_RELAY_HINTS),
+      attachedAt,
+      ...(detachedAt === undefined ? {} : { detachedAt }),
+    });
+  }
+  return normalizeGitRepositoryAttachments(attachments)
+    .map((attachment) => ({ ...attachment, relayHints: attachment.relayHints.slice(0, MAX_CHANNEL_GIT_RELAY_HINTS) }))
+    .slice(0, MAX_CHANNEL_GIT_ATTACHMENTS);
+}
+
+/**
+ * Normalize known Git fields while preserving every unknown channel/custom/Git
+ * extension member for forward-compatible metadata round trips.
+ */
+export function normalizeChannelMetadata(metadata: ChannelMetadata): ChannelMetadata {
+  if (!isRecord(metadata.custom)) return metadata;
+  const extension = metadata.custom[ARMADA_GIT_CHANNEL_METADATA_KEY];
+  if (!isRecord(extension)) {
+    // A malformed known extension is ignored; unrelated custom members survive.
+    const { [ARMADA_GIT_CHANNEL_METADATA_KEY]: _ignored, ...custom } = metadata.custom;
+    const { custom: _oldCustom, ...rest } = metadata;
+    return { ...rest, ...(Object.keys(custom).length ? { custom } : {}) };
+  }
+  const attachments = channelGitRepositoryAttachments(metadata);
+  return {
+    ...metadata,
+    custom: {
+      ...metadata.custom,
+      [ARMADA_GIT_CHANNEL_METADATA_KEY]: {
+        ...extension,
+        repositories: attachments.map((attachment): ChannelGitRepositoryAttachment => ({
+          address: attachment.address.coordinate,
+          relayHints: attachment.relayHints,
+          attachedAt: attachment.attachedAt,
+          ...(attachment.detachedAt === undefined ? {} : { detachedAt: attachment.detachedAt }),
+        })),
+      },
+    },
+  };
+}
+
+/** Replace attachment intervals without disturbing ordinary or opaque channel metadata. */
+export function withChannelGitRepositoryAttachments(
+  metadata: ChannelMetadata,
+  attachments: readonly GitRepositoryAttachment[],
+): ChannelMetadata {
+  const custom = isRecord(metadata.custom) ? metadata.custom : {};
+  const extension = isRecord(custom[ARMADA_GIT_CHANNEL_METADATA_KEY]) ? custom[ARMADA_GIT_CHANNEL_METADATA_KEY] : {};
+  const bounded = normalizeGitRepositoryAttachments(attachments)
+    .map((attachment) => ({ ...attachment, relayHints: attachment.relayHints.slice(0, MAX_CHANNEL_GIT_RELAY_HINTS) }))
+    .slice(0, MAX_CHANNEL_GIT_ATTACHMENTS);
+  return {
+    ...metadata,
+    custom: {
+      ...custom,
+      [ARMADA_GIT_CHANNEL_METADATA_KEY]: {
+        ...extension,
+        repositories: bounded.map((attachment): ChannelGitRepositoryAttachment => ({
+          address: attachment.address.coordinate,
+          relayHints: attachment.relayHints,
+          attachedAt: attachment.attachedAt,
+          ...(attachment.detachedAt === undefined ? {} : { detachedAt: attachment.detachedAt }),
+        })),
+      },
+    },
+  };
 }
 
 /** A private Channel's independent key material, as delivered by an invite. */

@@ -13,7 +13,10 @@ function foldedWith(channels: FoldedChannel[], name?: string): FoldedControl {
     roster: [],
     ownerHex: OWNER,
     metadata: name ? { name, relays: [] } : undefined,
-    channels: new Map(channels.map((c) => [c.channelIdHex, c])),
+    channels: new Map(channels.map((c) => [c.channelIdHex, {
+      ...c,
+      metadata: c.metadata ?? { name: c.name, private: c.isPrivate, ...(c.deleted ? { deleted: true } : {}) },
+    }])),
     banned: new Set(),
     liveInviteLinks: new Set(),
     registriesByCreator: new Map(),
@@ -31,7 +34,7 @@ describe("buildConcord2Subs", () => {
   it("builds one sub per readable channel with per-epoch streams + conv keys", () => {
     const { community, generalId } = mint();
     const folded = foldedWith(
-      [{ channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, deleted: false }],
+      [{ channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } }],
       "Fleet Renamed",
     );
 
@@ -73,7 +76,7 @@ describe("buildConcord2Subs", () => {
   it("skips deleted channels and communities without relays", () => {
     const { community, generalId } = mint();
     const folded = foldedWith([
-      { channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, deleted: true },
+      { channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, deleted: true, metadata: { name: "general", private: false, deleted: true } },
     ]);
     expect(buildConcord2Subs(community, folded).subs).toHaveLength(0);
 

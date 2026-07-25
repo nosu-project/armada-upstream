@@ -74,7 +74,7 @@ function foldedWith(
 function fixture(): { community: CommunityV2; channel: ChannelV2; folded: FoldedControl } {
   const { community, generalChannelId } = mintCommunity("Fleet", OWNER, ["wss://relay.example"]);
   const folded = foldedWith([
-    { channelIdHex: bytesToHex(generalChannelId), name: "general", isPrivate: false, deleted: false },
+    { channelIdHex: bytesToHex(generalChannelId), name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
   ]);
   const [channel] = channelsView(community, folded);
   return { community, channel, folded };
@@ -138,7 +138,7 @@ describe("useCallSync2", () => {
 
     // A ban verdict postdating my join lands in the fold.
     h.folded = foldedWith(
-      [{ channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false }],
+      [{ channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } }],
       { banned: [ME], bannedAt: new Map([[ME, Math.floor(Date.now() / 1000) + 60]]) },
     );
     view.rerender();
@@ -153,7 +153,7 @@ describe("useCallSync2", () => {
 
     // A compaction resurfaces an OLD sentence (bannedAt long before added_at).
     h.folded = foldedWith(
-      [{ channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false }],
+      [{ channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } }],
       { banned: [ME], bannedAt: new Map([[ME, 1]]) },
     );
     view.rerender();
@@ -204,7 +204,7 @@ describe("useCallSync2", () => {
     // Even a later ban must not double-fire from THIS mount — the remounted
     // room's fresh watcher handles it.
     h.folded = foldedWith(
-      [{ channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false }],
+      [{ channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } }],
       { banned: [ME], bannedAt: new Map([[ME, Math.floor(Date.now() / 1000) + 60]]) },
     );
     view.rerender();

@@ -28,7 +28,7 @@ import { HASHTAG_PATTERN } from "@/lib/hashtag";
 import { isInviteUrl } from "@/concord-v2/lib/invite";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
-import { splitInlineCode, splitMarkdownBlocks } from "@/lib/markdown";
+import { splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
 import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
@@ -63,6 +63,10 @@ interface ChatContentProps {
    *  ellipsis (used by quoted/embedded cards). Ignored when the content
    *  contains block media (images/embeds), which a line clamp would break. */
   clampLines?: number;
+  /** When true, long-form document markdown also renders: ATX headings, flat
+   *  lists and `[text](url)` links. Used for git issues/PRs/comments; chat
+   *  keeps its Discord-flavored subset. */
+  documentMarkdown?: boolean;
 }
 
 /** Bech32 charset used by NIP-19 identifiers. */
@@ -108,7 +112,10 @@ type ContentToken =
   | { type: "lightning-invoice"; invoice: string }
   | { type: "code-block"; code: string; lang?: string }
   | { type: "inline-code"; code: string }
-  | { type: "quote"; tokens: ContentToken[] };
+  | { type: "quote"; tokens: ContentToken[] }
+  | { type: "md-link"; text: string; url: string }
+  | { type: "heading"; level: number; tokens: ContentToken[] }
+  | { type: "list"; ordered: boolean; start: number; items: ContentToken[][] };
 
 /**
  * Split a plain-text leaf into text + `text-mention` tokens by matching known
@@ -235,7 +242,8 @@ function isOnlyEmojisOrCustom(text: string, emojiMap: Map<string, string>): bool
  * `decryption-key`/`decryption-nonce`), so it must be parsed for the body to
  * emit — and decrypt — the embed.
  */
-const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 14, 15, 1111, 1222, 1244, 3300]);
+// 1618/1621: NIP-34 pull requests and issues carry imeta for their attachments.
+const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 14, 15, 1111, 1222, 1244, 1618, 1621, 3300]);
 
 /**
  * Plain-text length (of the raw content, before tokenizing/rendering) past
@@ -272,7 +280,7 @@ function usableMime(m: string | undefined): string | undefined {
  * NIP-30 custom emoji, and lightning invoices.
  */
 /**
- * Tokenized message bodies, keyed by event id.
+ * Tokenized message bodies, keyed by event id and rendering dialect.
  *
  * Tokenizing is the expensive half of mounting a message row — the whole
  * markdown / URL / `nostr:` URI / emoji / invoice pass runs over the content —
@@ -298,10 +306,13 @@ function cacheTokens(id: string, content: string, tokens: ContentToken[]): Conte
   return tokens;
 }
 
-export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines }: ChatContentProps) {
+export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines, documentMarkdown = false }: ChatContentProps) {
   const rawTokens = useMemo(() => {
     const text = contentOverride ?? event.content;
-    const cached = TOKEN_CACHE.get(event.id);
+    // The dialect is part of the identity: the same event tokenizes
+    // differently in document mode (headings, lists, [text](url)).
+    const cacheKey = documentMarkdown ? `doc:${event.id}` : event.id;
+    const cached = TOKEN_CACHE.get(cacheKey);
     if (cached && cached.content === text) return cached.tokens;
 
     // Parse imeta tags for media URLs declared out-of-band. Vector/0xChat send
@@ -521,25 +532,40 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     };
 
     // A text run may still contain `inline code` spans — extract those first
-    // so code never gets linkified/emojified.
+    // so code never gets linkified/emojified. In document mode, `[text](url)`
+    // links split out of the non-code segments before URL tokenizing so the
+    // wrapped URL doesn't linkify on its own.
     const tokenizeRun = (run: string): ContentToken[] => {
       const out: ContentToken[] = [];
       for (const seg of splitInlineCode(run)) {
-        if (seg.code) out.push({ type: "inline-code", code: seg.value });
-        else out.push(...tokenizeSegment(seg.value));
+        if (seg.code) {
+          out.push({ type: "inline-code", code: seg.value });
+        } else if (documentMarkdown) {
+          for (const part of splitMarkdownLinks(seg.value)) {
+            if (part.type === "link") out.push({ type: "md-link", text: part.text, url: part.url });
+            else out.push(...tokenizeSegment(part.value));
+          }
+        } else {
+          out.push(...tokenizeSegment(seg.value));
+        }
       }
       return out;
     };
 
-    // Markdown block pass first (fenced ``` code, > quotes), then tokenize
-    // each non-code run. Quote blocks carry their own token list and render
-    // inside a <blockquote> (media inside quotes demotes to plain links).
+    // Markdown block pass first (fenced ``` code, > quotes, and in document
+    // mode headings/lists), then tokenize each non-code run. Quote blocks
+    // carry their own token list and render inside a <blockquote> (media
+    // inside quotes demotes to plain links).
     const result: ContentToken[] = [];
-    for (const block of splitMarkdownBlocks(text)) {
+    for (const block of splitMarkdownBlocks(text, documentMarkdown)) {
       if (block.type === "code") {
         result.push({ type: "code-block", code: block.code, lang: block.lang });
       } else if (block.type === "quote") {
         result.push({ type: "quote", tokens: tokenizeRun(block.text) });
+      } else if (block.type === "heading") {
+        result.push({ type: "heading", level: block.level, tokens: tokenizeRun(block.text) });
+      } else if (block.type === "list") {
+        result.push({ type: "list", ordered: block.ordered, start: block.start, items: block.items.map(tokenizeRun) });
       } else {
         result.push(...tokenizeRun(block.text));
       }
@@ -639,11 +665,11 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
 
     // Filter out empty text tokens
     return cacheTokens(
-      event.id,
+      cacheKey,
       text,
       result.filter((t) => !(t.type === "text" && t.value === "")),
     );
-  }, [event, contentOverride]);
+  }, [event, contentOverride, documentMarkdown]);
 
   // Resolve `@name` mentions carried as plain text + `p` tags (Buzz/legacy
   // style) back to pubkeys, then split them out of the text leaves. NIP-27
@@ -812,6 +838,51 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             {token.tokens.map((t, j) => renderToken(t, `${key}-q${j}`, null, true))}
           </blockquote>
         );
+      case "md-link": {
+        const safe = sanitizeUrl(token.url);
+        if (!safe) return <span key={key}>{token.text}</span>;
+        // Anti-spoof: when the link TEXT reads as a URL/domain whose host
+        // differs from the real target, surface the real host beside it —
+        // [github.com/x](https://evil.example) must not pass as github.
+        const spoofedHost = mdLinkSpoofHost(token.text, safe);
+        return (
+          <a
+            key={key}
+            href={safe}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline break-words"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {token.text}
+            {spoofedHost && <span className="text-muted-foreground"> ({spoofedHost})</span>}
+          </a>
+        );
+      }
+      case "heading":
+        return (
+          <div
+            key={key}
+            role="heading"
+            aria-level={token.level}
+            className={cn(
+              "mb-1 mt-3 font-bold leading-snug first:mt-0",
+              token.level === 1 ? "text-lg" : token.level === 2 ? "text-base" : "text-sm",
+            )}
+          >
+            {token.tokens.map((t, j) => renderToken(t, `${key}-h${j}`, null, true))}
+          </div>
+        );
+      case "list": {
+        const items = token.items.map((item, j) => (
+          <li key={`${key}-li${j}`}>{item.map((t, k) => renderToken(t, `${key}-li${j}-${k}`, null, true))}</li>
+        ));
+        // whitespace-normal: the pre-wrap container would otherwise render the
+        // markup's own line breaks as blank rows between <li> elements.
+        return token.ordered
+          ? <ol key={key} start={token.start} className="my-1 list-decimal space-y-0.5 whitespace-normal pl-5">{items}</ol>
+          : <ul key={key} className="my-1 list-disc space-y-0.5 whitespace-normal pl-5">{items}</ul>;
+      }
       case "image-embed": {
         if (inQuote) return inlineLink(key, token.url);
         const imgIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
@@ -1083,6 +1154,23 @@ function CollapsibleContent({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * The real target host, when a markdown link's TEXT itself reads as a
+ * URL/domain pointing somewhere else. Undefined for honest links and for
+ * plain-prose link text.
+ */
+function mdLinkSpoofHost(text: string, href: string): string | undefined {
+  const match = text.trim().toLowerCase().match(/^(?:https?:\/\/)?((?:[\w-]+\.)+[a-z]{2,})(?:[/:?#]|$)/i);
+  const textHost = match?.[1]?.replace(/^www\./, "");
+  if (!textHost) return undefined;
+  try {
+    const realHost = new URL(href).hostname.toLowerCase().replace(/^www\./, "");
+    return realHost === textHost ? undefined : realHost;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Extract the lowercase file extension from a URL's path, or undefined when there is none. */
 function extOfUrl(url: string): string | undefined {
   try {
@@ -1128,34 +1216,39 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
     );
   }
 
-  const box = mediaBox(image.dim);
+  const aspectRatio = parseDimAspectRatio(image.dim);
 
   return (
     <button
       type="button"
-      className={cn(
-        "relative block my-1.5 rounded-lg overflow-hidden cursor-pointer",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-        !image.blurhash && "bg-muted",
-      )}
-      style={box.style}
+      className="block my-1.5 rounded-lg overflow-hidden max-w-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       onClick={onClick}
     >
-      {!loaded && image.blurhash && (
-        <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
-      )}
-      {resolved.status === "ready" && (
-        <img
-          src={resolved.src}
-          alt=""
-          className={cn(
-            "absolute inset-0 w-full h-full hover:opacity-90 transition-opacity",
-            box.fit,
-          )}
-          onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
-        />
-      )}
+      <div
+        className={cn("relative rounded-lg overflow-hidden", !loaded && !image.blurhash && "bg-muted")}
+        style={
+          !loaded
+            ? { aspectRatio, minHeight: aspectRatio ? undefined : 120, minWidth: 160 }
+            : undefined
+        }
+      >
+        {!loaded && image.blurhash && (
+          <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
+        )}
+        {resolved.status === "ready" && (
+          <img
+            src={resolved.src}
+            alt=""
+            className={cn(
+              "block max-w-full max-h-80 h-auto rounded-lg hover:opacity-90 transition-opacity",
+              !loaded && aspectRatio && "absolute inset-0 w-full h-full object-cover",
+            )}
+            loading="lazy"
+            onLoad={() => setLoaded(true)}
+            onError={() => setFailed(true)}
+          />
+        )}
+      </div>
     </button>
   );
 }
@@ -1211,45 +1304,12 @@ function GridImage({ image }: { image: ImageRef }) {
   );
 }
 
-/** Widest an inline attachment renders (px) — the old `max-w-sm`. */
-const MEDIA_MAX_WIDTH = 384;
-/** Tallest an inline attachment renders (px) — the old `max-h-80`. */
-const MEDIA_MAX_HEIGHT = 320;
-/** Letterbox height (px) used when a NIP-94 `dim` isn't available. */
-const MEDIA_FALLBACK_HEIGHT = 240;
-
-/**
- * The box an inline attachment occupies, sized BEFORE its bytes arrive.
- *
- * Inline media lives inside a virtualized timeline, so a row that changes
- * height once the image decodes shifts everything below it — the reason
- * scrolling back through history juddered. Previously the reserved box was
- * sized by aspect ratio alone while the loaded image was clamped by
- * `max-h-80`, so the two disagreed for anything portrait: a 1080×1920 phone
- * photo reserved 683px and then snapped to 320px on load.
- *
- * With a `dim` we cap the WIDTH such that the aspect ratio can't produce a
- * height above {@link MEDIA_MAX_HEIGHT}, so the reservation is exactly what the
- * image ends up occupying and nothing moves. Without one the true ratio is
- * unknowable ahead of time, so we letterbox into a fixed-height well
- * (`object-contain`) rather than guess and correct.
- */
-function mediaBox(dim: string | undefined): {
-  style: React.CSSProperties;
-  fit: "object-cover" | "object-contain";
-} {
-  const [w, h] = (dim ?? "").split("x").map(Number);
-  if (!w || !h || Number.isNaN(w) || Number.isNaN(h)) {
-    return {
-      style: { width: `min(100%, ${MEDIA_MAX_WIDTH}px)`, height: MEDIA_FALLBACK_HEIGHT },
-      fit: "object-contain",
-    };
-  }
-  const width = Math.min(MEDIA_MAX_WIDTH, Math.round((MEDIA_MAX_HEIGHT * w) / h));
-  return {
-    style: { width: `min(100%, ${width}px)`, aspectRatio: `${w} / ${h}` },
-    fit: "object-cover",
-  };
+/** Parses a NIP-94 `dim` string ("WxH") into a CSS `aspect-ratio` value. */
+function parseDimAspectRatio(dim: string | undefined): string | undefined {
+  if (!dim) return undefined;
+  const [w, h] = dim.split("x").map(Number);
+  if (!w || !h || Number.isNaN(w) || Number.isNaN(h)) return undefined;
+  return `${w} / ${h}`;
 }
 
 /** Mention chip resolving the profile's display name. */

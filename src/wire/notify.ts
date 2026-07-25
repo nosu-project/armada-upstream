@@ -71,6 +71,10 @@ export interface NotifyCandidate {
   v1ChannelIdHex?: string;
   /** DM peer pubkey; set only for `plane === "dm"`. */
   peer?: string;
+  /** Git activity details, when this is a repository event routed into a C2 channel. */
+  git?: { action: string; repository: string; ticketId?: string; ticketTitle?: string };
+  /** Stable source event id, used to dedupe distinct same-second Git activity. */
+  eventId?: string;
 }
 
 export type NotifySink = (candidates: NotifyCandidate[]) => void;

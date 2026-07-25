@@ -3,6 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
+import type {
+  ProjectRepo,
+  ProjectRepoSummary,
+  ProjectWorkItem,
+  ProjectWorkKind,
+  ProjectWorkStatus,
+} from "@/components/projects/projectData";
+
 /** NIP-34 kinds (Buzz projects = git repos hosted on the relay). */
 export const KIND_REPO = 30617;
 export const KIND_PATCH = 1617;
@@ -10,38 +18,13 @@ export const KIND_PR = 1618;
 export const KIND_ISSUE = 1621;
 export const STATUS_KINDS = [1630, 1631, 1632, 1633];
 
-export interface BuzzRepo {
-  coord: string;
-  owner: string;
-  id: string;
-  name: string;
-  description?: string;
-  cloneUrls: string[];
-  webUrl?: string;
-  contributors: string[];
-  createdAt: number;
-  event: NostrEvent;
-}
+export type BuzzRepo = ProjectRepo;
+export type BuzzWorkKind = ProjectWorkKind;
+export type BuzzWorkStatus = ProjectWorkStatus;
+export type BuzzWorkItem = ProjectWorkItem;
+export type BuzzRepoSummary = ProjectRepoSummary;
 
-export type BuzzWorkKind = "issue" | "pr" | "patch";
-export type BuzzWorkStatus = "open" | "merged" | "closed" | "draft";
-
-export interface BuzzWorkItem {
-  id: string;
-  kind: BuzzWorkKind;
-  title: string;
-  content: string;
-  author: string;
-  createdAt: number;
-  repoCoord: string | null;
-  status: BuzzWorkStatus;
-  event: NostrEvent;
-}
-
-export interface BuzzRepoSummary {
-  prCount: number;
-  issueCount: number;
-}
+export { activityByDay, dayKey, projectPeople, repoSummaries } from "@/components/projects/projectData";
 
 function parseRepo(event: NostrEvent): BuzzRepo | undefined {
   const d = event.tags.find(([n]) => n === "d")?.[1];
@@ -150,50 +133,4 @@ export function useBuzzWorkItems(relayUrl: string | undefined, enabled = true) {
         }));
     },
   });
-}
-
-/** PR/issue counts bucketed by repo coordinate (`30617:owner:d`). */
-export function repoSummaries(items: BuzzWorkItem[]): Map<string, BuzzRepoSummary> {
-  const map = new Map<string, BuzzRepoSummary>();
-  for (const item of items) {
-    if (!item.repoCoord) continue;
-    const summary = map.get(item.repoCoord) ?? { prCount: 0, issueCount: 0 };
-    if (item.kind === "issue") summary.issueCount += 1;
-    else summary.prCount += 1;
-    map.set(item.repoCoord, summary);
-  }
-  return map;
-}
-
-/** Local `YYYY-MM-DD` key for a Unix-seconds timestamp (matches the graph). */
-export function dayKey(unix: number): string {
-  const date = new Date(unix * 1000);
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-/** Per-day event counts across repos + work items (the contribution heatmap). */
-export function activityByDay(repos: BuzzRepo[], items: BuzzWorkItem[]): Record<string, number> {
-  const merged: Record<string, number> = {};
-  for (const repo of repos) {
-    const key = dayKey(repo.createdAt);
-    merged[key] = (merged[key] ?? 0) + 1;
-  }
-  for (const item of items) {
-    const key = dayKey(item.createdAt);
-    merged[key] = (merged[key] ?? 0) + 1;
-  }
-  return merged;
-}
-
-/** Everyone who owns, is tagged on, or has authored activity in a workspace. */
-export function projectPeople(repos: BuzzRepo[], items: BuzzWorkItem[]): string[] {
-  const set = new Set<string>();
-  for (const repo of repos) {
-    set.add(repo.owner);
-    for (const c of repo.contributors) set.add(c);
-  }
-  for (const item of items) set.add(item.author);
-  return [...set];
 }

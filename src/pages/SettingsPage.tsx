@@ -16,6 +16,7 @@ import {
   Search,
   Server,
   Shield,
+  Smile,
   UserCircle,
   Waypoints,
   Wrench,
@@ -29,6 +30,7 @@ import { lazy, Suspense } from "react";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ConcordResyncCard } from "@/concord-v1/components/ConcordResyncCard";
 import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
+import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
@@ -77,6 +79,7 @@ type SectionId =
   | "search-relays"
   | "dms"
   | "media"
+  | "emojis"
   | "wallet"
   | "advanced"
   | "install"
@@ -261,6 +264,9 @@ export function SettingsPage() {
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
       { id: "media", title: "Media servers", icon: Image },
     ];
+    if (user) {
+      appItems.push({ id: "emojis", title: "Emoji packs", icon: Smile });
+    }
     if (user && config.zapsEnabled) {
       appItems.push({ id: "wallet", title: "Wallet", icon: Zap });
     }
@@ -457,6 +463,8 @@ export function SettingsPage() {
             </SettingsRow>
           </>
         );
+      case "emojis":
+        return <EmojiPackSettings />;
       case "wallet":
         return <WalletSettings />;
       case "advanced":

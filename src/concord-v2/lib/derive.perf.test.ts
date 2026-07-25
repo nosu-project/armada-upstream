@@ -70,6 +70,7 @@ function makeFolded(communityN: number, channelCount: number): FoldedControl {
       name: `channel-${i}`,
       isPrivate: false,
       deleted: false,
+      metadata: { name: `channel-${i}`, private: false },
     });
   }
   // channelsView only reads `.channels`; the rest of the fold is irrelevant here.

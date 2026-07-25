@@ -12,6 +12,7 @@ import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
+import { useLongPress } from "@/hooks/useLongPress";
 import { useSwipeToReply } from "@/hooks/useSwipeToReply";
 
 import type { ReactNode } from "react";
@@ -90,6 +91,13 @@ interface MessageRowProps {
    * SwipeReveal "leave room" gesture, so direction alone disambiguates intent.
    */
   onSwipeReply?: () => void;
+  /**
+   * Press-and-hold callback for touch devices, wired to the message action
+   * sheet. Presses that start on an interactive child (a link, a reaction
+   * pill, the avatar) are ignored so those keep their own gestures, and a
+   * press that turns into a scroll or a swipe cancels.
+   */
+  onLongPress?: () => void;
 }
 
 /**
@@ -114,7 +122,9 @@ export const MessageRow = memo(function MessageRow({
   className,
   containerProps,
   onSwipeReply,
+  onLongPress,
 }: MessageRowProps) {
+  const longPress = useLongPress(onLongPress);
   // Mesh authors carry an explicit identity; skip the Nostr author/profile
   // lookups entirely for them (the pubkey is a mesh peer id, not a real key).
   const author = useAuthor(identityOverride ? undefined : pubkey);
@@ -149,6 +159,7 @@ export const MessageRow = memo(function MessageRow({
     <div
       {...containerProps}
       {...(onSwipeReply ? swipe.touchHandlers : undefined)}
+      {...longPress}
       className={cn(
         "group relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
         continuation ? "py-0.5" : "py-1.5",
@@ -291,22 +302,19 @@ export const MessageRow = memo(function MessageRow({
           // than inline on the header. Inline, a long name/title would get
           // crushed by the buttons; floating keeps the full name visible and the
           // toolbar clear of the body. Solid background + a small lift keeps it
-          // legible over whatever it overlaps. On touch (no hover) it's
-          // tap-revealed and stays non-interactive until the row is made active,
-          // so the first tap only reveals it and a second, deliberate tap
-          // engages an action (avoids fat-fingering deletes). The tap-reveal
-          // guard is keyed to `touch:` (real touch), NOT a width breakpoint — a
-          // narrow desktop window still hovers and must stay clickable.
+          // legible over whatever it overlaps.
+          //
+          // This is a POINTER affordance only — ChatMessage doesn't pass
+          // `actions` on touch, where the long-press sheet takes over. A strip
+          // of icon buttons at the row's edge can't hold a message's full set
+          // of actions at 44px targets on a phone.
           <div className={cn(
-            "absolute right-2.5 z-20 flex items-center gap-0.5 touch:gap-1.5 rounded-md border bg-background/95 px-1 py-0.5 touch:px-1.5 touch:py-1 shadow-sm opacity-0 group-hover:opacity-100 group-data-[active]:opacity-100 focus-within:opacity-100 transition-opacity touch:pointer-events-none touch:group-data-[active]:pointer-events-auto",
+            "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity",
             // Sit just above the row's top-right edge, overlapping it so it stays
             // inside the row's hover region (a fully-detached panel vanishes when
             // the pointer leaves the row to reach it). Continuation rows are
-            // compact and header-less, but the offset is the same; touch gets a
-            // little more lift for its larger targets.
-            continuation
-              ? "-top-3 touch:-top-10"
-              : "-top-2.5 touch:-top-3.5",
+            // compact and header-less, but the offset is the same.
+            continuation ? "-top-3" : "-top-2.5",
           )}>
             {actions}
           </div>
