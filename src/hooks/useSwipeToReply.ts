@@ -37,6 +37,25 @@ const MAX_DRAG = 100;
 /** Horizontal travel must exceed 2× vertical travel to be a "swipe". */
 const HORIZONTAL_RATIO = 2;
 
+/**
+ * Whether a fullscreen image lightbox is currently open.
+ *
+ * Both lightbox variants (chat gallery `Lightbox`, single-image
+ * `ImageLightbox2`) render as a portal on `document.body` — outside the message
+ * row's subtree — and tag their content node with `data-lightbox-content`. A
+ * touch that armed the swipe on the row *before* the overlay mounted (e.g. the
+ * same tap that opened the lightbox) stays bound to its original target for the
+ * rest of the gesture, so its `move`/`end` events keep driving the swipe
+ * underneath the overlay and would fire a spurious reply. Bail whenever a
+ * lightbox is present.
+ */
+function isLightboxOpen(): boolean {
+  return (
+    typeof document !== "undefined" &&
+    document.querySelector("[data-lightbox-content]") !== null
+  );
+}
+
 export interface UseSwipeToReplyResult {
   /**
    * Current drag magnitude in pixels (0 at rest, grows as the user swipes
@@ -75,7 +94,7 @@ export function useSwipeToReply(
 
   const onTouchStart = useCallback(
     (e: React.TouchEvent) => {
-      if (!enabled) return;
+      if (!enabled || isLightboxOpen()) return;
       const touch = e.touches[0];
       if (!touch) return;
       startX.current = touch.clientX;
@@ -91,6 +110,15 @@ export function useSwipeToReply(
   const onTouchMove = useCallback(
     (e: React.TouchEvent) => {
       if (!enabled || !active.current) return;
+      // A lightbox opened mid-gesture (e.g. the tap that armed this swipe also
+      // opened it): disarm and spring back so we don't reply underneath it.
+      if (isLightboxOpen()) {
+        active.current = false;
+        horizontal.current = false;
+        setDragging(false);
+        setOffset(0);
+        return;
+      }
       const touch = e.touches[0];
       if (!touch) return;
 
@@ -139,7 +167,7 @@ export function useSwipeToReply(
         return;
       }
 
-      const triggered = offset >= THRESHOLD;
+      const triggered = offset >= THRESHOLD && !isLightboxOpen();
       active.current = false;
       horizontal.current = false;
       setDragging(false);

@@ -4,6 +4,31 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.40.0] - 2026-07-25
+
+Communities gain a Projects workspace for tracking work items: browse issues, pull requests, and comments from connected repositories, filter by status and labels, and edit items directly in Armada. Repositories attach to channels, integrate their git activity into the chat timeline, and sync updates live. Image attachments open in a cinematic lightbox, custom emoji rendering is polished across the app, and message actions are redesigned into a touch-friendly sheet on mobile and a desktop menu.
+
+### Added
+- Projects workspace for tracking issues, pull requests, and comments from git repositories
+- Repository attachment to channels with live git activity timeline integration
+- File attachments to issues, pull requests, and comments with markdown rendering
+- Issue creation and status editing directly from the Projects view
+- Labels for work items with filtering and assignment from a repository's vocabulary
+- Image attachment lightbox with swipe navigation, zoom, and download
+- ngit-ci workflow runs rendered in channel git activity timelines
+- Custom emoji rendering in display names and message content
+
+### Changed
+- Message actions (react, reply, zap, thread) restyled into a touch-friendly sheet on mobile and a desktop overflow menu
+- Emoji pack restyling with improved pack metadata display
+- Link preview proxy endpoint now configurable
+
+### Fixed
+- Swipe-to-reply is suppressed while a lightbox is open
+- Read state publishes only when settings base is available
+- Quick reaction table syncs reliably through encrypted settings
+- Attached video is compressed and extracts NIP-94 metadata on upload
+
 ## [0.39.10] - 2026-07-24
 
 Custom emojis now render in people's names and in message previews, emoji packs carry a name and cover image with a rebuilt creation flow, and your emoji palette sticks around between reloads. The direct message list opens instantly in its final order with wider, larger rows, and a batch of chat scrolling and reaction glitches are fixed. Servers you remove now stay removed.

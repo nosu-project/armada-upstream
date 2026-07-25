@@ -13,6 +13,11 @@ import {
   setLocalSettingsSync,
   useEncryptedSettings,
 } from "@/hooks/useEncryptedSettings";
+import {
+  getFrequentReactions,
+  hydrateFrequentReactions,
+  subscribeFrequentReactions,
+} from "@/hooks/useFrequentReactions";
 import { useTheme } from "@/hooks/useTheme";
 import { useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
@@ -33,6 +38,13 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /** Debounce for pushing local config changes to the encrypted NIP-78 event. */
 const PUBLISH_DEBOUNCE_MS = 800;
+
+/**
+ * Debounce for the quick-reaction frequency table. Longer than the config one:
+ * reacting is a rapid, repeatable act and the table is a convenience cache, so
+ * it isn't worth a settings event per tap.
+ */
+const FREQUENT_REACTIONS_DEBOUNCE_MS = 10_000;
 
 /**
  * Look-back applied to the standing self-state REQ's `since` on (re)subscribe:
@@ -120,6 +132,12 @@ export function NostrSync() {
   // by applying an incoming pull).
   const lastSyncedSnapshot = useRef<string | undefined>(undefined);
   const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Latest settings, readable from a debounced callback without making every
+  // settings change tear down and rebuild that subscription.
+  const settingsRef = useRef<EncryptedSettings | null>(null);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
 
   // Publish the current signer to the Buzz media module so Buzz-hosted images
   // and avatars can be fetched with a signed BUD-11 GET header from any render
@@ -349,6 +367,44 @@ export function NostrSync() {
     if (!user?.pubkey || !settings?.readState) return;
     hydrateReadState(settings.readState);
   }, [user?.pubkey, settings?.readState, hydrateReadState]);
+
+  // ─── 1d. Quick-reaction frequency table ↔ encrypted settings ──────────
+  // Merge-hydrate (max count / most recent use per emoji) so the quick row on
+  // a new device starts from the emoji the user actually reaches for. Safe to
+  // run on every settings change: the merge is a no-op write when nothing
+  // moved.
+  useEffect(() => {
+    if (!user?.pubkey || !settings?.frequentReactions) return;
+    hydrateFrequentReactions(user.pubkey, settings.frequentReactions);
+  }, [user?.pubkey, settings?.frequentReactions]);
+
+  // …and push the other way, debounced, on a user-initiated reaction only
+  // (`subscribeFrequentReactions` never fires for the hydrate above, so two
+  // devices can't ping-pong the table between them).
+  useEffect(() => {
+    const pubkey = user?.pubkey;
+    if (!pubkey || !hasNip44Support) return;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = subscribeFrequentReactions((changed) => {
+      if (changed !== pubkey) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        // Same guard as section 2: `updateSettings` merges the patch over the
+        // last read settings, so publishing without a known-good base would
+        // replace the user's real settings event with just this one key.
+        if (settingsRef.current === null) return;
+        updateSettings({ frequentReactions: getFrequentReactions(pubkey) }).catch((err) =>
+          console.warn("Frequent-reaction sync failed:", err),
+        );
+      }, FREQUENT_REACTIONS_DEBOUNCE_MS);
+    });
+
+    return () => {
+      unsubscribe();
+      if (timer) clearTimeout(timer);
+    };
+  }, [user?.pubkey, hasNip44Support, updateSettings]);
 
   // ─── 1b. NIP-29 server list (kind 10009 `r` tags) → addedRelays cache ──
   // The 10009 list is the cross-device source of truth for added servers;

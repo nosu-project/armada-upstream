@@ -33,6 +33,12 @@ const EMPTY: FrequentReaction[] = [];
  */
 const cache = new Map<string, FrequentReaction[]>();
 const listeners = new Set<() => void>();
+/**
+ * Notified only after a USER-initiated record, never after a hydrate — the
+ * cross-device sync publishes off this, and echoing an incoming merge straight
+ * back out would have every device rewriting the settings event in turn.
+ */
+const dirtyListeners = new Set<(pubkey: string) => void>();
 
 function load(pubkey: string): FrequentReaction[] {
   const hit = cache.get(pubkey);
@@ -86,6 +92,56 @@ export function recordReaction(pubkey: string | undefined, key: string, url?: st
     : [...prev, { key, url, count: 1, usedAt: now }];
   next.sort(byScore);
   save(pubkey, next.slice(0, MAX_STORED));
+  for (const listener of dirtyListeners) listener(pubkey);
+}
+
+/** The stored table as-is (unpadded), for the cross-device sync to publish. */
+export function getFrequentReactions(pubkey: string): FrequentReaction[] {
+  return load(pubkey);
+}
+
+/**
+ * Subscribe to user-initiated reaction records. The callback receives the
+ * pubkey whose table changed.
+ */
+export function subscribeFrequentReactions(listener: (pubkey: string) => void): () => void {
+  dirtyListeners.add(listener);
+  return () => {
+    dirtyListeners.delete(listener);
+  };
+}
+
+/**
+ * Fold another device's table into this one: union of keys, highest count and
+ * most recent use per key. A count is a monotonic tally, so max-wins converges
+ * without a clock — unlike last-writer-wins, which would let a device that has
+ * been offline for a week reset the row on every other device.
+ */
+export function hydrateFrequentReactions(pubkey: string, remote: FrequentReaction[]): void {
+  if (!pubkey || remote.length === 0) return;
+  const prev = load(pubkey);
+  const merged = new Map(prev.map((e) => [e.key, e]));
+  let changed = false;
+  for (const entry of remote) {
+    if (!entry?.key || typeof entry.count !== "number") continue;
+    const mine = merged.get(entry.key);
+    if (!mine) {
+      merged.set(entry.key, entry);
+      changed = true;
+      continue;
+    }
+    const count = Math.max(mine.count, entry.count);
+    const usedAt = Math.max(mine.usedAt, entry.usedAt);
+    const url = mine.url ?? entry.url;
+    if (count === mine.count && usedAt === mine.usedAt && url === mine.url) continue;
+    merged.set(entry.key, { ...mine, url, count, usedAt });
+    changed = true;
+  }
+  // A no-op merge must not write: `save` notifies every consumer, and this
+  // runs on each settings refetch.
+  if (!changed) return;
+  const next = [...merged.values()].sort(byScore).slice(0, MAX_STORED);
+  save(pubkey, next);
 }
 
 /**
