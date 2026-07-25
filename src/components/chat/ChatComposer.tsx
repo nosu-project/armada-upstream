@@ -497,6 +497,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
    * can be attached concurrently.
    */
   const [pendingUploads, setPendingUploads] = useState(0);
+  /**
+   * Sending is blocked while any attachment is still uploading: `attachments`
+   * only gains a file once its upload resolves, so a send fired mid-upload
+   * would publish the text alone and drop the file (the reset then clears the
+   * late-arriving URL).
+   */
+  const isUploading = pendingUploads > 0;
 
   // Poll mode state
   const [mode, setMode] = useState<"post" | "poll">("post");
@@ -1183,6 +1190,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [botCommand, sendInvocation]);
 
   const handleSend = useCallback(async () => {
+    // An attachment is still uploading — its URL isn't in `attachments` yet, so
+    // sending now would silently drop the file. Wait for it.
+    if (isUploading) return;
+
     const text = content.trim();
 
     // Slash commands: when the message is purely a "/command …" with no
@@ -1236,7 +1247,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       .filter((url) => !text.includes(url));
     const finalText = [text, ...extraUrls].filter(Boolean).join("\n");
     await publishMessage(finalText);
-  }, [content, attachments, executeSlash, publishMessage, botEntries, sendInvocation, toast]);
+  }, [content, attachments, isUploading, executeSlash, publishMessage, botEntries, sendInvocation, toast]);
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;
@@ -1246,7 +1257,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const handlePollSubmit = useCallback(async () => {
     const finalContent = content.trim();
     const filledOptions = pollOptions.filter((o) => o.label.trim());
-    if (!finalContent || filledOptions.length < 2 || !user || isSending) return;
+    if (!finalContent || filledOptions.length < 2 || !user || isSending || isUploading) return;
 
     const tags = buildMessageTags(finalContent);
     for (const opt of filledOptions) {
@@ -1269,7 +1280,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } catch {
       toast({ title: "Error", description: "Failed to publish poll.", variant: "destructive" });
     }
-  }, [content, pollOptions, user, isSending, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, toast]);
+  }, [content, pollOptions, user, isSending, isUploading, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, toast]);
 
   /** Stop recording, upload, and send as a voice message (kind 9 + imeta). */
   const handleStopAndSendVoice = useCallback(async () => {
@@ -1729,7 +1740,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               {/* Mic when empty, send when there's something to send (Signal-style).
                   Available in group mode AND delegated-send mode (Concord/DMs) —
                   handleStopAndSendVoice routes through sendOverride when set. */}
-              {mode === "post" && !hasContent && voiceRecorder.isSupported ? (
+              {mode === "post" && !hasContent && !isUploading && voiceRecorder.isSupported ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -1747,11 +1758,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 <button
                   type="button"
                   onClick={mode === "poll" ? handlePollSubmit : handleSend}
-                  disabled={mode === "poll" ? !isPollValid || isSending : !hasContent}
-                  aria-label={mode === "poll" ? "Publish poll" : "Send message"}
+                  disabled={isUploading || (mode === "poll" ? !isPollValid || isSending : !hasContent)}
+                  aria-label={isUploading ? "Uploading attachment" : mode === "poll" ? "Publish poll" : "Send message"}
                   className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9 touch:size-11"
                 >
-                  {mode === "poll" && isSending
+                  {isUploading || (mode === "poll" && isSending)
                     ? <Loader2 className="size-4 animate-spin" />
                     : <ArrowUpRight className="size-5" strokeWidth={2.5} />}
                 </button>
