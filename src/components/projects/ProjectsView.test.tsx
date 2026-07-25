@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -63,5 +63,41 @@ describe("ProjectsView ordering", () => {
   it("labels a bumped row with its activity time and keeps the opening in reach", () => {
     renderView();
     expect(screen.getByText(/^updated /)).toBeInTheDocument();
+  });
+});
+
+describe("ProjectsView search", () => {
+  it("narrows a list to matching items", () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: "Issues" }));
+    expect(screen.getByText("Fresh thing")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search" }), { target: { value: "stale" } });
+    expect(screen.getByText("Stale thing")).toBeInTheDocument();
+    expect(screen.queryByText("Fresh thing")).not.toBeInTheDocument();
+  });
+
+  it("requires every term", () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: "Issues" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Search" }), { target: { value: "stale fresh" } });
+    expect(screen.queryByText("Stale thing")).not.toBeInTheDocument();
+    expect(screen.getByText("Nothing matches the current filters.")).toBeInTheDocument();
+  });
+
+  it("focuses the search box on '/' but leaves editable targets alone", () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: "Issues" }));
+    const search = screen.getByRole("textbox", { name: "Search" });
+
+    fireEvent.keyDown(document.body, { key: "/" });
+    expect(document.activeElement).toBe(search);
+
+    const elsewhere = document.createElement("textarea");
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    fireEvent.keyDown(elsewhere, { key: "/" });
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
   });
 });

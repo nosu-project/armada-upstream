@@ -1,5 +1,5 @@
-import { CircleDot, Copy, ExternalLink, FolderGit2, GitMerge, GitPullRequest, LayoutGrid, List, MessageCircle, Users, X } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { CircleDot, Copy, ExternalLink, FolderGit2, GitMerge, GitPullRequest, LayoutGrid, List, MessageCircle, Search, Users, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -17,9 +17,11 @@ import { cn } from "@/lib/utils";
 import {
   activityByDay,
   projectPeople,
+  repoMatchesQuery,
   repoSummaries,
   sortProjectWorkItems,
   workItemActivityAt,
+  workItemMatchesQuery,
   type ProjectRepo,
   type ProjectRepoSummary,
   type ProjectSort,
@@ -645,6 +647,41 @@ function FilteredOutNotice({ onShowAll }: { onShowAll: () => void }) {
   );
 }
 
+function SearchField({ value, onChange, inputRef }: {
+  value: string;
+  onChange: (value: string) => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+}) {
+  return (
+    <div className="relative">
+      <Search aria-hidden className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape" || !value) return;
+          event.preventDefault();
+          onChange("");
+        }}
+        placeholder="Search"
+        aria-label="Search"
+        className="h-8 w-36 clip-corner-lg bg-muted/40 pl-7 pr-6 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          aria-label="Clear search"
+          className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <X className="size-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function EmptyState({ icon: Icon, title, hint }: { icon: typeof FolderGit2; title: string; hint: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-4 py-20 text-center">
@@ -690,18 +727,20 @@ export function ProjectsView({
   const [sort, setSort] = useState<ProjectSort>("updated");
   const [statusFilter, setStatusFilter] = useState<"open" | "closed" | "all">("open");
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const items = workItems;
   const summaries = useMemo(() => repoSummaries(items), [items]);
   const people = useMemo(() => projectPeople(repos, items), [repos, items]);
   const repoNameByCoord = useMemo(() => new Map(repos.map((r) => [r.coord, r.name])), [repos]);
 
-  const sortedRepos = useMemo(() => {
-    const list = [...repos];
+  const visibleRepos = useMemo(() => {
+    const list = repos.filter((repo) => repoMatchesQuery(repo, query));
     return sort === "name"
       ? list.sort((a, b) => a.name.localeCompare(b.name))
       : list.sort((a, b) => b.createdAt - a.createdAt);
-  }, [repos, sort]);
+  }, [repos, sort, query]);
 
   const prs = useMemo(() => items.filter((i) => i.kind !== "issue"), [items]);
   const issues = useMemo(() => items.filter((i) => i.kind === "issue"), [items]);
@@ -712,14 +751,33 @@ export function ProjectsView({
     if (statusFilter === "open" && !unresolved) return false;
     if (statusFilter === "closed" && unresolved) return false;
     if (labelFilter && !(item.labels ?? []).includes(labelFilter)) return false;
-    return true;
-  }, [statusFilter, labelFilter]);
+    const repoName = item.repoCoord ? repoNameByCoord.get(item.repoCoord) : undefined;
+    return workItemMatchesQuery(item, query, repoName);
+  }, [statusFilter, labelFilter, query, repoNameByCoord]);
   const filteredPrs = useMemo(() => sortProjectWorkItems(prs.filter(matchesFilters), sort), [prs, matchesFilters, sort]);
   const filteredIssues = useMemo(() => sortProjectWorkItems(issues.filter(matchesFilters), sort), [issues, matchesFilters, sort]);
   const toggleLabel = useCallback((label: string) => setLabelFilter((current) => (current === label ? null : label)), []);
   const showAll = useCallback(() => {
     setStatusFilter("all");
     setLabelFilter(null);
+    setQuery("");
+  }, []);
+
+  // "/" jumps to the search box, the way every tracker does. Editable targets
+  // and any open dialog keep the key, since they own the keyboard.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || /^(input|textarea|select)$/i.test(target?.tagName ?? "")) return;
+      if (document.querySelector("[role='dialog']")) return;
+      const input = searchRef.current;
+      if (!input) return;
+      event.preventDefault();
+      input.focus();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
   const summaryOf = (coord: string): ProjectRepoSummary => summaries.get(coord) ?? { prCount: 0, issueCount: 0 };
   const peopleOf = (repo: ProjectRepo): string[] => [...new Set([repo.owner, ...repo.contributors])];
@@ -747,6 +805,7 @@ export function ProjectsView({
                 <X className="size-3" />
               </Button>
             )}
+            <SearchField value={query} onChange={setQuery} inputRef={searchRef} />
             {(filter === "prs" || filter === "issues") && (
               <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
                 {(["open", "closed", "all"] as const).map((value) => (
@@ -810,15 +869,17 @@ export function ProjectsView({
         ) : filter === "all" ? (
           <Overview repos={repos} items={items} people={people} onSelect={setFilter} onOpenItem={onOpenItem} />
         ) : filter === "repositories" ? (
-          viewMode === "grid" ? (
+          visibleRepos.length === 0 ? (
+            <FilteredOutNotice onShowAll={showAll} />
+          ) : viewMode === "grid" ? (
             <div className={CARD_GRID}>
-              {sortedRepos.map((repo) => (
+              {visibleRepos.map((repo) => (
                 <RepoCard key={repo.coord} repo={repo} summary={summaryOf(repo.coord)} people={peopleOf(repo)} />
               ))}
             </div>
           ) : (
             <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
-              {sortedRepos.map((repo) => (
+              {visibleRepos.map((repo) => (
                 <RepoRow key={repo.coord} repo={repo} summary={summaryOf(repo.coord)} people={peopleOf(repo)} />
               ))}
             </div>

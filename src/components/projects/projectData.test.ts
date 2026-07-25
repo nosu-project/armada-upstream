@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-import { labelSuggestions, sortProjectWorkItems, workItemActivityAt, type ProjectWorkItem } from "./projectData";
+import {
+  labelSuggestions,
+  repoMatchesQuery,
+  sortProjectWorkItems,
+  workItemActivityAt,
+  workItemMatchesQuery,
+  type ProjectRepo,
+  type ProjectWorkItem,
+} from "./projectData";
 
 const event = { id: "", pubkey: "", created_at: 0, kind: 1621, content: "", tags: [], sig: "" } as NostrEvent;
 
@@ -89,5 +97,50 @@ describe("sortProjectWorkItems by activity", () => {
   it("leaves sources that track no discussion ordered by their opening", () => {
     const items = [item("a", "A", 100), item("b", "B", 300)];
     expect(sortProjectWorkItems(items, "updated").map((i) => i.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("workItemMatchesQuery", () => {
+  const target = { ...item("a", "Relay timeout on reconnect", 1), content: "Happens with wss://relay.example", labels: ["bug"] };
+
+  it("matches an empty query", () => {
+    expect(workItemMatchesQuery(target, "   ")).toBe(true);
+  });
+
+  it("matches on the title, body and labels, case-insensitively", () => {
+    expect(workItemMatchesQuery(target, "TIMEOUT")).toBe(true);
+    expect(workItemMatchesQuery(target, "wss://relay.example")).toBe(true);
+    expect(workItemMatchesQuery(target, "bug")).toBe(true);
+  });
+
+  it("matches the repository name when one is supplied", () => {
+    expect(workItemMatchesQuery(target, "armada")).toBe(false);
+    expect(workItemMatchesQuery(target, "armada", "armada")).toBe(true);
+  });
+
+  it("requires every term, so extra words narrow the result", () => {
+    expect(workItemMatchesQuery(target, "relay reconnect")).toBe(true);
+    expect(workItemMatchesQuery(target, "relay android")).toBe(false);
+  });
+});
+
+describe("repoMatchesQuery", () => {
+  const repo: ProjectRepo = {
+    coord: "30617:owner:armada",
+    owner: "o",
+    id: "armada",
+    name: "Armada",
+    description: "A Nostr client",
+    cloneUrls: [],
+    contributors: [],
+    createdAt: 1,
+    subtitle: "#engineering",
+  };
+
+  it("matches the name, identifier, description and origin channel", () => {
+    expect(repoMatchesQuery(repo, "armada")).toBe(true);
+    expect(repoMatchesQuery(repo, "nostr")).toBe(true);
+    expect(repoMatchesQuery(repo, "#engineering")).toBe(true);
+    expect(repoMatchesQuery(repo, "gitlab")).toBe(false);
   });
 });

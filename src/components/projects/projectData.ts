@@ -96,6 +96,27 @@ export function sortProjectWorkItems(items: readonly ProjectWorkItem[], sort: Pr
   ));
 }
 
+/**
+ * Every whitespace-separated term must appear somewhere in the haystack, so
+ * adding words narrows the result rather than widening it.
+ */
+function matchesTerms(haystack: readonly (string | undefined)[], query: string): boolean {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const text = haystack.filter(Boolean).join("\n").toLowerCase();
+  return terms.every((term) => text.includes(term));
+}
+
+/** Free-text match over a work item's title, body, labels and repository. */
+export function workItemMatchesQuery(item: ProjectWorkItem, query: string, repoName?: string): boolean {
+  return matchesTerms([item.title, item.content, repoName, ...(item.labels ?? [])], query);
+}
+
+/** Free-text match over a repository's name, identifier, description and origin. */
+export function repoMatchesQuery(repo: ProjectRepo, query: string): boolean {
+  return matchesTerms([repo.name, repo.id, repo.description, repo.subtitle], query);
+}
+
 /** PR/issue counts bucketed by repo coordinate (`30617:owner:d`). */
 export function repoSummaries(items: ProjectWorkItem[]): Map<string, ProjectRepoSummary> {
   const map = new Map<string, ProjectRepoSummary>();
