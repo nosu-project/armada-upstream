@@ -1494,8 +1494,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
   }, [voiceRecorder, toast]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter sends; Shift+Enter is a newline. Ignore the Enter that only confirms
+    // an in-progress IME composition (CJK and other multi-keystroke input),
+    // which would otherwise fire a premature send mid-word.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       if (mode === "poll") {
         handlePollSubmit();

@@ -1,6 +1,6 @@
-import { Braces, CheckCircle2, ChevronDown, ChevronRight, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, ScrollText, Trash2, X, XCircle } from "lucide-react";
+import { ArrowUpRight, Braces, CheckCircle2, ChevronDown, ChevronRight, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, ScrollText, Trash2, X, XCircle } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -310,6 +310,7 @@ function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onCom
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const appendUrl = useCallback((url: string) => {
     setText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${url}\n` : `${url}\n`));
   }, []);
@@ -323,49 +324,70 @@ function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onCom
       .catch((error) => toast({ title: "Couldn't post comment", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
       .finally(() => setSending(false));
   };
+
+  // Grow the textarea with its content, capped, like the shared ChatComposer.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [text]);
+
+  const placeholder = `Comment on this ${ticket.type === "issue" ? "issue" : "pull request"}`;
+
   return (
-    <div className="shrink-0 border-t border-border p-3">
-      <Textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            submit();
-          }
+    <div className="shrink-0 p-2 pb-safe">
+      <input
+        ref={fileInput}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          void attach(e.target.files);
+          e.target.value = "";
         }}
-        placeholder={`Comment on this ${ticket.type === "issue" ? "issue" : "pull request"}`}
-        rows={2}
-        className="min-h-0 resize-none text-sm"
       />
-      <div className="mt-2 flex items-center justify-between gap-1.5">
-        <p className="min-w-0 truncate text-[10px] text-muted-foreground">Public: repository discussion is visible outside this community.</p>
-        <div className="flex shrink-0 items-center gap-1.5">
-        <input
-          ref={fileInput}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            void attach(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground"
+      {/* Shared composer pill: recessed rounded field, self-growing borderless
+          textarea, primary send action. Mirrors ChatComposer. */}
+      <div className="flex items-end gap-0.5 touch:gap-1.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
+        <button
+          type="button"
           aria-label="Attach files"
           disabled={isUploading}
           onClick={() => fileInput.current?.click()}
+          className="p-2 shrink-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40 flex items-center justify-center size-9 touch:size-11"
         >
-          {isUploading ? <Loader2 className="size-3.5 animate-spin" /> : <Paperclip className="size-3.5" />}
-        </Button>
-        <Button size="sm" className="h-7 px-3 text-xs" disabled={sending || isUploading || !text.trim()} onClick={submit}>
-          {sending ? <Loader2 className="size-3.5 animate-spin" /> : "Comment"}
-        </Button>
-        </div>
+          {isUploading ? <Loader2 className="size-5 animate-spin" /> : <Paperclip className="size-5" />}
+        </button>
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter sends; Shift+Enter is a newline. Ignore the Enter that only
+            // confirms an in-progress IME composition (CJK and other
+            // multi-keystroke input), which would otherwise fire a premature send.
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          placeholder={placeholder}
+          aria-label={placeholder}
+          rows={1}
+          className="block flex-1 min-w-0 resize-none bg-transparent border-0 outline-none px-1.5 py-2 touch:py-3 leading-5 text-base md:text-sm max-h-40 overflow-y-auto align-middle placeholder:text-muted-foreground"
+        />
+        <button
+          type="button"
+          onClick={submit}
+          disabled={sending || isUploading || !text.trim()}
+          aria-label="Comment"
+          className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9 touch:size-11"
+        >
+          {sending ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-5" strokeWidth={2.5} />}
+        </button>
       </div>
+      <p className="mt-1 px-1.5 truncate text-[10px] text-muted-foreground">Public: repository discussion is visible outside this community.</p>
     </div>
   );
 }
@@ -518,5 +540,42 @@ function DiscussionMessage({ pubkey, createdAt, event, members, className, contr
 export function TicketSidePanel({ ticket, members, activities, onClose, actions }: { ticket: GitTicket | undefined; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; onClose: () => void; actions?: TicketPanelActions }) {
   const isDesktop = useIsDesktop();
 
-  return <><aside className={cn("hidden shrink-0 overflow-hidden bg-chrome sidebar:flex sidebar:transition-[width] sidebar:duration-200", ticket ? "border-l border-border sidebar:w-[21rem]" : "sidebar:w-0")}>{ticket && <div className="flex w-[21rem] min-w-[21rem] flex-col"><div className="flex h-12 items-center border-b border-border px-3"><p className="text-sm font-semibold">Conversation</p><Button variant="ghost" size="icon" className="ml-auto size-8" onClick={onClose} aria-label="Close conversation"><X className="size-4" /></Button></div><TicketPanelBody ticket={ticket} members={members} activities={activities} actions={actions} /></div>}</aside>{ticket && !isDesktop && <Sheet open onOpenChange={(open) => !open && onClose()}><SheetContent side="right" className="flex w-[92vw] max-w-none flex-col p-0">{/* SheetContent renders its own close control in this corner. */}<div className="flex h-12 shrink-0 items-center border-b border-border px-3"><SheetTitle className="text-sm font-semibold">Conversation</SheetTitle></div><TicketPanelBody ticket={ticket} members={members} activities={activities} actions={actions} /></SheetContent></Sheet>}</>;
+  return (
+    <>
+      <aside className={cn(
+        "hidden shrink-0 overflow-hidden sidebar:flex sidebar:flex-col sidebar:transition-[width] sidebar:duration-200",
+        ticket ? "sidebar:w-[22rem]" : "sidebar:w-0",
+      )}>
+        {ticket && (
+          <div className="flex flex-1 min-h-0 flex-col m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome">
+            <div className="flex items-center justify-between px-2 py-1 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <MessageCircle className="size-4 text-muted-foreground shrink-0" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground truncate">
+                  Conversation
+                </h3>
+              </div>
+              <Button variant="ghost" size="icon" className="size-6 touch:size-10" onClick={onClose} aria-label="Close conversation">
+                <X className="size-4" />
+              </Button>
+            </div>
+            <TicketPanelBody ticket={ticket} members={members} activities={activities} actions={actions} />
+          </div>
+        )}
+      </aside>
+      {ticket && !isDesktop && (
+        <Sheet open onOpenChange={(open) => !open && onClose()}>
+          <SheetContent side="right" className="flex w-[92vw] max-w-none flex-col p-0">
+            <div className="flex items-center gap-2 px-3 py-2 shrink-0">
+              <MessageCircle className="size-4 text-muted-foreground shrink-0" />
+              <SheetTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Conversation
+              </SheetTitle>
+            </div>
+            <TicketPanelBody ticket={ticket} members={members} activities={activities} actions={actions} />
+          </SheetContent>
+        </Sheet>
+      )}
+    </>
+  );
 }

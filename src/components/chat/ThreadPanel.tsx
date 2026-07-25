@@ -190,7 +190,9 @@ function ThreadMessage({
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    // Enter saves; Shift+Enter is a newline. Ignore the Enter
+                    // that only confirms an in-progress IME composition.
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       onEditSubmit?.(event, editText);
                     } else if (e.key === "Escape") {
