@@ -1127,34 +1127,39 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
     );
   }
 
-  const box = mediaBox(image.dim);
+  const aspectRatio = parseDimAspectRatio(image.dim);
 
   return (
     <button
       type="button"
-      className={cn(
-        "relative block my-1.5 rounded-lg overflow-hidden cursor-pointer",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-        !image.blurhash && "bg-muted",
-      )}
-      style={box.style}
+      className="block my-1.5 rounded-lg overflow-hidden max-w-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       onClick={onClick}
     >
-      {!loaded && image.blurhash && (
-        <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
-      )}
-      {resolved.status === "ready" && (
-        <img
-          src={resolved.src}
-          alt=""
-          className={cn(
-            "absolute inset-0 w-full h-full hover:opacity-90 transition-opacity",
-            box.fit,
-          )}
-          onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
-        />
-      )}
+      <div
+        className={cn("relative rounded-lg overflow-hidden", !loaded && !image.blurhash && "bg-muted")}
+        style={
+          !loaded
+            ? { aspectRatio, minHeight: aspectRatio ? undefined : 120, minWidth: 160 }
+            : undefined
+        }
+      >
+        {!loaded && image.blurhash && (
+          <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
+        )}
+        {resolved.status === "ready" && (
+          <img
+            src={resolved.src}
+            alt=""
+            className={cn(
+              "block max-w-full max-h-80 h-auto rounded-lg hover:opacity-90 transition-opacity",
+              !loaded && aspectRatio && "absolute inset-0 w-full h-full object-cover",
+            )}
+            loading="lazy"
+            onLoad={() => setLoaded(true)}
+            onError={() => setFailed(true)}
+          />
+        )}
+      </div>
     </button>
   );
 }
@@ -1210,45 +1215,12 @@ function GridImage({ image }: { image: ImageRef }) {
   );
 }
 
-/** Widest an inline attachment renders (px) — the old `max-w-sm`. */
-const MEDIA_MAX_WIDTH = 384;
-/** Tallest an inline attachment renders (px) — the old `max-h-80`. */
-const MEDIA_MAX_HEIGHT = 320;
-/** Letterbox height (px) used when a NIP-94 `dim` isn't available. */
-const MEDIA_FALLBACK_HEIGHT = 240;
-
-/**
- * The box an inline attachment occupies, sized BEFORE its bytes arrive.
- *
- * Inline media lives inside a virtualized timeline, so a row that changes
- * height once the image decodes shifts everything below it — the reason
- * scrolling back through history juddered. Previously the reserved box was
- * sized by aspect ratio alone while the loaded image was clamped by
- * `max-h-80`, so the two disagreed for anything portrait: a 1080×1920 phone
- * photo reserved 683px and then snapped to 320px on load.
- *
- * With a `dim` we cap the WIDTH such that the aspect ratio can't produce a
- * height above {@link MEDIA_MAX_HEIGHT}, so the reservation is exactly what the
- * image ends up occupying and nothing moves. Without one the true ratio is
- * unknowable ahead of time, so we letterbox into a fixed-height well
- * (`object-contain`) rather than guess and correct.
- */
-function mediaBox(dim: string | undefined): {
-  style: React.CSSProperties;
-  fit: "object-cover" | "object-contain";
-} {
-  const [w, h] = (dim ?? "").split("x").map(Number);
-  if (!w || !h || Number.isNaN(w) || Number.isNaN(h)) {
-    return {
-      style: { width: `min(100%, ${MEDIA_MAX_WIDTH}px)`, height: MEDIA_FALLBACK_HEIGHT },
-      fit: "object-contain",
-    };
-  }
-  const width = Math.min(MEDIA_MAX_WIDTH, Math.round((MEDIA_MAX_HEIGHT * w) / h));
-  return {
-    style: { width: `min(100%, ${width}px)`, aspectRatio: `${w} / ${h}` },
-    fit: "object-cover",
-  };
+/** Parses a NIP-94 `dim` string ("WxH") into a CSS `aspect-ratio` value. */
+function parseDimAspectRatio(dim: string | undefined): string | undefined {
+  if (!dim) return undefined;
+  const [w, h] = dim.split("x").map(Number);
+  if (!w || !h || Number.isNaN(w) || Number.isNaN(h)) return undefined;
+  return `${w} / ${h}`;
 }
 
 /** Mention chip resolving the profile's display name. */

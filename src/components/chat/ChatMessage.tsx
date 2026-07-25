@@ -118,22 +118,19 @@ export function ReplyPreview({ content, hideMediaPlaceholder = false }: { conten
 /**
  * A small square image thumbnail for the reply preview. Resolves the media the
  * same way the message body does ({@link useResolvedMediaSrc}) so Concord's
- * encrypted attachments decrypt too.
- *
- * Fixed-size and inline: it sits on the reply line's single text row rather
- * than below it, and occupies its square from the moment it mounts. It used to
- * be an `h-10 w-auto` block that rendered nothing until the media resolved,
- * which grew the row by 40px mid-scroll — inside a virtualized timeline that
- * shoves everything below it.
+ * encrypted attachments decrypt too; renders nothing until it's ready (so the
+ * line never flashes a broken image).
  */
 export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
   const resolved = useResolvedMediaSrc(image);
+  if (resolved.status !== "ready") return null;
   return (
-    <span className="size-4 shrink-0 overflow-hidden rounded-[3px] bg-muted">
-      {resolved.status === "ready" && (
-        <img src={resolved.src} alt="" className="size-full object-cover" />
-      )}
-    </span>
+    <img
+      src={resolved.src}
+      alt=""
+      className="h-10 w-auto max-w-[6rem] shrink-0 rounded object-cover"
+      loading="lazy"
+    />
   );
 }
 
@@ -143,18 +140,9 @@ export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
  * content preview) — relay-fetched for NIP-29, the in-memory sealed author for
  * Concord — and hands the resolved `name`/`preview` here so the chrome (a
  * Discord-style quoted bar with the bold name + truncated preview) is defined
- * once. When `onClick` is supplied the line jumps the timeline to the
+ * once. Renders nothing until a name is resolved (avoids a flash of an empty
+ * line). When `onClick` is supplied the line jumps the timeline to the
  * replied-to message.
- *
- * ALWAYS EXACTLY ONE LINE TALL, in every state. The parent message is resolved
- * asynchronously (a relay round-trip for NIP-29, a profile lookup for the
- * author name, a decrypt for the thumbnail), and this line previously rendered
- * `null` until the name landed and then wrapped its preview across up to two
- * lines with the thumbnail on a third. Each of those steps resized the row
- * after mount, which inside the virtualized timeline shifts everything below —
- * the judder when scrolling back through a conversation full of replies. So
- * the row reserves its height from mount and shows a muted placeholder until
- * the name arrives, and the preview truncates rather than wrapping.
  */
 export function ReplyContextLine({
   name,
@@ -171,27 +159,20 @@ export function ReplyContextLine({
   thumbnail?: ReactNode;
   onClick?: () => void;
 }) {
-  const className =
-    "flex items-center gap-1.5 h-5 overflow-hidden text-xs text-muted-foreground/80 mb-0.5 min-w-0 max-w-full border-l-2 border-muted-foreground/30 pl-2";
-  // Unresolved: hold the row open with a static placeholder. Deliberately not
-  // an animated skeleton — a reply whose parent has fallen out of the loaded
-  // window never resolves, and a permanent shimmer would be worse than a label.
-  if (!name) {
-    return (
-      <div className={cn(className, "italic text-muted-foreground/50")}>
-        <span className="truncate">Replying to a message</span>
-      </div>
-    );
-  }
+  if (!name) return null;
   const content = (
     <>
-      {thumbnail}
-      <span className="font-semibold shrink-0">
-        {pubkey ? <DisplayName pubkey={pubkey} name={name} /> : name}
+      <span className="flex items-baseline gap-1.5 min-w-0 max-w-full">
+        <span className="font-semibold shrink-0">
+          {pubkey ? <DisplayName pubkey={pubkey} name={name} /> : name}
+        </span>
+        {preview && <span className="line-clamp-2 break-words min-w-0">{preview}</span>}
       </span>
-      {preview && <span className="truncate min-w-0">{preview}</span>}
+      {thumbnail && <span className="mt-0.5">{thumbnail}</span>}
     </>
   );
+  const className =
+    "flex flex-col text-xs text-muted-foreground/80 mb-0.5 min-w-0 max-w-full border-l-2 border-muted-foreground/30 pl-2";
   if (!onClick) {
     return <div className={className}>{content}</div>;
   }
@@ -199,7 +180,7 @@ export function ReplyContextLine({
     <button
       type="button"
       onClick={onClick}
-      className={cn(className, "text-left hover:text-foreground hover:border-muted-foreground/60 transition-colors cursor-pointer")}
+      className={cn(className, "items-start text-left hover:text-foreground hover:border-muted-foreground/60 transition-colors cursor-pointer")}
     >
       {content}
     </button>

@@ -439,16 +439,15 @@ function DmLegacyFallbackNotice({
 function DmReplyContext({ parent, onJump }: { parent: NostrEvent | undefined; onJump: (id: string) => void }) {
   const author = useAuthor(parent?.pubkey);
   const name = parent ? getDisplayName(author.data?.metadata, parent.pubkey) : "";
-  // Render the line even when the parent isn't in the loaded thread yet:
-  // `ReplyContextLine` holds a fixed height, so the row doesn't grow later.
-  const image = parent ? firstImageRef(parent) : undefined;
+  if (!parent) return null;
+  const image = firstImageRef(parent);
   return (
     <ReplyContextLine
-      name={parent ? name : undefined}
-      pubkey={parent?.pubkey}
-      preview={parent ? <ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} /> : undefined}
+      name={name}
+      pubkey={parent.pubkey}
+      preview={<ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} />}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
-      onClick={parent ? () => onJump(parent.id) : undefined}
+      onClick={() => onJump(parent.id)}
     />
   );
 }
