@@ -61,4 +61,21 @@ describe("syncEmojiMartCategories", () => {
     await initWith([pack("pack-a", ["a1"])]);
     expect(categoryIds().indexOf("pack-a")).toBeLessThan(categoryIds().indexOf("people"));
   });
+
+  it("keeps every pack to a single shared nav entry", async () => {
+    // emoji-mart's bottom nav is one non-scrolling row: it renders a button per
+    // category WITHOUT a `target`, and chains custom categories onto the first
+    // one only while they have no `icon`. Giving packs their own icons
+    // overflows the nav once a user has a few, so the section headers — not the
+    // nav — are what identify a pack.
+    await initWith([pack("a", ["a1"]), pack("b", ["b1"]), pack("c", ["c1"]), pack("d", ["d1"])]);
+
+    const navEntries = (Data.categories as { id: string; target?: unknown }[]).filter(
+      (c) => !c.target,
+    );
+    const customNavEntries = navEntries.filter((c) => ["a", "b", "c", "d"].includes(c.id));
+    expect(customNavEntries).toHaveLength(1);
+    // …while all four still render as their own labelled sections.
+    for (const id of ["a", "b", "c", "d"]) expect(categoryIds()).toContain(id);
+  });
 });

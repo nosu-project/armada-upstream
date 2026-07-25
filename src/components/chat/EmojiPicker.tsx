@@ -109,10 +109,13 @@ export function EmojiPicker({ onSelect, customEmojis }: EmojiPickerProps) {
       });
     }
 
-    // Give each pack its own nav icon (its first emoji). Without an `icon`,
-    // emoji-mart chains a custom category onto the previous one's nav button,
-    // so every pack would share a single generic entry.
-    return [...groups.values()].map((g) => ({ ...g, icon: { src: g.emojis[0]?.skins[0]?.src } }));
+    // Deliberately NO per-category `icon`: emoji-mart gives every custom
+    // category with one its own nav button, and the bottom nav is a single
+    // non-scrolling row — a handful of packs overflows it. Without an icon it
+    // chains each pack onto the first one's button (module.js filters nav
+    // entries to categories without a `target`), so the packs share one entry
+    // while keeping their own labelled sections in the scroll area.
+    return [...groups.values()];
   }, [customEmojis]);
 
   useEffect(() => {
