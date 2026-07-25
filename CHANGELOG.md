@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.39.10] - 2026-07-24
+
+Custom emojis now render in people's names and in message previews, emoji packs carry a name and cover image with a rebuilt creation flow, and your emoji palette sticks around between reloads. The direct message list opens instantly in its final order with wider, larger rows, and a batch of chat scrolling and reaction glitches are fixed. Servers you remove now stay removed.
+
+### Added
+- Custom emojis render in display names across chat, member lists, mentions, direct messages, and profiles
+- Custom emojis render in direct message conversation previews
+- Emoji packs carry a name, description, and cover image
+- Emoji pack creation takes drag-and-dropped images, flags blank and duplicate shortcodes before publishing, and can add the pack to your own emojis
+
+### Changed
+- Restyled Discover with the floating command bar, tab pills, and a search field used elsewhere in the app
+- Wider direct message conversation list with larger rows and avatars
+- The direct message list restores instantly in its final order instead of reshuffling as it loads
+- Chat loading placeholders fill the pane and vary per row instead of reading as a progress bar
+- The direct message composer is focused when a conversation opens on desktop
+
+### Fixed
+- Your custom emoji palette no longer empties after a reload
+- Reactions no longer vanish and reappear after you react
+- Sending a direct message no longer makes the message flicker or lose your place in the conversation
+- Conversations no longer come to rest above the newest message
+- Servers you removed no longer reappear after a reload or from another device's outdated data
+
 ## [0.39.9] - 2026-07-24
 
 Adds a Discover page for browsing public communities, emoji packs, and themes. Communities are found by mining invite notes shared on app relays, so there's no central listing to maintain. You can also create and share emoji packs and themes directly from the Discover page.
