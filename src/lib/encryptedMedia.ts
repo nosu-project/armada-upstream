@@ -153,11 +153,28 @@ export interface EncryptedUpload {
  * the same reason.
  */
 export async function encryptFileForUpload(file: File): Promise<EncryptedUpload> {
+  return encryptFileWithParams(
+    file,
+    bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
+    bytesToHex(crypto.getRandomValues(new Uint8Array(16))), // 16-byte (0xChat-compatible) nonce
+  );
+}
+
+/**
+ * Encrypt a file under caller-supplied AES-GCM parameters.
+ *
+ * Used for the companion blobs of an attachment — NIP-17 specifies that a
+ * `thumb` (and any `fallback` source) is "encrypted with the same key, nonce"
+ * as the file it belongs to, which is what lets every other client decrypt a
+ * thumbnail from the single `decryption-key`/`decryption-nonce` pair in the
+ * message.
+ */
+export async function encryptFileWithParams(
+  file: File,
+  key: string,
+  nonce: string,
+): Promise<EncryptedUpload> {
   const plaintext = new Uint8Array(await file.arrayBuffer());
-  const keyBytes = crypto.getRandomValues(new Uint8Array(32));
-  const nonceBytes = crypto.getRandomValues(new Uint8Array(16)); // 16-byte (0xChat-compatible) nonce
-  const key = bytesToHex(keyBytes);
-  const nonce = bytesToHex(nonceBytes);
 
   const ciphertext = await encryptBytes(plaintext, key, nonce);
 

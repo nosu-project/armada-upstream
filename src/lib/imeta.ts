@@ -1,6 +1,10 @@
 /** Parsed imeta entry from NIP-94 tags. */
 export interface ImetaEntry {
   url: string;
+  /**
+   * Thumbnail/poster URL. Per NIP-17 a `thumb` is encrypted with the same key
+   * and nonce as the file it belongs to, so {@link encryption} decrypts both.
+   */
   thumbnail?: string;
   mime?: string;
   /** Summary text (used as webxdc app name for webxdc attachments). */
@@ -50,7 +54,8 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
       const enc = parseImetaEncryption(entry);
       map.set(entry.url, {
         url: entry.url,
-        thumbnail: entry.image,
+        // NIP-94 defines both; `thumb` is the smaller preview, so prefer it.
+        thumbnail: entry.thumb ?? entry.image,
         mime: entry.m,
         summary: entry.summary,
         webxdc: entry.webxdc,

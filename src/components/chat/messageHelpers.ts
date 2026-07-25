@@ -4,6 +4,7 @@ import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 
 import type { ChatMsg } from "@/components/chat/transport";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
+import type { ImetaEntry } from "@/lib/imeta";
 
 /**
  * Extract the id of the message this event *inline*-replies to via NIP-10
@@ -55,14 +56,28 @@ export function firstImageRef(event: ChatMsg): EncryptedRef | undefined {
   if (event.kind === KIND_DM_FILE) {
     const fileEntry = parseFileMessageTags(event.content.trim(), event.tags);
     if (fileEntry && (fileEntry.mime?.startsWith("image/") || IMAGE_URL_REGEX.test(fileEntry.url))) {
-      return { url: fileEntry.url, encryption: fileEntry.encryption, mime: fileEntry.mime };
+      return refOf(fileEntry);
     }
   }
   const imeta = parseImetaMap(event.tags);
   for (const entry of imeta.values()) {
     const isImage = entry.mime?.startsWith("image/") || IMAGE_URL_REGEX.test(entry.url);
-    if (isImage) return { url: entry.url, encryption: entry.encryption, mime: entry.mime };
+    if (isImage) return refOf(entry);
   }
   const inline = event.content.match(IMAGE_URL_REGEX)?.[0];
   return inline ? { url: inline } : undefined;
+}
+
+/**
+ * Narrow an imeta entry to a display ref, keeping the `dim`/`blurhash` hints so
+ * preview thumbnails get a sized blur-up placeholder instead of popping in.
+ */
+function refOf(entry: ImetaEntry): EncryptedRef {
+  return {
+    url: entry.url,
+    encryption: entry.encryption,
+    mime: entry.mime,
+    dim: entry.dim,
+    blurhash: entry.blurhash,
+  };
 }

@@ -1,3 +1,5 @@
+import { hasStrippableMetadata, isAnimatedImage, METADATA_SCAN_BYTES } from "@/lib/imageMetadata";
+
 /** Maximum dimension (width or height) for resized images. */
 const MAX_DIMENSION = 1920;
 
@@ -12,27 +14,37 @@ interface ResizedImage {
 }
 
 /**
- * Resize an image file so its longest side is at most {@link MAX_DIMENSION}
- * pixels, and encode it in the smallest format between JPEG and PNG.
+ * Prepare an image file for upload: cap its longest side at
+ * {@link MAX_DIMENSION}, and strip embedded metadata.
  *
- * If the image already fits within the dimension limit, the original file
- * is returned unchanged (no re-encoding overhead).
+ * Both goals are met by drawing to a canvas and re-encoding, which discards
+ * every ancillary chunk — EXIF (including GPS coordinates), XMP and IPTC.
+ * Because that costs a generation of quality, it is skipped for images that
+ * are already within the size limit *and* carry no metadata; those are
+ * uploaded byte-for-byte.
+ *
+ * Animated images (GIF, APNG, animated WebP) are always passed through, since
+ * a canvas round-trip would flatten them to a single frame.
  */
 export async function resizeImage(file: File): Promise<ResizedImage> {
-  const bitmap = await createImageBitmap(file);
+  const head = new Uint8Array(await file.slice(0, METADATA_SCAN_BYTES).arrayBuffer());
+
+  // `imageOrientation: "from-image"` bakes any EXIF rotation into the pixels.
+  // Without it, stripping the metadata would leave a sideways photo — the
+  // orientation tag we just dropped was the only thing rotating it.
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   const { width, height } = bitmap;
 
-  // Already within limits — return the original file as-is.
-  if (width <= MAX_DIMENSION && height <= MAX_DIMENSION) {
+  const needsResize = width > MAX_DIMENSION || height > MAX_DIMENSION;
+  const animated = isAnimatedImage(file.type, head);
+
+  if (animated || (!needsResize && !hasStrippableMetadata(head))) {
     bitmap.close();
-    return {
-      file,
-      dimensions: `${width}x${height}`,
-    };
+    return { file, dimensions: `${width}x${height}` };
   }
 
-  // Scale down preserving aspect ratio.
-  const scale = MAX_DIMENSION / Math.max(width, height);
+  // Scale down preserving aspect ratio (a no-op when only stripping metadata).
+  const scale = needsResize ? MAX_DIMENSION / Math.max(width, height) : 1;
   const newWidth = Math.round(width * scale);
   const newHeight = Math.round(height * scale);
 

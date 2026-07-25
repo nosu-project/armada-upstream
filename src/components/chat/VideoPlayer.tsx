@@ -1,17 +1,21 @@
 import { Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+import { isValidBlurhash } from "@/lib/blurhash";
 import { cn } from "@/lib/utils";
 
 import type { ImetaEncryption } from "@/lib/imeta";
 
 interface VideoPlayerProps {
   src: string;
-  /** Poster image URL (from the imeta `image` field). */
+  /** Poster image URL (from the imeta `thumb`/`image` field). */
   poster?: string;
   /** Pixel dimensions from the imeta `dim` field, e.g. "1280x720". */
   dim?: string;
+  /** Blurhash placeholder shown while an encrypted blob downloads/decrypts. */
+  blurhash?: string;
   /** MIME type of the video (used as the decrypted Blob's type). */
   mime?: string;
   /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
@@ -25,9 +29,19 @@ interface VideoPlayerProps {
  * (Concord/Vector) attachments are AES-GCM ciphertext on Blossom, so the src
  * is fetched + decrypted to an object URL before it reaches the <video>.
  */
-export function VideoPlayer({ src, poster, dim, mime, encryption, className }: VideoPlayerProps) {
+export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, className }: VideoPlayerProps) {
   const [failed, setFailed] = useState(false);
   const resolved = useResolvedMediaSrc({ url: src, encryption, mime });
+
+  // An encrypted poster is ciphertext on Blossom, so it has to be fetched and
+  // decrypted before the <video> can use it. NIP-17 encrypts a `thumb` with the
+  // same key and nonce as its file, so the video's own params decrypt it.
+  const resolvedPoster = useResolvedMediaSrc({
+    url: poster ?? "",
+    encryption,
+    mime: "image/jpeg",
+  });
+  const posterSrc = poster && resolvedPoster.status === "ready" ? resolvedPoster.src : undefined;
 
   const aspectRatio = useMemo(() => {
     const match = dim?.match(/^(\d+)x(\d+)$/);
@@ -62,7 +76,7 @@ export function VideoPlayer({ src, poster, dim, mime, encryption, className }: V
       {resolved.status === "ready" ? (
         <video
           src={resolved.src}
-          poster={poster}
+          poster={posterSrc}
           controls
           preload="metadata"
           playsInline
@@ -70,8 +84,11 @@ export function VideoPlayer({ src, poster, dim, mime, encryption, className }: V
           onError={() => setFailed(true)}
         />
       ) : (
-        <div className="w-full h-full flex items-center justify-center">
-          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        <div className="relative w-full h-full flex items-center justify-center">
+          {isValidBlurhash(blurhash) && (
+            <BlurhashCanvas hash={blurhash} className="absolute inset-0 w-full h-full" />
+          )}
+          <Loader2 className="relative size-6 animate-spin text-white/80" />
         </div>
       )}
     </div>

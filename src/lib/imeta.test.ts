@@ -48,6 +48,55 @@ describe("parseImetaMap encryption fields", () => {
     }
   });
 
+  it("prefers `thumb` then `image` for the thumbnail", () => {
+    const withBoth = [["imeta", "url https://x/y.mp4", "thumb https://t/1", "image https://t/2"]];
+    expect(parseImetaMap(withBoth).get("https://x/y.mp4")?.thumbnail).toBe("https://t/1");
+
+    const imageOnly = [["imeta", "url https://x/y.mp4", "image https://t/2"]];
+    expect(parseImetaMap(imageOnly).get("https://x/y.mp4")?.thumbnail).toBe("https://t/2");
+  });
+
+  it("covers the thumbnail with the file's own decryption params", () => {
+    // NIP-17: a `thumb` is "encrypted with the same key, nonce" as its file,
+    // so one params pair decrypts both blobs.
+    const tags = [
+      [
+        "imeta",
+        "url https://x/y.mp4",
+        "m video/mp4",
+        "thumb https://x/poster.jpg",
+        "encryption-algorithm aes-gcm",
+        `decryption-key ${"a".repeat(64)}`,
+        `decryption-nonce ${"b".repeat(32)}`,
+      ],
+    ];
+    const entry = parseImetaMap(tags).get("https://x/y.mp4");
+    expect(entry?.thumbnail).toBe("https://x/poster.jpg");
+    expect(entry?.encryption).toEqual({
+      algorithm: "aes-gcm",
+      key: "a".repeat(64),
+      nonce: "b".repeat(32),
+    });
+  });
+
+  it("does not expose the poster as an attachment of its own", () => {
+    // ChatContent renders an embed for every imeta URL that isn't already in
+    // the body. The poster must stay a field on the video's entry, or a video
+    // message would render its own thumbnail as a second, separate image.
+    const tags = [
+      [
+        "imeta",
+        "url https://x/y.mp4",
+        "m video/mp4",
+        "image https://x/poster.jpg",
+        "thumb https://x/poster.jpg",
+      ],
+    ];
+    const map = parseImetaMap(tags);
+    expect([...map.keys()]).toEqual(["https://x/y.mp4"]);
+    expect(map.has("https://x/poster.jpg")).toBe(false);
+  });
+
   it("normalizes key/nonce to lowercase hex", () => {
     const tags = [
       [

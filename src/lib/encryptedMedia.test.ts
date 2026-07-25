@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decryptBytes, encryptBytes } from "./encryptedMedia";
+import { decryptBytes, encryptBytes, encryptFileWithParams } from "./encryptedMedia";
 
 /**
  * Interop guarantees for client-encrypted Blossom attachments (Vector / 0xChat):
@@ -39,5 +39,44 @@ describe("encryptedMedia crypto", () => {
     const data = new Uint8Array([9, 8, 7, 6, 5]);
     const ct = await encryptBytes(data, key, nonce16);
     expect(Array.from(await decryptBytes(ct, key, nonce16))).toEqual(Array.from(data));
+  });
+});
+
+/**
+ * NIP-17 specifies that a `thumb` (and any `fallback` source) is "encrypted
+ * with the same key, nonce" as the file it accompanies, so the message's
+ * single decryption-key/nonce pair decrypts every blob of the attachment.
+ */
+describe("encryptFileWithParams", () => {
+  const key = "a".repeat(64);
+  const nonce = "b".repeat(32);
+
+  /** jsdom's File has no `arrayBuffer()`; supply just that. */
+  function file(content: string, name: string, type?: string): File {
+    const f = new File([content], name, type ? { type } : undefined);
+    Object.defineProperty(f, "arrayBuffer", {
+      value: async () => new TextEncoder().encode(content).buffer,
+    });
+    return f;
+  }
+
+  it("encrypts under the supplied key and nonce", async () => {
+    const result = await encryptFileWithParams(file("video", "clip.mp4"), key, nonce);
+    expect(result.key).toBe(key);
+    expect(result.nonce).toBe(nonce);
+  });
+
+  it("gives a video and its thumbnail identical params", async () => {
+    const video = await encryptFileWithParams(file("video", "clip.mp4"), key, nonce);
+    const thumb = await encryptFileWithParams(file("poster", "clip.jpg"), video.key, video.nonce);
+
+    expect(thumb.key).toBe(video.key);
+    expect(thumb.nonce).toBe(video.nonce);
+  });
+
+  it("keeps the plaintext MIME on the ciphertext file", async () => {
+    // Blossom servers commonly reject application/octet-stream.
+    const thumb = await encryptFileWithParams(file("poster", "clip.jpg", "image/jpeg"), key, nonce);
+    expect(thumb.file.type).toBe("image/jpeg");
   });
 });

@@ -54,16 +54,18 @@ import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
 import { buzzThreadRef } from "@/buzz/protocol";
 import { collectEmojiTags } from "@/lib/customEmoji";
-import { encryptFileForUpload } from "@/lib/encryptedMedia";
+import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
+import { processVideo } from "@/lib/video/processVideo";
 import { invocationTags, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 import type { AddrCoords } from "@/hooks/useEvent";
 import type { ImetaEncryption } from "@/lib/imeta";
+import type { ProcessedVideo } from "@/lib/video/types";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
@@ -103,6 +105,12 @@ const MAX_CHARS = 5000;
 
 /** MIME types accepted via paste/drag-and-drop (matches the file picker). */
 const ACCEPTED_PASTE_RE = /^(image|video|audio)\//;
+
+/** Replace or append a file extension. */
+function replaceExtension(filename: string, ext: string): string {
+  const dot = filename.lastIndexOf(".");
+  return (dot > 0 ? filename.slice(0, dot) : filename) + ext;
+}
 
 /** Short random ID for poll options. */
 function pollOptionId(): string {
@@ -193,6 +201,17 @@ async function getImageMeta(file: File): Promise<{ dim?: string; blurhash?: stri
   } catch {
     return {};
   }
+}
+
+/** An attachment being processed and uploaded. */
+interface PendingUpload {
+  id: string;
+  /** Local work (transcode/encrypt) vs. the network upload. */
+  phase: "processing" | "uploading";
+  /** 0..1 transcode progress. Absent when the work is indeterminate. */
+  progress?: number;
+  /** Aborts the transcode and drops the attachment. */
+  abort: AbortController;
 }
 
 /** An embed (quote or link) detected in the composer content. */
@@ -489,21 +508,22 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
    */
   const attachmentEncryption = useRef<Map<string, ImetaEncryption & { ox: string }>>(new Map());
   /**
-   * In-flight upload count. Incremented the instant a file is selected and only
-   * decremented once its upload finishes (or fails), so a placeholder spinner
-   * tile shows immediately — through the slow local pre-upload work (resize,
-   * blurhash, client-side encryption) that runs *before* the network request
-   * flips `useUploadFile`'s `isPending`. Counter (not boolean) because files
-   * can be attached concurrently.
+   * In-flight attachments. An entry is added the instant a file is selected and
+   * removed once its upload finishes (or fails), so a placeholder tile shows
+   * immediately — through the slow local pre-upload work (resize, blurhash,
+   * video transcode, client-side encryption) that runs *before* the network
+   * request flips `useUploadFile`'s `isPending`. A list (not a counter) because
+   * files can be attached concurrently and video transcodes report progress and
+   * can be cancelled individually.
    */
-  const [pendingUploads, setPendingUploads] = useState(0);
+  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
   /**
    * Sending is blocked while any attachment is still uploading: `attachments`
    * only gains a file once its upload resolves, so a send fired mid-upload
    * would publish the text alone and drop the file (the reset then clears the
    * late-arriving URL).
    */
-  const isUploading = pendingUploads > 0;
+  const isUploading = pendingUploads.length > 0;
 
   // Poll mode state
   const [mode, setMode] = useState<"post" | "poll">("post");
@@ -720,33 +740,58 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [draftKey, onCancelReply]);
 
   const handleFileUpload = useCallback(async (file: File) => {
-    // Flip on the placeholder spinner immediately, before the slow local work
-    // (resize/blurhash/encrypt) that precedes the actual network upload.
-    setPendingUploads((n) => n + 1);
+    // Flip on the placeholder tile immediately, before the slow local work
+    // (resize/transcode/blurhash/encrypt) that precedes the network upload.
+    const pendingId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const abort = new AbortController();
+    setPendingUploads((prev) => [...prev, { id: pendingId, phase: "processing", abort }]);
+
+    const patchPending = (patch: Partial<PendingUpload>) => {
+      setPendingUploads((prev) => prev.map((p) => (p.id === pendingId ? { ...p, ...patch } : p)));
+    };
+
     try {
       const isImage = file.type.startsWith("image/");
+      const isVideo = file.type.startsWith("video/");
 
       let uploadableFile = file;
       let resizedDim: string | undefined;
+      let video: ProcessedVideo | undefined;
 
       if (isImage) {
         // Resize & optimize images before uploading.
         const resized = await resizeImage(file);
         uploadableFile = resized.file;
         resizedDim = resized.dimensions;
+      } else if (isVideo) {
+        // Compress the video and pull out its NIP-94 metadata. Never throws for
+        // media reasons — falls back to uploading the original.
+        video = await processVideo(file, {
+          signal: abort.signal,
+          onProgress: (progress) => patchPending({ progress }),
+        });
+        uploadableFile = video.file;
       }
 
-      // Compute image preview metadata from the PLAINTEXT (before any
-      // encryption) — dim/blurhash must describe the visible image, not the
-      // ciphertext. Captured here so it's available regardless of encryption.
-      let dimTag = resizedDim;
-      let blurhashTag: string | undefined;
+      if (abort.signal.aborted) return;
+      patchPending({ phase: "uploading", progress: undefined });
+
+      // Compute preview metadata from the PLAINTEXT (before any encryption) —
+      // dim/blurhash must describe the visible media, not the ciphertext.
+      let dimTag = resizedDim ?? video?.dim;
+      let blurhashTag: string | undefined = video?.blurhash;
       if (isImage) {
         const meta = await getImageMeta(uploadableFile);
         if (!dimTag && meta.dim) dimTag = meta.dim;
         blurhashTag = meta.blurhash || undefined;
       }
       const originalMime = uploadableFile.type;
+
+      // The video poster frame is a second blob, uploaded alongside and
+      // referenced from the video's imeta as `image`/`thumb`.
+      let posterFile = video?.poster
+        ? new File([video.poster], replaceExtension(uploadableFile.name, ".jpg"), { type: "image/jpeg" })
+        : undefined;
 
       // Concord: encrypt the blob client-side (AES-256-GCM) so Blossom only
       // ever holds ciphertext; the key/nonce ride in the message imeta.
@@ -755,6 +800,23 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         const enc = await encryptFileForUpload(uploadableFile);
         uploadableFile = enc.file;
         encryption = { algorithm: "aes-gcm", key: enc.key, nonce: enc.nonce, ox: enc.originalHash };
+
+        if (posterFile) {
+          // NIP-17: a `thumb` is "encrypted with the same key, nonce" as the
+          // file it belongs to, so the message's single decryption-key/nonce
+          // pair covers both blobs.
+          posterFile = (await encryptFileWithParams(posterFile, enc.key, enc.nonce)).file;
+        }
+      }
+
+      // Poster first: it's small, and a failure here must not cost us the video.
+      let posterUrl: string | undefined;
+      if (posterFile) {
+        try {
+          posterUrl = (await uploadFile(posterFile))[0][1];
+        } catch {
+          posterUrl = undefined;
+        }
       }
 
       const tags = await uploadFile(uploadableFile);
@@ -769,12 +831,25 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         else tags.push(["m", originalMime]);
       }
 
-      if (isImage) {
-        const hasTag = (name: string) => tags.some((t) => t[0] === name);
+      const hasTag = (name: string) => tags.some((t) => t[0] === name);
+      if (isImage || isVideo) {
         // Attach the plaintext-derived dim/blurhash so the embed renders right.
-        if (dimTag && !hasTag("dim")) tags.push(["dim", dimTag]);
+        // For video the server's `dim` describes the pre-transcode file (or the
+        // ciphertext), so ours wins.
+        if (dimTag) {
+          const dim = tags.find((t) => t[0] === "dim");
+          if (dim) dim[1] = dimTag;
+          else tags.push(["dim", dimTag]);
+        }
         if (blurhashTag && !hasTag("blurhash")) tags.push(["blurhash", blurhashTag]);
       }
+      if (video?.duration && !hasTag("duration")) tags.push(["duration", String(video.duration)]);
+      if (posterUrl) {
+        // NIP-94 defines both; clients differ on which they read.
+        tags.push(["image", posterUrl], ["thumb", posterUrl]);
+      }
+
+      if (abort.signal.aborted) return;
 
       if (encryption) attachmentEncryption.current.set(url, encryption);
 
@@ -782,9 +857,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       // The URL is tracked as an attachment chip (rendered above the input)
       // rather than dumped into the text; it's appended to content on send.
     } catch {
-      toast({ title: "Upload failed", description: "Could not upload file.", variant: "destructive" });
+      if (!abort.signal.aborted) {
+        toast({ title: "Upload failed", description: "Could not upload file.", variant: "destructive" });
+      }
     } finally {
-      setPendingUploads((n) => Math.max(0, n - 1));
+      setPendingUploads((prev) => prev.filter((p) => p.id !== pendingId));
     }
   }, [uploadFile, toast, encryptAttachments]);
 
@@ -1438,7 +1515,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       )}
 
       {/* Attachment previews — uploaded images render as inline thumbnails. */}
-      {(attachments.length > 0 || pendingUploads > 0) && (
+      {(attachments.length > 0 || pendingUploads.length > 0) && (
         <div className="flex flex-wrap gap-2 px-3 pt-2 animate-in slide-in-from-top-2 fade-in-0 duration-200">
           {attachments.map((att) => (
             <div
@@ -1465,12 +1542,33 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </button>
             </div>
           ))}
-          {Array.from({ length: pendingUploads }).map((_, i) => (
+          {pendingUploads.map((pending) => (
             <div
-              key={`pending-${i}`}
-              className="size-20 rounded-lg border border-border bg-secondary/40 shrink-0 flex items-center justify-center"
+              key={pending.id}
+              className="group relative size-20 rounded-lg border border-border bg-secondary/40 shrink-0 flex flex-col items-center justify-center gap-1"
             >
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              {pending.phase === "processing" && pending.progress !== undefined && (
+                <span className="text-[10px] tabular-nums text-muted-foreground">
+                  {Math.round(pending.progress * 100)}%
+                </span>
+              )}
+              <button
+                type="button"
+                aria-label="Cancel attachment"
+                onClick={() => pending.abort.abort()}
+                className="absolute top-1 right-1 p-0.5 touch:p-1.5 rounded-full bg-background/80 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
+              >
+                <X className="size-3.5 touch:size-4" />
+              </button>
+              {pending.phase === "processing" && pending.progress !== undefined && (
+                <div className="absolute inset-x-0 bottom-0 h-1 bg-border">
+                  <div
+                    className="h-full bg-primary transition-[width] duration-200"
+                    style={{ width: `${Math.round(pending.progress * 100)}%` }}
+                  />
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1565,7 +1663,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   <button
                     type="button"
                     aria-label="More options"
-                    disabled={pendingUploads > 0}
+                    disabled={isUploading}
                     className={cn(
                       "p-2 shrink-0 rounded-full transition-colors disabled:opacity-40 flex items-center justify-center size-9 touch:size-11",
                       plusOpen || mode === "poll"
@@ -1573,7 +1671,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                         : "text-muted-foreground hover:text-foreground hover:bg-secondary",
                     )}
                   >
-                    {pendingUploads > 0
+                    {isUploading
                       ? <Loader2 className="size-5 animate-spin" />
                       : <Plus className={cn("size-5 transition-transform", plusOpen && "rotate-45")} />}
                   </button>

@@ -885,6 +885,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             src={token.url}
             poster={imeta?.thumbnail}
             dim={imeta?.dim}
+            blurhash={imeta?.blurhash}
             mime={mediaMime}
             encryption={encryption}
           />
