@@ -591,6 +591,120 @@ describe("control completeness — the whole plane, every sweep", () => {
     await sweepControl(nostr, community);
     expect(controlSweepTruncated(community)).toBe(false);
   });
+
+  it("sweeps only the CURRENT epoch's control plane, not retired ones", async () => {
+    // Concord's control plane is compaction-bounded: a Refounding re-wraps
+    // every head into the new epoch, so prior planes are history, not
+    // authority. Still sweeping them would let a plane any member can inflate
+    // follow the community through every future rotation — defeating the one
+    // operation that escapes a flood.
+    const owner = signer();
+    const community = communityOf(95, owner.pubkey);
+    const oldRoot = community.root;
+    const newRoot = new Uint8Array(32).fill(0x7e);
+    const rotated: CommunityV2 = {
+      ...community,
+      root: newRoot,
+      rootEpoch: 1n,
+      heldRoots: [
+        { epoch: 1n, key: newRoot },
+        { epoch: 0n, key: oldRoot },
+      ],
+    };
+    const now = Math.floor(Date.now() / 1000);
+    const retired = await wrapAt(controlGroupKey(oldRoot, community.id, 0), owner, "aa".repeat(32), now - 500);
+    const current = await wrapAt(controlGroupKey(newRoot, community.id, 1), owner, "bb".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [retired.wrap, current.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, rotated);
+    const ids = fresh.map((e) => e.rumorId);
+
+    expect(ids, "the current epoch's plane must be swept").toContain(current.rumor.id);
+    expect(ids, "a retired plane must not be swept").not.toContain(retired.rumor.id);
+    const authors = relay.calls.flat().flatMap((f) => f.authors ?? []);
+    expect(authors, "the retired plane's address must not even be asked for").not.toContain(
+      controlGroupKey(oldRoot, community.id, 0).pk,
+    );
+  });
+
+  it("an exhaustive sweep reaches the whole plane however deep it is", async () => {
+    // The Refounding path's escape from the deadlock: a member can flood the
+    // plane past the hop budget, and a capped sweep would then refuse to
+    // rotate — the one operation that retires the flood. Exhaustive pays the
+    // depth instead of giving up.
+    _configureSweepPagingForTests({ pageLimit: 2, maxPages: 1 });
+    const owner = signer();
+    const community = communityOf(94, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = await Promise.all(
+      [0, 1, 2, 3, 4, 5].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+
+    const relay = new FakeRelay();
+    relay.events = wraps.map((w) => w.wrap);
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, community, { exhaustive: true });
+
+    expect(controlSweepTruncated(community), "exhaustive must not report truncation").toBe(false);
+    for (const w of wraps) {
+      expect(fresh.map((e) => e.rumorId), "every edition must be reached").toContain(w.rumor.id);
+    }
+  });
+
+  it("flags truncation at a same-second wall thicker than the page limit", async () => {
+    // `until` is inclusive, so a block of identical timestamps wider than the
+    // page limit is a wall no cursor can step past — everything older stays
+    // unreachable. Stopping there SILENTLY let a burst of same-second wraps
+    // bury a ban without tripping any signal, the refound gate included.
+    _configureSweepPagingForTests({ pageLimit: 2, maxPages: 8 });
+    const owner = signer();
+    const community = communityOf(92, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wall = await Promise.all(
+      [0, 1, 2, 3].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100)),
+    );
+    const buried = await wrapAt(control, owner, "ee".repeat(32), now - 900);
+
+    const relay = new FakeRelay();
+    relay.events = [...wall.map((w) => w.wrap), buried.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, community);
+
+    expect(controlSweepTruncated(community), "a wall the pager cannot step past is a truncated sweep").toBe(true);
+    expect(fresh.map((e) => e.rumorId), "the edition behind the wall really is unreachable").not.toContain(buried.rumor.id);
+  });
+
+  it("does not flag truncation when the last page is simply the end of the plane", async () => {
+    // The all-overlap break must tell a same-second wall (FULL page, nothing
+    // new) apart from an exhausted relay (SHORT page). Flagging the latter
+    // would wedge refounds on perfectly healthy communities.
+    _configureSweepPagingForTests({ pageLimit: 2, maxPages: 8 });
+    const owner = signer();
+    const community = communityOf(93, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = await Promise.all(
+      [0, 1].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+
+    const relay = new FakeRelay();
+    relay.events = wraps.map((w) => w.wrap);
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, community);
+
+    expect(controlSweepTruncated(community), "an exhausted relay is a complete sweep").toBe(false);
+    for (const w of wraps) {
+      expect(fresh.map((e) => e.rumorId)).toContain(w.rumor.id);
+    }
+  });
 });
 
 describe("guestbook forward cursor — epoch-keyed scope", () => {

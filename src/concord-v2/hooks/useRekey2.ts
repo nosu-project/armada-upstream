@@ -673,7 +673,10 @@ export function useRefound2(community: CommunityV2 | undefined) {
       // would be silently dropped from, or compacted stale into, the new epoch
       // — for every member, forever.
       try {
-        await sweepControl(nostr, community);
+        // Exhaustive: a rotation may only compact a plane it has read WHOLE,
+        // and plane depth is attacker-controlled. Capping here would let any
+        // member hold rotation hostage by flooding past the hop budget.
+        await sweepControl(nostr, community, { exhaustive: true });
       } catch {
         throw new Error("Couldn't re-fetch the community's control plane; check your connection and try again.");
       }

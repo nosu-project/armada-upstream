@@ -33,7 +33,7 @@
  *   different read scope.
  */
 
-import { controlGroups } from "@/concord-v2/lib/control";
+import { currentControlGroup } from "@/concord-v2/lib/control";
 import { guestbookGroups } from "@/concord-v2/lib/guestbook";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
@@ -119,12 +119,28 @@ export interface PlaneScope {
    * a truncated plane drops the unfetched entities from the new epoch.
    */
   onTruncated?: () => void;
+  /**
+   * COMPLETE mode only: page until the relay is exhausted, ignoring the hop
+   * budget. Plane depth is attacker-controlled — any member can mint wraps —
+   * so the budget exists to stop a routine sweep spending a launch on a flood.
+   * A Refounding has no such option: it may only compact a plane it has read
+   * WHOLE, so it opts in and pays whatever the depth costs.
+   */
+  exhaustive?: boolean;
 }
 
 /**
  * One community's Control Plane on one relay. COMPLETE: the fold that hangs
  * off this plane (roster, banlist, channels, registries) must never run on a
  * silently-truncated edition set — see the module docstring.
+ *
+ * CURRENT EPOCH ONLY. Concord's control plane is compaction-bounded: a
+ * Refounding re-wraps every entity's head into the new epoch, so the current
+ * plane is a complete snapshot and prior ones are dead weight — history, not
+ * authority. Sweeping them too would mean a plane any member can inflate
+ * follows the community across every future rotation, which is exactly what
+ * rotating was supposed to escape. Old roots stay held (and stream-auth
+ * registered) for chat history; only this fetch narrows.
  */
 export function controlScope(
   community: CommunityV2,
@@ -133,7 +149,7 @@ export function controlScope(
 ): PlaneScope {
   return {
     scope: `control:${community.idHex}|${relayUrl}`,
-    groups: controlGroups(community),
+    groups: [currentControlGroup(community)],
     complete: true,
     onFresh,
   };
@@ -321,35 +337,54 @@ export function controlSweepTruncated(community: CommunityV2): boolean {
  * wrap seen so far, until a short page says the relay is exhausted. `until` is
  * inclusive, so pages overlap by design (dedupe by id) — the overlap is what
  * steps over a same-second boundary instead of skipping it.
+ *
+ * Pages STREAM to `onPage` and are then dropped; only wrap ids are retained,
+ * for the cross-page dedupe. Plane depth is attacker-controlled (any member
+ * holds the key that mints wraps), so a deep plane must cost bandwidth and
+ * time, never heap — accumulating it here is how a flood becomes an OOM
+ * instead of a slow sync. Returns the distinct wrap count.
  */
 async function fetchCompleteScope(
   nostr: NostrLike,
   url: string,
   filter: NostrFilter,
   first: NostrEvent[],
+  onPage: (page: NostrEvent[]) => Promise<void>,
   onTruncated?: () => void,
-): Promise<NostrEvent[]> {
-  const byId = new Map(first.map((e) => [e.id, e] as const));
-  let lastBatch = first;
-  for (let hops = 0; lastBatch.length >= paging.pageLimit; hops++) {
-    if (hops >= paging.maxPages) {
+  exhaustive = false,
+): Promise<number> {
+  const seen = new Set(first.map((e) => e.id));
+  let oldest = Math.min(...first.map((e) => e.created_at));
+  await onPage(first);
+  let lastPage = first.length;
+  for (let hops = 0; lastPage >= paging.pageLimit; hops++) {
+    if (!exhaustive && hops >= paging.maxPages) {
       // No silent caps: a plane this deep exceeds the pager's budget.
       logSync("sweep", `complete-scope pager hit ${paging.maxPages} pages on ${url} — older events left behind this round`);
       onTruncated?.();
       break;
     }
-    const until = Math.min(...[...byId.values()].map((e) => e.created_at));
-    const older = await nostr.relay(url).query([{ ...filter, until }], {
+    const older = await nostr.relay(url).query([{ ...filter, until: oldest }], {
       signal: AbortSignal.timeout(15_000),
     });
-    const fresh = older.filter((e) => !byId.has(e.id));
-    for (const e of fresh) byId.set(e.id, e);
-    // A full page of pure overlap is a same-second wall thicker than the
-    // limit — no `until` can get past it, so stop rather than spin.
-    if (fresh.length === 0) break;
-    lastBatch = older;
+    const fresh = older.filter((e) => !seen.has(e.id));
+    if (fresh.length === 0) {
+      // Nothing new behind the boundary. A SHORT page means the relay is
+      // simply exhausted; a FULL one means a same-second wall thicker than the
+      // limit, which no `until` can step past — so everything older than it
+      // stays unreachable and this sweep is truncated like any other.
+      if (older.length >= paging.pageLimit) {
+        logSync("sweep", `complete-scope hit a same-second wall on ${url} — older events unreachable this round`);
+        onTruncated?.();
+      }
+      break;
+    }
+    for (const e of fresh) seen.add(e.id);
+    oldest = Math.min(oldest, ...fresh.map((e) => e.created_at));
+    await onPage(fresh);
+    lastPage = older.length;
   }
-  return [...byId.values()];
+  return seen.size;
 }
 
 /**
@@ -393,47 +428,65 @@ async function runScopes(
         if (i !== undefined) perScope[i].push(ev);
       }
 
-      // A complete scope whose first page filled up may have older history
-      // behind the limit — page it in before deciding what's fresh.
+      const freshPerScope: OpenedEvent[][] = scopes.map(() => []);
+      const totals: number[] = scopes.map((_, i) => perScope[i].length);
+
+      // A complete scope STREAMS: decrypt (time-sliced — a cold plane is
+      // thousands of synchronous EC ops), store and memo each page, then drop
+      // it. The folds read the opened-event store, not this sweep's result, so
+      // no page needs to outlive its own iteration.
       for (const [i, s] of scopes.entries()) {
         if (!s.complete) continue;
         truncatedScopes.delete(s.scope);
-        if (perScope[i].length >= paging.pageLimit) {
-          perScope[i] = await fetchCompleteScope(nostr, url, filters[i], perScope[i], () => {
+        const ingest = async (page: NostrEvent[]) => {
+          // Narrow by the memo BEFORE advancing it, or nothing ever decrypts.
+          const opened = await openPlaneWrapsChunked(
+            page.filter((w) => !seenCompleteWraps.has(w.id)),
+            s.groups,
+          );
+          if (opened.length > 0) {
+            await writeOpened(opened);
+            for (const e of opened) freshPerScope[i].push(e);
+          }
+          // Only the memo advances, and only once the rumors are durably
+          // stored — every sweep re-asks for the whole plane, so nothing
+          // received can ever become unreachable.
+          notePlaneWrapsSeen(page.map((w) => w.id));
+        };
+        totals[i] = await fetchCompleteScope(
+          nostr,
+          url,
+          filters[i],
+          perScope[i],
+          ingest,
+          () => {
             truncatedScopes.add(s.scope);
             s.onTruncated?.();
-          });
-        }
+          },
+          s.exhaustive,
+        );
+        perScope[i] = [];
       }
 
-      // Decrypt everything new (time-sliced — a cold plane is thousands of
-      // synchronous EC ops), then ONE store write and parallel cursor
-      // advances. A complete scope narrows to wraps not yet processed (the
-      // persisted memo); a forward scope's `since` already did that narrowing.
-      const freshPerScope: OpenedEvent[][] = [];
+      // Forward scopes stay one batch — their `since` already narrowed them —
+      // then ONE store write and parallel cursor advances.
+      const forwardFresh: OpenedEvent[] = [];
       for (const [i, s] of scopes.entries()) {
-        freshPerScope.push(
-          await openPlaneWrapsChunked(
-            s.complete ? perScope[i].filter((w) => !seenCompleteWraps.has(w.id)) : perScope[i],
-            s.groups,
-          ),
-        );
+        if (s.complete) continue;
+        for (const e of await openPlaneWrapsChunked(perScope[i], s.groups)) {
+          freshPerScope[i].push(e);
+          forwardFresh.push(e);
+        }
       }
-      const allFresh = freshPerScope.flat();
-      if (allFresh.length > 0) await writeOpened(allFresh);
+      if (forwardFresh.length > 0) await writeOpened(forwardFresh);
       await Promise.all(
         scopes.map((s, i) => {
-          const mine = perScope[i];
           logSync(
             "sweep",
-            `${s.scope} → ${mine.length} event(s), ${freshPerScope[i].length} new in ${sinceMs(started)} (${s.complete ? "full" : `since=${cursors[i]?.newest ?? "∅"}`}, authors×${s.groups.length})`,
+            `${s.scope} → ${totals[i]} event(s), ${freshPerScope[i].length} new in ${sinceMs(started)} (${s.complete ? "full" : `since=${cursors[i]?.newest ?? "∅"}`}, authors×${s.groups.length})`,
           );
-          if (s.complete) {
-            // Only the memo advances — every sweep re-asks for the whole
-            // plane, so nothing received can ever become unreachable.
-            notePlaneWrapsSeen(mine.map((w) => w.id));
-            return undefined;
-          }
+          if (s.complete) return undefined; // memoed per page above
+          const mine = perScope[i];
           if (mine.length === 0) return undefined;
           return updateStreamCursor(s.scope, { newest: Math.max(...mine.map((e) => e.created_at)) });
         }),
@@ -546,13 +599,21 @@ async function sweepCommunityPlane(
   return mergeOpened(...results.map((m) => [...m.values()].flat()));
 }
 
-/** Sweep one community's Control Plane (editions across held epochs). */
+/**
+ * Sweep one community's Control Plane (editions across held epochs).
+ * `exhaustive` pages to the end of the plane however deep it is — for the
+ * Refounding path, which may only compact what it has read whole.
+ */
 export function sweepControl(
   nostr: NostrLike,
   community: CommunityV2,
-  opts?: { onFresh?: (fresh: OpenedEvent[]) => void },
+  opts?: { onFresh?: (fresh: OpenedEvent[]) => void; exhaustive?: boolean },
 ): Promise<OpenedEvent[]> {
-  return sweepCommunityPlane(nostr, community, controlScope, opts);
+  const scopeOf: typeof controlScope = (c, url, onFresh) => ({
+    ...controlScope(c, url, onFresh),
+    exhaustive: opts?.exhaustive,
+  });
+  return sweepCommunityPlane(nostr, community, scopeOf, opts);
 }
 
 /** Sweep one community's Guestbook Plane (membership motions). */
