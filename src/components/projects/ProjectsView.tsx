@@ -404,7 +404,7 @@ function RepoCard({ repo, summary, people, selected, onOpen }: {
   return (
     <Card
       className={cn(
-        "relative flex min-h-44 flex-col overflow-hidden border-border/60 bg-card shadow-none transition-colors",
+        "relative flex min-h-44 flex-col overflow-hidden clip-corner-lg border-0 bg-card shadow-none transition-colors",
         onOpen && "hover:bg-foreground/[0.02]",
         selected && "ring-1 ring-primary/60",
       )}
@@ -577,7 +577,7 @@ function StatPill({ count, icon: Icon, label, onClick }: {
     <Comp
       {...(onClick ? { type: "button" as const, onClick } : {})}
       className={cn(
-        "flex flex-col clip-corner-lg border border-border/60 bg-card px-3.5 py-3 text-left",
+        "flex flex-col clip-corner-lg bg-card px-3.5 py-3 text-left",
         onClick && "transition-colors hover:bg-foreground/[0.03]",
       )}
     >
@@ -629,7 +629,7 @@ function Overview({
         <section className="min-w-0 space-y-3">
           <h3 className="text-base font-semibold text-foreground">Recent activity</h3>
           {feed.length > 0 ? (
-            <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
+            <div className="clip-corner-lg bg-card divide-y divide-border/60">
               {feed.map((item) => (
                 <WorkItemRow
                   key={item.id}
@@ -883,7 +883,7 @@ export function ProjectsView({
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">{intro}</p>
+        <p className="text-xs text-muted-foreground sm:text-sm">{intro}</p>
         {headerExtra}
       </div>
 
@@ -987,7 +987,7 @@ export function ProjectsView({
               ))}
             </div>
           ) : (
-            <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
+            <div className="clip-corner-lg bg-card divide-y divide-border/60">
               {visibleRepos.map((repo) => (
                 <RepoRow
                   key={repo.coord}
@@ -1002,7 +1002,7 @@ export function ProjectsView({
           )
         ) : filter === "prs" ? (
           filteredPrs.length > 0 ? (
-            <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
+            <div className="clip-corner-lg bg-card divide-y divide-border/60">
               {filteredPrs.map((item) => (
                 <WorkItemRow
                   key={item.id}
@@ -1019,7 +1019,7 @@ export function ProjectsView({
             <EmptyState icon={GitPullRequest} title="No pull requests" hint="Patches and PRs opened on this workspace will appear here." />
           )
         ) : filteredIssues.length > 0 ? (
-          <div className="clip-corner-lg border border-border/60 bg-card divide-y divide-border/60">
+          <div className="clip-corner-lg bg-card divide-y divide-border/60">
             {filteredIssues.map((item) => (
               <WorkItemRow
                 key={item.id}

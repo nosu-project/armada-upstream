@@ -175,8 +175,8 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
             grid. Added packs offer a one-tap remove instead of a dead "Added". */}
         {isAdded ? (
           <Button
-            variant="outline"
-            className="mt-auto w-full clip-corner-lg hover:border-destructive/50 hover:text-destructive"
+            variant="ghost"
+            className="mt-auto w-full clip-corner-lg hover:text-destructive"
             onClick={onRemove}
             disabled={isRemoving}
           >
