@@ -1841,7 +1841,11 @@ export function DMsPage() {
             loadMore={loadMore}
             hasMore={hasMore}
             isLoadingMore={isLoadingMore}
-            className="flex-1 sidebar:flex-none sidebar:w-60"
+            // Wider than a community's ChannelSidebarView (w-60): a channel row
+            // is one short "# name", but a conversation row carries an avatar,
+            // a display name and a message preview that truncates hard at 240px.
+            // Steps up again once the viewport can spare it.
+            className="flex-1 sidebar:flex-none sidebar:w-72 xl:w-80"
           />
         </>
       }
