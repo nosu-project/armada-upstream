@@ -14,6 +14,8 @@ interface ImportMetaEnv {
   readonly VITE_DEFAULT_AUTO_GAIN_CONTROL?: string;
   readonly VITE_DEFAULT_RNNOISE?: string;
   readonly VITE_SANDBOX_DOMAIN?: string;
+  /** Generic link-preview proxy template, `{url}` = encoded target. Empty = generic previews disabled. */
+  readonly VITE_LINK_PREVIEW_ENDPOINT?: string;
   /** Plausible site domain (e.g. "armada.buzz"). Empty/unset = analytics disabled. */
   readonly VITE_PLAUSIBLE_DOMAIN?: string;
   /** Plausible API endpoint (self-hosted instance or proxy). Empty/unset = Plausible Cloud default. */

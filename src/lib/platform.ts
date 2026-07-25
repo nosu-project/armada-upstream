@@ -253,6 +253,36 @@ export const DEFAULT_RNNOISE: boolean = envBool(import.meta.env.VITE_DEFAULT_RNN
 export const SANDBOX_DOMAIN: string = import.meta.env.VITE_SANDBOX_DOMAIN || "iframe.diy";
 
 /**
+ * Generic link-preview (OEmbed) proxy, for URLs whose host has no native OEmbed
+ * endpoint of its own.
+ *
+ * Unfurling runs in the browser, so whatever this points at sees every link URL
+ * a user's client renders a preview for. It defaults to the public `ditto.pub`
+ * proxy; operators who would rather not route their users' link traffic through
+ * a third party can point it at their own unfurler, or set it empty to turn
+ * generic previews off entirely. Empty does not disable previews for
+ * YouTube/Spotify/Reddit — those are fetched from the provider's own OEmbed
+ * endpoint, which the browser contacts directly either way.
+ *
+ * The value is a template: a literal `{url}` is replaced with the
+ * percent-encoded target URL. Without a `{url}` placeholder the encoded URL is
+ * appended instead, so both `https://example.com/api/link-preview/` and
+ * `https://example.com/oembed?url=` work as written.
+ */
+export const LINK_PREVIEW_ENDPOINT: string = (
+  import.meta.env.VITE_LINK_PREVIEW_ENDPOINT ?? "https://ditto.pub/api/link-preview/{url}"
+).trim();
+
+/** Build the proxy request URL for a link preview, or null if no proxy is configured. */
+export function linkPreviewUrl(url: string): string | null {
+  if (!LINK_PREVIEW_ENDPOINT) return null;
+  const encoded = encodeURIComponent(url);
+  return LINK_PREVIEW_ENDPOINT.includes("{url}")
+    ? LINK_PREVIEW_ENDPOINT.replaceAll("{url}", encoded)
+    : `${LINK_PREVIEW_ENDPOINT}${encoded}`;
+}
+
+/**
  * Privacy-friendly analytics (Plausible), configured at build time.
  *
  * OFF by default: like `VITE_PLATFORM_RELAYS`, analytics is deployment

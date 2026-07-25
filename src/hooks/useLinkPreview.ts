@@ -1,8 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
-/** Generic link-preview proxy (OEmbed-shaped responses). */
-const LINK_PREVIEW_TEMPLATE = "https://ditto.pub/api/link-preview/{url}";
+import { linkPreviewUrl } from "@/lib/platform";
 
 /** Zod schema for OEmbed responses from the link preview endpoint. */
 const OEmbedSchema = z.object({
@@ -79,13 +78,15 @@ async function tryFetchOEmbed(endpoint: string, signal?: AbortSignal): Promise<O
 /**
  * Fetch OEmbed data for a URL. Known providers (YouTube, Spotify, Reddit) are
  * queried at their native endpoints; everything else goes through the generic
- * link preview proxy.
+ * link preview proxy, which the build may leave unconfigured.
  */
 async function fetchLinkPreview(url: string, signal?: AbortSignal): Promise<OEmbedData | null> {
   const native = await tryNativeOEmbed(url, signal);
   if (native) return native;
 
-  const endpoint = LINK_PREVIEW_TEMPLATE.replace("{url}", encodeURIComponent(url));
+  const endpoint = linkPreviewUrl(url);
+  if (!endpoint) return null;
+
   return tryFetchOEmbed(endpoint, signal);
 }
 
