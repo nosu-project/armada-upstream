@@ -8,7 +8,10 @@ import type { ProjectRepo, ProjectWorkItem } from "@/components/projects/project
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("@/hooks/useAuthor", () => ({ useAuthor: () => ({ data: undefined }) }));
-vi.mock("@/hooks/useScopedDisplayName", () => ({ useScopedDisplayName: () => "someone" }));
+vi.mock("@/hooks/useScopedDisplayName", () => ({
+  useScopedDisplayName: () => "someone",
+  useScopedIdentity: () => ({ displayName: "someone", color: undefined, label: undefined }),
+}));
 vi.mock("@/hooks/useToast", () => ({ toast: vi.fn() }));
 vi.mock("@/lib/clipboard", () => ({ writeClipboardText: () => Promise.resolve() }));
 
