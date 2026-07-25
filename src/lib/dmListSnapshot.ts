@@ -42,8 +42,20 @@ export interface DmListSnapshotRow {
   author: string;
   /** Decrypted preview text, when it was available at write time. */
   preview?: string;
+  /**
+   * The latest message's NIP-30 `emoji` tags, so a restored preview renders
+   * custom emoji as images on the first frame. Only `emoji` tags are kept —
+   * the rest (`p`, `e`, …) are irrelevant to rendering and would bloat this.
+   */
+  emojiTags?: string[][];
   /** The viewer has authored at least one message in this conversation. */
   mine: boolean;
+}
+
+/** Pick just the NIP-30 emoji tags out of a message's tags, or undefined. */
+export function pickEmojiTags(tags: readonly string[][] | undefined): string[][] | undefined {
+  const picked = (tags ?? []).filter((t) => t[0] === "emoji" && t[1] && t[2]);
+  return picked.length > 0 ? picked : undefined;
 }
 
 function isRow(value: unknown): value is DmListSnapshotRow {
@@ -54,7 +66,10 @@ function isRow(value: unknown): value is DmListSnapshotRow {
     typeof r.createdAt === "number" &&
     typeof r.author === "string" &&
     typeof r.mine === "boolean" &&
-    (r.preview === undefined || typeof r.preview === "string")
+    (r.preview === undefined || typeof r.preview === "string") &&
+    (r.emojiTags === undefined ||
+      (Array.isArray(r.emojiTags) &&
+        r.emojiTags.every((t) => Array.isArray(t) && t.every((s) => typeof s === "string"))))
   );
 }
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  pickEmojiTags,
   readDmListSnapshot,
   writeDmListSnapshot,
   type DmListSnapshotRow,
@@ -60,6 +61,48 @@ describe("dmListSnapshot", () => {
     writeDmListSnapshot(SELF, rows(3));
     writeDmListSnapshot(SELF, []);
     expect(readDmListSnapshot(SELF)).toBeUndefined();
+  });
+
+  it("round-trips emoji tags so a restored preview renders custom emoji", () => {
+    const list: DmListSnapshotRow[] = [
+      {
+        peer: "p1",
+        createdAt: 10,
+        author: "p1",
+        preview: "nice :blobwave:",
+        emojiTags: [["emoji", "blobwave", "https://example.com/blobwave.png"]],
+        mine: false,
+      },
+    ];
+    writeDmListSnapshot(SELF, list);
+    expect(readDmListSnapshot(SELF)).toEqual(list);
+  });
+
+  it("rejects a row whose emoji tags are malformed", () => {
+    localStorage.setItem(
+      `armada:dmlist:v1:${SELF}`,
+      JSON.stringify([{ peer: "p1", createdAt: 1, author: "p1", mine: false, emojiTags: "nope" }]),
+    );
+    expect(readDmListSnapshot(SELF)).toBeUndefined();
+  });
+
+  describe("pickEmojiTags", () => {
+    it("keeps only complete emoji tags", () => {
+      expect(
+        pickEmojiTags([
+          ["p", "somepubkey"],
+          ["emoji", "blobwave", "https://example.com/a.png"],
+          ["emoji", "incomplete"],
+          ["e", "someid"],
+        ]),
+      ).toEqual([["emoji", "blobwave", "https://example.com/a.png"]]);
+    });
+
+    it("is undefined when there are none, so the field is omitted", () => {
+      expect(pickEmojiTags([["p", "somepubkey"]])).toBeUndefined();
+      expect(pickEmojiTags([])).toBeUndefined();
+      expect(pickEmojiTags(undefined)).toBeUndefined();
+    });
   });
 
   it("rejects corrupt storage instead of throwing on the render path", () => {

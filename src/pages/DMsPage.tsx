@@ -1,6 +1,6 @@
 import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Plus, Search, ShieldCheck, Sparkles, UserCheck, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
@@ -73,7 +73,9 @@ import { deriveDmRoomId } from "@/lib/dmVoice";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
-import { readDmListSnapshot, writeDmListSnapshot } from "@/lib/dmListSnapshot";
+import { pickEmojiTags, readDmListSnapshot, writeDmListSnapshot } from "@/lib/dmListSnapshot";
+import { buildEmojiMap } from "@/lib/customEmoji";
+import { emojify } from "@/components/chat/emojify";
 import { DM_VOICE_RELAYS, PLATFORM_RELAYS } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
@@ -95,10 +97,28 @@ function resolvePubkey(input: string): string | undefined {
   return undefined;
 }
 
-/** Highlight every case-insensitive occurrence of `query` within `text`. */
-function Highlight({ text, query }: { text: string; query: string }) {
+/**
+ * Highlight every case-insensitive occurrence of `query` within `text`, with
+ * NIP-30 custom emoji rendered as inline images.
+ *
+ * `emojiTags` are the source message's own `emoji` tags, so resolution is
+ * self-contained — no emoji-pack lookup, no network. A shortcode with no
+ * matching tag is left as literal text (see `emojify`), which is what kind-4
+ * previews get: that plane carries no emoji tags.
+ */
+function Highlight({
+  text,
+  query,
+  emojiTags,
+}: {
+  text: string;
+  query: string;
+  emojiTags?: string[][];
+}) {
+  const emojiMap = buildEmojiMap(emojiTags ?? []);
+  const render = (s: string) => (emojiMap.size > 0 ? emojify(s, emojiMap) : s);
   const q = query.trim();
-  if (!q) return <>{text}</>;
+  if (!q) return <>{render(text)}</>;
   // Split on the query (case-insensitive), keeping the delimiters so the
   // matched runs can be wrapped. Escape regex metacharacters in the query.
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -108,10 +128,10 @@ function Highlight({ text, query }: { text: string; query: string }) {
       {parts.map((part, i) =>
         part.toLowerCase() === q.toLowerCase() ? (
           <mark key={i} className="rounded-[2px] bg-primary/30 text-inherit">
-            {part}
+            {render(part)}
           </mark>
         ) : (
-          part
+          <Fragment key={i}>{render(part)}</Fragment>
         ),
       )}
     </>
@@ -204,7 +224,11 @@ function ConversationRow({
         {(preview || secondLine) && (
           <div className={cn("text-sm truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
             {secondLine ? (
-              <Highlight text={secondLine} query={secondLineHighlight ? query : ""} />
+              <Highlight
+                text={secondLine}
+                query={secondLineHighlight ? query : ""}
+                emojiTags={preview?.tags}
+              />
             ) : (
               "Encrypted message"
             )}
@@ -1722,7 +1746,10 @@ export function DMsPage() {
         created_at: r.createdAt,
         kind: 4,
         content: "",
-        tags: [],
+        // Emoji tags only — enough for the preview line to render custom emoji
+        // on the first frame, so a restored row doesn't swap a raw shortcode
+        // for an image when the live rows land.
+        tags: r.emojiTags ?? [],
         sig: "",
       } as NostrEvent,
       plaintext: r.preview,
@@ -1761,6 +1788,7 @@ export function DMsPage() {
             createdAt: c.latest.created_at,
             author: c.latest.pubkey,
             preview: c.plaintext ?? previews[c.peer],
+            emojiTags: pickEmojiTags(c.latest.tags),
             mine: c.mine,
           })),
       );
