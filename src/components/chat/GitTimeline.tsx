@@ -1,4 +1,4 @@
-import { Braces, CheckCircle2, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, Trash2, X, XCircle } from "lucide-react";
+import { Braces, CheckCircle2, ChevronDown, ChevronRight, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, ScrollText, Trash2, X, XCircle } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useMemo, useRef, useState } from "react";
 
@@ -18,7 +18,7 @@ import { useGitAttachmentUploads } from "@/hooks/useGitAttachmentUploads";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
-import { ciRunOutcome, ciWorkflowName } from "@/lib/ci";
+import { ciRunOutcome, ciWorkflowName, type CIRunJob } from "@/lib/ci";
 import { shortTimeAgo } from "@/lib/formatTime";
 import {
   GIT_ISSUE_KIND,
@@ -159,27 +159,105 @@ function ciOutcomePresentation(outcome: string): { Icon: typeof CheckCircle2; to
  * publisher trust to the client and nothing on-relay binds a coordinator to a
  * repository, so this row reports a claim rather than a verified fact.
  */
-function CIRunRow({ activity, members }: { activity: Extract<GitTimelineActivity, { type: "ci-run" }>; members: ReadonlySet<string> }) {
-  const { run } = activity;
-  const { Icon, tone, label } = ciOutcomePresentation(ciRunOutcome(run));
-  const logs = run.jobs.find((job) => job.result?.logs)?.result?.logs;
+/** Never render an unbounded log body into the timeline. */
+const CI_LOG_MAX_BYTES = 512 * 1024;
+
+/**
+ * One job's log, fetched on demand from Blossom and rendered inline.
+ *
+ * The fetch is deferred to first expand: a channel can hold many runs and each
+ * log is an arbitrary-size blob on a third-party host. The Job Result's own
+ * `content` tail renders immediately as a preview, so an unreachable Blossom
+ * server still leaves something readable rather than an empty block.
+ */
+function CIJobLog({ job }: { job: CIRunJob }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  const url = job.result?.logs;
+  const tail = job.result?.event.content?.trim() || undefined;
+
+  const toggle = useCallback(async () => {
+    const next = !open;
+    setOpen(next);
+    if (!next || text !== undefined || loading || !url) return;
+    if (!/^https:\/\//i.test(url)) {
+      setError("Log URL is not https.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`${response.status}`);
+      const body = await response.text();
+      setText(body.length > CI_LOG_MAX_BYTES ? `${body.slice(0, CI_LOG_MAX_BYTES)}\n…truncated` : body);
+    } catch (e) {
+      setError(e instanceof Error ? `Couldn't load the log (${e.message}).` : "Couldn't load the log.");
+    } finally {
+      setLoading(false);
+    }
+  }, [open, text, loading, url]);
+
+  const body = text ?? (error ? tail : undefined);
   return (
-    <div className="my-3 px-2.5">
-      <div className="flex w-full items-center gap-2 rounded-md border border-border bg-secondary/30 px-3 py-2 text-left text-xs">
-        <Icon className={`size-3.5 shrink-0 ${tone}${ciRunOutcome(run) === "in_progress" ? " animate-spin" : ""}`} />
-        <p className="min-w-0 flex-1 truncate">
-          <span className="font-medium">{ciWorkflowName(run)}</span>
-          <span className="text-muted-foreground"> {label}</span>
-          {run.commit && <span className="text-muted-foreground"> on <span className="font-mono">{run.commit.slice(0, 7)}</span></span>}
-          {run.trigger && <span className="text-muted-foreground"> · {run.trigger}</span>}
-          <span className="text-muted-foreground"> · reported by </span>
-          <ActorName pubkey={run.author} members={members} />
-        </p>
-        {logs && (
-          <a href={logs} target="_blank" rel="noreferrer" className="shrink-0 text-primary hover:underline" onClick={(e) => e.stopPropagation()}>
-            logs
+    <div className="mt-1.5">
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={toggle} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+          {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+          <ScrollText className="size-3" />
+          <span>{job.result?.name || job.job}</span>
+          {loading && <Loader2 className="size-3 animate-spin" />}
+        </button>
+        {url && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            title="Open the full log"
+            aria-label="Open the full log"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <ExternalLink className="size-3" />
           </a>
         )}
+      </div>
+      {open && (
+        <>
+          {error && <p className="mt-1 text-[11px] text-destructive">{error}</p>}
+          {body ? (
+            <pre className="mt-1 max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-2 text-[11px] leading-relaxed">
+              <code className="font-mono whitespace-pre">{body}</code>
+            </pre>
+          ) : (
+            !loading && !error && <p className="mt-1 text-[11px] text-muted-foreground">No log output.</p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CIRunRow({ activity, members }: { activity: Extract<GitTimelineActivity, { type: "ci-run" }>; members: ReadonlySet<string> }) {
+  const { run } = activity;
+  const outcome = ciRunOutcome(run);
+  const { Icon, tone, label } = ciOutcomePresentation(outcome);
+  const logged = run.jobs.filter((job) => job.result?.logs || job.result?.event.content?.trim());
+  return (
+    <div className="my-3 px-2.5">
+      <div className="w-full rounded-md border border-border bg-secondary/30 px-3 py-2 text-left text-xs">
+        <div className="flex items-center gap-2">
+          <Icon className={`size-3.5 shrink-0 ${tone}${outcome === "in_progress" ? " animate-spin" : ""}`} />
+          <p className="min-w-0 flex-1 truncate">
+            <span className="font-medium">{ciWorkflowName(run)}</span>
+            <span className="text-muted-foreground"> {label}</span>
+            {run.commit && <span className="text-muted-foreground"> on <span className="font-mono">{run.commit.slice(0, 7)}</span></span>}
+            {run.trigger && <span className="text-muted-foreground"> · {run.trigger}</span>}
+            <span className="text-muted-foreground"> · reported by </span>
+            <ActorName pubkey={run.author} members={members} />
+          </p>
+        </div>
+        {logged.map((job) => <CIJobLog key={job.eventId} job={job} />)}
       </div>
     </div>
   );
