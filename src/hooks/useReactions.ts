@@ -102,6 +102,15 @@ function tallyReactions(reactions: NostrEvent[], userPubkey: string | undefined)
 /** Shared empty tally array so a message with no reactions keeps a stable prop. */
 const EMPTY_TALLIES: ReactionTally[] = [];
 
+/**
+ * How long a reaction is trusted from the query cache alone before the
+ * IndexedDB mirror becomes authoritative for it. Live-subscription events are
+ * mirrored to the store best-effort and asynchronously, so a just-arrived
+ * reaction is legitimately missing from a store read; a minute later, missing
+ * means deleted.
+ */
+const MIRROR_GRACE_SECONDS = 60;
+
 function reactionsKey(relayUrl: string | undefined, groupId: string | undefined) {
   return ["nip29", "reactions", relayUrl, groupId] as const;
 }
@@ -180,7 +189,29 @@ export function useGroupReactions(
         }
       })();
 
-      return groupReactionsByTarget(cached);
+      // Union the store read with what's already cached, but let the store
+      // PRUNE anything settled. Returning the store read alone discarded every
+      // reaction merged in since the last run — the live subscription's and the
+      // background refresh's — so each `onSuccess` invalidation below removed
+      // pills that reappeared a moment later when the refresh resolved. A plain
+      // union would fix the flicker but resurrect deleted reactions, since the
+      // store self-applies NIP-09 and a delete shows up only as an ABSENCE
+      // here. So: a reaction older than the mirror grace has had time to reach
+      // IndexedDB, and its absence there means deleted; a fresher one may
+      // simply not be mirrored yet, so it's kept.
+      const prev = queryClient.getQueryData<Map<string, NostrEvent[]>>(queryKey);
+      const settledBefore = Math.floor(Date.now() / 1000) - MIRROR_GRACE_SECONDS;
+      const unmirrored: NostrEvent[] = [];
+      if (prev) {
+        const cachedIds = new Set(cached.map((e) => e.id));
+        for (const list of prev.values()) {
+          for (const e of list) {
+            if (cachedIds.has(e.id) || e.created_at < settledBefore) continue;
+            unmirrored.push(e);
+          }
+        }
+      }
+      return mergeReactions(groupReactionsByTarget(cached), unmirrored);
     },
     enabled: Boolean(relayUrl && groupId) && Boolean(idsSig),
     staleTime: 15_000,
@@ -215,6 +246,21 @@ export function useGroupReactions(
   }, [nostr, relayUrl, groupId, idsSig, queryClient]);
 
   const react = useMutation({
+    // Removing a reaction has to drop it from the cache up front: the queryFn's
+    // grace window would otherwise hold a just-added reaction on screen for the
+    // whole window, since a NIP-09 delete registers only as an absence.
+    onMutate: ({ mineEventId }: { target: NostrEvent } & ReactInput) => {
+      if (!mineEventId) return;
+      queryClient.setQueryData<Map<string, NostrEvent[]>>(queryKey, (old) => {
+        if (!old) return old;
+        const next = new Map<string, NostrEvent[]>();
+        for (const [target, list] of old) {
+          const kept = list.filter((e) => e.id !== mineEventId);
+          if (kept.length > 0) next.set(target, kept);
+        }
+        return next;
+      });
+    },
     mutationFn: async ({ target, content, emojiUrl, mineEventId }: { target: NostrEvent } & ReactInput) => {
       if (mineEventId) {
         // Removing: publish a NIP-09 kind-5 deletion of the user's prior
