@@ -5,11 +5,26 @@ import { useMemo } from "react";
 import { useBuzzEmojiPalette } from "@/buzz/useBuzzEmojiPalette";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { parseAddr } from "@/lib/parseAddr";
+
+import type { NostrEvent } from "@nostrify/nostrify";
 
 export interface CustomEmoji {
   shortcode: string;
   url: string;
+}
+
+/** Newest event per addressable coordinate (`kind:pubkey:d`), first-seen order. */
+function newestPerAddr(events: NostrEvent[]): NostrEvent[] {
+  const newest = new Map<string, NostrEvent>();
+  for (const event of events) {
+    const identifier = event.tags.find(([name]) => name === "d")?.[1] ?? "";
+    const addr = `${event.kind}:${event.pubkey}:${identifier}`;
+    const prev = newest.get(addr);
+    if (!prev || event.created_at > prev.created_at) newest.set(addr, event);
+  }
+  return [...newest.values()];
 }
 
 /**
@@ -23,20 +38,37 @@ export interface CustomEmoji {
 export function useCustomEmojis() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const eventStore = useEventStore();
 
   const query = useQuery({
     queryKey: ["custom-emojis", user?.pubkey ?? ""],
     queryFn: async ({ signal }) => {
       if (!user) return [];
 
-      const listEvents = await nostr.query(
-        [{ kinds: [10030], authors: [user.pubkey], limit: 1 }],
-        { signal },
-      );
+      const store = await eventStore;
 
-      if (listEvents.length === 0) return [];
+      // Relay ∪ local store, newest wins — same shape as the pack reads below.
+      // An empty relay result is almost always transient rather than a real
+      // empty list (the batcher merges replaceable kinds into one REQ and
+      // resolves at the first EOSE, so a slow relay holding the 10030 can be
+      // raced out; a cold pool or AUTH does the same), and this query is
+      // invalidated on every incoming 10030 by NostrSync, so returning []
+      // here overwrites a good list with an empty one. Merging (rather than
+      // falling back on a miss) also stops a stale relay copy from beating a
+      // newer cached one.
+      const [relayList, cachedList] = await Promise.all([
+        nostr.query(
+          [{ kinds: [10030], authors: [user.pubkey], limit: 1 }],
+          { signal },
+        ),
+        store.query([{ kinds: [10030], authors: [user.pubkey] }])
+          .catch(() => [] as NostrEvent[]),
+      ]);
 
-      const listEvent = listEvents[0];
+      const listEvent = [...relayList, ...cachedList]
+        .sort((a, b) => b.created_at - a.created_at)[0];
+
+      if (!listEvent) return [];
 
       // Collect all emojis with their source pack identifier so we can
       // detect shortcode collisions across packs and prefix them.
@@ -72,18 +104,22 @@ export function useCustomEmojis() {
           limit: 1,
         }));
 
-        try {
-          const packEvents = await nostr.query(filters, { signal });
-          for (const packEvent of packEvents) {
-            const packId = packEvent.tags.find(([n]) => n === "d")?.[1] ?? "";
-            for (const tag of packEvent.tags) {
-              if (tag[0] === "emoji" && tag[1] && tag[2]) {
-                raw.push({ shortcode: tag[1], url: tag[2], packId });
-              }
+        // Relay ∪ local store, newest per pack. Most users' emojis live behind
+        // these `a` refs rather than inline tags (adding a pack writes an `a`
+        // tag), so a partial or failed pack read empties the list even when the
+        // 10030 above resolved fine. The store floor makes a miss non-destructive.
+        const [relayPacks, cachedPacks] = await Promise.all([
+          nostr.query(filters, { signal }).catch(() => [] as NostrEvent[]),
+          store.query(filters).catch(() => [] as NostrEvent[]),
+        ]);
+
+        for (const packEvent of newestPerAddr([...relayPacks, ...cachedPacks])) {
+          const packId = packEvent.tags.find(([n]) => n === "d")?.[1] ?? "";
+          for (const tag of packEvent.tags) {
+            if (tag[0] === "emoji" && tag[1] && tag[2]) {
+              raw.push({ shortcode: tag[1], url: tag[2], packId });
             }
           }
-        } catch {
-          // Timeout or relay error — return what we have from inline tags
         }
       }
 

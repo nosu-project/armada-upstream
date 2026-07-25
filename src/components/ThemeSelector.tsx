@@ -1,4 +1,4 @@
-import { Check, Palette } from "lucide-react";
+import { Check, Loader2, Palette, Share2 } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -6,8 +6,12 @@ import { ColorPicker } from "@/components/ui/color-picker";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useTheme } from "@/hooks/useTheme";
 import { useUserThemes } from "@/hooks/useUserThemes";
+import { toast } from "@/hooks/useToast";
+import { buildThemeDefinitionEvent } from "@/lib/themeEvent";
 import { hexToHslString, hslStringToHex } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 import {
@@ -76,6 +80,8 @@ function ThemeTile({ label, emoji, colors, active, onClick }: TileProps) {
 export function ThemeSelector() {
   const { theme, customTheme, setTheme, applyCustomTheme } = useTheme();
   const { data: userThemes, isLoading: userThemesLoading } = useUserThemes();
+  const { user } = useCurrentUser();
+  const { mutateAsync: publishEvent, isPending: sharing } = useNostrPublish();
   const [builderOpen, setBuilderOpen] = useState(false);
 
   const presetKeys = Object.keys(themePresets);
@@ -91,6 +97,23 @@ export function ThemeSelector() {
   const isCustomBuild = theme === "custom" && !activePresetKey && !activeUserThemeId;
 
   const selectMode = (mode: Theme) => setTheme(mode);
+
+  const canShare = theme === "custom" && !!customTheme;
+  const shareTheme = async () => {
+    if (!customTheme) return;
+    try {
+      await publishEvent(
+        buildThemeDefinitionEvent(customTheme.title || "My theme", customTheme.colors),
+      );
+      toast({ title: "Theme shared", description: "It's now discoverable by others." });
+    } catch (e) {
+      toast({
+        title: "Couldn't share theme",
+        description: e instanceof Error ? e.message : "Publishing failed.",
+        variant: "destructive",
+      });
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -167,6 +190,18 @@ export function ThemeSelector() {
         <Palette className="size-4 mr-2" />
         {isCustomBuild ? "Edit custom theme" : "Create a custom theme"}
       </Button>
+
+      {user && canShare && (
+        <Button
+          variant="outline"
+          className="w-full clip-corner-lg"
+          onClick={shareTheme}
+          disabled={sharing}
+        >
+          {sharing ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Share2 className="size-4 mr-2" />}
+          Share to Discover
+        </Button>
+      )}
 
       <ThemeBuilderDialog
         open={builderOpen}

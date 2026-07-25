@@ -75,12 +75,12 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
   return (
     <div
       className={cn(
-        "block max-w-sm w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden my-1.5",
+        "flex flex-col max-w-sm w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden my-1.5",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="px-3.5 py-3 space-y-2.5">
+      <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
         {/* Header: pack name + author */}
         <div className="flex items-center gap-2 min-w-0">
           <Smile className="size-4 shrink-0 text-primary" />
@@ -127,15 +127,15 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
           <p className="text-xs text-muted-foreground">This pack has no emojis.</p>
         )}
 
-        {/* Add button */}
+        {/* Add button — pinned to the card bottom so cards align in a grid. */}
         {isAdded ? (
-          <Button variant="secondary" className="w-full clip-corner-lg" disabled>
+          <Button variant="secondary" className="mt-auto w-full clip-corner-lg" disabled>
             <Check className="size-4" />
             Added
           </Button>
         ) : (
           <Button
-            className="w-full clip-corner-lg"
+            className="mt-auto w-full clip-corner-lg"
             onClick={onAdd}
             disabled={isPending || entries.length === 0}
           >

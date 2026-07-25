@@ -32,6 +32,7 @@ import { lazyWithReload } from "@/lib/chunkReload";
 const AboutPage = lazy(lazyWithReload(() => import("@/pages/AboutPage").then((m) => ({ default: m.AboutPage }))));
 const ConcordPage = lazy(lazyWithReload(() => import("@/concord-v1/pages/ConcordPage").then((m) => ({ default: m.ConcordPage }))));
 const ConcordV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page }))));
+const DiscoverPage = lazy(lazyWithReload(() => import("@/pages/DiscoverPage").then((m) => ({ default: m.DiscoverPage }))));
 const DMsPage = lazy(lazyWithReload(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage }))));
 const GroupPage = lazy(lazyWithReload(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage }))));
 const InboxPage = lazy(lazyWithReload(() => import("@/pages/InboxPage").then((m) => ({ default: m.InboxPage }))));
@@ -292,6 +293,9 @@ export function AppRouter() {
             {/* Callback target baked into nostrconnect:// URIs — remote
                 signers redirect here after the user approves pairing. */}
             <Route path="/remoteloginsuccess" element={<RemoteLoginSuccessPage />} />
+            {/* Public browse/search directory — no auth (joining/adding prompts
+                sign-in at the point of action, like the invite landing). */}
+            <Route path="/discover" element={<DiscoverPage />} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
             <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
             <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />

@@ -27,7 +27,9 @@ import {
   type InviteList,
 } from "@/concord-v2/lib/invite";
 import { KIND_INVITE_LIST } from "@/concord-v2/lib/kinds";
+import { buildInviteAnnouncementNote } from "@/concord-v2/lib/inviteDiscovery";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord-v2/lib/inviteRelays";
+import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 import { shareOrigin } from "@/lib/shareOrigin";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
@@ -191,6 +193,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   const { data: folded } = useControlFold2(community);
   const inviteList = useInviteList2();
   const { mutateAsync: updateInviteList } = useUpdateInviteList2();
+  const { mutateAsync: publishEvent } = useNostrPublish();
   // The freshest membership snapshot from the live Community List vault. The
   // `community` prop is a memoized snapshot that can lag a just-adopted rekey
   // (staleTime/poll/render windows), and a bundle minted from a stale snapshot
@@ -272,8 +275,22 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     invalidateControl2(queryClient, community.idHex);
   };
 
-  const createLink = useMutation<string, Error, { expiresAtMs?: number; label?: string }>({
-    mutationFn: async ({ expiresAtMs, label }) => {
+  const createLink = useMutation<
+    string,
+    Error,
+    {
+      expiresAtMs?: number;
+      label?: string;
+      /**
+       * Opt-in: also announce this community in a PUBLIC note carrying the full
+       * shareable link (fragment included), so Discover — which mines notes for
+       * invite links — can find it. This deliberately trades the link's secrecy
+       * for discoverability; only ever set from an explicit user action.
+       */
+      listPublicly?: { description?: string; topics?: string[] };
+    }
+  >({
+    mutationFn: async ({ expiresAtMs, label, listPublicly }) => {
       if (!user || !community) throw new Error("Not ready.");
       if (!user.signer.nip44) throw new Error("This signer can't mint invite links (NIP-44 unsupported).");
 
@@ -328,6 +345,17 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
       mine.add(link.pk);
       await publishRegistry([...mine]);
+
+      // Opt-in public announcement note (best-effort — a failed post must not
+      // fail the mint; the link itself is already live).
+      if (listPublicly) {
+        const note = buildInviteAnnouncementNote({
+          inviteUrl: url,
+          description: listPublicly.description,
+          topics: listPublicly.topics,
+        });
+        if (note) await publishEvent(note).catch(() => undefined);
+      }
 
       return url;
     },
