@@ -10,8 +10,11 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  getFrequentReactions,
+  hydrateFrequentReactions,
   recordReaction,
   resetFrequentReactionsCache,
+  subscribeFrequentReactions,
   useFrequentReactions,
 } from "@/hooks/useFrequentReactions";
 
@@ -81,5 +84,56 @@ describe("useFrequentReactions", () => {
   it("ignores a signed-out user rather than writing a stray table", () => {
     act(() => recordReaction(undefined, "🔥"));
     expect(localStorage.length).toBe(0);
+  });
+});
+
+describe("useFrequentReactions — cross-device merge", () => {
+  it("takes the higher count per emoji rather than the remote's", () => {
+    act(() => {
+      recordReaction(SELF, "🔥");
+      recordReaction(SELF, "🔥");
+      recordReaction(SELF, "🔥");
+    });
+    // A device that has been offline since the first use must not reset it.
+    act(() => hydrateFrequentReactions(SELF, [{ key: "🔥", count: 1, usedAt: 1 }]));
+    const stored = getFrequentReactions(SELF);
+    expect(stored.find((e) => e.key === "🔥")?.count).toBe(3);
+  });
+
+  it("adopts emoji only the other device has used", () => {
+    act(() => recordReaction(SELF, "🔥"));
+    act(() =>
+      hydrateFrequentReactions(SELF, [
+        { key: ":cat:", url: "https://e/cat.png", count: 9, usedAt: 500 },
+      ]),
+    );
+    expect(keys()[0]).toBe(":cat:");
+    expect(getFrequentReactions(SELF).find((e) => e.key === ":cat:")?.url).toBe(
+      "https://e/cat.png",
+    );
+  });
+
+  it("does not report a hydrate as a local change", () => {
+    const seen: string[] = [];
+    const unsubscribe = subscribeFrequentReactions((pubkey) => seen.push(pubkey));
+    act(() => hydrateFrequentReactions(SELF, [{ key: "🔥", count: 4, usedAt: 9 }]));
+    expect(seen).toEqual([]);
+    // …but a real reaction is reported, so the sync knows to publish.
+    act(() => recordReaction(SELF, "🔥"));
+    expect(seen).toEqual([SELF]);
+    unsubscribe();
+  });
+
+  it("stays capped after merging a large remote table", () => {
+    act(() => {
+      for (let i = 0; i < 20; i++) recordReaction(SELF, `local${i}`);
+    });
+    act(() =>
+      hydrateFrequentReactions(
+        SELF,
+        Array.from({ length: 40 }, (_, i) => ({ key: `remote${i}`, count: 5, usedAt: i })),
+      ),
+    );
+    expect(getFrequentReactions(SELF).length).toBeLessThanOrEqual(32);
   });
 });

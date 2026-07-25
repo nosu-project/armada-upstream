@@ -46,6 +46,18 @@ export const RailLayoutNodeSchema: z.ZodType<RailLayoutNode> = z.union([
 ]);
 
 /**
+ * One entry in the user's quick-reaction frequency table (see
+ * hooks/useFrequentReactions). `url` is set only for custom `:shortcode:`
+ * emoji.
+ */
+export const FrequentReactionSchema = z.object({
+  key: z.string(),
+  url: z.string().optional(),
+  count: z.number(),
+  usedAt: z.number(),
+});
+
+/**
  * Validates the persisted AppConfig. Used field-by-field in AppProvider so a
  * single corrupt key never wipes the entire config.
  */
@@ -119,6 +131,12 @@ export const EncryptedSettingsSchema = z.looseObject({
   notifLevels: z.record(z.string(), z.enum(["all", "mentions", "nothing"])).optional(),
   /** Per-conversation DM encryption preference (auto/nip17/nip04) — see AppConfig. */
   dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).optional(),
+  /**
+   * The user's quick-reaction frequency table. Merged per key on the way in
+   * (highest count / most recent use wins) rather than replaced, so two
+   * devices reacting independently don't reset each other's counts.
+   */
+  frequentReactions: z.array(FrequentReactionSchema).optional(),
   /**
    * Per-conversation last-read timestamps (unix seconds), keyed by a stable
    * conversation id (e.g. `${relayUrl}::${groupId}` for channels, `dm:${pubkey}`
