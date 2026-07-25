@@ -33,6 +33,7 @@ import {
   capRelays,
   channelGitRepositoryAttachments,
   withChannelGitRepositoryAttachments,
+  type ChannelMetadata,
   type CommunityV2,
 } from "@/concord-v2/lib/types";
 import { controlGroups, foldControlState, openControlWraps } from "@/concord-v2/lib/control";
@@ -390,19 +391,37 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     },
   });
 
-  const createChannel = useMutation<{ channelIdHex: string }, Error, { name: string }>({
-    mutationFn: async ({ name }) => {
+  const createChannel = useMutation<
+    { channelIdHex: string },
+    Error,
+    { name: string; repository?: { address: string; relayHints: string[] } }
+  >({
+    mutationFn: async ({ name, repository }) => {
       if (!user || !community) throw new Error("Not ready.");
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Channel name is required.");
       const channelId = random32();
+      // A repository rides the channel's FIRST edition rather than a follow-up
+      // attachRepository: that path resolves the channel out of the control
+      // fold, which this mutation only invalidates in the background, so a
+      // just-created channel is absent from it and the attach throws. Building
+      // one edition leaves the channel born attached instead.
+      let metadata: ChannelMetadata = { name: trimmed, private: false };
+      if (repository) {
+        const address = parseGitRepositoryAddress(repository.address);
+        if (!address) throw new Error("Repository address must be a canonical 30617 coordinate.");
+        metadata = withChannelGitRepositoryAttachments(
+          metadata,
+          attachGitRepository([], address, repository.relayHints, Math.floor(Date.now() / 1000)),
+        );
+      }
       await publishEdition2(
         nostr,
         community,
         user.signer,
         buildChannelEdition(
           channelId,
-          { name: trimmed, private: false },
+          metadata,
           { actorPubkey: user.pubkey, version: 1n, authority: citationFor(community, folded, user.pubkey) },
         ),
       );

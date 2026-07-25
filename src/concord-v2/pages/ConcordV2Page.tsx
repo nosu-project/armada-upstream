@@ -1123,25 +1123,18 @@ export function ConcordV2Page() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead]);
 
-  const { leave, isLeaving, dissolve, createChannel, attachRepository } = useCommunityManagement2(community);
+  const { leave, isLeaving, dissolve, createChannel } = useCommunityManagement2(community);
   const handleCreateTextChannel = useCallback(async (name: string) => {
     const { channelIdHex: created } = await createChannel({ name });
     selectChannel(created);
   }, [createChannel, selectChannel]);
   const handleCreateRepositoryChannel = useCallback(async (name: string, repository: WizardRepository) => {
-    const { channelIdHex: created } = await createChannel({ name });
-    try {
-      await attachRepository({ channelIdHex: created, address: repository.coordinate, relayHints: repository.relayHints });
-    } catch {
-      // The channel exists either way; the repository can be retried from Community Info.
-      toast({
-        title: "Channel created, but the repository didn't connect",
-        description: "Retry from Community Info under Connected repositories.",
-        variant: "destructive",
-      });
-    }
+    const { channelIdHex: created } = await createChannel({
+      name,
+      repository: { address: repository.coordinate, relayHints: repository.relayHints },
+    });
     selectChannel(created);
-  }, [createChannel, attachRepository, selectChannel]);
+  }, [createChannel, selectChannel]);
   // Repositories already connected anywhere in this community (wizard dedupe).
   const connectedCoordinates = useMemo(
     () => new Set([...gitAttachmentsByChannel.values()].flatMap((list) => list.filter((a) => a.detachedAt === undefined).map((a) => a.address.coordinate))),
