@@ -75,7 +75,7 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
   return (
     <div
       className={cn(
-        "flex flex-col max-w-sm w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden my-1.5",
+        "flex flex-col max-w-sm w-full rounded-xl border border-border/60 bg-card overflow-hidden my-1.5",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
@@ -85,8 +85,15 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
         <div className="flex items-center gap-2 min-w-0">
           <Smile className="size-4 shrink-0 text-primary" />
           <p className="font-semibold truncate leading-tight flex-1">{name}</p>
-          <span className="text-[10px] px-1.5 py-px rounded-full bg-secondary text-muted-foreground shrink-0">
-            Emoji pack
+          {/* Legible while scanning a Discover grid, where the Add button at
+              the card's foot is the only other signal. */}
+          <span
+            className={cn(
+              "text-[10px] px-1.5 py-px rounded-full shrink-0",
+              isAdded ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground",
+            )}
+          >
+            {isAdded ? "Added" : "Emoji pack"}
           </span>
         </div>
 

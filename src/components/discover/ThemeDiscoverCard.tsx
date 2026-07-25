@@ -76,7 +76,7 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
   return (
     <div
       className={cn(
-        "flex flex-col w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden",
+        "flex flex-col w-full rounded-xl border border-border/60 bg-card overflow-hidden",
         className,
       )}
     >
