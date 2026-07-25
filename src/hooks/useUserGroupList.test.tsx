@@ -27,6 +27,8 @@ const SELF = "a".repeat(64);
 const S1 = normalizeRelayUrl("wss://one.example")!;
 const S2 = normalizeRelayUrl("wss://two.example")!;
 const S3 = normalizeRelayUrl("wss://three.example")!;
+const S4 = normalizeRelayUrl("wss://four.example")!;
+const S5 = normalizeRelayUrl("wss://five.example")!;
 
 const h = vi.hoisted(() => ({
   query: vi.fn<(...args: unknown[]) => Promise<NostrEvent[]>>(),
@@ -242,5 +244,96 @@ describe("useUpdateUserGroupList (kind 10009 read-modify-write)", () => {
     const items = decodePublished();
     expect(items).toContainEqual(["group", "chan", S1]);
     expect(items).toContainEqual(["r", S1]);
+  });
+
+  /**
+   * Removing several servers in a row fires several read-modify-writes at
+   * once — one per context-menu click, each spanning a network read, a signer
+   * round-trip and a publish. Unserialized they all read the SAME pre-edit
+   * list, each drops only its own server, and the last publish to land
+   * reinstates the other four.
+   */
+  describe("concurrent writes", () => {
+    const ALL = [S1, S2, S3, S4, S5];
+
+    /** A relay that never updates, plus a persisted copy that carries writes forward. */
+    function statefulBackend(servers: string[]) {
+      h.query.mockResolvedValue([
+        listEvent({ createdAt: 100, content: encContent({ groups: [], servers }) }),
+      ]);
+      let persisted: { event: NostrEvent; groups: GroupRef[]; servers: string[] } | undefined;
+      h.readFolded.mockImplementation(async () => persisted);
+      h.writeFolded.mockImplementation(async (_key, value) => {
+        persisted = value as typeof persisted;
+      });
+      h.publish.mockImplementation(async (t) => {
+        const tmpl = t as { created_at?: number; content: string; tags: string[][]; kind: number };
+        return {
+          ...tmpl,
+          id: `p${++evCounter}`.padEnd(64, "0").slice(0, 64),
+          pubkey: SELF,
+          created_at: tmpl.created_at ?? 0,
+          sig: "s".repeat(128),
+        } as NostrEvent;
+      });
+    }
+
+    /** The `r` tags of the last event published. */
+    function lastPublishedServers(): string[] {
+      const arg = h.publish.mock.calls.at(-1)![0] as { content: string };
+      const items = JSON.parse(arg.content.slice(4)) as string[][];
+      return items.filter(([n]) => n === "r").map(([, url]) => url);
+    }
+
+    it("loses no removal when five servers are removed at once", async () => {
+      statefulBackend(ALL);
+
+      const result = renderUpdate();
+      await act(async () => {
+        await Promise.all(
+          ALL.map((url) => result.current.mutateAsync({ type: "remove-server", url })),
+        );
+      });
+
+      expect(h.publish).toHaveBeenCalledTimes(5);
+      // Every one of the five is gone from the final list — not just the last.
+      expect(lastPublishedServers()).toEqual([]);
+    });
+
+    it("keeps a concurrent add from reinstating a removed server", async () => {
+      statefulBackend([S1, S2]);
+
+      const result = renderUpdate();
+      await act(async () => {
+        await Promise.all([
+          result.current.mutateAsync({ type: "remove-server", url: S1 }),
+          result.current.mutateAsync({ type: "add-server", url: S3 }),
+        ]);
+      });
+
+      const servers = lastPublishedServers();
+      expect(servers).not.toContain(S1);
+      expect(servers).toContain(S2);
+      expect(servers).toContain(S3);
+    });
+
+    it("advances created_at on every write so same-second edits can't tie", async () => {
+      statefulBackend(ALL);
+
+      const result = renderUpdate();
+      await act(async () => {
+        await Promise.all(
+          ALL.map((url) => result.current.mutateAsync({ type: "remove-server", url })),
+        );
+      });
+
+      // Replaceable events are ordered at second granularity and NIP-01 breaks
+      // a tie by lowest id, so equal created_at lets an earlier edit win.
+      const stamps = h.publish.mock.calls.map(
+        ([t]) => (t as { created_at: number }).created_at,
+      );
+      expect(stamps).toEqual([...stamps].sort((a, b) => a - b));
+      expect(new Set(stamps).size).toBe(stamps.length);
+    });
   });
 });

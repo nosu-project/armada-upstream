@@ -7,6 +7,7 @@ import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
 import { writeClipboardText } from "@/lib/clipboard";
+import { isPublishQueuedError } from "@/lib/publishOutbox";
 import { addServerTombstone } from "@/lib/serverTombstone";
 import { shareOrigin } from "@/lib/shareOrigin";
 
@@ -64,16 +65,47 @@ export function useServerActions(relayUrl: string): UseServerActionsReturn {
         (url) => normalizeRelayUrl(url) !== relayUrl,
       ),
     }));
-    if (user) {
-      // Tombstone the removal so a stale relay echoing the pre-removal 10009
-      // list can't re-add this server via NostrSync's hydration before the
-      // update propagates. Cleared once a read confirms it's gone.
-      addServerTombstone(user.pubkey, relayUrl);
-      updateList({ type: "remove-server", url: relayUrl }).catch((err) =>
-        console.warn("Failed to sync server removal to group list:", err));
+    if (!user) {
+      toast({ title: "Server removed", description: relayUrl });
+      navigate("/");
+      return;
     }
-    toast({ title: "Server removed", description: relayUrl });
+    // Tombstone the removal so a stale relay echoing the pre-removal 10009
+    // list can't re-add this server via NostrSync's hydration before the
+    // update propagates. Cleared only by an explicit re-add, or by a list
+    // event created after this removal that still carries the server.
+    addServerTombstone(user.pubkey, relayUrl);
+
+    // The rail updates immediately, but the removal is not REAL until it lands
+    // in the kind 10009 list — that list is what other devices and the next
+    // login read back. This used to `console.warn` the rejection and show the
+    // success toast regardless, so a refused write (empty/undecryptable read)
+    // or a dead relay looked identical to a removal that worked, and the
+    // server came back at the next sync with no indication why.
+    const pending = updateList({ type: "remove-server", url: relayUrl });
     navigate("/");
+    pending.then(
+      () => toast({ title: "Server removed", description: relayUrl }),
+      (err) => {
+        // A queued publish is signed and durably stored; the retry worker
+        // will land it. That's a delay, not a failure.
+        if (isPublishQueuedError(err)) {
+          toast({
+            title: "Server removed",
+            description: `${relayUrl} — syncing when the network is back.`,
+          });
+          return;
+        }
+        console.warn("Failed to sync server removal to group list:", err);
+        toast({
+          title: "Couldn't remove server everywhere",
+          description:
+            `Hidden on this device, but your synced community list still has ${relayUrl}` +
+            ` — it will come back on other devices. ${err instanceof Error ? err.message : ""}`.trimEnd(),
+          variant: "destructive",
+        });
+      },
+    );
   };
 
   return { serverMuted, isRemovable, toggleMute, copyLink, removeServer };

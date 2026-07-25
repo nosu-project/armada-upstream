@@ -268,6 +268,39 @@ function applyAction(list: UserGroupList, action: GroupListAction): UserGroupLis
 }
 
 /**
+ * All 10009 writes run one at a time, process-wide.
+ *
+ * Every write is a read-modify-write spanning an 8s network read, a signer
+ * round-trip and a publish. Fired concurrently — which is exactly what
+ * removing several servers in a row does, one context-menu click each — they
+ * all read the SAME pre-edit list, each drops only its own server, and the
+ * last publish to land overwrites the rest. Five removals would keep one.
+ * Serializing makes each write observe the previous one's result.
+ */
+let groupListWriteChain: Promise<unknown> = Promise.resolve();
+
+function serializeGroupListWrite<T>(write: () => Promise<T>): Promise<T> {
+  const run = groupListWriteChain.then(write, write);
+  // Swallow the result on the chain itself so one failed write neither wedges
+  // the queue nor surfaces as an unhandled rejection; the caller still gets it.
+  groupListWriteChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+/**
+ * The created_at for the next version of a replaceable event.
+ *
+ * Replaceable events are ordered at SECOND granularity, and NIP-01 breaks a
+ * created_at tie by lowest event id — so two writes within the same second
+ * resolve arbitrarily and the later edit can lose to the earlier one. Force
+ * strict monotonicity instead of trusting the wall clock.
+ */
+function nextCreatedAt(prev: NostrEvent | null): number {
+  const now = Math.floor(Date.now() / 1000);
+  return prev ? Math.max(now, prev.created_at + 1) : now;
+}
+
+/**
  * Mutate the user's kind 10009 list (add/remove a group or a server) with a
  * read-modify-write against fresh relay state. New lists store items as
  * NIP-44 private items (encrypted to self) in `.content`, matching NIP-51;
@@ -281,7 +314,7 @@ export function useUpdateUserGroupList() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (action: GroupListAction) => {
+    mutationFn: (action: GroupListAction) => serializeGroupListWrite(async () => {
       if (!user) throw new Error("User is not logged in");
 
       // Read-modify-write against fresh relay state, never the query cache.
@@ -311,7 +344,12 @@ export function useUpdateUserGroupList() {
 
       let prev: NostrEvent | null = fetched;
       let current: UserGroupList;
-      if (persisted?.event && fetched && persisted.event.created_at > fetched.created_at) {
+      // `>=`, not `>`: on a tie the persisted copy is this device's own most
+      // recent write, and the network copy is at best the same event and at
+      // worst a same-second predecessor the relay hasn't replaced yet. The
+      // serialized write immediately before this one may not have propagated,
+      // so preferring the network on a tie would undo it.
+      if (persisted?.event && fetched && persisted.event.created_at >= fetched.created_at) {
         prev = persisted.event;
         current = { groups: persisted.groups, servers: persisted.servers };
       } else {
@@ -359,19 +397,23 @@ export function useUpdateUserGroupList() {
         kind: KIND_USER_GROUPS,
         content,
         tags,
+        created_at: nextCreatedAt(prev),
         prev: prev ?? undefined,
       });
       // Persist the decrypted result (we have `next` in the clear here) so the
-      // next boot reads plaintext without a signer decrypt.
+      // next boot reads plaintext without a signer decrypt. AWAITED, not fired
+      // and forgotten: the next queued write reads this back as its base, and
+      // a write that hasn't landed yet would send it to the stale network copy
+      // and undo this edit.
       if (published) {
-        void writeFolded(`nip29-grouplist:${user.pubkey}`, {
+        await writeFolded(`nip29-grouplist:${user.pubkey}`, {
           event: published,
           groups: next.groups,
           servers: next.servers,
-        } satisfies PersistedGroupList);
+        } satisfies PersistedGroupList).catch(() => undefined);
       }
       return published;
-    },
+    }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["nip29", "user-groups"] });
     },
