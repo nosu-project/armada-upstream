@@ -6,6 +6,7 @@ import {
 } from "@/contexts/ReadStateContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { type EncryptedSettings } from "@/lib/schemas";
 
 const EMPTY: ReadStateMap = {};
 
@@ -53,8 +54,19 @@ const SYNC_DEBOUNCE_MS = 4000;
  */
 export function ReadStateProvider({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
-  const { updateSettings, hasNip44Support } = useEncryptedSettings();
+  const { settings, updateSettings, hasNip44Support } = useEncryptedSettings();
   const pubkey = user?.pubkey;
+
+  // Latest settings, readable from the debounced flush without restarting the
+  // debounce every time the query re-resolves.
+  const settingsRef = useRef<EncryptedSettings | null>(null);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  // Debounced sync of dirty keys to encrypted settings.
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pendingSync = useRef<ReadStateMap | null>(null);
 
   const [readState, setReadState] = useState<ReadStateMap>(() =>
     pubkey ? loadLocal(pubkey) : EMPTY,
@@ -63,11 +75,12 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
   // Re-load the cache when the account changes.
   useEffect(() => {
     setReadState(pubkey ? loadLocal(pubkey) : EMPTY);
+    // Drop anything still queued for the previous account — publishing one
+    // user's read-state into another's settings event would be worse than
+    // losing it, and it's already durable in that account's localStorage.
+    pendingSync.current = null;
+    if (flushTimer.current) clearTimeout(flushTimer.current);
   }, [pubkey]);
-
-  // Debounced sync of dirty keys to encrypted settings.
-  const flushTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const pendingSync = useRef<ReadStateMap | null>(null);
 
   const scheduleSync = useCallback(
     (map: ReadStateMap) => {
@@ -76,16 +89,29 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
       if (flushTimer.current) clearTimeout(flushTimer.current);
       flushTimer.current = setTimeout(() => {
         const next = pendingSync.current;
+        if (!next) return;
+        // Never publish without a settings event to merge over. `updateSettings`
+        // builds the new 30078 from `settings ?? {}`, so publishing off a failed
+        // or not-yet-resolved read would replace the user's real settings —
+        // every synced key they own — with just this one. Keep the pending map
+        // and let the effect below retry once a base has been read.
+        if (settingsRef.current === null) return;
         pendingSync.current = null;
-        if (next) {
-          updateSettings({ readState: next }).catch((err) =>
-            console.warn("Read-state sync failed:", err),
-          );
-        }
+        updateSettings({ readState: next }).catch((err) =>
+          console.warn("Read-state sync failed:", err),
+        );
       }, SYNC_DEBOUNCE_MS);
     },
     [hasNip44Support, updateSettings],
   );
+
+  // Retry a sync that was held back for want of a settings base, once one
+  // arrives. Reads stay in localStorage meanwhile, so nothing is lost — they
+  // just haven't reached the user's other devices yet.
+  useEffect(() => {
+    if (!settings || !pendingSync.current) return;
+    scheduleSync(pendingSync.current);
+  }, [settings, scheduleSync]);
 
   // Flush any pending sync on unmount.
   useEffect(() => {
