@@ -78,9 +78,10 @@ function EmbedInfoBar({ url }: { url: string }) {
           <span>Open</span>
         </a>
       </div>
-      {/* Fixed two-line box: the title arrives asynchronously, and letting it
-          expand the bar would resize the row inside the virtualized timeline. */}
-      <p className="h-10 text-sm font-semibold leading-snug line-clamp-2">{data?.title}</p>
+      {/* One reserved line: the title arrives asynchronously, so the bar keeps a
+          line box to avoid collapsing, but doesn't hold open a second one that
+          most titles never fill. */}
+      <p className="min-h-5 text-sm font-semibold leading-snug line-clamp-2">{data?.title}</p>
     </div>
   );
 }
@@ -97,15 +98,16 @@ function displayDomain(url: string): string {
 /**
  * Rich link preview card rendered from OEmbed data.
  *
- * The card's height is FIXED and identical in every state — loading, resolved
- * with a thumbnail, resolved without one, and thumbnail-failed-to-load. It sits
- * inside a virtualized timeline, where a row that resizes after mount shoves
- * everything below it; a preview that resolved from a two-line skeleton into a
- * hero card (or collapsed into a bare link) moved the reading position by
- * ~200px, which is what made scrolling back through history judder. So the
- * thumbnail well is a fixed {@link THUMBNAIL_HEIGHT}px box that falls back to an
- * icon placeholder, and each text row occupies its line box whether or not it
- * has content.
+ * The bulk of the card's height is fixed across the loading, resolved,
+ * resolved-without-thumbnail and thumbnail-failed states: a row that resizes
+ * after mount shoves everything below it in the timeline, and a preview that
+ * resolved from a skeleton into a hero card (or collapsed into a bare link)
+ * moved the reading position by ~200px, which made scrolling back through
+ * history judder. So the thumbnail well stays a fixed {@link THUMBNAIL_HEIGHT}px
+ * box that falls back to an icon placeholder. The text rows below it size to
+ * their content — reserving two title lines and an author line left an obvious
+ * gap under the (usually one-line) title, since most providers return neither a
+ * wrapped title nor an author at all.
  */
 function LinkPreview({ url, className }: { url: string; className?: string }) {
   const { data, isLoading } = useLinkPreview(url);
@@ -152,15 +154,14 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
           <span className="truncate">{data?.provider_name || domain}</span>
           <ExternalLink className="size-3 ml-auto shrink-0 opacity-0 group-hover:opacity-100 touch:opacity-100 transition-opacity" />
         </div>
-        {/* Two fixed line boxes: `h-10` is exactly two `text-sm leading-snug`
-            lines, so a one-line title (or none at all) reserves the same space
-            as a wrapped one. */}
-        <p className="h-10 text-sm font-semibold leading-snug line-clamp-2">
+        <p className="text-sm font-semibold leading-snug line-clamp-2">
           {isLoading ? <Skeleton className="h-4 w-3/4" /> : data?.title ?? url}
         </p>
-        <p className="h-4 text-xs text-muted-foreground line-clamp-1">
-          {data?.author_name}
-        </p>
+        {data?.author_name && (
+          <p className="text-xs text-muted-foreground line-clamp-1">
+            {data.author_name}
+          </p>
+        )}
       </div>
     </a>
   );
