@@ -1082,7 +1082,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
   };
 
   const body = (
-    <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, clampClass, isEmojiOnly && "leading-tight", isEmojiOnly && (isSingleEmoji ? "text-5xl" : "text-4xl"))}>
+    <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, clampClass, isEmojiOnly && (isSingleEmoji ? "text-5xl leading-normal" : "text-4xl leading-tight"))}>
       {groupedTokens.map((token, i) => renderToken(token, i, i))}
 
       {lightboxIndex !== null && (
