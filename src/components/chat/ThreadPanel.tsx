@@ -9,6 +9,7 @@ import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import { ZapButton } from "@/components/chat/ZapButton";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -174,7 +175,7 @@ function ThreadMessage({
               <div className="flex items-baseline gap-2">
                 <ProfilePreviewCard pubkey={event.pubkey}>
                   <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
-                    {displayName}
+                    <DisplayName pubkey={event.pubkey} name={displayName} />
                   </button>
                 </ProfilePreviewCard>
                 <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>

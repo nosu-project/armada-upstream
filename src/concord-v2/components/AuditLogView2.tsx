@@ -23,6 +23,7 @@ import {
   type CommunityRoles,
 } from "@/concord-v2/lib/roles";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
@@ -172,7 +173,9 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: CommunityV
       </Avatar>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-          <span className="truncate font-medium">{actorName}</span>
+          <span className="truncate font-medium">
+            <DisplayName pubkey={row.author} name={actorName} />
+          </span>
           {isOwner && (
             <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
               Owner
@@ -210,7 +213,7 @@ function MemberName({ pubkey, community }: { pubkey: string; community: Communit
   const isOwner = pubkey === community.owner;
   return (
     <span className="inline-flex items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 text-xs font-medium">
-      {name}
+      <DisplayName pubkey={pubkey} name={name} />
       {isOwner && <span className="text-[9px] uppercase text-muted-foreground">owner</span>}
     </span>
   );

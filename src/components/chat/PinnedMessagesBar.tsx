@@ -1,5 +1,6 @@
 import { Pin, X } from "lucide-react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -42,7 +43,7 @@ function PinnedRow({
       >
         {event && (
           <span className="text-[11px] font-semibold text-primary truncate max-w-full">
-            {displayName}
+            <DisplayName pubkey={event.pubkey} name={displayName} />
           </span>
         )}
         <span className="text-[12px] text-muted-foreground line-clamp-2 break-words">
@@ -130,7 +131,7 @@ function PinnedAddrRow({
           </span>
           {event && (
             <span className="text-[11px] font-semibold text-primary truncate">
-              {scopedName}
+              <DisplayName pubkey={event.pubkey} name={scopedName} />
             </span>
           )}
         </span>

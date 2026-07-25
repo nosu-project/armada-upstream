@@ -4,6 +4,7 @@ import { memo } from "react";
 import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { BotPill } from "@/components/BotPill";
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -263,7 +264,7 @@ export const MessageRow = memo(function MessageRow({
                   className="text-[15px] font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none"
                   style={color ? { color } : undefined}
                 >
-                  {displayName}
+                  <DisplayName pubkey={pubkey} name={displayName} />
                 </button>
               </ProfilePreviewCard>
             )}

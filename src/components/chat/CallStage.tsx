@@ -25,6 +25,7 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -215,6 +216,8 @@ function usePrimaryFloatingKey(args: {
 function useTileDisplayName(participant: Participant): {
   pubkey: string;
   displayName: string;
+  /** Whether `pubkey` is a claim we've verified — i.e. whether the name is theirs. */
+  verified: boolean;
   metadata: NostrMetadata | undefined;
 } {
   const room = useRoomContext();
@@ -241,6 +244,7 @@ function useTileDisplayName(participant: Participant): {
   return {
     pubkey,
     displayName: verified ? scopedName : inGrace ? "Verifying…" : "Unverified",
+    verified,
     metadata,
   };
 }
@@ -396,7 +400,7 @@ function VideoTile({
   onToggleFocus: () => void;
 }) {
   const participant = trackRef.participant;
-  const { pubkey, displayName, metadata } = useTileDisplayName(participant);
+  const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
   const shape = getAvatarShape(metadata);
   const isScreenShare = trackRef.source === Track.Source.ScreenShare;
   // Show the avatar (not a black frame) unless there's a LIVE video track:
@@ -417,7 +421,7 @@ function VideoTile({
         <MicOff className="size-3 shrink-0 text-destructive" />
       ) : null}
       <span className="truncate">
-        {displayName}
+        <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
         {isScreenShare && " — screen"}
         {isLocal && " (you)"}
       </span>
@@ -516,7 +520,7 @@ function AvatarTile({
   focused: boolean;
   onToggleFocus: () => void;
 }) {
-  const { pubkey, displayName, metadata } = useTileDisplayName(participant);
+  const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
   const shape = getAvatarShape(metadata);
   const hasCustomShape = !!shape;
   const isLocal = participant.isLocal;
@@ -534,7 +538,7 @@ function AvatarTile({
     <>
       {muted && <MicOff className="size-3 shrink-0 text-destructive" />}
       <span className="truncate">
-        {displayName}
+        <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
         {isLocal && " (you)"}
       </span>
     </>

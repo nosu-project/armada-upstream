@@ -100,6 +100,7 @@ function ReplyContext1({ parent, onJump }: { parent: ChatMsg | undefined; onJump
   return (
     <ReplyContextLine
       name={parent ? name : undefined}
+      pubkey={parent?.pubkey}
       preview={parent ? <ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} /> : undefined}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
       onClick={parent ? () => onJump(parent.id) : undefined}

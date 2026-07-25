@@ -16,6 +16,7 @@ import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useInviteActions2, useMyLinkEpochs2 } from "@/concord-v2/hooks/useInvites2";
 import { parseInviteLink, type InviteListEntry } from "@/concord-v2/lib/invite";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
@@ -357,7 +358,9 @@ function RegistryRow({
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>
-      <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+      <span className="min-w-0 flex-1 truncate font-medium">
+        <DisplayName pubkey={creator} name={name} />
+      </span>
       {isOwner && (
         <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
           Owner

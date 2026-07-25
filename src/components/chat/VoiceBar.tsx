@@ -10,6 +10,7 @@ import { Check, Headphones, Loader2, Mic, Settings2, Video, Volume2 } from "luci
 
 import "@livekit/components-styles";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
 import { useCallback, useState } from "react";
@@ -223,7 +224,9 @@ function ParticipantVolumeRow({ participant }: { participant: Participant }) {
             {name[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
-        <span className="truncate text-sm">{name}</span>
+        <span className="truncate text-sm">
+          <DisplayName pubkey={verified ? pubkey : undefined} name={name} />
+        </span>
       </div>
       <VolumeSliderRow volume={volume} apply={setVolume} displayName={name} />
     </div>

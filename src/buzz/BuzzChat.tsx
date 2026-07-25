@@ -27,6 +27,7 @@ import { useBuzzEditMessage, useBuzzTyping, useSendBuzzThreadReply } from "@/buz
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import { DisplayName } from "@/components/DisplayName";
 import { firstImageRef, getReplyToId } from "@/components/chat/messageHelpers";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
@@ -78,6 +79,7 @@ function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl
   return (
     <ReplyContextLine
       name={event ? displayName : undefined}
+      pubkey={event?.pubkey}
       preview={event ? <ReplyPreview content={event.content} hideMediaPlaceholder={!!image} /> : undefined}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
       onClick={() => onJump(eventId)}
@@ -314,7 +316,9 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
-            <span className="truncate font-medium text-foreground">{displayName}</span>
+            <span className="truncate font-medium text-foreground">
+              <DisplayName pubkey={event.pubkey} name={displayName} />
+            </span>
             {isAgent && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-[10px] font-medium text-primary">
                 <BotIcon className="size-2.5" aria-hidden />

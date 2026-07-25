@@ -1,6 +1,7 @@
 import { Hand, Headphones, MicOff } from "lucide-react";
 import type { CSSProperties } from "react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { VoiceUserContextMenu, VoiceUserMenuButton } from "@/components/VoiceUserContextMenu";
@@ -30,9 +31,11 @@ function ParticipantAvatar({ pubkey, className }: { pubkey: string; className?: 
 
 /** A participant's display name (for the tooltip listing). */
 function ParticipantName({ pubkey }: { pubkey: string }) {
-  const author = useAuthor(pubkey);
-  const name = getDisplayName(author.data?.metadata, pubkey);
-  return <div className="truncate">{name}</div>;
+  return (
+    <div className="truncate">
+      <DisplayName pubkey={pubkey} />
+    </div>
+  );
 }
 
 /**
@@ -125,7 +128,9 @@ function VoiceParticipantRow({
             </AvatarFallback>
           </Avatar>
         </div>
-        <span className={cn("truncate flex-1 min-w-0", isSpeaking && "text-success")}>{name}</span>
+        <span className={cn("truncate flex-1 min-w-0", isSpeaking && "text-success")}>
+          <DisplayName pubkey={pubkey} name={name} />
+        </span>
         {isRaised && (
           <Hand
             className="size-3.5 shrink-0 text-amber-500"

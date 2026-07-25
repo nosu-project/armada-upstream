@@ -14,6 +14,7 @@ import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { renderInlineMarkdown } from "@/components/chat/markdownRender";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { XdcAttachment } from "@/components/chat/XdcAttachment";
+import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelNav } from "@/hooks/useChannelNav";
 import { type MentionNameMap, useMentionNameMap } from "@/hooks/useMentionNameMap";
@@ -1271,7 +1272,8 @@ function NostrMention({ pubkey, noAtPrefix = false }: { pubkey: string; noAtPref
         // reply focus, etc.) — this chip owns the interaction.
         onClick={(e) => e.stopPropagation()}
       >
-        {noAtPrefix ? "" : "@"}{displayName}
+        {noAtPrefix ? "" : "@"}
+        <DisplayName pubkey={pubkey} name={displayName} />
       </button>
     </ProfilePreviewCard>
   );

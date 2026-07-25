@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
@@ -272,7 +273,7 @@ function MemberRow({
           className="min-w-0 flex-1 text-left focus:outline-none"
         >
           <span className="block text-sm truncate" style={color ? { color } : undefined}>
-            {displayName}
+            <DisplayName pubkey={pubkey} name={displayName} />
           </span>
           {status?.content && (
             <span

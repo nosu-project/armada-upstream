@@ -15,6 +15,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { VoicePresence } from "@/components/VoicePresence";
 import { BotPill } from "@/components/BotPill";
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -190,7 +191,9 @@ function ConversationRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
           <div className={cn("text-sm truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
-            <Highlight text={name} query={query} />
+            {/* Search highlighting operates on the raw name, so custom emoji
+                shortcodes only render as images when no query is active. */}
+            {q ? <Highlight text={name} query={query} /> : <DisplayName pubkey={peer} name={name} />}
           </div>
           <BotPill metadata={metadata} />
         </div>
@@ -377,6 +380,7 @@ function DmReplyContext({ parent, onJump }: { parent: NostrEvent | undefined; on
   return (
     <ReplyContextLine
       name={parent ? name : undefined}
+      pubkey={parent?.pubkey}
       preview={parent ? <ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} /> : undefined}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
       onClick={parent ? () => onJump(parent.id) : undefined}
@@ -688,7 +692,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
-          <h1 className="font-semibold truncate min-w-0">{name}</h1>
+          <h1 className="font-semibold truncate min-w-0"><DisplayName pubkey={peer} name={name} /></h1>
           <BotPill metadata={author.data?.metadata} />
         </div>
         {/* Who's in this DM's voice room (others, not us) — shown whether or
@@ -1081,7 +1085,7 @@ function RecipientSuggestion({
       </Avatar>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-medium">{name}</span>
+          <span className="truncate text-sm font-medium"><DisplayName pubkey={pubkey} name={name} /></span>
           {followed && (
             <UserCheck className="size-3.5 shrink-0 text-primary" aria-label="You follow this person" />
           )}

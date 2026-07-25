@@ -11,6 +11,7 @@ import { useMembers2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
 import { KIND_COMMENT, KIND_MESSAGE } from "@/concord-v2/lib/kinds";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -188,7 +189,9 @@ function MemberHealthRow({
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>
-      <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+      <span className="min-w-0 flex-1 truncate font-medium">
+        <DisplayName pubkey={row.pubkey} name={name} />
+      </span>
       {isOwner && (
         <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
           Owner

@@ -27,6 +27,7 @@ import { GifPicker } from "@/components/chat/GifPicker";
 import { MentionAutocomplete } from "@/components/chat/MentionAutocomplete";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { StickerPicker } from "@/components/chat/StickerPicker";
+import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -1981,7 +1982,10 @@ function ReplyBanner({ event, onCancel }: { event: NostrEvent; onCancel?: () => 
       <div className="flex flex-col min-w-0 flex-1 gap-0.5">
         <span className="flex items-center gap-1 min-w-0">
           <span className="text-muted-foreground shrink-0">
-            Replying to <span className="font-semibold text-foreground">{displayName}</span>
+            Replying to{" "}
+            <span className="font-semibold text-foreground">
+              <DisplayName pubkey={event.pubkey} name={displayName} />
+            </span>
           </span>
           <span className="text-muted-foreground/70 truncate">
             <ReplyPreview content={event.content} hideMediaPlaceholder={!!image} />

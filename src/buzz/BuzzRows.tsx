@@ -14,6 +14,7 @@ import {
   KIND_HUDDLE_PARTICIPANT_LEFT,
 } from "@/buzz/kinds";
 import { jobKindLabel, parseSystemMessage } from "@/buzz/protocol";
+import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
@@ -23,10 +24,12 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Resolve a pubkey to its scoped display name (per-server nickname aware). */
 function Name({ pubkey }: { pubkey: string | undefined }) {
-  const author = useAuthor(pubkey);
-  const name = useScopedDisplayName(pubkey, author.data?.metadata);
   if (!pubkey) return null;
-  return <span className="font-medium text-foreground/80">{name}</span>;
+  return (
+    <span className="font-medium text-foreground/80">
+      <DisplayName pubkey={pubkey} />
+    </span>
+  );
 }
 
 /** The muted centered chrome every non-conversational row shares. */
@@ -119,7 +122,7 @@ export function BuzzDiffRow({ event }: { event: NostrEvent }) {
       <div className="clip-corner-lg border border-border/60 bg-secondary/40 overflow-hidden">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 text-xs text-muted-foreground border-b border-border/60">
           <GitBranch className="size-3.5 shrink-0" />
-          <span className="font-medium text-foreground/80">{name}</span>
+          <span className="font-medium text-foreground/80"><DisplayName pubkey={event.pubkey} name={name} /></span>
           {file && <code className="font-mono">{file}</code>}
           {commit && <code className="font-mono text-[10px] opacity-70">{commit.slice(0, 8)}</code>}
           {repo && <span className="truncate max-w-48 opacity-70">{repo}</span>}
@@ -226,7 +229,7 @@ export function BuzzWorkflowDefinitionRow({ event }: { event: NostrEvent }) {
         >
           <Workflow className="size-4 shrink-0 text-primary/80" />
           <span className="font-medium truncate flex-1">{label}</span>
-          <span className="text-xs text-muted-foreground shrink-0">by {name}</span>
+          <span className="text-xs text-muted-foreground shrink-0">by <DisplayName pubkey={event.pubkey} name={name} /></span>
           <span className="text-[10px] text-muted-foreground/60 shrink-0">{shortTimeAgo(event.created_at)}</span>
         </button>
         {expanded && (
@@ -289,7 +292,7 @@ export function BuzzHuddleRow({ event, lifecycle }: {
         <AudioLines className={cn("size-5 shrink-0", ended ? "text-muted-foreground" : "text-success")} />
         <div className="min-w-0 flex-1">
           <div className="text-sm">
-            <span className="font-medium">{name}</span>{" "}
+            <span className="font-medium"><DisplayName pubkey={event.pubkey} name={name} /></span>{" "}
             <span className="text-muted-foreground">{ended ? "held a huddle" : "started a huddle"}</span>
           </div>
           {!ended && participants.length > 0 && (

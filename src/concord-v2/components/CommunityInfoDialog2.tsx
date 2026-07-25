@@ -27,6 +27,7 @@ import { useChannels2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { refreshInviteBundlesFor } from "@/concord-v2/hooks/useRekey2";
 import { useMetadataActions2 } from "@/concord-v2/hooks/useRoles2";
+import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -445,7 +446,9 @@ function OwnerRow({ pubkey }: { pubkey: string }) {
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>
-      <span className="min-w-0 flex-1 truncate">{displayName}</span>
+      <span className="min-w-0 flex-1 truncate">
+        <DisplayName pubkey={pubkey} name={displayName} />
+      </span>
       <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
         <Shield className="size-3" />
         Owner

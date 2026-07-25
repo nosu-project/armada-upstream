@@ -9,6 +9,7 @@ import { ReactionBar, ReactionPicker } from "@/components/chat/ReactionBar";
 import { ZapButton } from "@/components/chat/ZapButton";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,16 +55,12 @@ const REPLY_MENTION_RE =
 
 /** Resolve a single mention pubkey to `@displayname` for the preview line. */
 function ReplyMentionName({ pubkey }: { pubkey: string }) {
-  const author = useAuthor(pubkey);
-  const name = useScopedDisplayName(pubkey, author.data?.metadata);
-  return <span className="text-primary">@{name}</span>;
+  return <span className="text-primary">@<DisplayName pubkey={pubkey} /></span>;
 }
 
 /** The bot an invocation was addressed to, by display name. */
 function InvokedBotName({ pubkey }: { pubkey: string }) {
-  const author = useAuthor(pubkey);
-  const name = useScopedDisplayName(pubkey, author.data?.metadata);
-  return <span className="font-semibold not-italic text-primary">{name}</span>;
+  return <span className="font-semibold not-italic text-primary"><DisplayName pubkey={pubkey} /></span>;
 }
 
 /**
@@ -161,11 +158,14 @@ export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
  */
 export function ReplyContextLine({
   name,
+  pubkey,
   preview,
   thumbnail,
   onClick,
 }: {
   name: string | undefined;
+  /** The replied-to author, when known — supplies their custom emoji tags. */
+  pubkey?: string;
   preview?: ReactNode;
   /** Optional media thumbnail shown before the preview (e.g. an image reply). */
   thumbnail?: ReactNode;
@@ -186,7 +186,9 @@ export function ReplyContextLine({
   const content = (
     <>
       {thumbnail}
-      <span className="font-semibold shrink-0">{name}</span>
+      <span className="font-semibold shrink-0">
+        {pubkey ? <DisplayName pubkey={pubkey} name={name} /> : name}
+      </span>
       {preview && <span className="truncate min-w-0">{preview}</span>}
     </>
   );
@@ -674,7 +676,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
         // out on purpose: they were addressed to the bot, not to the room, and
         // the bot's reply is what actually says how it went.
         <div className="text-[15px] italic text-muted-foreground">
-          <span className="font-semibold not-italic text-primary">{displayName}</span>{" "}
+          <span className="font-semibold not-italic text-primary">
+            <DisplayName pubkey={identityOverride ? undefined : event.pubkey} name={displayName} />
+          </span>{" "}
           ran{" "}
           <button
             type="button"
@@ -696,7 +700,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
         </div>
       ) : isMeAction(event) ? (
         <div className="text-[15px] italic text-muted-foreground">
-          <span className="font-semibold not-italic text-primary">{displayName}</span>{" "}
+          <span className="font-semibold not-italic text-primary">
+            <DisplayName pubkey={identityOverride ? undefined : event.pubkey} name={displayName} />
+          </span>{" "}
           <ChatContent
             event={event}
             contentOverride={meActionText(event)}

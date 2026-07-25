@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { NostrMetadata } from '@nostrify/nostrify';
+import { DisplayName } from '@/components/DisplayName';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { type AvatarShape, isValidAvatarShape, isEmoji, getAvatarMaskUrlAsync, shapedAvatarBorderStyle } from '@/lib/avatarShape';
 import { CheckCircle2, Pencil, Plus, Trash2, ChevronDown, ImagePlus, SmilePlus, X as XIcon } from 'lucide-react';
@@ -98,7 +99,7 @@ export interface ProfileCardProps {
 }
 
 export function ProfileCard({
-  pubkey: _pubkey,
+  pubkey,
   metadata,
   onChange,
   onPickImage,
@@ -310,7 +311,9 @@ export function ProfileCard({
             className="text-xl font-bold"
           />
         ) : (
-          <h2 className="text-xl font-bold truncate">{displayName}</h2>
+          <h2 className="text-xl font-bold truncate">
+            <DisplayName pubkey={pubkey} name={displayName} />
+          </h2>
         )}
 
         {/* NIP-05 */}

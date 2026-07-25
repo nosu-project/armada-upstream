@@ -5,6 +5,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useModeration2 } from "@/concord-v2/hooks/useModeration2";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
@@ -87,7 +88,9 @@ function BannedRow({
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>
-      <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+      <span className="min-w-0 flex-1 truncate font-medium">
+        <DisplayName pubkey={pubkey} name={name} />
+      </span>
       {canUnban && (
         <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onUnban}>
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldOff className="size-3.5" />}

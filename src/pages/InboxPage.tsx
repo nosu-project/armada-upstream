@@ -7,6 +7,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -67,7 +68,7 @@ function InboxRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5">
           <span className={cn("truncate text-sm", unread ? "font-semibold" : "font-medium")}>
-            {displayName}
+            <DisplayName pubkey={event.pubkey} name={displayName} />
           </span>
           <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
             <AtSign className="size-3 shrink-0" />

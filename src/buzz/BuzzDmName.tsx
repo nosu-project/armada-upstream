@@ -1,11 +1,4 @@
-import { useAuthor } from "@/hooks/useAuthor";
-import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-
-/** One participant's resolved display name (scoped per-server nickname aware). */
-function ParticipantName({ pubkey }: { pubkey: string }) {
-  const author = useAuthor(pubkey);
-  return <>{useScopedDisplayName(pubkey, author.data?.metadata)}</>;
-}
+import { DisplayName } from "@/components/DisplayName";
 
 /**
  * The display title of a Buzz DM channel: the OTHER participants' names,
@@ -32,7 +25,7 @@ export function BuzzDmName({
       {shown.map((pk, i) => (
         <span key={pk}>
           {i > 0 && ", "}
-          <ParticipantName pubkey={pk} />
+          <DisplayName pubkey={pk} />
         </span>
       ))}
       {list.length > shown.length && <> +{list.length - shown.length}</>}
