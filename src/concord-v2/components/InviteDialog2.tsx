@@ -8,7 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
 import { toast } from "@/hooks/useToast";
@@ -51,6 +54,9 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
   const [copied, setCopied] = useState<string | null>(null);
   const [expiryDays, setExpiryDays] = useState<number>(0); // 0 = never
   const [label, setLabel] = useState("");
+  const [listPublicly, setListPublicly] = useState(false);
+  const [listingDescription, setListingDescription] = useState("");
+  const [listingTopics, setListingTopics] = useState("");
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [sentPubkey, setSentPubkey] = useState<string | null>(null);
@@ -87,9 +93,31 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     ) {
       return;
     }
+    // Listing an invite publishes the full link (secret included) to a public,
+    // searchable directory — a real privacy step, so confirm it explicitly.
+    if (
+      listPublicly &&
+      !confirm(
+        "Listing in Discover publishes this invite link — including its secret — to a public directory anyone can search. Only do this for a community you want strangers to find and join.",
+      )
+    ) {
+      return;
+    }
     try {
       const expiresAtMs = expiryDays > 0 ? Date.now() + expiryDays * 86400_000 : undefined;
-      setLink(await createLink({ expiresAtMs, label: label.trim() || undefined }));
+      const topics = listingTopics
+        .split(/[,\s]+/)
+        .map((t) => t.trim())
+        .filter(Boolean);
+      setLink(
+        await createLink({
+          expiresAtMs,
+          label: label.trim() || undefined,
+          listPublicly: listPublicly
+            ? { description: listingDescription.trim() || undefined, topics }
+            : undefined,
+        }),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't create the link.");
     }
@@ -250,6 +278,44 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
                     className="min-w-0 text-sm"
                     aria-label="Invite label"
                   />
+                </div>
+
+                {/* Opt-in public directory listing. */}
+                <div className="mt-3 rounded-lg border border-chrome p-3 space-y-2.5">
+                  <Label
+                    htmlFor="list-publicly"
+                    className="flex items-start justify-between gap-3 cursor-pointer"
+                  >
+                    <span className="space-y-0.5">
+                      <span className="block text-sm font-medium normal-case tracking-normal">
+                        List in Discover
+                      </span>
+                      <span className="block text-xs font-normal normal-case tracking-normal text-muted-foreground">
+                        Publish this link to a public directory so anyone can search for and join
+                        the community. The link's secret becomes public.
+                      </span>
+                    </span>
+                    <Switch id="list-publicly" checked={listPublicly} onCheckedChange={setListPublicly} />
+                  </Label>
+                  {listPublicly && (
+                    <div className="space-y-2 pt-1">
+                      <Textarea
+                        value={listingDescription}
+                        onChange={(e) => setListingDescription(e.target.value)}
+                        placeholder="Short description (optional)"
+                        className="min-h-16 text-sm"
+                        maxLength={280}
+                        aria-label="Listing description"
+                      />
+                      <Input
+                        value={listingTopics}
+                        onChange={(e) => setListingTopics(e.target.value)}
+                        placeholder="Topics, comma-separated (optional)"
+                        className="text-sm"
+                        aria-label="Listing topics"
+                      />
+                    </div>
+                  )}
                 </div>
               </CollapsibleContent>
             </Collapsible>

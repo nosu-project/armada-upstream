@@ -1,5 +1,6 @@
-import { hexToHslString, isValidHex } from "@/lib/colorUtils";
+import { hexToHslString, hslStringToHex, isValidHex } from "@/lib/colorUtils";
 
+import type { EventTemplate } from "@/hooks/useNostrPublish";
 import type { CoreThemeColors } from "@/themes";
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -70,4 +71,36 @@ export function parseDittoTheme(event: NostrEvent): DittoTheme | null {
     event.tags.find(([n]) => n === "title")?.[1] || identifier || "Untitled theme";
 
   return { identifier, title, colors };
+}
+
+/** A short, stable-ish slug for a theme's `d` identifier. */
+function slugify(title: string): string {
+  const base = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return base || "theme";
+}
+
+/**
+ * Build a kind-36767 theme definition event (Ditto-compatible) publishing the 3
+ * core colors as role-tagged `c` hex tags. Used by the "Share to Discover"
+ * action so an Armada-authored theme shows up in the theme directory (and in
+ * Ditto). Only ever published on an explicit user action.
+ */
+export function buildThemeDefinitionEvent(
+  title: string,
+  colors: CoreThemeColors,
+  identifier?: string,
+): EventTemplate {
+  const name = title.trim() || "My theme";
+  const d = identifier?.trim() || `${slugify(name)}-${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    kind: THEME_DEFINITION_KIND,
+    content: "",
+    tags: [
+      ["d", d],
+      ["title", name],
+      ["c", hslStringToHex(colors.background), "background"],
+      ["c", hslStringToHex(colors.text), "text"],
+      ["c", hslStringToHex(colors.primary), "primary"],
+    ],
+  };
 }

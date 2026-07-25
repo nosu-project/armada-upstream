@@ -27,7 +27,13 @@ import {
   type InviteList,
 } from "@/concord-v2/lib/invite";
 import { KIND_INVITE_LIST } from "@/concord-v2/lib/kinds";
+import {
+  KIND_PUBLIC_COMMUNITY,
+  buildPublicListingEvent,
+  listingCoord,
+} from "@/concord-v2/lib/publicListing";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord-v2/lib/inviteRelays";
+import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 import { shareOrigin } from "@/lib/shareOrigin";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
@@ -191,6 +197,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   const { data: folded } = useControlFold2(community);
   const inviteList = useInviteList2();
   const { mutateAsync: updateInviteList } = useUpdateInviteList2();
+  const { mutateAsync: publishEvent } = useNostrPublish();
   // The freshest membership snapshot from the live Community List vault. The
   // `community` prop is a memoized snapshot that can lag a just-adopted rekey
   // (staleTime/poll/render windows), and a bundle minted from a stale snapshot
@@ -272,8 +279,22 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     invalidateControl2(queryClient, community.idHex);
   };
 
-  const createLink = useMutation<string, Error, { expiresAtMs?: number; label?: string }>({
-    mutationFn: async ({ expiresAtMs, label }) => {
+  const createLink = useMutation<
+    string,
+    Error,
+    {
+      expiresAtMs?: number;
+      label?: string;
+      /**
+       * Opt-in: also publish a PUBLIC directory listing (kind 30456) embedding
+       * this link's full shareable URL (fragment included) so it's searchable in
+       * Discover. This deliberately trades the link's secrecy for
+       * discoverability — only ever set from an explicit user action.
+       */
+      listPublicly?: { description?: string; topics?: string[] };
+    }
+  >({
+    mutationFn: async ({ expiresAtMs, label, listPublicly }) => {
       if (!user || !community) throw new Error("Not ready.");
       if (!user.signer.nip44) throw new Error("This signer can't mint invite links (NIP-44 unsupported).");
 
@@ -329,6 +350,18 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       mine.add(link.pk);
       await publishRegistry([...mine]);
 
+      // Opt-in public directory listing (best-effort — a failed listing must
+      // not fail the mint; the link itself is already live).
+      if (listPublicly) {
+        const listing = buildPublicListingEvent({
+          inviteUrl: url,
+          name: folded?.metadata?.name ?? community.name,
+          description: listPublicly.description,
+          topics: listPublicly.topics,
+        });
+        if (listing) await publishEvent(listing).catch(() => undefined);
+      }
+
       return url;
     },
   });
@@ -361,6 +394,18 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
       mine.delete(parsed.linkSigner);
       await publishRegistry([...mine]);
+
+      // Best-effort: retract any public directory listing for this link (NIP-09
+      // delete of the addressable listing coordinate). Failure is non-fatal —
+      // the link is already tombstoned and can no longer be joined.
+      await publishEvent({
+        kind: 5,
+        content: "",
+        tags: [
+          ["a", listingCoord(user.pubkey, parsed.linkSigner)],
+          ["k", String(KIND_PUBLIC_COMMUNITY)],
+        ],
+      }).catch(() => undefined);
     },
   });
 
