@@ -188,6 +188,76 @@ interface MessageTimelineProps {
 }
 
 /**
+ * A fixed pseudo-thread for the loading placeholder: alternating authors, runs
+ * of same-author continuations, and bodies of one to three lines at varied
+ * widths. Real conversations look like this; a column of identical
+ * avatar-plus-one-line rows reads as a progress indicator, not as content.
+ *
+ * Fixed rather than random so the placeholder never reshuffles between renders,
+ * and geometry matches {@link MessageRow} exactly (size-10 avatar, gap-3,
+ * py-1.5 head rows / py-0.5 continuations, w-10 continuation gutter) so nothing
+ * shifts when the real messages replace it.
+ */
+const SKELETON_ROWS: { continuation: boolean; name?: string; widths: string[] }[] = [
+  { continuation: false, name: "5rem", widths: ["62%"] },
+  { continuation: true, widths: ["38%"] },
+  { continuation: true, widths: ["74%", "41%"] },
+  { continuation: false, name: "7rem", widths: ["48%"] },
+  { continuation: false, name: "4.5rem", widths: ["83%", "56%", "29%"] },
+  { continuation: true, widths: ["35%"] },
+  { continuation: false, name: "6rem", widths: ["67%"] },
+  { continuation: true, widths: ["52%", "44%"] },
+  { continuation: false, name: "5.5rem", widths: ["31%"] },
+  { continuation: false, name: "8rem", widths: ["78%", "38%"] },
+  { continuation: true, widths: ["59%"] },
+  { continuation: false, name: "4rem", widths: ["45%", "70%"] },
+  { continuation: true, widths: ["33%"] },
+  { continuation: false, name: "6.5rem", widths: ["71%", "50%"] },
+];
+
+/**
+ * Bottom-anchored loading placeholder for the timeline.
+ *
+ * `justify-end` plus `overflow-hidden` makes this behave like the real thread:
+ * content sits on the bottom edge and the surplus is clipped at the top, so it
+ * reads as history scrolled off-screen rather than a short list floating in an
+ * empty pane. The pattern is repeated so it overflows tall viewports too — the
+ * previous fixed eight rows left most of the screen blank.
+ */
+function TimelineSkeleton() {
+  return (
+    <div
+      className="flex-1 min-h-0 overflow-hidden flex flex-col justify-end px-3 py-4"
+      aria-hidden
+    >
+      {[...SKELETON_ROWS, ...SKELETON_ROWS].map((row, i) => (
+        <div
+          key={i}
+          className={cn("flex items-start gap-3 px-2.5", row.continuation ? "py-0.5" : "py-1.5")}
+        >
+          {row.continuation ? (
+            <div className="w-10 shrink-0" />
+          ) : (
+            <Skeleton className="size-10 rounded-full shrink-0 mt-0.5" />
+          )}
+          <div className="flex-1 min-w-0 space-y-1.5">
+            {!row.continuation && (
+              <div className="flex items-baseline gap-2">
+                <Skeleton className="h-3.5" style={{ width: row.name }} />
+                <Skeleton className="h-2.5 w-8" />
+              </div>
+            )}
+            {row.widths.map((width, j) => (
+              <Skeleton key={j} className="h-3.5 max-w-full" style={{ width }} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * The transport-agnostic message timeline: a bottom-anchored, auto-scrolling
  * scroll area with scroll-up backfill, same-author continuation collapsing, a
  * loading skeleton and an empty state. It owns only scroll mechanics and the
@@ -540,19 +610,7 @@ export function MessageTimeline({
   return (
     <div className={cn("relative flex flex-col", className)}>
       {isLoading || transientEmpty || (syncing && messages.length === 0) ? (
-        <div className="flex-1 min-h-0 overflow-hidden px-3 py-4">
-          <div className="space-y-3 p-2">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <Skeleton className="size-10 rounded-full shrink-0" />
-                <div className="space-y-1 flex-1">
-                  <Skeleton className="h-3 w-24" />
-                  <Skeleton className="h-3 w-2/3" />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <TimelineSkeleton />
       ) : messages.length === 0 ? (
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4">{emptyState ?? null}</div>
       ) : (

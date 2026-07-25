@@ -225,6 +225,19 @@ function ConversationRow({
 }
 
 /**
+ * A stable, varied body width for an undecrypted row. A screenful of
+ * placeholders all cut to the same length reads as a loading bar rather than as
+ * messages, so each row derives its width from its event id — deterministic, so
+ * a row keeps the same width across re-renders and scroll passes, and so the
+ * width never hints at the real message length.
+ */
+function placeholderBodyWidth(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return `${25 + (hash % 60)}%`;
+}
+
+/**
  * A not-yet-decrypted DM placeholder. It reserves the row (so scroll
  * length/position stay correct in the timeline) and shows a muted shimmer until
  * it scrolls into view, at which point `observePlaceholder` triggers its
@@ -272,7 +285,10 @@ function DmPlaceholderRow({
             Encrypted message. Tap to decrypt.
           </button>
         ) : (
-          <Skeleton className="h-3 w-40 max-w-full" />
+          <Skeleton
+            className="h-3.5 max-w-full"
+            style={{ width: placeholderBodyWidth(id) }}
+          />
         )}
       </MessageRow>
     </div>
@@ -1275,9 +1291,13 @@ function NewDMPane({
  * cold start for this account on this device. Mirrors ConversationRow's
  * geometry (size-9 avatar, name line, preview line) so the real list doesn't
  * shift when it replaces these. Widths are fixed rather than random so the
- * placeholders don't reflow on re-render.
+ * placeholders don't reflow on re-render, and there are enough of them to fill
+ * a tall viewport rather than trailing off into blank space.
  */
-const SKELETON_WIDTHS = ["70%", "45%", "58%", "38%", "64%", "50%", "72%", "42%"] as const;
+const SKELETON_WIDTHS = [
+  "70%", "45%", "58%", "38%", "64%", "50%", "72%", "42%",
+  "55%", "66%", "34%", "61%", "47%", "75%", "40%", "53%",
+] as const;
 
 function ConversationRowSkeletons() {
   return (
