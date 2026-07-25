@@ -80,7 +80,7 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="px-3.5 py-3 space-y-2.5 flex flex-col flex-1">
+      <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
         {/* Header: pack name + author */}
         <div className="flex items-center gap-2 min-w-0">
           <Smile className="size-4 shrink-0 text-primary" />

@@ -93,12 +93,12 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     ) {
       return;
     }
-    // Listing an invite publishes the full link (secret included) to a public,
-    // searchable directory — a real privacy step, so confirm it explicitly.
+    // Announcing publishes the full link (secret included) as a public note —
+    // a real privacy step, so confirm it explicitly.
     if (
       listPublicly &&
       !confirm(
-        "Listing in Discover publishes this invite link — including its secret — to a public directory anyone can search. Only do this for a community you want strangers to find and join.",
+        "Sharing to Discover posts a public note from your account with this invite link — including its secret — so anyone can find and join. Only do this for a community you want strangers to join.",
       )
     ) {
       return;
@@ -288,11 +288,11 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
                   >
                     <span className="space-y-0.5">
                       <span className="block text-sm font-medium normal-case tracking-normal">
-                        List in Discover
+                        Share to Discover
                       </span>
                       <span className="block text-xs font-normal normal-case tracking-normal text-muted-foreground">
-                        Publish this link to a public directory so anyone can search for and join
-                        the community. The link's secret becomes public.
+                        Post this link in a public note so anyone can find and join the community.
+                        The link's secret becomes public.
                       </span>
                     </span>
                     <Switch id="list-publicly" checked={listPublicly} onCheckedChange={setListPublicly} />

@@ -27,11 +27,7 @@ import {
   type InviteList,
 } from "@/concord-v2/lib/invite";
 import { KIND_INVITE_LIST } from "@/concord-v2/lib/kinds";
-import {
-  KIND_PUBLIC_COMMUNITY,
-  buildPublicListingEvent,
-  listingCoord,
-} from "@/concord-v2/lib/publicListing";
+import { buildInviteAnnouncementNote } from "@/concord-v2/lib/inviteDiscovery";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord-v2/lib/inviteRelays";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
@@ -286,10 +282,10 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       expiresAtMs?: number;
       label?: string;
       /**
-       * Opt-in: also publish a PUBLIC directory listing (kind 30456) embedding
-       * this link's full shareable URL (fragment included) so it's searchable in
-       * Discover. This deliberately trades the link's secrecy for
-       * discoverability — only ever set from an explicit user action.
+       * Opt-in: also announce this community in a PUBLIC note carrying the full
+       * shareable link (fragment included), so Discover — which mines notes for
+       * invite links — can find it. This deliberately trades the link's secrecy
+       * for discoverability; only ever set from an explicit user action.
        */
       listPublicly?: { description?: string; topics?: string[] };
     }
@@ -350,16 +346,15 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       mine.add(link.pk);
       await publishRegistry([...mine]);
 
-      // Opt-in public directory listing (best-effort — a failed listing must
-      // not fail the mint; the link itself is already live).
+      // Opt-in public announcement note (best-effort — a failed post must not
+      // fail the mint; the link itself is already live).
       if (listPublicly) {
-        const listing = buildPublicListingEvent({
+        const note = buildInviteAnnouncementNote({
           inviteUrl: url,
-          name: folded?.metadata?.name ?? community.name,
           description: listPublicly.description,
           topics: listPublicly.topics,
         });
-        if (listing) await publishEvent(listing).catch(() => undefined);
+        if (note) await publishEvent(note).catch(() => undefined);
       }
 
       return url;
@@ -394,18 +389,6 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
       mine.delete(parsed.linkSigner);
       await publishRegistry([...mine]);
-
-      // Best-effort: retract any public directory listing for this link (NIP-09
-      // delete of the addressable listing coordinate). Failure is non-fatal —
-      // the link is already tombstoned and can no longer be joined.
-      await publishEvent({
-        kind: 5,
-        content: "",
-        tags: [
-          ["a", listingCoord(user.pubkey, parsed.linkSigner)],
-          ["k", String(KIND_PUBLIC_COMMUNITY)],
-        ],
-      }).catch(() => undefined);
     },
   });
 

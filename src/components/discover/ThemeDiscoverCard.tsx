@@ -96,7 +96,7 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
         </span>
       </div>
 
-      <div className="px-3.5 py-3 space-y-2.5 flex flex-col flex-1">
+      <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
         <div className="flex items-center gap-2 min-w-0">
           <Palette className="size-4 shrink-0 text-primary" />
           <p className="font-semibold truncate leading-tight flex-1">{theme.title}</p>
@@ -131,7 +131,7 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
           )}
           {user && (
             <Button
-              variant="outline"
+              variant="secondary"
               className="shrink-0 clip-corner-lg"
               onClick={onSave}
               disabled={saving || saved}

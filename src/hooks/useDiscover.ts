@@ -6,10 +6,10 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useDebounce } from "@/hooks/useDebounce";
 import { KIND_EMOJI_SET, emojiPackEntries, emojiPackName } from "@/hooks/useEmojiPacks";
 import {
-  KIND_PUBLIC_COMMUNITY,
-  parsePublicListing,
-  type PublicListing,
-} from "@/concord-v2/lib/publicListing";
+  SHARE_MARKER,
+  invitesFromEvent,
+  type DiscoveredInvite,
+} from "@/concord-v2/lib/inviteDiscovery";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
 
@@ -77,31 +77,38 @@ function useDiscoverRelays(): string[] {
   }, [config.appRelays]);
 }
 
-/** Public Concord community listings (kind 30456). */
+/**
+ * Public Concord communities — mined from ordinary notes that share a full
+ * invite link. NIP-50-searches notes for the invite-URL marker (ANDed with the
+ * user's query), extracts the links, and de-duplicates by link-signer keeping
+ * the newest sharing note.
+ */
 export function useDiscoverCommunities(query: string) {
   const { nostr } = useNostr();
   const relays = useDiscoverRelays();
   const debounced = useDebounce(query, 300);
 
-  return useQuery<PublicListing[]>({
+  return useQuery<DiscoveredInvite[]>({
     queryKey: ["discover", "communities", relays, debounced.trim()],
     enabled: relays.length > 0,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
       const q = debounced.trim();
-      const events = await fetchDiscover(nostr, relays, KIND_PUBLIC_COMMUNITY, q, signal);
-      const listings = events
-        .map(parsePublicListing)
-        .filter((l): l is PublicListing => l !== null);
-      if (!q) return listings;
-      const needle = q.toLowerCase();
-      return listings.filter((l) =>
-        [l.name, l.description ?? "", l.topics.join(" ")]
-          .join(" ")
-          .toLowerCase()
-          .includes(needle),
+      const search = q ? `${q} ${SHARE_MARKER}` : SHARE_MARKER;
+      const events = await nostr.group(relays).query(
+        [{ kinds: [1], search, limit: FETCH_LIMIT }],
+        { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
       );
+      // Newest note wins for a given link.
+      events.sort((a, b) => b.created_at - a.created_at);
+      const byLinkSigner = new Map<string, DiscoveredInvite>();
+      for (const event of events) {
+        for (const invite of invitesFromEvent(event)) {
+          if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
+        }
+      }
+      return [...byLinkSigner.values()];
     },
   });
 }

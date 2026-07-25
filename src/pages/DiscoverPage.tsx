@@ -142,15 +142,15 @@ function CommunitiesTab({ query }: { query: string }) {
         <p className="max-w-xs text-sm">
           {query.trim()
             ? "No public communities matched your search."
-            : "No public communities listed yet. A community owner can list one when generating an invite link."}
+            : "No public communities found yet. Share an invite link in a note (or from the invite dialog) to list one here."}
         </p>
       </TabState>
     );
   }
   return (
-    <div className={GRID}>
-      {data.map((listing) => (
-        <CommunityListingCard key={listing.event.id} listing={listing} />
+    <div className={cn(GRID, "items-stretch")}>
+      {data.map((invite) => (
+        <CommunityListingCard key={invite.linkSigner} invite={invite} />
       ))}
     </div>
   );
