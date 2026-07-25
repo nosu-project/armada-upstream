@@ -218,11 +218,29 @@ export function emojiPackEntries(event: NostrEvent): { shortcode: string; url: s
     .map((t) => ({ shortcode: t[1], url: t[2] }));
 }
 
-/** The pack's human name (`title` tag), falling back to its `d` identifier. */
+/**
+ * The pack's human name. Reads `title` and `name` (clients disagree on which
+ * they emit — we publish both), falling back to the `d` identifier.
+ */
 export function emojiPackName(event: NostrEvent): string {
   return (
     event.tags.find((t) => t[0] === "title")?.[1] ||
+    event.tags.find((t) => t[0] === "name")?.[1] ||
     event.tags.find((t) => t[0] === "d")?.[1] ||
     "Emoji pack"
+  );
+}
+
+/** The pack's description (`about` tag), if any. */
+export function emojiPackAbout(event: NostrEvent): string | undefined {
+  return event.tags.find((t) => t[0] === "about")?.[1] || undefined;
+}
+
+/** The pack's cover image (`image` or `picture` tag), if any. */
+export function emojiPackPicture(event: NostrEvent): string | undefined {
+  return (
+    event.tags.find((t) => t[0] === "image")?.[1] ||
+    event.tags.find((t) => t[0] === "picture")?.[1] ||
+    undefined
   );
 }

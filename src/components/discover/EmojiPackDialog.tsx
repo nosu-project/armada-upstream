@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { KIND_EMOJI_SET, useAddEmojiPack } from "@/hooks/useEmojiPacks";
@@ -77,10 +78,35 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
   const { mutateAsync: addPack } = useAddEmojiPack();
   const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
+  const iconInput = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
+  const [about, setAbout] = useState("");
+  const [icon, setIcon] = useState("");
+  const [iconUploading, setIconUploading] = useState(false);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [dragging, setDragging] = useState(false);
   const [addToMine, setAddToMine] = useState(true);
+  // Spans the whole publish handler. `publishing` (the publishEvent mutation)
+  // only covers the event write; the list read-modify-write in `addPack` after
+  // it can run for seconds with no other signal, leaving the button looking
+  // idle while work is still in flight.
+  const [submitting, setSubmitting] = useState(false);
+
+  // The pack's cover image (`picture`/`image` tags). Other clients — Ditto
+  // among them — show this as the pack icon and fall back to nothing without
+  // it, so a pack published with none looks bare everywhere but here.
+  const addIcon = async (file: File | null | undefined) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    setIconUploading(true);
+    try {
+      const tags = await uploadFile(file);
+      setIcon(tags[0]?.[1] ?? "");
+    } catch {
+      toast({ title: "Icon upload failed", description: file.name, variant: "destructive" });
+    } finally {
+      setIconUploading(false);
+    }
+  };
 
   const addFiles = async (files: FileList | File[] | null) => {
     if (!files) return;
@@ -131,12 +157,12 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
   const missing = uploaded.filter((e) => !finalShortcode(e.shortcode)).length;
   const named = name.trim().length > 0;
   const canPublish =
-    named && uploaded.length > 0 && !uploading && !publishing && duplicates === 0 && missing === 0;
+    named && uploaded.length > 0 && !uploading && !iconUploading && !publishing && !submitting && duplicates === 0 && missing === 0;
 
-  const hint = publishing
+  const hint = publishing || submitting
     ? "Publishing…"
-    : uploading > 0
-      ? `Uploading ${uploading} image${uploading === 1 ? "" : "s"}…`
+    : uploading > 0 || iconUploading
+      ? `Uploading ${uploading + (iconUploading ? 1 : 0)} image${uploading + (iconUploading ? 1 : 0) === 1 ? "" : "s"}…`
       : missing > 0
         ? "Every emoji needs a shortcode."
         : duplicates > 0
@@ -149,8 +175,21 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
 
   const publish = async () => {
     if (!canPublish) return;
+    setSubmitting(true);
     const identifier = `${slugify(name)}-${Math.random().toString(36).slice(2, 6)}`;
-    const tags: string[][] = [["d", identifier], ["title", name.trim()]];
+    // `title` and `name` both carry the human name: some clients (Ditto) read
+    // `name` and fall back to the raw `d` slug without it, so emit both. `image`
+    // and `picture` both carry the cover so icon-reading clients (either tag)
+    // resolve it. `about` is the description.
+    const tags: string[][] = [
+      ["d", identifier],
+      ["title", name.trim()],
+      ["name", name.trim()],
+    ];
+    if (about.trim()) tags.push(["about", about.trim()]);
+    if (icon) {
+      tags.push(["image", icon], ["picture", icon]);
+    }
     for (const e of uploaded) {
       tags.push(["emoji", finalShortcode(e.shortcode), e.url]);
     }
@@ -196,6 +235,8 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
         description: e instanceof Error ? e.message : "Publishing failed.",
         variant: "destructive",
       });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -213,20 +254,72 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
         </p>
       </div>
 
+      <input
+        ref={iconInput}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void addIcon(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
+
+      <div className="flex items-end gap-3">
+        {/* Pack icon — the cover other clients render beside the name. */}
+        <button
+          type="button"
+          onClick={() => iconInput.current?.click()}
+          aria-label="Pack icon"
+          className={cn(
+            "flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border transition-colors",
+            icon
+              ? "border-transparent"
+              : "border-dashed border-border text-muted-foreground hover:border-muted-foreground/60 hover:bg-foreground/5",
+          )}
+        >
+          {iconUploading ? (
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          ) : icon ? (
+            <img src={icon} alt="" className="size-full object-cover" />
+          ) : (
+            <ImagePlus className="size-5" />
+          )}
+        </button>
+        <div className="flex-1 space-y-1.5">
+          <Label
+            htmlFor="pack-name"
+            className="text-xs font-medium uppercase tracking-wider text-muted-foreground"
+          >
+            Pack name
+          </Label>
+          <Input
+            id="pack-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="My emoji pack"
+            maxLength={60}
+            autoFocus
+          />
+        </div>
+      </div>
+
       <div className="space-y-1.5">
         <Label
-          htmlFor="pack-name"
+          htmlFor="pack-about"
           className="text-xs font-medium uppercase tracking-wider text-muted-foreground"
         >
-          Pack name
+          Description
+          <span className="ml-1 normal-case tracking-normal text-muted-foreground/60">optional</span>
         </Label>
-        <Input
-          id="pack-name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="My emoji pack"
-          maxLength={60}
-          autoFocus
+        <Textarea
+          id="pack-about"
+          value={about}
+          onChange={(e) => setAbout(e.target.value)}
+          placeholder="What's in this pack?"
+          maxLength={280}
+          rows={2}
+          className="resize-none"
         />
       </div>
 
@@ -362,7 +455,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
           </Label>
         )}
         <Button className="w-full clip-corner-lg" onClick={publish} disabled={!canPublish}>
-          {publishing && <Loader2 className="size-4 animate-spin" />}
+          {(publishing || submitting) && <Loader2 className="size-4 animate-spin" />}
           Publish pack
         </Button>
         <p
