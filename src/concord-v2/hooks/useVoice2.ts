@@ -396,10 +396,15 @@ export function useVoiceBroker2(
     () => (roomHex ? rendezvousCandidates(roomHex, fold, ownAvServers()) : []),
     [roomHex, fold],
   );
+  // The probe answers a question about an ORIGIN, not about a channel, and
+  // `candidatesKey` already captures everything the queryFn reads (including
+  // the room-derived ordering). Keying on the channel too would give every
+  // channel in a community its own entry for the same idle-room candidate
+  // list — N identical probes to the same broker on every mount.
   const candidatesKey = candidates.join(",");
 
   return useQuery<string | null>({
-    queryKey: ["concord2", "av-broker", channel?.idHex ?? null, candidatesKey],
+    queryKey: ["concord2", "av-broker", candidatesKey],
     enabled: Boolean(roomHex),
     staleTime: 60_000,
     queryFn: async ({ signal }) => {
