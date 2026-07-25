@@ -21,7 +21,7 @@ import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
 import { signStreamAuthsChunked } from "@/concord-v2/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { normalizeRelayUrl } from "@/lib/platform";
+import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platform";
 import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import type { GitRepositoryWireInput } from "@/wire/spec";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -328,7 +328,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   });
   const gitSubs = useMemo(() => gitRepositories.map((repository) => ({
     address: repository.address,
-    relays: repository.relays.filter((relay) => !relay.includes("index.ngit.dev")),
+    relays: repository.relays.filter((relay) => !isGitAnnouncementDiscoveryRelay(relay)),
     owner: repository.address.split(":")[1]!,
     // Only a parsed announcement with the exact coordinate contributes trust.
     maintainers: gitAnnouncements.data?.get(repository.address)?.maintainers ?? [],

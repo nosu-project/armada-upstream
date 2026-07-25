@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import type { ProjectRepo, ProjectWorkItem } from "@/components/projects/projectData";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import {
   EVENT_DELETION_KIND,
@@ -28,6 +29,7 @@ import {
   type GitTicket,
   type GitTimelineActivity,
 } from "@/lib/gitActivity";
+import { isGitAnnouncementDiscoveryRelay } from "@/lib/platform";
 import { emitWireScopes } from "@/wire/bus";
 import { useWireScopes } from "@/wire/useWireScopes";
 
@@ -198,17 +200,27 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
 }
 
 function sourceRelays(source: GitProjectSource): string[] {
-  return source.relayHints.filter((relay) => !relay.includes("index.ngit.dev"));
+  return source.relayHints.filter((relay) => !isGitAnnouncementDiscoveryRelay(relay));
 }
 
 /**
- * Deep-sync attempts per coordinate this app session (module scope survives
- * view unmounts). A repository is done once a relay actually answered; total
- * failures retry up to the cap so an offline first open isn't final, without
- * looping while offline. Manual refresh clears the slate.
+ * Deep-sync attempts per account and coordinate this app session (module scope
+ * survives view unmounts). A repository is done once a relay actually answered;
+ * total failures retry up to the cap so an offline first open isn't final,
+ * without looping while offline. Manual refresh clears the slate.
  */
 const deepSyncAttempts = new Map<string, number>();
 const MAX_SYNC_ATTEMPTS = 2;
+
+/**
+ * Marks are per account: relays are AUTH-gated, so what one account managed to
+ * read says nothing about what the next one can, and a switch must re-sync
+ * rather than inherit the previous account's "done".
+ */
+function syncKey(pubkey: string | undefined, coordinate: string): string {
+  return `${pubkey ?? "anon"}:${coordinate}`;
+}
+
 /** Fan-out bounds: repos and relay hints are admin-controlled data. */
 const SYNC_SOURCES_PER_RUN = 4;
 const MAX_SYNC_RELAYS = 8;
@@ -239,6 +251,7 @@ export function useGitProjects(
   relaysForCoordinates: (coordinates: readonly string[]) => string[];
 } {
   const { nostr } = useNostr();
+  const { user } = useCurrentUser();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
 
@@ -285,7 +298,7 @@ export function useGitProjects(
     // A bounded batch per run; the finally-nonce re-fires the effect until no
     // source is pending (sources attached mid-sync included).
     const pending = sources
-      .filter((source) => (deepSyncAttempts.get(source.address.coordinate) ?? 0) < MAX_SYNC_ATTEMPTS && sourceRelays(source).length > 0)
+      .filter((source) => (deepSyncAttempts.get(syncKey(user?.pubkey, source.address.coordinate)) ?? 0) < MAX_SYNC_ATTEMPTS && sourceRelays(source).length > 0)
       .slice(0, SYNC_SOURCES_PER_RUN);
     if (pending.length === 0) return;
     syncing.current = true;
@@ -378,10 +391,10 @@ export function useGitProjects(
           }
 
           if (answered) {
-            deepSyncAttempts.set(coordinate, MAX_SYNC_ATTEMPTS);
+            deepSyncAttempts.set(syncKey(user?.pubkey, coordinate), MAX_SYNC_ATTEMPTS);
             touched.add(`git:${coordinate}`);
           } else {
-            deepSyncAttempts.set(coordinate, (deepSyncAttempts.get(coordinate) ?? 0) + 1);
+            deepSyncAttempts.set(syncKey(user?.pubkey, coordinate), (deepSyncAttempts.get(syncKey(user?.pubkey, coordinate)) ?? 0) + 1);
           }
         }));
       } finally {
@@ -393,13 +406,13 @@ export function useGitProjects(
         setSyncNonce((nonce) => nonce + 1);
       }
     })();
-  }, [enabled, sources, eventStore, nostr, queryClient, queryKey, syncNonce]);
+  }, [enabled, sources, eventStore, nostr, queryClient, queryKey, syncNonce, user?.pubkey]);
 
   // Forget this session's sync marks so the next effect run re-pulls everything.
   const refresh = useCallback(() => {
-    for (const source of sources) deepSyncAttempts.delete(source.address.coordinate);
+    for (const source of sources) deepSyncAttempts.delete(syncKey(user?.pubkey, source.address.coordinate));
     setSyncNonce((nonce) => nonce + 1);
-  }, [sources]);
+  }, [sources, user?.pubkey]);
 
   // Pull one ticket's full thread from the repository relays on demand.
   const refreshTicket = useCallback(async (ticket: GitTicket): Promise<number> => {

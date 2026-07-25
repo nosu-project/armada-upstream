@@ -1,9 +1,12 @@
 package buzz.armada.app;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Method;
+import org.json.JSONObject;
 import org.junit.Test;
 
 /**
@@ -29,5 +32,25 @@ public class NotificationRelayServiceGitTest {
         assertTrue(call("validHex", "b".repeat(64)));
         assertFalse(call("validHex", "B".repeat(64)));
         assertFalse(call("validHex", "b".repeat(63)));
+    }
+
+    private static String rootTag(String tagsJson, String name) throws Exception {
+        Method method = NotificationRelayService.class.getDeclaredMethod("rootTag", JSONObject.class, String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, new JSONObject("{\"tags\":" + tagsJson + "}"), name);
+    }
+
+    @Test public void readsNip22RootsWhoseFourthValueIsTheRootAuthor() throws Exception {
+        String ticket = "b".repeat(64), author = "c".repeat(64);
+        assertEquals(ticket, rootTag("[[\"E\",\"" + ticket + "\",\"wss://relay.example\",\"" + author + "\"]]", "E"));
+        assertEquals(ticket, rootTag("[[\"E\",\"" + ticket + "\"]]", "E"));
+        // Ambiguous roots are refused rather than guessed at.
+        assertNull(rootTag("[[\"E\",\"" + ticket + "\"],[\"E\",\"" + author + "\"]]", "E"));
+    }
+
+    @Test public void stillRequiresTheRootMarkerOnLowercaseStatusTags() throws Exception {
+        String ticket = "b".repeat(64);
+        assertEquals(ticket, rootTag("[[\"e\",\"" + ticket + "\",\"\",\"root\"]]", "e"));
+        assertNull(rootTag("[[\"e\",\"" + ticket + "\",\"\",\"reply\"]]", "e"));
     }
 }

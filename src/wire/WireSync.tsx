@@ -200,7 +200,7 @@ function wireGitRepositories(
         byAddress.set(repository.address, repository);
       }
       repository.relays.push(...attachment.relayHints);
-       repository.attachments.push({ channelId: channel.idHex, communityId: communityIdHex, attachment });
+      repository.attachments.push({ channelId: channel.idHex, communityId: communityIdHex, attachment });
     }
   }
   return [...byAddress.values()]

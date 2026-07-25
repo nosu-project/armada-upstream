@@ -1039,8 +1039,10 @@ public class NotificationRelayService extends Service {
                 JSONArray relays = value.optJSONArray("relays");
                 if (relays != null && repository.live()) for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j, "");
-                    // index.ngit.dev is discovery-only and must never get ongoing activity REQs.
-                    if (relay.isEmpty() || relay.contains("index.ngit.dev")) continue;
+                    // The client resolves which relay is the discovery index and
+                    // drops it before writing gitSubs, so these are activity
+                    // relays only; the service holds no host of its own.
+                    if (relay.isEmpty()) continue;
                     Set<String> addresses = gitRepositoriesByRelay.get(relay);
                     if (addresses == null) gitRepositoriesByRelay.put(relay, addresses = new LinkedHashSet<>());
                     addresses.add(address);
@@ -2090,10 +2092,10 @@ public class NotificationRelayService extends Service {
             root = new GitRoot(id, event.optString("pubkey"), kind);
             if (!repository.roots.containsKey(id)) {
                 repository.roots.put(id, root);
+                // Persisting the root reconnects through the config listener,
+                // the same path every other subscription change takes, so the
+                // new root's child filters go live without a WebView.
                 persistGitRoot(address, root);
-                // Rebuild all affected connections immediately; the new root's
-                // child filters are now active even when no WebView exists.
-                loadConfigAndReconnect();
             }
             title = tagValue(event, "subject"); action = kind == 1618 ? "opened a pull request" : "opened an issue";
             ticketId = id;
@@ -2126,16 +2128,41 @@ public class NotificationRelayService extends Service {
             String url = "/c/" + uriEncode(attachment.communityId) + "/" + uriEncode(attachment.channelId)
                     + "?ticket=" + uriEncode(ticketId);
             String line = action + (title != null && !title.trim().isEmpty() ? ": " + truncate(title) : "");
-            enqueueRoomMessage("c2:" + attachment.channelId, "Git activity", url, true,
-                    event.optString("pubkey", null), "Git activity", null, line,
-                    timestamp * 1000L, false);
+            // Share the channel's own room, community and title with chat, so
+            // git activity appends to that conversation instead of opening a
+            // second notification with a conflicting name.
+            Concord2Stream stream = streamForChannel(attachment.channelId);
+            enqueueRoomMessage(
+                    stream != null ? stream.community : null, "c2:" + attachment.channelId,
+                    stream != null ? stream.name : "Git activity", url,
+                    event.optString("pubkey", null), "Git activity", /*picture=*/null,
+                    line, timestamp * 1000L, /*mention=*/false);
         }
     }
 
+    /** The subscribed stream for a channel, if any; git activity borrows its
+     * community and display name. Streams are per (channel, epoch), so the
+     * first match is enough — every epoch carries the same two. */
+    private Concord2Stream streamForChannel(String channelId) {
+        for (Concord2Stream stream : pkToStream2.values()) if (stream.channelId.equals(channelId)) return stream;
+        return null;
+    }
+
+    /** NIP-22 encodes the root in uppercase tags, where — unlike NIP-10's
+     * lowercase `e` — the fourth value is the root author's pubkey rather than a
+     * "root" marker. Mirrors the TypeScript parser: an uppercase root counts
+     * only when it is unambiguous. */
     private static String rootTag(JSONObject event, String name) {
+        boolean nip22 = "E".equals(name);
+        String found = null;
         try { JSONArray tags = event.optJSONArray("tags"); if (tags == null) return null;
-            for (int i = 0; i < tags.length(); i++) { JSONArray tag = tags.optJSONArray(i); if (tag != null && name.equals(tag.optString(0)) && "root".equals(tag.optString(3))) return tag.optString(1); }
-        } catch (Exception ignored) {} return null;
+            for (int i = 0; i < tags.length(); i++) { JSONArray tag = tags.optJSONArray(i);
+                if (tag == null || !name.equals(tag.optString(0))) continue;
+                if (!nip22) { if ("root".equals(tag.optString(3))) return tag.optString(1); continue; }
+                if (found != null) return null;
+                found = tag.optString(1);
+            }
+        } catch (Exception ignored) {} return found;
     }
     private static boolean validTicketRoot(JSONObject event, GitRepository repository, int kind) {
         return validHex(event.optString("id", "")) && validHex(event.optString("pubkey", ""))

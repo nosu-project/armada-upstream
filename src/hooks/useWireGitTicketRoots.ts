@@ -13,6 +13,7 @@ import {
   matchGitTicketRepository,
   parseGitTicket,
 } from "@/lib/gitActivity";
+import { isGitAnnouncementDiscoveryRelay } from "@/lib/platform";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { GitRepositoryWireInput } from "@/wire/spec";
@@ -39,7 +40,7 @@ export function useWireGitTicketRoots(repositories: readonly GitRepositoryWireIn
     .filter((repository) => repository.attachments.some(({ attachment }) => attachment.detachedAt === undefined))
     .map((repository) => ({
       address: repository.address,
-      relays: [...new Set(repository.relays)].filter((relay) => !relay.includes("index.ngit.dev")).sort(),
+      relays: [...new Set(repository.relays)].filter((relay) => !isGitAnnouncementDiscoveryRelay(relay)).sort(),
     }))
     .sort((a, b) => a.address.localeCompare(b.address)), [repositories]);
   const signature = active.map((repository) => `${repository.address}:${repository.relays.join(",")}`).join("|");

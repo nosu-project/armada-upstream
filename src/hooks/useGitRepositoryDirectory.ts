@@ -6,7 +6,7 @@ import {
   parseGitRepositoryAnnouncement,
   type GitRepositoryAnnouncement,
 } from "@/lib/gitActivity";
-import { GIT_ANNOUNCEMENT_DISCOVERY_RELAY } from "@/lib/gitRepositoryResolver";
+import { GIT_ANNOUNCEMENT_DISCOVERY_RELAY } from "@/lib/platform";
 
 /**
  * The public NIP-34 repository directory: newest announcement per repository
@@ -17,8 +17,8 @@ import { GIT_ANNOUNCEMENT_DISCOVERY_RELAY } from "@/lib/gitRepositoryResolver";
 export function useGitRepositoryDirectory(enabled: boolean) {
   const { nostr } = useNostr();
   return useQuery<GitRepositoryAnnouncement[]>({
-    queryKey: ["git", "repository-directory"],
-    enabled,
+    queryKey: ["git", "repository-directory", GIT_ANNOUNCEMENT_DISCOVERY_RELAY],
+    enabled: enabled && GIT_ANNOUNCEMENT_DISCOVERY_RELAY !== "",
     staleTime: 5 * 60_000,
     queryFn: async ({ signal }) => {
       const events = await nostr.relay(GIT_ANNOUNCEMENT_DISCOVERY_RELAY).query(

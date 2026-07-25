@@ -1,4 +1,4 @@
-import { normalizeRelayUrl } from "@/lib/platform";
+import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platform";
 import { BUZZ_WIRE_KINDS } from "@/buzz/kinds";
 import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
@@ -331,7 +331,7 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     const repository = (inputs.gitRepositories ?? []).find((entry) => entry.address === address);
     if (!repository?.attachments.some(({ attachment }) => attachment.detachedAt === undefined)) continue;
     for (const url of repository.relays) {
-      if (url.includes("index.ngit.dev")) continue;
+      if (isGitAnnouncementDiscoveryRelay(url)) continue;
       const relay = normalizeRelayUrl(url);
       if (!relay) continue;
       let ids = rootIdsByRelay.get(relay);

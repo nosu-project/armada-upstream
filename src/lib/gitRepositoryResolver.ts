@@ -9,10 +9,7 @@ import {
   type GitRepositoryAnnouncement,
 } from "@/lib/gitActivity";
 import { isNostrId } from "@/lib/nostrId";
-import { normalizeRelayUrl } from "@/lib/platform";
-
-/** index.ngit.dev only helps find repository announcements; it is never persisted as activity. */
-export const GIT_ANNOUNCEMENT_DISCOVERY_RELAY = "wss://index.ngit.dev";
+import { GIT_ANNOUNCEMENT_DISCOVERY_RELAY, normalizeRelayUrl } from "@/lib/platform";
 
 export type GitRepositoryResolution = {
   address: GitRepositoryAddress;
@@ -130,7 +127,7 @@ export async function fetchGitRepositoryAnnouncement(
   signal?: AbortSignal,
 ): Promise<ResolvedGitRepository> {
   const primary = normalizedRelays(resolved.relayHints);
-  const discovery = primary.includes(GIT_ANNOUNCEMENT_DISCOVERY_RELAY)
+  const discovery = !GIT_ANNOUNCEMENT_DISCOVERY_RELAY || primary.includes(GIT_ANNOUNCEMENT_DISCOVERY_RELAY)
     ? []
     : [GIT_ANNOUNCEMENT_DISCOVERY_RELAY];
   let newest: GitRepositoryAnnouncement | undefined;

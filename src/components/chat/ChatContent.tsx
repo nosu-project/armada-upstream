@@ -1153,7 +1153,6 @@ function CollapsibleContent({ children }: { children: ReactNode }) {
   );
 }
 
-/** Extract the lowercase file extension from a URL's path, or undefined when there is none. */
 /**
  * The real target host, when a markdown link's TEXT itself reads as a
  * URL/domain pointing somewhere else. Undefined for honest links and for
@@ -1171,6 +1170,7 @@ function mdLinkSpoofHost(text: string, href: string): string | undefined {
   }
 }
 
+/** Extract the lowercase file extension from a URL's path, or undefined when there is none. */
 function extOfUrl(url: string): string | undefined {
   try {
     const path = new URL(url).pathname;

@@ -10,6 +10,7 @@ import {
   parseGitTicket,
   type GitRepositoryAttachment,
 } from "@/lib/gitActivity";
+import { isGitAnnouncementDiscoveryRelay } from "@/lib/platform";
 import { emitWireScopes } from "@/wire/bus";
 import { useWireScopes } from "@/wire/useWireScopes";
 
@@ -67,7 +68,7 @@ export function useChannelGitTicketRoots(channelId: string | undefined, attachme
     () => [...attachments].sort((a, b) => a.address.coordinate.localeCompare(b.address.coordinate) || a.attachedAt - b.attachedAt),
     [attachments],
   );
-  const queryKey = key(channelId, normalized);
+  const queryKey = useMemo(() => key(channelId, normalized), [channelId, normalized]);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [hasOlder, setHasOlder] = useState(true);
   const olderCursor = useRef<number | undefined>(undefined);
@@ -93,7 +94,7 @@ export function useChannelGitTicketRoots(channelId: string | undefined, attachme
     await Promise.all(normalized.map(async (attachment) => {
       const upper = attachment.detachedAt === undefined ? until : Math.min(until ?? attachment.detachedAt - 1, attachment.detachedAt - 1);
       if (upper !== undefined && upper < attachment.attachedAt) return;
-      const relays = [...new Set(attachment.activityRelays)].filter((relay) => !relay.includes("index.ngit.dev"));
+      const relays = [...new Set(attachment.activityRelays)].filter((relay) => !isGitAnnouncementDiscoveryRelay(relay));
       await Promise.all(relays.map(async (relay) => {
         try {
           const events = await nostr.relay(relay).query(

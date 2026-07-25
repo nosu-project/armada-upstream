@@ -2,8 +2,9 @@ import { nip19 } from "nostr-tools";
 import type { NostrEvent } from "@nostrify/nostrify";
 import { describe, expect, it } from "vitest";
 
+import { GIT_ANNOUNCEMENT_DISCOVERY_RELAY } from "@/lib/platform";
+
 import {
-  GIT_ANNOUNCEMENT_DISCOVERY_RELAY,
   resolveGitRepositoryAnnouncement,
   resolveGitRepositoryInput,
 } from "./gitRepositoryResolver";
