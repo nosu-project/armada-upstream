@@ -343,6 +343,17 @@ export function MessageTimeline({
   // own downward scrolls (see `handleScroll`).
   const lastScrollTopRef = useRef(Number.POSITIVE_INFINITY);
 
+  // The scroller only exists once there's something to put in it; the skeleton
+  // replaces it outright.
+  const listVisible = !isLoading && !transientEmpty && messages.length > 0;
+  // So while the skeleton is up there is no scroll position to preserve, and
+  // the scroller will remount at `scrollTop: 0`: the next layout has to pin.
+  // The opening pin is otherwise armed only at mount, and `messages` routinely
+  // arrives *before* `isLoading` clears (DMs merge two independently-loading
+  // planes), so the commits that fill the window can all land while the
+  // scroller is still unmounted and the pin has nothing to act on.
+  if (!listVisible) pinBottomRef.current = true;
+
   const [showJumpPill, setShowJumpPill] = useState(false);
 
   // Oldest message currently rendered. `null` = the newest INITIAL_WINDOW.
@@ -420,6 +431,7 @@ export function MessageTimeline({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     distanceRef.current = 0;
+    lastScrollTopRef.current = el.scrollTop;
     setShowJumpPill(false);
   }, []);
 
@@ -434,6 +446,7 @@ export function MessageTimeline({
     if (!el) return;
     if (distanceRef.current > AT_BOTTOM_PX) return;
     el.scrollTop = el.scrollHeight - el.clientHeight - distanceRef.current;
+    lastScrollTopRef.current = el.scrollTop;
   }, []);
 
   /** Center a mounted row and flash a highlight over it. */
@@ -494,12 +507,15 @@ export function MessageTimeline({
     if (anchor && anchor.items === items) {
       restoreAnchor(el, contentRef.current!, anchor);
       distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+      lastScrollTopRef.current = el.scrollTop;
       return;
     }
     stickToBottom();
-  }, [items, anchorLost, setWindowStart, jumpToRow, pinToBottomNow, stickToBottom]);
-
-  const listVisible = !isLoading && !transientEmpty && messages.length > 0;
+    // `listVisible` is a dependency because the scroller is what this effect
+    // moves: every commit before it mounts returns at the `!el` guard above, so
+    // without this the pin would be missed entirely whenever the window is
+    // already full by the time the skeleton clears.
+  }, [items, listVisible, anchorLost, setWindowStart, jumpToRow, pinToBottomNow, stickToBottom]);
 
   // Content that grows or shrinks without the message list changing (images,
   // link previews, embeds, reactions) and container reflows (the thread panel
@@ -551,15 +567,25 @@ export function MessageTimeline({
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
-    // Only extend while the scroller is moving toward older messages. Every
-    // scroll this component performs itself — the opening pin, stick-to-bottom,
-    // an anchor restore after rows land above — moves the offset DOWN, so this
+    // Only the reader moving up can push us away from the bottom. Every scroll
+    // this component performs itself — the opening pin, stick-to-bottom, an
+    // anchor restore after rows land above — records its own offset, so this
     // one comparison keeps the timeline from reacting to its own scrolling and
     // walking a channel's history in the moment it opens.
     const movingUp = el.scrollTop < lastScrollTopRef.current;
     lastScrollTopRef.current = el.scrollTop;
+    // A row that grows *below* the fold — a DM decrypting out of its
+    // placeholder skeleton, an image decoding, a reply context resolving —
+    // raises the distance without touching `scrollTop`. Scroll events are
+    // delivered a frame after the move that caused them, so the pin's own event
+    // routinely arrives with that growth already in `scrollHeight`; banking it
+    // as the reader's distance would latch stick-to-bottom off (it gives up
+    // past AT_BOTTOM_PX) for the rest of the mount and strand a freshly-opened
+    // conversation short of its newest message. Shrinking distance is always
+    // safe to record; growth counts only when the reader is the one moving.
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (movingUp || distance <= distanceRef.current) distanceRef.current = distance;
+    setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
     if (movingUp) maybeExtend();
   }, [maybeExtend]);
 

@@ -669,6 +669,11 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         // so foreign clients render the reply relationship too.
         const finalTags = replyTo ? [...tags, ["e", replyTo.id]] : tags;
         await send(text, finalTags, { allowLegacy: legacyAllowed });
+        // Sending is an explicit "I'm at the present", so follow the new
+        // message even from a reader who had scrolled up — the timeline's own
+        // stick-to-bottom deliberately won't, and group and Buzz chat both pin
+        // here too.
+        timelineRef.current?.pinToBottom();
         setReplyTo(undefined);
       } catch (e) {
         // The peer can't receive private DMs and legacy hasn't been enabled —
