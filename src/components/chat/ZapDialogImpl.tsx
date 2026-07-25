@@ -2,6 +2,7 @@ import { ChevronDown, Copy, ExternalLink, HelpCircle, Loader2, X } from "lucide-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { DisplayName } from "@/components/DisplayName";
 import { OnchainZapContent } from "@/components/OnchainZapContent";
 import { GenericPaymentContent } from "@/components/GenericPaymentContent";
 import { PaymentMethodIcon } from "@/components/PaymentMethodIcon";
@@ -247,7 +248,11 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
             </DropdownMenu>
           ) : (
             <span className="truncate">
-              {isPrivate ? "Private Zap" : `Zap ${displayName}`}
+              {isPrivate ? (
+                "Private Zap"
+              ) : (
+                <>Zap <DisplayName pubkey={target.pubkey} name={displayName} /></>
+              )}
             </span>
           )}
           {isPrivate && !showingInvoice && !success && (

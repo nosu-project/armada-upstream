@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Check, ExternalLink } from 'lucide-react';
+import { DisplayName } from '@/components/DisplayName';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { getAvatarShape } from '@/lib/avatarShape';
@@ -148,7 +149,11 @@ export function ZapSuccessScreen({
         </Avatar>
         <div className="min-w-0 text-left">
           <div className="text-[11px] text-muted-foreground leading-tight">To</div>
-          <div className="text-sm font-medium truncate max-w-[220px]">{displayName}</div>
+          <div className="text-sm font-medium truncate max-w-[220px]">
+            {/* A campaign label isn't a Nostr profile, so only the resolved
+                author name carries custom emoji. */}
+            {recipientLabel ?? <DisplayName pubkey={recipientPubkey} name={fallbackName} />}
+          </div>
         </div>
       </div>
 

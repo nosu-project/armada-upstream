@@ -18,6 +18,14 @@ vi.mock("@/hooks/useAuthor", () => ({
   }),
 }));
 
+// The bot's name renders through DisplayName (so custom emoji in it resolve),
+// which reaches for the per-server nickname. There's no relay behind this test,
+// so the scoped lookup resolves to nothing and the global name stands.
+vi.mock("@/hooks/useServerProfile", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useServerProfile")>()),
+  useServerProfile: () => ({ data: null }),
+}));
+
 const manifest = parseBotManifest(JSON.stringify(concordiaManifest))!;
 
 function entriesFor(bot: string, names: string[]): BotCommandEntry[] {

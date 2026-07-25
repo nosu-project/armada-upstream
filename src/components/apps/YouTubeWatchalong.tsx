@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, ListVideo, MonitorPlay, Play, Plus, SkipBack, SkipForward, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -422,7 +423,13 @@ function QueueRow({
         <div className="min-w-0">
           <p className={cn("truncate text-[12px]", isCurrent ? "font-semibold text-foreground" : "font-medium")}>{title}</p>
           <p className="truncate text-[11px] text-muted-foreground">
-            {isCurrent ? "Now playing" : adderName ? `Added by ${adderName}` : meta?.author ?? ""}
+            {isCurrent ? (
+              "Now playing"
+            ) : adderName ? (
+              <>Added by <DisplayName pubkey={item.addedBy} name={adderName} /></>
+            ) : (
+              meta?.author ?? ""
+            )}
           </p>
         </div>
       </button>

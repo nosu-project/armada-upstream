@@ -2,6 +2,7 @@ import { SmilePlus } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -71,7 +72,9 @@ function ReactorRow({ pubkey }: { pubkey: string }) {
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>
-      <span className="text-xs truncate">{displayName}</span>
+      <span className="text-xs truncate">
+        <DisplayName pubkey={pubkey} name={displayName} />
+      </span>
     </div>
   );
 }

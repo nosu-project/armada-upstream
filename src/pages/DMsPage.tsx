@@ -216,9 +216,11 @@ function ConversationRow({
       <div className="min-w-0 flex-1 space-y-0.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <div className={cn("text-[15px] truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
-            {/* Search highlighting operates on the raw name, so custom emoji
-                shortcodes only render as images when no query is active. */}
-            {q ? <Highlight text={name} query={query} /> : <DisplayName pubkey={peer} name={name} />}
+            {q ? (
+              <Highlight text={name} query={query} emojiTags={author.data?.event?.tags} />
+            ) : (
+              <DisplayName pubkey={peer} name={name} />
+            )}
           </div>
           <BotPill metadata={metadata} />
         </div>
@@ -360,7 +362,15 @@ function DmLegacyBadge() {
  * we deliver it to shared app relays, so it reaches the peer once they read
  * them. Click/tap-to-open Popover, mirroring {@link DmLegacyBadge}.
  */
-function DmBestEffortBadge({ name, className }: { name: string; className?: string }) {
+function DmBestEffortBadge({
+  peer,
+  name,
+  className,
+}: {
+  peer: string;
+  name: string;
+  className?: string;
+}) {
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -376,7 +386,7 @@ function DmBestEffortBadge({ name, className }: { name: string; className?: stri
         </button>
       </PopoverTrigger>
       <PopoverContent side="bottom" className="w-64 p-3 text-xs font-normal text-muted-foreground">
-        {name} hasn't set up private messaging yet. Your messages are still
+        <DisplayName pubkey={peer} name={name} /> hasn't set up private messaging yet. Your messages are still
         fully private (encrypted). They're delivered to shared relays and reach
         them once they open Armada.
       </PopoverContent>
@@ -390,14 +400,24 @@ function DmBestEffortBadge({ name, className }: { name: string; className?: stri
  * (who's talking, and when), so we make the downgrade an explicit, informed
  * choice rather than a silent default.
  */
-function DmLegacyFallbackNotice({ name, onEnable }: { name: string; onEnable: () => void }) {
+function DmLegacyFallbackNotice({
+  peer,
+  name,
+  onEnable,
+}: {
+  peer: string;
+  name: string;
+  onEnable: () => void;
+}) {
   return (
     <div className="mx-2 mb-3 rounded-lg border border-border/60 bg-muted/40 px-4 py-3 text-sm">
       <div className="flex items-start gap-2.5">
         <Lock className="size-4 mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 space-y-2">
           <p className="text-muted-foreground">
-            <span className="font-medium text-foreground">{name}</span> hasn't set
+            <span className="font-medium text-foreground">
+              <DisplayName pubkey={peer} name={name} />
+            </span> hasn't set
             up private messaging yet, so we can't send them a fully-private DM.
             You can still message them with older encryption. It hides what you
             say, but not that you're talking or when.
@@ -739,7 +759,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             </AvatarFallback>
           </Avatar>
           {dm17Enabled && !dm17DeliveryGuaranteed && (
-            <DmBestEffortBadge name={name} className="absolute -bottom-1 -right-1" />
+            <DmBestEffortBadge peer={peer} name={name} className="absolute -bottom-1 -right-1" />
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
@@ -977,7 +997,9 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <MessageSquare className="size-10 text-muted-foreground/40 mb-3" />
               <p className="text-sm text-muted-foreground">No messages yet</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">Say hello to {name}!</p>
+              <p className="text-xs text-muted-foreground/60 mt-1">
+                Say hello to <DisplayName pubkey={peer} name={name} />!
+              </p>
             </div>
           }
           renderMessage={(msg, continuation) =>
@@ -1045,7 +1067,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       )}
 
       {legacyBlocked ? (
-        <DmLegacyFallbackNotice name={name} onEnable={() => setLegacyAllowed(true)} />
+        <DmLegacyFallbackNotice peer={peer} name={name} onEnable={() => setLegacyAllowed(true)} />
       ) : (
         <ChatComposer
           relayUrl="dm"
@@ -1078,9 +1100,12 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       <AlertDialog open={muteConfirmOpen} onOpenChange={setMuteConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Mute {name}?</AlertDialogTitle>
+            <AlertDialogTitle>
+              Mute <DisplayName pubkey={peer} name={name} />?
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This conversation will be hidden and you won't see new messages from {name}.
+              This conversation will be hidden and you won't see new messages from{" "}
+              <DisplayName pubkey={peer} name={name} />.
               You can unmute them later from your mute list.
             </AlertDialogDescription>
           </AlertDialogHeader>

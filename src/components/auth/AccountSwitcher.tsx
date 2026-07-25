@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu.tsx';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.tsx';
+import { EmojifiedText } from '@/components/chat/CustomEmoji';
 import { getAvatarShape } from '@/lib/avatarShape';
 import { Skeleton } from '@/components/ui/skeleton.tsx';
 import { useLoggedInAccounts, type Account } from '@/hooks/useLoggedInAccounts';
@@ -25,6 +26,25 @@ import { useAppContext } from '@/hooks/useAppContext';
 
 interface AccountSwitcherProps {
   onAddAccountClick: () => void;
+}
+
+const getDisplayName = (account: Account): string => {
+  return account.metadata.name || account.metadata.display_name || 'Anonymous';
+};
+
+/**
+ * An account's name with NIP-30 custom emoji shortcodes rendered as inline
+ * images. Emoji tags come from the account's own kind-0 event (which
+ * `useLoggedInAccounts` already resolved to produce the metadata above), so the
+ * name and its emoji always describe the same profile event. Sites that need a
+ * plain string (`alt`, the avatar initial) keep using {@link getDisplayName}.
+ */
+function AccountName({ account }: { account: Account }) {
+  return (
+    <EmojifiedText tags={account.event?.tags ?? []}>
+      {getDisplayName(account)}
+    </EmojifiedText>
+  );
 }
 
 export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
@@ -60,10 +80,6 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
     }, 0);
   };
 
-  const getDisplayName = (account: Account): string => {
-    return account.metadata.name || account.metadata.display_name || 'Anonymous';
-  }
-
   return (
     <>
     <DropdownMenu modal={false} open={isOpen} onOpenChange={setIsOpen}>
@@ -81,7 +97,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
             {isLoading ? (
               <Skeleton className='h-4 w-24' />
             ) : (
-              <p className='font-medium text-sm truncate'>{getDisplayName(currentUser)}</p>
+              <p className='font-medium text-sm truncate'><AccountName account={currentUser} /></p>
             )}
           </div>
           <ChevronDown className='w-4 h-4 text-muted-foreground' />
@@ -100,7 +116,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
               <AvatarFallback>{getDisplayName(user)?.charAt(0) || <UserIcon />}</AvatarFallback>
             </Avatar>
             <div className='flex-1 truncate'>
-              <p className='text-sm font-medium'>{getDisplayName(user)}</p>
+              <p className='text-sm font-medium'><AccountName account={user} /></p>
             </div>
             {user.id === currentUser.id && <div className='w-2 h-2 rounded-full bg-primary'></div>}
           </DropdownMenuItem>

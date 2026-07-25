@@ -1,6 +1,7 @@
 import { Ban, Check, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -94,7 +95,9 @@ export function BanMemberDialog({ target, willRotate, onClose, onConfirm }: BanM
     <Dialog open={target !== null} onOpenChange={(open) => !open && close()}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>Ban {name || "member"}?</DialogTitle>
+          <DialogTitle>
+            Ban {name ? <DisplayName pubkey={target ?? undefined} name={name} /> : "member"}?
+          </DialogTitle>
           <DialogDescription>
             They will be removed and silenced for everyone in this community.
           </DialogDescription>

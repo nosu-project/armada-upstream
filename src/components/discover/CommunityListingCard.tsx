@@ -4,6 +4,7 @@ import { ArrowRight, ShieldCheck } from "lucide-react";
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { DisplayName } from "@/components/DisplayName";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -99,7 +100,9 @@ export function CommunityListingCard({ invite, className }: CommunityListingCard
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
-            <span className="truncate">shared by {displayName}</span>
+            <span className="truncate">
+              shared by <DisplayName pubkey={invite.source.pubkey} name={displayName} />
+            </span>
           </button>
         </ProfilePreviewCard>
 

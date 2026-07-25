@@ -1,6 +1,7 @@
 import { Zap } from "lucide-react";
 import { useState } from "react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -35,7 +36,9 @@ function ZapperRow({ zap }: { zap: ZapEntry }) {
       </Avatar>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-xs truncate">{displayName}</span>
+          <span className="text-xs truncate">
+            <DisplayName pubkey={zap.pubkey} name={displayName} />
+          </span>
           <span className="text-xs font-semibold tabular-nums text-amber-500">
             {formatSats(zap.sats)}
           </span>

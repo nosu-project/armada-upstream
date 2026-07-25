@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthor } from "@/hooks/useAuthor";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
@@ -69,15 +70,20 @@ const rowKey = (row: Row): string =>
 /** A bot's avatar + display name, resolved from its profile. */
 function BotIdentity({ pubkey, avatarOnly }: { pubkey: string; avatarOnly?: boolean }) {
   const author = useAuthor(pubkey);
-  const name = author.data?.metadata?.name ?? `${pubkey.slice(0, 8)}…`;
-  const image = author.data?.metadata?.picture;
+  const metadata = author.data?.metadata;
+  const name = metadata?.name || metadata?.display_name || `${pubkey.slice(0, 8)}…`;
+  const image = metadata?.picture;
   return (
     <>
       <Avatar className="size-4 shrink-0">
         <AvatarImage src={image} alt="" />
         <AvatarFallback className="text-[8px]">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
       </Avatar>
-      {!avatarOnly && <span className="truncate">{name}</span>}
+      {!avatarOnly && (
+        <span className="truncate">
+          <DisplayName pubkey={pubkey} name={name} />
+        </span>
+      )}
     </>
   );
 }

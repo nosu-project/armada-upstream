@@ -281,10 +281,13 @@ function useApplyUserVolume(participant: Participant, pubkey: string) {
 function VolumeMenu({
   pubkey,
   displayName,
+  verified,
   children,
 }: {
   pubkey: string;
   displayName: string;
+  /** Whether `pubkey` is a verified claim — see {@link VoiceUserContextMenu}. */
+  verified: boolean;
   children: React.ReactNode;
 }) {
   const [volume, setVolume] = useUserVolume(pubkey);
@@ -302,7 +305,9 @@ function VolumeMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56 p-3">
         <div className="flex items-center justify-between gap-2 mb-2">
-          <span className="text-sm font-medium truncate">{displayName}</span>
+          <span className="text-sm font-medium truncate">
+            <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
+          </span>
           <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
         </div>
         <VolumeSliderRow volume={volume} apply={setVolume} displayName={displayName} />
@@ -467,7 +472,7 @@ function VideoTile({
       {!isScreenShare && <TileReactions pubkey={pubkey} />}
       {/* Remote (non-screenshare) nameplates open the per-user volume menu. */}
       {hasVolumeMenu ? (
-        <VolumeMenu pubkey={pubkey} displayName={displayName}>
+        <VolumeMenu pubkey={pubkey} displayName={displayName} verified={verified}>
           {nameplate}
         </VolumeMenu>
       ) : (
@@ -477,7 +482,7 @@ function VideoTile({
   );
 
   return hasVolumeMenu ? (
-    <VoiceUserContextMenu pubkey={pubkey} displayName={displayName}>
+    <VoiceUserContextMenu pubkey={pubkey} displayName={displayName} verified={verified}>
       {tile}
     </VoiceUserContextMenu>
   ) : (
@@ -571,7 +576,7 @@ function AvatarTile({
       <TileReactions pubkey={pubkey} />
       {/* Remote nameplates open the per-user volume menu. */}
       {!isLocal ? (
-        <VolumeMenu pubkey={pubkey} displayName={displayName}>
+        <VolumeMenu pubkey={pubkey} displayName={displayName} verified={verified}>
           {nameplate}
         </VolumeMenu>
       ) : (
@@ -581,7 +586,7 @@ function AvatarTile({
   );
 
   return !isLocal ? (
-    <VoiceUserContextMenu pubkey={pubkey} displayName={displayName}>
+    <VoiceUserContextMenu pubkey={pubkey} displayName={displayName} verified={verified}>
       {tile}
     </VoiceUserContextMenu>
   ) : (
@@ -610,7 +615,7 @@ function ShareSelector({
   onPrev: () => void;
   onNext: () => void;
 }) {
-  const name = useShareSharerName(participant);
+  const { pubkey: sharer, label } = useShareSharerLabel(participant);
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <div
@@ -635,7 +640,9 @@ function ShareSelector({
       </button>
       <span className="flex items-center gap-1 max-w-40 truncate">
         <ScreenShare className="size-3 shrink-0" />
-        <span className="truncate">{name}</span>
+        <span className="truncate">
+          <DisplayName pubkey={sharer} name={label} />
+        </span>
         <span className="tabular-nums text-white/60">
           {index + 1}/{total}
         </span>
@@ -657,16 +664,23 @@ function ShareSelector({
   );
 }
 
-/** Resolve a sharer's display name for the share selector label. */
-function useShareSharerName(participant: Participant | null): string {
+/**
+ * Resolve a sharer's label for the share selector. Only a verified claim
+ * resolves to a profile (and so to a name carrying custom emoji); the local and
+ * unverified cases are fixed literals with no pubkey behind them.
+ */
+function useShareSharerLabel(participant: Participant | null): {
+  pubkey?: string;
+  label: string;
+} {
   const resolve = useVoiceIdentity();
   const identity = participant?.identity ?? "";
   const { pubkey, verified } = resolve(identity);
   const author = useAuthor(verified ? pubkey : undefined);
   const scopedName = useScopedDisplayName(pubkey, author.data?.metadata);
-  if (!participant) return "";
-  if (participant.isLocal) return "Your screen";
-  return verified ? scopedName : "Screen share";
+  if (!participant) return { label: "" };
+  if (participant.isLocal) return { label: "Your screen" };
+  return verified ? { pubkey, label: scopedName } : { label: "Screen share" };
 }
 
 /**

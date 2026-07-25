@@ -1,5 +1,6 @@
 import { Copy, MoreVertical, Volume2, VolumeX } from "lucide-react";
 
+import { DisplayName } from "@/components/DisplayName";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -75,6 +76,7 @@ function useVoiceMenuItems(
   pubkey: string,
   displayName: string,
   showVolume: boolean,
+  verified: boolean,
 ) {
   const [volume, setVolume] = useUserVolume(pubkey);
   const muted = volume === 0;
@@ -103,7 +105,9 @@ function useVoiceMenuItems(
     return (
       <>
         <Label className="flex items-center justify-between gap-2">
-          <span className="truncate">{displayName}</span>
+          <span className="truncate">
+            <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
+          </span>
           {showVolume && (
             <span className="text-xs text-muted-foreground tabular-nums font-normal">{pct}%</span>
           )}
@@ -141,14 +145,21 @@ export function VoiceUserContextMenu({
   pubkey,
   displayName,
   showVolume = true,
+  verified = true,
   children,
 }: {
   pubkey: string;
   displayName: string;
   showVolume?: boolean;
+  /**
+   * Whether `pubkey` is a claim we've verified — i.e. whether the name (and the
+   * custom emoji in it) are really theirs. Unverified claims render the name as
+   * plain text so an unclaimed identity can't borrow another profile's emoji.
+   */
+  verified?: boolean;
   children: React.ReactNode;
 }) {
-  const renderMenuItems = useVoiceMenuItems(pubkey, displayName, showVolume);
+  const renderMenuItems = useVoiceMenuItems(pubkey, displayName, showVolume, verified);
 
   return (
     <ContextMenu>
@@ -180,14 +191,17 @@ export function VoiceUserMenuButton({
   pubkey,
   displayName,
   showVolume = true,
+  verified = true,
   className,
 }: {
   pubkey: string;
   displayName: string;
   showVolume?: boolean;
+  /** See {@link VoiceUserContextMenu}. */
+  verified?: boolean;
   className?: string;
 }) {
-  const renderMenuItems = useVoiceMenuItems(pubkey, displayName, showVolume);
+  const renderMenuItems = useVoiceMenuItems(pubkey, displayName, showVolume, verified);
 
   return (
     <DropdownMenu>

@@ -1,6 +1,7 @@
 import { Check, Loader2, Plus, Smile } from "lucide-react";
 import { useState } from "react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -125,7 +126,9 @@ export function EmojiPackCard({ event, className }: EmojiPackCardProps) {
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
-            <span className="truncate">by {displayName}</span>
+            <span className="truncate">
+              by <DisplayName pubkey={event.pubkey} name={displayName} />
+            </span>
           </button>
         </ProfilePreviewCard>
 

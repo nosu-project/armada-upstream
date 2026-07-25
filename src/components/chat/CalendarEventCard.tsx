@@ -1,5 +1,6 @@
 import { Calendar, CalendarDays, Check, Clock, HelpCircle, MapPin, X } from "lucide-react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -194,7 +195,9 @@ export function EventDetailDialog({ relayUrl, groupId, event, open, onOpenChange
             </div>
             <div className="min-w-0">
               <h2 className="text-lg font-semibold leading-tight break-words">{event.title}</h2>
-              <p className="text-xs text-muted-foreground">Organized by {organizerName}</p>
+              <p className="text-xs text-muted-foreground">
+                Organized by <DisplayName pubkey={event?.event.pubkey} name={organizerName} />
+              </p>
             </div>
           </div>
 

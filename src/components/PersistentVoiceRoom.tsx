@@ -30,6 +30,7 @@ import "@livekit/components-styles";
 
 import { InCallView } from "@/components/chat/VoiceBar";
 import { CallStage } from "@/components/chat/CallStage";
+import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -565,7 +566,9 @@ function Nip29VoiceRoom({
   const { data: relayInfo } = useRelayInfo(call.relayUrl);
   const peerAuthor = useAuthor(isDm ? call.dmPeer : undefined);
   const peerName = getDisplayName(peerAuthor.data?.metadata, call.dmPeer ?? "");
-  const channelName = isDm ? peerName : details?.group?.name ?? "voice";
+  // DMs label the bar with the peer's name instead (rendered below, so custom
+  // emoji in it resolve to images).
+  const channelName = details?.group?.name ?? "voice";
   const serverName = isDm ? "Direct message" : relayInfo?.name ?? call.relayUrl.replace(/^wss?:\/\//, "");
   const options = useRoomOptions();
 
@@ -600,7 +603,7 @@ function Nip29VoiceRoom({
 
   const label = isDm ? (
     <button type="button" onClick={goToChannel} className="truncate hover:underline text-left">
-      {channelName}
+      <DisplayName pubkey={call.dmPeer} name={peerName} />
     </button>
   ) : (
     <button type="button" onClick={goToChannel} className="hover:underline text-left">

@@ -1,6 +1,7 @@
 import { CircleDot, Copy, ExternalLink, FolderGit2, GitMerge, GitPullRequest, LayoutGrid, List, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -39,7 +40,12 @@ function useName(pubkey: string): string {
 }
 
 function AuthorName({ pubkey }: { pubkey: string }) {
-  return <span className="font-medium text-foreground/80">{useName(pubkey)}</span>;
+  const name = useName(pubkey);
+  return (
+    <span className="font-medium text-foreground/80">
+      <DisplayName pubkey={pubkey} name={name} />
+    </span>
+  );
 }
 
 function PersonAvatar({ pubkey, size = "size-7" }: { pubkey: string; size?: string }) {
@@ -54,7 +60,9 @@ function PersonAvatar({ pubkey, size = "size-7" }: { pubkey: string; size?: stri
           <AvatarFallback className="text-[10px]">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
         </Avatar>
       </TooltipTrigger>
-      <TooltipContent>{name}</TooltipContent>
+      <TooltipContent>
+        <DisplayName pubkey={pubkey} name={name} />
+      </TooltipContent>
     </Tooltip>
   );
 }

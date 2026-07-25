@@ -1,6 +1,7 @@
 import { Check, FileText, Hash, Image as ImageIcon, Link as LinkIcon, Loader2, Lock, Search, SlidersHorizontal, Video, X } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -60,7 +61,9 @@ function AuthorChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => void
         <AvatarImage src={author.data?.metadata?.picture} />
         <AvatarFallback className="text-[8px]">{(name || pubkey).slice(0, 2)}</AvatarFallback>
       </Avatar>
-      <span className="max-w-28 truncate">{name || pubkey.slice(0, 8)}</span>
+      <span className="max-w-28 truncate">
+        {name ? <DisplayName pubkey={pubkey} name={name} /> : pubkey.slice(0, 8)}
+      </span>
       <button type="button" aria-label={`Remove ${name}`} onClick={onRemove} className="text-muted-foreground hover:text-foreground">
         <X className="size-3" />
       </button>
@@ -96,7 +99,9 @@ function AuthorOption({
         <AvatarImage src={author.data?.metadata?.picture} />
         <AvatarFallback className="text-[9px]">{(name || pubkey).slice(0, 2)}</AvatarFallback>
       </Avatar>
-      <span className="min-w-0 flex-1 truncate">{name || pubkey.slice(0, 12)}</span>
+      <span className="min-w-0 flex-1 truncate">
+        {name ? <DisplayName pubkey={pubkey} name={name} /> : pubkey.slice(0, 12)}
+      </span>
       {selected && <Check className="size-4 shrink-0 text-primary" />}
     </button>
   );

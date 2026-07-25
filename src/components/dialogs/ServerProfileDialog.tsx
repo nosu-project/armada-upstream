@@ -1,6 +1,7 @@
 import { Loader2, RotateCcw, UserCog } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -123,7 +124,10 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
                     className="text-[15px] font-semibold text-primary truncate"
                     style={previewColor ? { color: previewColor } : undefined}
                   >
-                    {previewName}
+                    {/* A real message row emojifies the scoped name against
+                        your kind-0 `emoji` tags, so the preview has to as
+                        well or a nickname with a shortcode previews wrong. */}
+                    <DisplayName pubkey={user?.pubkey} name={previewName} />
                   </span>
                   {label.trim() && (
                     <Badge variant="secondary" className="text-[10px] font-medium">

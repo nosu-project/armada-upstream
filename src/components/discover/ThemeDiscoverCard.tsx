@@ -2,6 +2,7 @@ import { BookmarkPlus, Check, Loader2, Palette } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { DisplayName } from "@/components/DisplayName";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -113,7 +114,9 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
-            <span className="truncate">by {displayName}</span>
+            <span className="truncate">
+              by <DisplayName pubkey={event.pubkey} name={displayName} />
+            </span>
           </button>
         </ProfilePreviewCard>
 
