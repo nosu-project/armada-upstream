@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.39.8] - 2026-07-24
+
+Reworks how chat is rendered. Channels open and switch without the pause that used to come with a long timeline, scrolling back through history keeps your place, and jumping to a message lands on it in one step.
+
+### Changed
+- Opening or switching a channel renders progressively, so the tap responds right away instead of waiting on the whole timeline
+- Scrolling toward the top reveals older messages in place, and loading more history no longer shifts what you were reading
+- Returning to the newest message restores your distance from it instead of snapping to the bottom
+- Jumping to a message centers it immediately rather than drifting into place over a couple of seconds
+- Redrawn Android notification icon using the simplified Armada A
+
+### Fixed
+- Link previews no longer leave blank space under one-line titles or links with no author
+- Chat media and link previews reserve their space as they load, so the timeline stops jumping around
+
 ## [0.39.7] - 2026-07-24
 
 Fixes signing in with an external Android signer app, such as Amber, on relays that require authentication.
