@@ -215,11 +215,10 @@ describe("useControlEvents2 — on-open sweep (no standing socket)", () => {
   });
 });
 
-describe("useControlFold2 — a short sweep is never folded", () => {
+describe("useControlFold2 — a short sweep still folds", () => {
   /**
    * Render the fold hook, wait for its sweep to settle, and hand back a
-   * re-render trigger — the truncation verdict is read during render, so the
-   * thunk captured before the sweep still holds the pre-sweep answer.
+   * re-render trigger.
    */
   async function renderFold(community: CommunityV2, relay: FakeRelay) {
     h.compute = undefined;
@@ -231,9 +230,9 @@ describe("useControlFold2 — a short sweep is never folded", () => {
     return rerender;
   }
 
-  it("folds normally when the sweep reached the whole plane", { timeout: 30_000 }, async () => {
+  it("folds normally when the sweep read the plane comfortably", { timeout: 30_000 }, async () => {
     _resetPlaneSweepMemoForTests();
-    _configureSweepPagingForTests({ pageLimit: 500, maxPages: 8 });
+    _configureSweepPagingForTests({ pageLimit: 500, maxEvents: 15_000 });
     const owner = signer();
     const community = communityOf(61, owner.pubkey);
     const control = controlGroupKey(community.root, community.id, 0);
@@ -245,18 +244,20 @@ describe("useControlFold2 — a short sweep is never folded", () => {
     await waitFor(
       () => {
         rerender();
-        expect(h.compute!(), "a complete sweep must produce a fold").toBeDefined();
+        expect(h.compute!()).toBeDefined();
       },
       { timeout: 10_000 },
     );
   });
 
-  it("yields no fold when the sweep was truncated", { timeout: 30_000 }, async () => {
-    // The reported ban evasion: any member can inflate the plane past the
-    // pager's reach. Folding what survived would render a partial banlist as
-    // authoritative AND persist it as this key's snapshot.
+  it("still folds when the sweep hit its budget", { timeout: 30_000 }, async () => {
+    // Anyone can inflate the plane past any budget, so refusing to fold a
+    // short read hands every member a lockup switch. The plane is procedural:
+    // fold what arrived, converge on later sweeps. What a short read DOES
+    // forfeit is the durable snapshot (loginWarmup) and the right to compact
+    // (useRekey2) — not the ability to see the community at all.
     _resetPlaneSweepMemoForTests();
-    _configureSweepPagingForTests({ pageLimit: 2, maxPages: 1 });
+    _configureSweepPagingForTests({ pageLimit: 2, maxEvents: 2 });
     const owner = signer();
     const community = communityOf(62, owner.pubkey);
     const control = controlGroupKey(community.root, community.id, 0);
@@ -271,8 +272,8 @@ describe("useControlFold2 — a short sweep is never folded", () => {
     const rerender = await renderFold(community, relay);
     await waitFor(() => expect(controlSweepTruncated(community)).toBe(true), { timeout: 10_000 });
     rerender();
-    expect(h.compute!(), "a truncated sweep must hold the last complete fold instead").toBeUndefined();
+    expect(h.compute!(), "a member must still see the community").toBeDefined();
 
-    _configureSweepPagingForTests({ pageLimit: 500, maxPages: 8 });
+    _configureSweepPagingForTests({ pageLimit: 500, maxEvents: 15_000 });
   });
 });

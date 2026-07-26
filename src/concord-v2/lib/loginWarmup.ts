@@ -119,12 +119,14 @@ export async function warmupCommunities2(
       try {
         const stored = await queryByStreams(controlGroups(c).map((g) => g.pk));
         const folded = foldControlState(openControlEditions(stored), c.id, c.owner);
-        // A truncated sweep must never become the durable baseline. This fold
-        // ran with no floor and no snapshot to correct it, so persisting it
-        // would freeze a partial banlist/roster on disk — a ban published
-        // beyond the pager's reach would read as absent on every later launch,
+        // A sweep we KNOW came up short must never become the durable
+        // baseline. This fold ran with no floor and no snapshot to correct it,
+        // so persisting it would freeze a partial banlist/roster on disk — a
+        // ban beyond the budget would read as absent on every later launch,
         // not just this one. Plane depth is attacker-controlled, so this is
-        // reachable on purpose, not just by a slow relay.
+        // reachable on purpose, not just by a slow relay. The in-memory fold
+        // still renders: the member sees the community, they just don't get a
+        // shortcut past re-reading it next launch.
         if (!controlSweepTruncated(c)) {
           await writeFolded(controlFoldKey(c.idHex), folded);
         }

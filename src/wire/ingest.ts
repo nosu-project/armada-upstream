@@ -1,7 +1,7 @@
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { KIND_MESSAGE, KIND_REACTION } from "@/concord-v2/lib/kinds";
 import type { GroupKey } from "@/concord-v2/lib/derive";
-import { notePlaneWrapsSeen, openPlaneWrapsChunked, unseenPlaneWraps } from "@/concord-v2/lib/planeSync";
+import { notePlaneWrapsJunk, notePlaneWrapsSeen, openPlaneWrapsChunked, unseenPlaneWraps } from "@/concord-v2/lib/planeSync";
 import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { bufferLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
@@ -208,6 +208,10 @@ export async function ingestWireEvents(
         await writeOpened(opened);
         scopes.add(`c2ctl:${idHex}`);
       }
+      // Record the junk before memoing it: the memo stops the sweep ever
+      // re-attempting these, so this is the only chance to count them.
+      const openedIds = new Set(opened.map((e) => e.wrapId));
+      notePlaneWrapsJunk(unseen.filter((w) => !openedIds.has(w.id)).map((w) => w.id));
       notePlaneWrapsSeen(unseen.map((w) => w.id));
     }
   }

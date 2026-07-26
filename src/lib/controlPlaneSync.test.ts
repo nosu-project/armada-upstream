@@ -29,6 +29,7 @@ interface Filter {
   kinds?: number[];
   authors?: string[];
   since?: number;
+  until?: number;
   limit?: number;
 }
 
@@ -107,10 +108,13 @@ describe("syncControlPlane — batched V2 sweep", () => {
 
     const result = await syncControlPlane(nostr, queryClient, [], [a, b]);
 
-    // 2 communities × 2 planes = 4 filters, ONE query call per relay.
+    // 2 communities × 2 planes = 4 filters, ONE opening query call per relay.
+    // The completeness pager then issues its own `until`-bearing probes per
+    // scope; those aren't part of the batch this test is about.
     for (const relay of [relayA, relayB]) {
-      expect(relay.calls.length, "every relay must be asked exactly once").toBe(1);
-      expect(relay.calls[0].length).toBe(4);
+      const opening = relay.calls.filter((fs) => !fs.some((f) => f.until !== undefined));
+      expect(opening.length, "every relay must be OPENED exactly once").toBe(1);
+      expect(opening[0].length).toBe(4);
     }
     expect(result.v2Touched).toEqual(new Set([a.idHex]));
     expect(invalidated).toHaveBeenCalledWith({ queryKey: ["concord2", "control", a.idHex] });

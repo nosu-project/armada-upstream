@@ -16,7 +16,7 @@ import { channelsView } from "@/concord-v2/lib/community";
 import { bytesToHex, dissolvedGroupKey, grantLocator, hex32 } from "@/concord-v2/lib/derive";
 import type { AuthorityCitation } from "@/concord-v2/lib/edition";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
-import { controlSweepTruncated, openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
+import { openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
 import { queryByStreams, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { openWrap, type OpenedEvent, type Rumor, type StreamSigner } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
@@ -150,24 +150,20 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
     floorRef.current = { key: floorKey, heads: new Map() };
   }
 
-  // Read during render so a verdict that flips (a later sweep reaching the
-  // whole plane) re-triggers the compute below even when the event set itself
-  // didn't change.
-  const truncated = community ? controlSweepTruncated(community) : false;
-
   const data = useDeferredFold<FoldedControl>(
     community ? controlFoldKey(community.idHex) : null,
     () => {
       if (!community || !events) return undefined;
-      // Never fold a sweep that came up short. The result would be a partial
-      // banlist/roster rendered as authoritative — the reported ban evasion —
-      // and useDeferredFold would persist it as this key's snapshot. Returning
-      // undefined holds the last COMPLETE fold instead, and on a cold client
-      // that has none, leaves the community unresolved rather than wrong.
-      if (truncated) {
-        logSync("fold", `${community.idHex.slice(0, 8)}: control sweep truncated — holding the last complete fold`);
-        return undefined;
-      }
+      // Folds whatever has arrived, on purpose. The control plane is
+      // procedural: members process editions as they come and converge, and a
+      // member who is one sweep behind reads and writes fine — they just don't
+      // have the newest metadata, roles and bans yet. Refusing to fold until
+      // the plane is "proven complete" would hand any member a lockup switch,
+      // since anyone can inflate the plane past any budget. The defenses that
+      // matter are local and already here: monotonic per-entity floors (a
+      // flood can't downgrade an entity we've advanced past) and `incomplete`
+      // (floored entities the served set can't account for), which is what the
+      // Refounding path aborts on.
       const editions = openControlEditions(events);
       // Once the community has Refounded, editions under the CURRENT epoch's
       // control group fold by version-anchored bootstrap (the compaction
@@ -190,7 +186,7 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
       );
       return folded;
     },
-    [community, events, truncated],
+    [community, events],
   );
 
   return { ...control, data } as typeof control & { data: FoldedControl | undefined };
