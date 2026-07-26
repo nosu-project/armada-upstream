@@ -654,11 +654,14 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 
 /**
  * Send one chat-plane rumor: build (with the channel/epoch binding),
- * optimistically insert as "pending" IMMEDIATELY, then sign the seal with the
- * user's real identity (a remote round-trip for NIP-46 logins), wrap under
- * the CURRENT epoch's stream key, and broadcast fire-and-forget. The pending
- * badge clears once a relay accepts the wrap; a sign OR broadcast failure
- * marks the message "failed" (retry/discard) — it never silently vanishes.
+ * optimistically insert IMMEDIATELY, then sign the seal with the user's real
+ * identity (a remote round-trip for NIP-46 logins), wrap under the CURRENT
+ * epoch's stream key, and broadcast fire-and-forget. No pending spinner
+ * (matching V1): the message is treated as sent the moment it renders —
+ * clearing a spinner on the full broadcast meant awaiting every relay's OK,
+ * so one dead relay held it for the whole publish timeout. A sign OR
+ * broadcast failure marks the message "failed" (retry/discard) — it never
+ * silently vanishes.
  */
 export function useSendMessage2(community: CommunityV2 | undefined, channel: ChannelV2 | undefined) {
   const { nostr } = useNostr();
@@ -742,12 +745,13 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       if (extraTags) tags.push(...extraTags);
 
       const rumor: Rumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms: effectiveMs });
-      // Discord-style delivery states for the visible kinds: the message
-      // renders IMMEDIATELY as "pending" — before the seal, which for a
-      // NIP-46 login is a remote round-trip that can take seconds or fail
-      // outright. A message the user typed must never silently vanish: sign
-      // or broadcast failure flips it to "failed" (retry/discard affordance)
-      // instead of eating it.
+      // The message renders IMMEDIATELY — before the seal, which for a
+      // NIP-46 login is a remote round-trip that can take seconds — and with
+      // NO pending spinner (matching V1): the broadcast is near-instant in
+      // reality, and gating the spinner on the full broadcast meant one dead
+      // relay held it for the whole publish timeout. A message the user typed
+      // must never silently vanish: sign or broadcast failure flips it to
+      // "failed" (retry/discard affordance) instead of eating it.
       const isVisible = effectiveKind === KIND_MESSAGE || effectiveKind === KIND_COMMENT;
       const opened: OpenedChat = {
         rumorId: rumor.id,
@@ -776,7 +780,6 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       };
       if (isVisible) {
         queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [opened]));
-        setStatus(rumor.id, "pending");
       }
 
       logSync("send", `sealing rumor ${rumor.id.slice(0, 8)} (kind ${effectiveKind}) — signer: ${user.method}`);
@@ -802,13 +805,9 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       // (and a self-delete removes its target via the store's NIP-09).
       writeRumors([sealed]);
 
-      void broadcast(wrap)
-        .then(() => {
-          if (isVisible) setStatus(rumor.id, undefined); // delivered
-        })
-        .catch(() => {
-          if (isVisible) setStatus(rumor.id, "failed");
-        });
+      void broadcast(wrap).catch(() => {
+        if (isVisible) setStatus(rumor.id, "failed");
+      });
 
       return { rumorId: rumor.id, wrap: wrap as NostrEvent | undefined };
     },
@@ -829,7 +828,6 @@ export function useMessageActions2(community: CommunityV2 | undefined, channel: 
       const raw = queryClient.getQueryData<OpenedChat[]>(channelKey(channelIdHex)) ?? [];
       const msg = raw.find((m) => m.rumorId === id);
       if (!msg) return;
-      setStatus(id, "pending");
       // Re-send as a fresh rumor (a new id); drop the failed original. A
       // threaded reply (kind-1111 comment) carries its NIP-22 thread pointers in
       // its own tags, so preserve them verbatim (minus the channel binding,
