@@ -1,6 +1,7 @@
-import { Loader2, Reply, Timer } from "lucide-react";
+import { Loader2, Reply } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 
+import { ExpirationTimerIcon } from "@/components/chat/ExpirationTimerIcon";
 import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { BotPill } from "@/components/BotPill";
@@ -38,17 +39,20 @@ export interface MessageIdentity {
 const EXPIRY_URGENT_SECS = 60 * 60;
 
 /**
- * Signal's disappearing-message clock: a timer glyph on any message carrying a
- * NIP-40 `expiration`. The icon alone carries the fact for most of a message's
- * life (a "4w" countdown on every row would be noise); the remaining time is
- * spelled out only in the last hour, when it's what the reader actually wants.
- * The full deadline is always in the tooltip.
+ * Signal's disappearing-message clock on any message carrying a NIP-40
+ * `expiration`: a live timer face that empties as the deadline approaches
+ * ({@link ExpirationTimerIcon} owns that animation and its own scheduling).
  *
- * Ticks at the coarsest useful rate — once a second in the final minute, twice
- * a minute below an hour, and otherwise a single timer armed for the moment it
- * becomes urgent — so a long thread of expiring messages costs almost nothing.
+ * The face alone carries the fact for most of a message's life — a "4w"
+ * countdown on every row would be noise — and the remaining time is spelled out
+ * only in the last hour, when it's what the reader actually wants. The tooltip
+ * always has it.
+ *
+ * This wrapper's own timer exists purely for that TEXT: once a second in the
+ * final minute, twice a minute below an hour, and otherwise a single timeout
+ * armed for the moment the label appears at all.
  */
-function ExpirationClock({ expiresAt }: { expiresAt: number }) {
+function ExpirationClock({ createdAt, expiresAt }: { createdAt: number; expiresAt: number }) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {
@@ -67,8 +71,10 @@ function ExpirationClock({ expiresAt }: { expiresAt: number }) {
     <span
       className="inline-flex items-center gap-0.5 shrink-0 text-[10px] text-muted-foreground/60 tabular-nums"
       title={`Disappears in ${label}`}
+      role="img"
+      aria-label={`Disappearing message, ${label} left`}
     >
-      <Timer className="size-3" aria-label="Disappearing message" />
+      <ExpirationTimerIcon createdAt={createdAt} expiresAt={expiresAt} />
       {left <= EXPIRY_URGENT_SECS && <span>{label}</span>}
     </span>
   );
@@ -342,7 +348,7 @@ export const MessageRow = memo(function MessageRow({
             {edited && (
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
-            {expiresAt !== undefined && <ExpirationClock expiresAt={expiresAt} />}
+            {expiresAt !== undefined && <ExpirationClock createdAt={createdAt} expiresAt={expiresAt} />}
             {pending && (
               <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
             )}
@@ -380,7 +386,7 @@ export const MessageRow = memo(function MessageRow({
             {edited && (
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
-            {expiresAt !== undefined && <ExpirationClock expiresAt={expiresAt} />}
+            {expiresAt !== undefined && <ExpirationClock createdAt={createdAt} expiresAt={expiresAt} />}
             {pending && (
               <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
             )}
