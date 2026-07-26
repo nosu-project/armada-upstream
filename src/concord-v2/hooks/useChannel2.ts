@@ -113,7 +113,7 @@ async function backfillStore(
   relays: string[],
   channel: ChannelV2,
   signal: AbortSignal,
-  opts: { until?: number; since?: number; maxPages?: number } = {},
+  opts: { until?: number; since?: number; maxPages?: number; beforeRelay?: (url: string) => Promise<void> } = {},
 ): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; exhausted: boolean; failed: boolean }> {
   const maxPages = opts.maxPages ?? BACKFILL_MAX_PAGES;
   let oldest: number | undefined;
@@ -137,6 +137,11 @@ async function backfillStore(
         if (relay.cursor !== undefined) filter.until = relay.cursor;
         if (opts.since !== undefined) filter.since = opts.since;
         try {
+          // Per-relay auth gate (see backfillAndRefresh): each relay's page
+          // waits only for ITS OWN stream AUTHs to settle, never for the
+          // slowest relay's cap.
+          await opts.beforeRelay?.(relay.url);
+          if (pageSignal.aborted) return { relay, events: [] as NostrEvent[], ok: false };
           const events = await nostr
             .relay(relay.url)
             .query([filter], {
@@ -354,17 +359,23 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       const cursorKeyId = channelIdHex ?? "";
 
       // Fold in any wraps the native service parked (it can't decrypt) so a
-      // notification's message is present on cold read. Decode WITHOUT the
+      // notification's message lands from this read. Runs AFTER the store
+      // paint, not serially before it: the peek opens a second IndexedDB
+      // database and, with wraps parked, decrypts a notification batch —
+      // ahead of the store read that used to tax every channel-switch paint.
+      // writeRumors rings the bus once the drained rumors commit, so the
+      // timeline re-reads and paints them right after. Decode WITHOUT the
       // query's abort signal (the batch is notification-sized) and acknowledge
       // only what actually decoded — an interrupted or key-less decode leaves
       // the wraps parked for the next read instead of destroying them.
-      const parked = await peekPendingWraps(channel!.streams.map((s) => s.group.pk));
-      if (parked.length > 0) {
+      const drainParked = async () => {
+        const parked = await peekPendingWraps(channel!.streams.map((s) => s.group.pk));
+        if (parked.length === 0) return;
         const opened = await openChatBatch(parked, channel!);
         writeRumors(opened);
         const openedWrapIds = new Set(opened.map((o) => o.wrapId));
         ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
-      }
+      };
 
       // hasMore is true if the local rumor window is full OR relays may have more.
       const refreshHasMore = (localFull: boolean) => {
@@ -387,15 +398,18 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 
       const backfillAndRefresh = async (task: SyncTaskHandle) => {
         if (signal.aborted) return;
-        // Hold the round until every relay has ACKED our stream AUTHs (if it
-        // challenged) — a kind-1059 REQ racing NIP-42 gets CLOSED and reads
-        // back as an empty page, which on a cold open paints "no messages"
-        // for a channel that has plenty (the post-login empty-rooms bug).
-        // Capped inside whenAuthSettled; the sync task is already showing.
-        await Promise.all(
-          community!.relays.map((url) => whenAuthSettled(url, () => channel!.streams.map((s) => s.group))),
-        );
-        if (signal.aborted) return;
+        // Hold each relay's pages until THAT relay has ACKED our stream AUTHs
+        // (if it challenged) — a kind-1059 REQ racing NIP-42 gets CLOSED and
+        // reads back as an empty page, which on a cold open paints "no
+        // messages" for a channel that has plenty (the post-login empty-rooms
+        // bug). Gated PER RELAY (backfillStore's beforeRelay) rather than
+        // awaited for the whole relay set up front: one unsettled relay used
+        // to hold every relay's first page behind its full cap
+        // (whenAuthSettled, up to 8s) — a cold-open skeleton stall. A relay
+        // that reads empty or aborts while its auth settles is recorded as
+        // failed, so the cursor never seals over its region and a later round
+        // retries it.
+        const authGate = (url: string) => whenAuthSettled(url, () => channel!.streams.map((s) => s.group));
         // Running count of rumors this round decrypted, for the status bar.
         let synced = 0;
         const tick = () => {
@@ -407,7 +421,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         // lands rather than waiting for the deep-history passes below (which,
         // on a cold channel, meant staring at a skeleton through up to 20
         // back-to-back relay pages).
-        const newest = await backfillStore(nostr, community!.relays, channel!, signal, { maxPages: 1 });
+        const newest = await backfillStore(nostr, community!.relays, channel!, signal, { maxPages: 1, beforeRelay: authGate });
         if (signal.aborted) return;
 
         const firstOpened = await openChatBatch(newest.events, channel!, { signal });
@@ -435,6 +449,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
           bridge = await backfillStore(nostr, community!.relays, channel!, signal, {
             until: newest.oldest - 1,
             since: saved.newest,
+            beforeRelay: authGate,
           });
           if (signal.aborted) return;
         }
@@ -443,7 +458,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         // cursor if we have one; otherwise (cold channel) resume from just
         // below pass 1's newest page rather than re-fetching that page.
         const resumeFrom = saved?.oldest ?? (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
-        const older = await backfillStore(nostr, community!.relays, channel!, signal, { until: resumeFrom });
+        const older = await backfillStore(nostr, community!.relays, channel!, signal, { until: resumeFrom, beforeRelay: authGate });
         if (signal.aborted) return;
 
         // Decrypt the bridge + older pages into the rumor cache (pass 1 already
@@ -523,6 +538,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         void (async () => {
           if (signal.aborted) return;
           queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore());
+          await drainParked();
           await maybeBackfill();
         })().catch(() => undefined);
         return existing;
@@ -535,6 +551,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       // an empty store read is NOT authoritative for V2, since history is
       // decrypted by the backfill, not the wire's live `since` window.
       if (local.length > 0 && !signal.aborted) setFirstLoadDone(true);
+      void drainParked().catch(() => undefined);
       void maybeBackfill().catch(() => undefined);
       return local;
     },

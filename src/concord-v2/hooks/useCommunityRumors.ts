@@ -50,22 +50,43 @@ export function useCommunityRumors(channelIds: string[]): {
     queryKey,
     queryFn: ({ signal }) => queryRumorsByChannel(channelIds, { perChannel: PER_CHANNEL, signal }),
     enabled: channelIds.length > 0,
-    // A cheap single transaction; the wire bus below is the live path, this is
-    // just a backstop for a missed announcement.
-    refetchInterval: 30_000,
-    staleTime: 0,
+    // The wire bus below is the live path (per-channel delta reads); this
+    // interval is only a backstop for an announcement this tab never heard
+    // (e.g. a write from another tab). It re-runs the FULL N-channel scan,
+    // which contends with the active channel's own reads on the shared store
+    // connection — keep it slow.
+    refetchInterval: 2 * 60_000,
+    staleTime: 30_000,
   });
 
-  // Re-read when the wire ingests a rumor for a watched channel. The bus
-  // already coalesces a burst of writes into one flush, so this fires at most
-  // once per burst.
+  // Delta-read when the wire ingests a rumor for a watched channel: re-scan
+  // ONLY the channels that changed and patch them into the cached map. The
+  // previous full invalidation re-ran the N×PER_CHANNEL scan on every ingest
+  // burst, serializing against the active channel's timeline read — a real
+  // channel-switch tax on busy communities. The bus already coalesces a burst
+  // of writes into one flush, so this fires at most once per burst.
   useWireScopes((scopes) => {
+    const changed: string[] = [];
     for (const s of scopes) {
-      if (s.startsWith("c2:") && idSet.has(s.slice(3))) {
-        void queryClient.invalidateQueries({ queryKey });
-        return;
-      }
+      if (s.startsWith("c2:") && idSet.has(s.slice(3))) changed.push(s.slice(3));
     }
+    if (changed.length === 0) return;
+    void queryRumorsByChannel(changed, { perChannel: PER_CHANNEL })
+      .then((delta) => {
+        queryClient.setQueryData<Map<string, OpenedChat[]>>(queryKey, (old) => {
+          // Until the initial full scan lands there is nothing to patch — and
+          // that scan will include this delta's rows anyway.
+          if (!old) return undefined;
+          const next = new Map(old);
+          for (const id of changed) {
+            const rows = delta.get(id);
+            if (rows) next.set(id, rows);
+            else next.delete(id);
+          }
+          return next;
+        });
+      })
+      .catch(() => undefined);
   });
 
   return { byChannel: data ?? EMPTY, isLoading };
