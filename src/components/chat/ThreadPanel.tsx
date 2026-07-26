@@ -5,10 +5,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageActionSheet } from "@/components/chat/MessageActionSheet";
-import { MessageOverflowMenu } from "@/components/chat/MessageOverflowMenu";
+import { MessageActionToolbar } from "@/components/chat/MessageActionToolbar";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
-import { ReactionActions, ReactionBar } from "@/components/chat/ReactionBar";
-import { ZapButton } from "@/components/chat/ZapButton";
+import { ReactionBar } from "@/components/chat/ReactionBar";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
 import { DisplayName } from "@/components/DisplayName";
@@ -314,20 +313,17 @@ function ThreadMessage({
             )}
           </div>
           {/* Desktop hover strip. On touch the long-press sheet replaces it —
-              a floated icon row can't hold this many actions on a phone. */}
+              a floated icon row can't hold this many actions on a phone.
+              quickSlots=0: this strip is inline at the end of a narrow panel
+              row, not floated, so it has no width for a quick-reaction row. */}
           {!isTouch && !isEditing ? (
             <div className="absolute right-1.5 top-1 flex items-center opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity">
-              {canReact && reactions && (
-                // No quick row here: this strip is inline at the end of a
-                // narrow panel row, not floated, so it has no width to spare.
-                <ReactionActions
-                  onReact={reactions.react}
-                  tallies={reactions.tallies}
-                  quickSlots={0}
-                />
-              )}
-              {canZap && <ZapButton disabled={zapDisabled} onOpen={() => setZapOpen(true)} />}
-              <MessageOverflowMenu actions={overflowActions} />
+              <MessageActionToolbar
+                reactions={canReact ? reactions : undefined}
+                reactionQuickSlots={0}
+                zap={canZap ? { disabled: zapDisabled, onOpen: () => setZapOpen(true) } : undefined}
+                overflowActions={overflowActions}
+              />
             </div>
           ) : null}
         </div>

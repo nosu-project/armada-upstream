@@ -4,11 +4,10 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageActionSheet } from "@/components/chat/MessageActionSheet";
-import { MessageOverflowMenu } from "@/components/chat/MessageOverflowMenu";
+import { MessageActionToolbar } from "@/components/chat/MessageActionToolbar";
 import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
 import { PollCard } from "@/components/chat/PollCard";
-import { ReactionActions, ReactionBar } from "@/components/chat/ReactionBar";
-import { ZapButton } from "@/components/chat/ZapButton";
+import { ReactionBar } from "@/components/chat/ReactionBar";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
 import { DisplayName } from "@/components/DisplayName";
@@ -586,11 +585,11 @@ const ChatMessageInner = memo(function ChatMessageInner({
   );
 
   const toolbar = (
-    <>
-      {canWrite && !isEditing && reactions && (
-        <ReactionActions onReact={reactions.react} tallies={reactions.tallies} />
-      )}
-      {canZap && !isEditing && <ZapButton disabled={zapDisabled} onOpen={() => setZapOpen(true)} />}
+    <MessageActionToolbar
+      reactions={canWrite && !isEditing ? reactions : undefined}
+      zap={canZap && !isEditing ? { disabled: zapDisabled, onOpen: () => setZapOpen(true) } : undefined}
+      overflowActions={overflowActions}
+    >
       {canWrite && !isEditing && onOpenThread && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -620,11 +619,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
               <Reply className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Reply</TooltipContent>
-        </Tooltip>
+            <TooltipContent>Reply</TooltipContent>
+          </Tooltip>
       )}
-      <MessageOverflowMenu actions={overflowActions} />
-    </>
+    </MessageActionToolbar>
   );
 
   const body = (
