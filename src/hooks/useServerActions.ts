@@ -1,50 +1,48 @@
 import { useNavigate } from "react-router-dom";
 
-import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
-import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
+import { PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
 import { writeClipboardText } from "@/lib/clipboard";
 import { isPublishQueuedError } from "@/lib/publishOutbox";
-import { addServerTombstone } from "@/lib/serverTombstone";
 import { shareOrigin } from "@/lib/shareOrigin";
 
 export interface UseServerActionsReturn {
   /** Whether this server is currently muted. */
   serverMuted: boolean;
   /**
-   * Whether the server can be removed. A server is removable unless it's an
-   * opt-in build-time pinned relay (`VITE_PIN_PLATFORM_RELAYS`, off by default).
+   * Whether the server can be removed. Removal means deleting it from the
+   * user's kind 10009 list, so it needs a logged-in user; opt-in build-time
+   * pinned relays (`VITE_PIN_PLATFORM_RELAYS`, off by default) are never
+   * removable.
    */
   isRemovable: boolean;
   /** Toggle the server's muted state. */
   toggleMute: () => void;
   /** Copy a shareable link to this server to the clipboard. */
   copyLink: () => void;
-  /** Remove the server locally (and from the synced group list), then go home. */
+  /** Remove the server from the user's group list and rail, then go home. */
   removeServer: () => void;
 }
 
 /**
- * Server-level actions (mute, copy link, remove) shared by the desktop welcome
- * pane (`ServerPage`) and the mobile-accessible channel-sidebar header menu.
- * Keeping the removal logic — including the tombstone that stops a stale relay
- * from re-adding the rail icon — in one place avoids the two surfaces drifting.
+ * Server-level actions (mute, copy link, remove) shared by the rail's context
+ * menu, the desktop welcome pane (`ServerPage`) and the mobile-accessible
+ * channel-sidebar header menu, so the three surfaces can't drift.
  */
 export function useServerActions(relayUrl: string): UseServerActionsReturn {
   const navigate = useNavigate();
-  const { updateConfig } = useAppContext();
   const { user } = useCurrentUser();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const { isCommunityMuted, toggleCommunityMute } = useMutes();
 
   const serverMuted = isCommunityMuted(relayUrl);
-  // Compare by NORMALIZED url, not raw string equality: any non-pinned server
-  // the user can navigate to should be removable — including one whose relay is
-  // now offline (removal is purely local).
-  const isRemovable = !PINNED_RAIL_RELAYS.includes(relayUrl);
+  // Any non-pinned server the user can navigate to is removable — including
+  // one whose relay is now offline, since removal only edits the user's own
+  // list. Logged out there is no list, so there is nothing to remove.
+  const isRemovable = Boolean(user) && !PINNED_RAIL_RELAYS.includes(relayUrl);
 
   const toggleMute = () => toggleCommunityMute(relayUrl);
 
@@ -57,31 +55,15 @@ export function useServerActions(relayUrl: string): UseServerActionsReturn {
   };
 
   const removeServer = () => {
-    updateConfig((current) => ({
-      ...current,
-      // Drop every stored entry that normalizes to this server, so a
-      // trailing-slash/casing variant can't linger and re-add the rail icon.
-      addedRelays: current.addedRelays.filter(
-        (url) => normalizeRelayUrl(url) !== relayUrl,
-      ),
-    }));
-    if (!user) {
-      toast({ title: "Server removed", description: relayUrl });
-      navigate("/");
-      return;
-    }
-    // Tombstone the removal so a stale relay echoing the pre-removal 10009
-    // list can't re-add this server via NostrSync's hydration before the
-    // update propagates. Cleared only by an explicit re-add, or by a list
-    // event created after this removal that still carries the server.
-    addServerTombstone(user.pubkey, relayUrl);
+    if (!user) return;
 
-    // The rail updates immediately, but the removal is not REAL until it lands
-    // in the kind 10009 list — that list is what other devices and the next
-    // login read back. This used to `console.warn` the rejection and show the
-    // success toast regardless, so a refused write (empty/undecryptable read)
-    // or a dead relay looked identical to a removal that worked, and the
-    // server came back at the next sync with no indication why.
+    // The kind 10009 list is the ONLY store for added servers, so this write
+    // is the removal — `remove-server` drops the `r` tag, every joined `group`
+    // on that relay, and the rail-layout key for it. This used to `console.warn`
+    // the rejection and show the success toast regardless, so a refused write
+    // (empty/undecryptable read) or a dead relay looked identical to a removal
+    // that worked, and the server came back at the next sync with no
+    // indication why.
     const pending = updateList({ type: "remove-server", url: relayUrl });
     navigate("/");
     pending.then(

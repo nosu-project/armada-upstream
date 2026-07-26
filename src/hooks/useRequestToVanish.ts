@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 
 import { useAppContext } from "./useAppContext";
 import { useCurrentUser } from "./useCurrentUser";
+import { useNip29Servers } from "./useNip29Servers";
 
 /**
  * Hook to publish a NIP-62 Request to Vanish (kind 62) event.
@@ -16,6 +17,7 @@ export function useRequestToVanish() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
+  const servers = useNip29Servers();
 
   return useMutation({
     mutationFn: async ({ relayUrls, content }: { relayUrls: string[]; content: string }) => {
@@ -39,7 +41,7 @@ export function useRequestToVanish() {
 
         // Also send directly to each configured relay individually for redundancy.
         const relaySet = new Set<string>([
-          ...config.addedRelays,
+          ...servers,
           ...config.appRelays,
           ...config.dmRelays,
         ]);

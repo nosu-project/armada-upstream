@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useAppContext } from "@/hooks/useAppContext";
 import { APP_NAME } from "@/lib/platform";
@@ -240,6 +241,7 @@ export function useUpdateConcordList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
+  const removeRailKey = useRemoveRailKey();
 
   return useMutation({
     // Serialize every list mutation onto one queue. Without this, TanStack runs
@@ -308,7 +310,10 @@ export function useUpdateConcordList() {
       await nostr.event(event, { signal: AbortSignal.timeout(8000) });
       return next;
     },
-    onSuccess: () => {
+    onSuccess: (_next, action) => {
+      // Leaving purges the rail-arrangement key too, so a later rejoin doesn't
+      // reappear inside the folder it used to live in.
+      if (action.type === "remove") removeRailKey(`c1:${action.communityId}`);
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
     },
   });

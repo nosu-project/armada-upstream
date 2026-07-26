@@ -215,7 +215,11 @@ export function useLoginActions() {
     },
     // Relay URLs used for NIP-46 nostrconnect communication. App relays come
     // first (remote signers are usually reachable through public relays),
-    // then the internal platform/user servers as fallback rendezvous points.
+    // then the platform relays as fallback rendezvous points.
+    //
+    // The user's own NIP-29 servers are deliberately NOT consulted: they live
+    // in the kind 10009 list, which can only be read once someone is logged
+    // in — and this runs to establish that login.
     //
     // The list is FROZEN into the signer pairing for the lifetime of the
     // session (#48), so relays the signer can never reach must not enter it
@@ -224,10 +228,7 @@ export function useLoginActions() {
       const appRelays = config.appRelays
         .map(normalizeRelayUrl)
         .filter((url): url is string => Boolean(url));
-      const added = config.addedRelays
-        .map(normalizeRelayUrl)
-        .filter((url): url is string => Boolean(url));
-      const all = [...new Set([...appRelays, ...PLATFORM_RELAYS, ...added])];
+      const all = [...new Set([...appRelays, ...PLATFORM_RELAYS])];
       const usable = all.filter(usableRendezvousRelay);
       // Never hand back an empty list: a loopback-only dev config still needs
       // SOME rendezvous attempt (and the QR shows the user what's wrong).

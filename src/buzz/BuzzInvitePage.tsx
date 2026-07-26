@@ -11,12 +11,10 @@ import {
   fetchBuzzJoinPolicy,
   type BuzzJoinPolicy,
 } from "@/buzz/invite";
-import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
-import { clearServerTombstone } from "@/lib/serverTombstone";
 
 /**
  * Landing page for a Buzz relay invite on the Armada host —
@@ -32,7 +30,6 @@ export function BuzzInvitePage() {
   const relayParam = params.get("r");
   const navigate = useNavigate();
   const { user } = useCurrentUser();
-  const { updateConfig } = useAppContext();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
 
   const invite = useMemo(
@@ -87,17 +84,10 @@ export function BuzzInvitePage() {
           policy: policy ?? undefined,
           ageConfirmed,
         });
-        updateConfig((current) =>
-          current.addedRelays.includes(invite.relayUrl)
-            ? current
-            : { ...current, addedRelays: [...current.addedRelays, invite.relayUrl] },
-        );
-        // Claiming an invite is explicit intent, so it supersedes any prior
-        // removal of this server; without dropping the tombstone the sync
-        // hydration would veto it straight back out of the rail.
-        clearServerTombstone(user.pubkey, invite.relayUrl);
-        updateList({ type: "add-server", url: invite.relayUrl }).catch((err) =>
-          console.warn("Failed to sync server to group list:", err));
+        // The kind 10009 list is the only store for added servers, so this
+        // write IS the add. Awaited: a rejected publish must fail the claim
+        // rather than leave a rail icon that vanishes at the next sync.
+        await updateList({ type: "add-server", url: invite.relayUrl });
         toast({ title: "Joined", description: previewName || invite.host });
         navigate(`/s/${relayToRouteParam(invite.relayUrl)}`, { replace: true });
       } catch (e) {
@@ -107,7 +97,7 @@ export function BuzzInvitePage() {
         setClaiming(false);
       }
     },
-    [invite, user, policy, policyAccepted, ageConfirmed, previewName, updateConfig, updateList, navigate],
+    [invite, user, policy, policyAccepted, ageConfirmed, previewName, updateList, navigate],
   );
 
   // Auto-join once signed in when there's no policy to accept; a policy needs an

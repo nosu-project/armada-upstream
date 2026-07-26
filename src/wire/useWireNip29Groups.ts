@@ -1,13 +1,11 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
 
 import { isBuzzRelayInfo } from "@/buzz/detect";
-import { useAppContext } from "@/hooks/useAppContext";
 import { useEventStore } from "@/hooks/useEventStore";
 import { fetchRelayInfoDoc } from "@/hooks/useRelayInfo";
+import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { buildRelayGroups, KIND_GROUP_METADATA } from "@/lib/nip29";
-import { PINNED_RAIL_RELAYS, normalizeRelayUrl } from "@/lib/platform";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -22,8 +20,8 @@ import type { NostrEvent } from "@nostrify/nostrify";
  * subscribed only to `groupList.groups` it would open ZERO `#h` subscriptions
  * for such servers and their timelines would never ingest (empty servers).
  *
- * So we enumerate the same servers the rail shows (PINNED_RAIL_RELAYS +
- * config.addedRelays) and, per relay, read the group ids from:
+ * So we enumerate the same servers the rail shows (`useNip29Servers`) and, per
+ * relay, read the group ids from:
  *   - the relay-PROVENANCE-scoped kind-39000 metadata already in the store
  *     (instant, and the common case after a first visit), and
  *   - a bounded live directory read (relay-key-authored) to pick up channels
@@ -40,22 +38,9 @@ import type { NostrEvent } from "@nostrify/nostrify";
  */
 export function useWireNip29Groups(): Array<{ id: string; relay: string; buzz?: boolean }> {
   const { nostr } = useNostr();
-  const { config } = useAppContext();
   const eventStore = useEventStore();
 
-  const servers = useMemo(() => {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const url of [...PINNED_RAIL_RELAYS, ...config.addedRelays]) {
-      const relay = normalizeRelayUrl(url);
-      if (relay && !seen.has(relay)) {
-        seen.add(relay);
-        out.push(relay);
-      }
-    }
-    return out;
-  }, [config.addedRelays]);
-
+  const servers = useNip29Servers();
   const serversKey = servers.join(",");
 
   const query = useQuery<Array<{ id: string; relay: string; buzz?: boolean }>>({

@@ -17,9 +17,8 @@ import { useLoginActions } from "@/hooks/useLoginActions";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { toast } from "@/hooks/useToast";
-import { useUserGroupList } from "@/hooks/useUserGroupList";
+import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { saveNsec } from "@/lib/credentialManager";
-import { normalizeRelayUrl, PINNED_RAIL_RELAYS } from "@/lib/platform";
 import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
 import { cn } from "@/lib/utils";
 
@@ -94,7 +93,6 @@ export function WelcomePage() {
   const online = useOnlineStatus();
   const navigate = useNavigate();
   const login = useLoginActions();
-  const { data: groupList } = useUserGroupList();
   const [joinOpen, setJoinOpen] = useState(false);
   // Wizard position. null = not in the wizard (landing when signed out; the
   // in-layout create/join step when signed in with no server).
@@ -143,38 +141,24 @@ export function WelcomePage() {
   // A signed-in user with a community never sees onboarding: redirect onto
   // the FIRST item of their arranged community rail — NIP-29 servers AND
   // Concord V1/V2 communities intermixed in the order they chose (the same
-  // list the far-left rail renders). `addedRelays` alone is NIP-29-only, so a
-  // user whose first rail item is a Concord community would otherwise be
-  // bounced into a NIP-29 server. The persisted `railLayout` (seeded from the
-  // legacy flat `railOrder`) lives in app config and is available
+  // list the far-left rail renders). The persisted `railLayout` (seeded from
+  // the legacy flat `railOrder`) lives in app config and is available
   // synchronously, so the redirect commits without racing the rail's async
   // load. `mergeLayout` seeds the working order from `railOrder` and appends
   // any live NIP-29 server the layout doesn't yet know about.
-  const liveServers = useMemo(
-    () =>
-      [...PINNED_RAIL_RELAYS, ...config.addedRelays]
-        .map((u) => normalizeRelayUrl(u))
-        .filter((u): u is string => Boolean(u)),
-    [config.addedRelays],
-  );
+  const liveServers = useNip29Servers();
   const firstRoute = useMemo(() => {
     const servers = new Set(liveServers);
-    const groupServers = groupList?.servers ?? [];
     const ordered = flattenLayout(
       mergeLayout(config.railLayout, config.railOrder, liveServers),
     );
     for (const key of ordered) {
-      if (!key.startsWith("c1:") && !key.startsWith("c2:")) {
-        const live =
-          servers.has(key) ||
-          groupServers.some((s) => normalizeRelayUrl(s) === key);
-        if (!live) continue;
-      }
+      if (!key.startsWith("c1:") && !key.startsWith("c2:") && !servers.has(key)) continue;
       const route = railKeyToRoute(key);
       if (route) return route;
     }
     return null;
-  }, [config.railLayout, config.railOrder, liveServers, groupList?.servers]);
+  }, [config.railLayout, config.railOrder, liveServers]);
   if (user && !online && mesh.available) {
     return <Navigate to="/mesh" replace />;
   }

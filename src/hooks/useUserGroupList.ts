@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import {
   buildGroupListTags,
   KIND_USER_GROUPS,
@@ -14,15 +15,13 @@ import {
 } from "@/lib/nip29";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
+import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
 
 /** Empty list, used before any 10009 event exists. */
 const EMPTY_LIST: UserGroupList = { groups: [], servers: [] };
-
-/** The decrypted group list persisted locally, with the event id it came from. */
-type PersistedGroupList = { event: NostrEvent; groups: GroupRef[]; servers: string[] };
 
 /** Result of reading a 10009 event, with a flag for a failed private-item decrypt. */
 interface ReadGroupListResult extends UserGroupList {
@@ -100,7 +99,7 @@ export function useUserGroupList() {
   const queryClient = useQueryClient();
 
   const queryKey = ["nip29", "user-groups", user?.pubkey];
-  const foldKey = user ? `nip29-grouplist:${user.pubkey}` : null;
+  const foldKey = user ? groupListFoldKey(user.pubkey) : null;
 
   // Plaintext-first (Vector-style): the 10009 private items are NIP-44
   // self-encrypted, and decrypting them through a remote/extension signer on
@@ -312,6 +311,7 @@ export function useUpdateUserGroupList() {
   const { user } = useCurrentUser();
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
+  const removeRailKey = useRemoveRailKey();
 
   return useMutation({
     mutationFn: (action: GroupListAction) => serializeGroupListWrite(async () => {
@@ -337,7 +337,7 @@ export function useUpdateUserGroupList() {
       //     (stale replaceable-event propagation). Base the edit on the newer
       //     persisted copy so the publish doesn't silently revert the user's
       //     recent changes.
-      const persisted = await readFolded<PersistedGroupList>(`nip29-grouplist:${user.pubkey}`);
+      const persisted = await readFolded<PersistedGroupList>(groupListFoldKey(user.pubkey));
       if (!fetched && persisted?.event) {
         throw new Error("Couldn't load your current server list from the network; not saving to avoid wiping it.");
       }
@@ -406,7 +406,7 @@ export function useUpdateUserGroupList() {
       // a write that hasn't landed yet would send it to the stale network copy
       // and undo this edit.
       if (published) {
-        await writeFolded(`nip29-grouplist:${user.pubkey}`, {
+        await writeFolded(groupListFoldKey(user.pubkey), {
           event: published,
           groups: next.groups,
           servers: next.servers,
@@ -414,7 +414,13 @@ export function useUpdateUserGroupList() {
       }
       return published;
     }),
-    onSuccess: () => {
+    onSuccess: (_published, action) => {
+      // Removing a server also purges its rail-arrangement key. Doing it here
+      // rather than at each menu item means every removal surface is covered,
+      // and only once the list write actually landed.
+      if (action.type === "remove-server") {
+        removeRailKey(normalizeRelayUrl(action.url) ?? action.url);
+      }
       queryClient.invalidateQueries({ queryKey: ["nip29", "user-groups"] });
     },
   });

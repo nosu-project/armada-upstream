@@ -7,6 +7,7 @@ import type { NostrSigner } from "@nostrify/types";
 
 import { EventStoreContext, type EventStoreContextType } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useCachedNip29Servers } from "@/hooks/useCachedNip29Servers";
 import { appEventStore } from "@/lib/sqlite/eventStore";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
@@ -123,6 +124,12 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // Pool routes: app relays (non-NIP-29 traffic) + all servers
   // (platform-pinned + user-added). The internal servers stay in the set so
   // a fully air-gapped deployment keeps working with zero app relays.
+  //
+  // The user's servers come from the folded kind 10009 snapshot rather than a
+  // config field: this component provides the Nostrify context, so it can't
+  // call `useUserGroupList`. The fold needs no relay and no signer, and it
+  // re-reads on every snapshot write, so the pool follows adds AND removals.
+  const cachedServers = useCachedNip29Servers(logins[0]?.pubkey);
   const poolRelays = useMemo(() => {
     const urls = new Set<string>();
     for (const url of config.appRelays) {
@@ -130,12 +137,12 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       if (normalized) urls.add(normalized);
     }
     for (const url of PLATFORM_RELAYS) urls.add(url);
-    for (const url of config.addedRelays) {
+    for (const url of cachedServers) {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
     }
     return [...urls];
-  }, [config.appRelays, config.addedRelays]);
+  }, [config.appRelays, cachedServers]);
 
   const poolRelaysRef = useRef(poolRelays);
   useEffect(() => {

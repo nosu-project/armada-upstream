@@ -18,7 +18,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useAppContext } from "@/hooks/useAppContext";
+import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { useConcordActions } from "@/concord-v1/hooks/useConcordActions";
 import { useCommunityActions2, useCreateRelayCandidates2 } from "@/concord-v2/hooks/useCommunityActions2";
@@ -31,7 +31,7 @@ import { classifyAddInput, type ConcordInvite } from "@/concord-v1/lib/concord";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
 import { parseGroupNaddr } from "@/lib/nip29";
 import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
-import { clearServerTombstone } from "@/lib/serverTombstone";
+
 import { cn } from "@/lib/utils";
 
 interface AddDialogProps {
@@ -248,7 +248,7 @@ type Target =
   | { kind: "nip29"; relay: string; name?: string; description?: string };
 
 function EscapeHatch({ onDone }: { onDone: () => void }) {
-  const { config, updateConfig } = useAppContext();
+  const servers = useNip29Servers();
   const { user } = useCurrentUser();
   const navigate = useNavigate();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
@@ -349,7 +349,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           });
         } else if (classified.kind === "nip29") {
           const relay = classified.relay;
-          if (PINNED_RAIL_RELAYS.includes(relay) || config.addedRelays.includes(relay)) {
+          if (PINNED_RAIL_RELAYS.includes(relay) || servers.includes(relay)) {
             throw new Error("That server is already in your list.");
           }
           // The NIP-11 document is only a preview of the server's name and
@@ -391,7 +391,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
     // `classified` is derived from `value`; `identity` captures the parts that
     // matter (plus the lists that gate nip29 dupes).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity, config.addedRelays]);
+  }, [identity, servers]);
 
   const handleCommit = async () => {
     if (!target) return;
@@ -413,17 +413,10 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           policy: target.policy,
           ageConfirmed,
         });
-        updateConfig((current) =>
-          current.addedRelays.includes(target.relay)
-            ? current
-            : { ...current, addedRelays: [...current.addedRelays, target.relay] },
-        );
-        // Accepting an invite is explicit intent, so any prior removal of this
-        // server is superseded — drop its tombstone or the sync hydration
-        // would keep vetoing it right back out of the rail.
-        clearServerTombstone(user.pubkey, target.relay);
-        updateList({ type: "add-server", url: target.relay }).catch((err) =>
-          console.warn("Failed to sync server to group list:", err));
+        // The 10009 list is the only place the rail reads servers from, so
+        // this write IS the add — awaited, so a failure surfaces as an error
+        // rather than a rail icon that vanishes at the next sync.
+        await updateList({ type: "add-server", url: target.relay });
         onDone();
         toast({ title: "Joined", description: target.name || target.relay });
         navigate(`/s/${relayToRouteParam(target.relay)}`);
@@ -446,25 +439,23 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         return;
       }
       if (target.kind === "nip29-group") {
-        // Route to the channel page: it adds the server to the rail locally,
-        // and when the naddr carried an `?invite=` code the join banner
-        // auto-sends the kind-9021 join request with it pre-filled.
+        // Route to the channel page: joining there is what puts the server on
+        // the rail (`add-group` carries it into the 10009 list), and when the
+        // naddr carried an `?invite=` code the join banner auto-sends the
+        // kind-9021 join request with it pre-filled.
         const query = target.inviteCode ? `?invite=${encodeURIComponent(target.inviteCode)}` : "";
         onDone();
         navigate(`/s/${relayToRouteParam(target.relay)}/${encodeURIComponent(target.groupId)}${query}`);
         return;
       }
-      // nip29: already validated in the preview; persist + sync.
-      updateConfig((current) => ({
-        ...current,
-        addedRelays: [...current.addedRelays, target.relay],
-      }));
-      if (user) {
-        // Adding a server the user had removed supersedes that removal.
-        clearServerTombstone(user.pubkey, target.relay);
-        updateList({ type: "add-server", url: target.relay }).catch((err) =>
-          console.warn("Failed to sync server to group list:", err));
+      // nip29: already validated in the preview. The kind 10009 list is the
+      // only store for added servers, so signing in is a hard requirement and
+      // this write IS the add — awaited, so a rejected publish surfaces as an
+      // error instead of a rail icon that disappears at the next sync.
+      if (!user) {
+        throw new Error("Sign in first — your server list is stored on your Nostr account.");
       }
+      await updateList({ type: "add-server", url: target.relay });
       toast({ title: "Server added", description: target.name || target.relay });
       onDone();
     } catch (e) {

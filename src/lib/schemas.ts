@@ -65,7 +65,6 @@ export const AppConfigSchema = z.object({
   theme: z.enum(["light", "dark", "system", "custom"]).catch("dark"),
   customTheme: ThemeConfigSchema.optional().catch(undefined),
   themes: ThemesConfigSchema.optional().catch(undefined),
-  addedRelays: z.array(z.string()).catch([]),
   railOrder: z.array(z.string()).catch([]),
   railLayout: z.array(RailLayoutNodeSchema).catch([]),
   railOpenFolders: z.array(z.string()).catch([]),
@@ -95,12 +94,9 @@ export const EncryptedSettingsSchema = z.looseObject({
   theme: z.enum(["light", "dark", "system", "custom"]).optional(),
   customTheme: ThemeConfigSchema.optional(),
   themes: ThemesConfigSchema.optional(),
-  /**
-   * Cache of the user's NIP-29 server list. Canonically lives in the kind
-   * 10009 list; synced here too so a fresh device paints the rail before the
-   * 10009 read resolves. Merged (union) on the way in, never used to remove.
-   */
-  addedRelays: z.array(z.string()).optional(),
+  // NOTE: `addedRelays` is gone. The NIP-29 server set is read from the kind
+  // 10009 list only. The schema is loose, so an `addedRelays` key left in an
+  // older device's blob passes through untouched and is simply ignored.
   /** Unified community-rail order (relay URLs + `c1:`/`c2:` community keys). */
   railOrder: z.array(z.string()).optional(),
   /** Structured rail layout: ordered items + folders (supersedes railOrder). */

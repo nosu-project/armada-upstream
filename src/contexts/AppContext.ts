@@ -11,11 +11,11 @@ export type Theme = "light" | "dark" | "system" | "custom";
 /**
  * Application configuration, persisted to localStorage by AppProvider.
  *
- * The server list is the user's own: relays are added by following an
- * invite/server link or via the "+" add flow (`addedRelays`). A deployment's
- * platform relay (VITE_PLATFORM_RELAYS) is infrastructure, not an auto-joined
- * community — it enters the rail the same way, via its invite/server link,
- * unless an operator opts into pinning it (VITE_PIN_PLATFORM_RELAYS).
+ * Note this holds no server list: the user's NIP-29 servers live in their kind
+ * 10009 event (see `useNip29Servers`), added by the "+" flow or by joining a
+ * channel. A deployment's platform relay (VITE_PLATFORM_RELAYS) is
+ * infrastructure, not an auto-joined community — it enters the rail the same
+ * way, unless an operator opts into pinning it (VITE_PIN_PLATFORM_RELAYS).
  */
 export interface AppConfig {
   /** Display theme mode. */
@@ -31,14 +31,15 @@ export interface AppConfig {
    */
   themes?: ThemesConfig;
   /**
-   * Relay (server) URLs the user added on top of the pinned platform relays.
-   *
-   * This is a fast/offline **cache** of the user's NIP-29 server list, which
-   * lives canonically in their kind 10009 event (`r` tags, NIP-51, NIP-44
-   * encrypted to self). NostrSync hydrates this from the 10009 list on login;
-   * AddDialog / ServerPage / Settings write through to both.
+   * NOTE: there is deliberately NO `addedRelays` here. The user's NIP-29
+   * server set lives in exactly one place — their kind 10009 event, read via
+   * `useUserGroupList()` and cached offline in the folded IndexedDB store.
+   * A second copy in AppConfig was a synced field hydrated by UNION from both
+   * the 10009 list and the settings blob itself, so any device holding a
+   * pre-removal copy re-added a removed server forever, and the local
+   * tombstone hack that vetoed it got cleared by the very event that
+   * resurrected it. One source of truth removes the whole failure mode.
    */
-  addedRelays: string[];
   /**
    * User-defined display order for the *entire* community rail as one list —
    * NIP-29 servers and Concord (V1/V2) communities intermixed in any order.
@@ -243,7 +244,6 @@ export const SYNCED_CONFIG_KEYS = [
   "theme",
   "customTheme",
   "themes",
-  "addedRelays",
   "railOrder",
   "railLayout",
   "appRelays",
@@ -268,7 +268,6 @@ export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
 
 export const defaultConfig: AppConfig = {
   theme: "dark",
-  addedRelays: [],
   railOrder: [],
   railLayout: [],
   railOpenFolders: [],

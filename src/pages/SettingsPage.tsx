@@ -47,12 +47,12 @@ import { useBlossomServerList } from "@/hooks/useBlossomServerList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
+import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { APP_RELAYS, PINNED_RAIL_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
-import { addServerTombstone, clearServerTombstone } from "@/lib/serverTombstone";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -115,6 +115,7 @@ export function SettingsPage() {
   const { user } = useCurrentUser();
   const { logins } = useNostrLogin();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
+  const servers = useNip29Servers();
   const dmRelayList = useDmRelayList();
   const blossomServerList = useBlossomServerList();
 
@@ -137,8 +138,8 @@ export function SettingsPage() {
   };
 
   /**
-   * Update a relay field locally. The added-server list (`addedRelays`) is
-   * handled separately by `setAddedRelays` (NIP-29 kind 10009), and the DM
+   * Update a relay field locally. The added-server list is handled separately
+   * by `setAddedRelays` (which writes the NIP-29 kind 10009 list), and the DM
    * relays by `setDmRelays` (also republishes the NIP-17 kind 10050 list).
    * The change is pushed to the encrypted NIP-78 settings centrally by
    * NostrSync, which watches every synced AppConfig field.
@@ -148,31 +149,21 @@ export function SettingsPage() {
   };
 
   /**
-   * Update the user's server list. The local cache updates immediately; the
-   * change is diffed and persisted to the NIP-29 kind 10009 list (`r` tags),
-   * the cross-device source of truth.
+   * Update the user's server list by diffing against the kind 10009 list —
+   * the one and only store for added servers. There is no local mirror to
+   * write: `useNip29Servers` re-derives from the list mutation's own fold
+   * write, so the editor reflects the change as soon as it lands.
    */
   const setAddedRelays = (relays: string[]) => {
-    const prev = config.addedRelays;
-    updateConfig((current) => ({ ...current, addedRelays: relays }));
     if (!user) return;
     for (const url of relays) {
-      if (!prev.includes(url)) {
-        // Re-adding a server the user had removed: drop its tombstone so the
-        // sync hydration is allowed to keep it again.
-        clearServerTombstone(user.pubkey, url);
+      if (!servers.includes(url)) {
         updateList({ type: "add-server", url }).catch((err) =>
           console.warn("Failed to add server to group list:", err));
       }
     }
-    for (const url of prev) {
+    for (const url of servers) {
       if (!relays.includes(url)) {
-        // Tombstone the removal locally. The 10009 removal is published below,
-        // but a slow relay can echo the STALE pre-removal list and re-add the
-        // server via NostrSync's hydration before the update propagates. The
-        // tombstone lets the hydration filter it out until the removal is
-        // confirmed on the network.
-        addServerTombstone(user.pubkey, url);
         updateList({ type: "remove-server", url }).catch((err) =>
           console.warn("Failed to remove server from group list:", err));
       }
@@ -332,7 +323,7 @@ export function SettingsPage() {
           <SettingsRow>
             <RelayListEditor
               pinned={PINNED_RAIL_RELAYS}
-              relays={config.addedRelays}
+              relays={servers}
               onChange={setAddedRelays}
               emptyText="No extra servers added. Use the + button in the server rail to add one."
               placeholder="wss://server.example.com"

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { useEffect, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import { useEventStore } from "@/hooks/useEventStore";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import {
@@ -10,6 +11,7 @@ import {
   assertListBounds,
   EMPTY_COMMUNITY_LIST,
   isExcluded,
+  isLive,
   liveEntries,
   markExcluded,
   mergeCommunityLists,
@@ -221,6 +223,7 @@ export function useUpdateCommunityList2() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
+  const removeRailKey = useRemoveRailKey();
 
   return useMutation({
     // Serialize every list mutation onto one queue so back-to-back joins can't
@@ -290,7 +293,10 @@ export function useUpdateCommunityList2() {
       }
       return next;
     },
-    onSuccess: () => {
+    onSuccess: (_next, action) => {
+      // Leaving purges the rail-arrangement key too, so a later rejoin doesn't
+      // reappear inside the folder it used to live in.
+      if (action.type === "remove") removeRailKey(`c2:${action.communityId}`);
       queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });
     },
   });
@@ -308,19 +314,27 @@ export function useLiveCommunities2(): CommunityListEntry[] {
  * unioned in (community relays first). Stable identity across renders.
  */
 export function useCommunity2(idHex: string | undefined): CommunityV2 | undefined {
+  const entry = useCommunityEntry2(idHex);
+  return useMemo(() => (entry ? rehydrateCommunity(entry) : undefined), [entry]);
+}
+
+/**
+ * The raw list entry for a community (needed to round-trip unknown fields).
+ *
+ * Resolves only LIVE memberships. A tombstoned entry stays in the list
+ * document forever — that's how a leave propagates — but it must not resolve
+ * here, or `/c/<id>` would still mount the full community page for a community
+ * the user left, arming every watcher on it. Two of those watchers
+ * (`useRekeyWatch2` adopting a Refounding, `useStrandedRecovery2` re-resolving
+ * the invite) bump `added_at`, which is exactly what makes a leave undo itself.
+ */
+export function useCommunityEntry2(idHex: string | undefined): CommunityListEntry | undefined {
   const { data } = useCommunityList2();
   return useMemo(() => {
     if (!idHex || !data) return undefined;
-    const entry = data.list.entries.find((e) => e.community_id === idHex);
-    if (!entry) return undefined;
-    return rehydrateCommunity(entry);
+    if (!isLive(data.list, idHex)) return undefined;
+    return data.list.entries.find((e) => e.community_id === idHex);
   }, [data, idHex]);
-}
-
-/** The raw list entry for a community (needed to round-trip unknown fields). */
-export function useCommunityEntry2(idHex: string | undefined): CommunityListEntry | undefined {
-  const { data } = useCommunityList2();
-  return useMemo(() => data?.list.entries.find((e) => e.community_id === idHex), [data, idHex]);
 }
 
 /**

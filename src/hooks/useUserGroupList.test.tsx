@@ -35,6 +35,7 @@ const h = vi.hoisted(() => ({
   publish: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   readFolded: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   writeFolded: vi.fn<(...args: unknown[]) => Promise<void>>(),
+  removeRailKey: vi.fn<(key: string) => void>(),
   user: undefined as unknown,
 }));
 
@@ -50,6 +51,9 @@ vi.mock("@/hooks/useNostrPublish", () => ({
 vi.mock("@/lib/foldedCache", () => ({
   readFolded: (...args: unknown[]) => h.readFolded(...args),
   writeFolded: (...args: unknown[]) => h.writeFolded(...args),
+}));
+vi.mock("@/hooks/useRemoveRailKey", () => ({
+  useRemoveRailKey: () => h.removeRailKey,
 }));
 // Only the read hook touches the event store; keep the module graph light.
 vi.mock("@/hooks/useEventStore", () => ({
@@ -106,6 +110,7 @@ beforeEach(() => {
   h.publish.mockReset();
   h.readFolded.mockReset().mockResolvedValue(undefined);
   h.writeFolded.mockReset().mockResolvedValue(undefined);
+  h.removeRailKey.mockReset();
   h.user = { pubkey: SELF, signer: { nip44 } };
   h.publish.mockImplementation(async (t) => ({
     ...(t as object),
@@ -334,6 +339,45 @@ describe("useUpdateUserGroupList (kind 10009 read-modify-write)", () => {
       );
       expect(stamps).toEqual([...stamps].sort((a, b) => a - b));
       expect(new Set(stamps).size).toBe(stamps.length);
+    });
+
+    it("purges the rail-arrangement key when a server is removed", async () => {
+      statefulBackend([S1, S2]);
+
+      const result = renderUpdate();
+      await act(async () => {
+        await result.current.mutateAsync({ type: "remove-server", url: S1 });
+      });
+
+      // Removal has to hit the arrangement as well as the list, or the key
+      // survives in railLayout/railOrder and a later re-add drops the server
+      // back into the folder it used to live in.
+      expect(h.removeRailKey).toHaveBeenCalledWith(S1);
+    });
+
+    it("normalizes the rail key it purges, so a raw url still matches", async () => {
+      statefulBackend([S1]);
+
+      const result = renderUpdate();
+      await act(async () => {
+        await result.current.mutateAsync({ type: "remove-server", url: "wss://one.example" });
+      });
+
+      // The rail keys servers by NORMALIZED url; purging the raw form would
+      // silently miss.
+      expect(h.removeRailKey).toHaveBeenCalledWith(S1);
+    });
+
+    it("leaves the arrangement alone when a server is ADDED", async () => {
+      statefulBackend([S1]);
+
+      const result = renderUpdate();
+      await act(async () => {
+        await result.current.mutateAsync({ type: "add-server", url: S2 });
+      });
+
+      // A new server is appended by mergeLayout at render time; nothing to prune.
+      expect(h.removeRailKey).not.toHaveBeenCalled();
     });
   });
 });

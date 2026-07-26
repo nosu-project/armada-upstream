@@ -18,7 +18,6 @@ import { useCreateGroup, useGroupModeration } from "@/hooks/useGroupModeration";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { toast } from "@/hooks/useToast";
 import { relayToRouteParam } from "@/lib/platform";
-import { clearServerTombstone } from "@/lib/serverTombstone";
 import { cn } from "@/lib/utils";
 
 interface CreateGroupDialogProps {
@@ -99,11 +98,9 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
           isClosed,
         });
       }
-      // Creating a channel on this server supersedes any earlier removal of
-      // it, so drop the tombstone — otherwise the sync hydration keeps vetoing
-      // the server and the new channel has no rail icon to reach it by.
-      if (user) clearServerTombstone(user.pubkey, relayUrl);
-      // Best-effort: remember the group in the user's NIP-51 list.
+      // Best-effort: remember the group in the user's NIP-51 list. This also
+      // carries the server into that list, which is what gives the new channel
+      // a rail icon to reach it by.
       updateList({ type: "add-group", ref: { id: effectiveId, relay: relayUrl } }).catch(() => undefined);
 
       toast({ title: "Channel created", description: name.trim() });

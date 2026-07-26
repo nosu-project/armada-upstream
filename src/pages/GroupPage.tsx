@@ -54,15 +54,13 @@ import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
-import { PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { relayRejectionMessage, type Nip29Admin } from "@/lib/nip29";
-import { clearServerTombstone, isServerTombstoned } from "@/lib/serverTombstone";
 import { cn } from "@/lib/utils";
 
 function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId: string; isClosed: boolean }) {
   const join = useJoinGroup(relayUrl, groupId);
   const { mutateAsync: updateList } = useUpdateUserGroupList();
-  const { user } = useCurrentUser();
   const [searchParams] = useSearchParams();
   // Accept Armada's `?code=`, Flotilla/Coracle's `?c=`, and the standardized
   // NIP-29 `?invite=` (the naddr invite-code suffix, see buildGroupNaddr).
@@ -73,11 +71,9 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   const handleJoin = useCallback(async () => {
     try {
       await join.mutateAsync({ code: code.trim() || undefined });
-      // Joining a channel is explicit intent to have this server, and
-      // `add-group` carries the server into the 10009 list — so a prior
-      // removal is superseded. Drop its tombstone, or the sync hydration
-      // would keep vetoing the server the user just opted back into.
-      if (user) clearServerTombstone(user.pubkey, relayUrl);
+      // Joining a channel is the explicit intent that brings this server onto
+      // the rail: `add-group` carries the server into the 10009 list, which is
+      // the only place the rail reads NIP-29 communities from.
       updateList({ type: "add-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
       toast({ title: "Join request sent", description: "The relay will admit you automatically or after review." });
     } catch (e) {
@@ -87,7 +83,7 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
         variant: "destructive",
       });
     }
-  }, [join, code, updateList, groupId, relayUrl, user]);
+  }, [join, code, updateList, groupId, relayUrl]);
 
   // Shared invite link → join automatically once on arrival.
   useEffect(() => {
@@ -301,36 +297,14 @@ export function GroupPage() {
     );
   }, [relayUrl, groupId, updateConfig]);
 
-  // Visiting a server/invite link (e.g. /s/chat.soapbox.pub/<group>) should add
-  // the server to the user's rail so they can navigate back to it after going
-  // to DMs or another server. This is the primary way a relay-based community —
-  // INCLUDING the deployment's own platform relay — enters the rail: by the
-  // user following its invite/server link, not by build-time fiat. Only relays
-  // that are already auto-pinned (`PINNED_RAIL_RELAYS`, opt-in and empty by
-  // default) skip this. Write the local cache immediately (works logged-out,
-  // instant rail visibility). This is LOCAL-ONLY: the kind 10009 list is never
-  // published from a passive visit — the server rides into the list only via
-  // an explicit action (joining a channel, adding a server in Settings/Add).
-  //
-  // A server the user has REMOVED is exempt: this effect fires on any mount of
-  // the route, including ones the user didn't choose — a notification tap, the
-  // last-channel restore, back-navigation, the quick switcher — so without the
-  // veto a passive visit silently undoes the removal and the icon reappears in
-  // the rail. Explicitly joining a channel here clears the tombstone (see
-  // JoinBanner), which is the intentional way back in.
-  const addedServerRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!relayUrl || PINNED_RAIL_RELAYS.includes(relayUrl)) return;
-    if (user && isServerTombstoned(user.pubkey, relayUrl)) return;
-    if (addedServerRef.current !== relayUrl) {
-      addedServerRef.current = relayUrl;
-      updateConfig((c) =>
-        c.addedRelays.includes(relayUrl)
-          ? c
-          : { ...c, addedRelays: [...c.addedRelays, relayUrl] },
-      );
-    }
-  }, [relayUrl, updateConfig, user]);
+  // NOTE: visiting this route deliberately does NOT put the server on the
+  // rail. It used to, writing a local-only cache that the kind 10009 list knew
+  // nothing about — and because this effect fires on any mount the user didn't
+  // choose (a notification tap, the last-channel restore, back-navigation, the
+  // quick switcher), it silently undid removals, which is what the removed
+  // tombstone hack existed to veto. The rail now shows exactly the 10009 list,
+  // and a server enters it only by explicit action: joining a channel here
+  // (`add-group` carries the server) or adding it in Settings/Add/invite.
 
   const group = details?.group;
   // Buzz channel type (stream/forum/dm/workflow) from the 39000 `t` tag.

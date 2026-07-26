@@ -87,8 +87,9 @@ export const PLATFORM_RELAYS: string[] = RAW_PLATFORM_RELAYS
  * separate things: the relay as *deployment infrastructure* (AV/DM-voice/pool
  * fallback, below — still driven by `PLATFORM_RELAYS`) versus the relay as a
  * *community the user belongs to*. A relay-based (NIP-29) community should be
- * entered the same way any other is: via an invite/server link (which adds it
- * to `addedRelays`, see GroupPage), not by build-time fiat.
+ * entered the same way any other is: by explicitly adding it or joining a
+ * channel on it, which writes it to the user's kind 10009 list — not by
+ * build-time fiat.
  *
  * So the default is now **empty** — the platform relay is NOT auto-pinned; it
  * appears in the rail only once the user visits its invite/server link. An

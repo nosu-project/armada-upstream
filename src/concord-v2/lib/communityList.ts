@@ -255,7 +255,14 @@ export function markExcluded(list: CommunityList, communityId: string, epoch: nu
  * exactly as a re-join does. Without this, a member excluded in one Refounding
  * (tombstoned) and RE-INCLUDED in a later one keeps their original `added_at`,
  * which stays below `removed_at`, so `isLive` judges the still-valid membership
- * dead and the community silently vanishes from the rail forever. Pure.
+ * dead and the community silently vanishes from the rail forever.
+ *
+ * That the bump can resurrect a tombstone is intentional (see
+ * communityList.liveness.test.ts), and it is NOT a way for a leave to undo
+ * itself: the callers that adopt an epoch — the rekey watcher, a manual
+ * Refound — only run for a community whose page is mounted, and
+ * `useCommunityEntry2` resolves live memberships only, so a community the
+ * user left never arms them. Pure.
  */
 export function refreshCurrent(list: CommunityList, current: JoinMaterial, addedAt = Date.now()): CommunityList {
   const idx = list.entries.findIndex((e) => e.community_id === current.community_id);

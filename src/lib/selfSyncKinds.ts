@@ -89,8 +89,8 @@ export function queryKeysForSelfEvent(kind: number, dTag: string | undefined): r
     case KIND_MUTE_LIST:
       return [["mute-list"]];
     case KIND_USER_GROUPS:
-      // The rail's servers + joined channels. NostrSync also re-hydrates
-      // addedRelays from this list's `r` tags once the query re-reads it.
+      // The rail's servers (`r` tags) + joined channels. This list IS the
+      // source the rail renders, so re-reading it is the whole update.
       return [["nip29", "user-groups"]];
     case KIND_DM_RELAYS:
       return [["dm-relay-list"]];

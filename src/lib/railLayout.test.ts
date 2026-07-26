@@ -10,6 +10,7 @@ import {
   normalizeLayout,
   planDrop,
   railKeyToRoute,
+  removeKey,
   renameFolder,
   type RailLayoutNode,
   type RailSlot,
@@ -272,5 +273,41 @@ describe("planDrop", () => {
       type: "before",
       anchor: itemAnchor("z"),
     });
+  });
+});
+
+describe("removeKey", () => {
+  it("drops a top-level item", () => {
+    expect(removeKey([item("a"), item("b"), item("c")], "b")).toEqual([item("a"), item("c")]);
+  });
+
+  it("drops an item out of a folder, keeping the folder", () => {
+    expect(removeKey([folder("f", ["a", "b", "c"]), item("d")], "b")).toEqual([
+      folder("f", ["a", "c"]),
+      item("d"),
+    ]);
+  });
+
+  it("dissolves a folder left with one member", () => {
+    // Same Discord rule normalizeLayout applies to a drag-out.
+    expect(removeKey([folder("f", ["a", "b"]), item("c")], "b")).toEqual([item("a"), item("c")]);
+  });
+
+  it("drops a folder that removal empties", () => {
+    expect(removeKey([folder("f", ["a"]), item("c")], "a")).toEqual([item("c")]);
+  });
+
+  it("is a no-op for a key the layout doesn't hold", () => {
+    const layout = [folder("f", ["a", "b"]), item("c")];
+    expect(removeKey(layout, "zzz")).toEqual(layout);
+  });
+
+  it("purges the key so a later re-add can't reappear inside its old folder", () => {
+    // The whole point: mergeLayout appends unknown live keys at the END, so a
+    // rejoined community comes back at the bottom rather than in the folder it
+    // was in when the user left.
+    const left = removeKey([folder("f", ["a", "b", "c"])], "b");
+    expect(flattenLayout(left)).toEqual(["a", "c"]);
+    expect(flattenLayout(mergeLayout(left, [], ["a", "c", "b"]))).toEqual(["a", "c", "b"]);
   });
 });

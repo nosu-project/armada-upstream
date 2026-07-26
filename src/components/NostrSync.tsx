@@ -20,11 +20,8 @@ import {
 } from "@/hooks/useFrequentReactions";
 import { useTheme } from "@/hooks/useTheme";
 import { useReadState } from "@/hooks/useReadState";
-import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseBlossomServerList } from "@/lib/blossom";
 import { KIND_BLOSSOM_SERVERS } from "@/hooks/useBlossomServerList";
-import { normalizeRelayUrl, PINNED_RAIL_RELAYS } from "@/lib/platform";
-import { reconcileServerTombstones } from "@/lib/serverTombstone";
 import { type EncryptedSettings } from "@/lib/schemas";
 import {
   KIND_APP_SPECIFIC,
@@ -98,9 +95,8 @@ function syncedSubset(config: AppConfig): Partial<EncryptedSettings> {
  *       never clobbers a fresh local edit; re-applies whenever a newer remote
  *       event arrives (layer A invalidates → the query re-reads → this fires).
  *    1a. Read-state hydration from the same event.
- *    1b. Hydrates `addedRelays` from the NIP-29 server list (10009 `r` tags) —
- *        the cross-device source of truth for the server rail. Re-merged on
- *        every list change (union only, never replace).
+ *    (There is no 1b. It used to hydrate the 10009 `r` tags into an
+ *        `addedRelays` config cache; the rail now reads that list directly.)
  *    1c. Blossom media server list (10063) → config.
  *    2. Publishes local config changes back to the encrypted event (debounced),
  *       so every AppConfig edit syncs across devices.
@@ -114,7 +110,6 @@ export function NostrSync() {
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   const { settings, updateSettings, hasNip44Support, isSuccess } = useEncryptedSettings();
-  const { data: groupList } = useUserGroupList();
   const { hydrate: hydrateReadState } = useReadState();
   const { applyCustomTheme } = useTheme();
   const queryClient = useQueryClient();
@@ -247,31 +242,13 @@ export function NostrSync() {
           (merged as Record<string, unknown>)[key] = value;
         }
       }
-      // The settings blob carries `addedRelays`, which makes it a server
-      // re-add channel in its own right: a blob written before a removal still
-      // lists the removed server, and the union below would faithfully put it
-      // back on every device, forever. Apply the same removal veto as 1b —
-      // clearing any tombstone this blob proves was superseded (created after
-      // the removal and still carrying the server, i.e. a real re-add
-      // elsewhere).
-      const tombstoned = reconcileServerTombstones(
-        user.pubkey,
-        Array.isArray(merged.addedRelays) ? merged.addedRelays : [],
-        remoteTs,
-      );
-      // addedRelays is a union cache, never a wholesale replace (a partial
-      // remote list must not drop servers we know about locally).
+      // Every synced key applies wholesale. The blob used to also carry
+      // `addedRelays`, union-merged — which made it a server RE-ADD channel:
+      // a blob written before a removal still listed the removed server and
+      // put it back on every device, forever. The server set now lives only in
+      // the kind 10009 list, so there is nothing here to union.
       updateConfig((current) => {
         const next = { ...current, ...merged };
-        if (Array.isArray(merged.addedRelays)) {
-          const have = new Set(current.addedRelays);
-          next.addedRelays = [
-            ...current.addedRelays,
-            ...merged.addedRelays.filter(
-              (url) => !have.has(url) && !tombstoned.has(normalizeRelayUrl(url) ?? url),
-            ),
-          ];
-        }
         // Record what we just applied so the publish watcher treats it as
         // already-synced and doesn't echo it straight back out.
         lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));
@@ -406,71 +383,13 @@ export function NostrSync() {
     };
   }, [user?.pubkey, hasNip44Support, updateSettings]);
 
-  // ─── 1b. NIP-29 server list (kind 10009 `r` tags) → addedRelays cache ──
-  // The 10009 list is the cross-device source of truth for added servers;
-  // localStorage `addedRelays` is just a fast/offline cache. Hydrate by MERGING
-  // the list into the local cache (union) — never by replacing it. Replacing
-  // was catastrophic: any transient empty/partial/failed-decrypt read of the
-  // 10009 event (slow relay, signer not ready) would overwrite `addedRelays`
-  // with [] and the whole server rail would vanish. A union only ever ADDS
-  // servers the list knows about; explicit removals update `addedRelays`
-  // directly at the call site (ServerPage / SettingsPage), so we don't need the
-  // list to drive removals here.
-  //
-  // Removal race guard: because we only MERGE, a stale relay handing back the
-  // pre-removal 10009 event would re-add a just-removed server. SettingsPage
-  // tombstones removals locally; we filter tombstoned servers out of the merge
-  // here and clear each tombstone once a read confirms the server is gone from
-  // the list (propagation complete). See `serverTombstone.ts`.
-  //
-  // Re-runs on EVERY list change (not once per account): the standing
-  // self-state REQ (layer A) invalidates the 10009 query when another device
-  // adds a server, `groupList` re-reads, and this merges the new server into
-  // the rail live. The union + idempotent `updateConfig` make repeated runs
-  // free when nothing changed.
-  useEffect(() => {
-    if (!user?.pubkey || !groupList) return;
-
-    // Nothing trustworthy to merge from: no event yet, or its encrypted items
-    // failed to decrypt (servers would read empty). Wait for a real list.
-    if (!groupList.event || groupList.decryptFailed) return;
-
-    // Reconcile tombstones against this read. A removed server that this list
-    // still carries is only allowed back if the list event was created AFTER
-    // the removal — that means another device genuinely re-added it. An older
-    // event is a stale echo of the pre-removal list, and gets filtered out of
-    // the merge below.
-    const tombstoned = reconcileServerTombstones(
-      user.pubkey,
-      groupList.servers,
-      groupList.event.created_at * 1000,
-    );
-
-    // Opt-in auto-pinned relays (`PINNED_RAIL_RELAYS`, empty by default) are
-    // always in the rail regardless of the list, so they needn't be cached;
-    // everything else the list knows about (minus tombstoned removals) is
-    // merged in.
-    const pinned = new Set(PINNED_RAIL_RELAYS);
-    const fromList = groupList.servers.filter(
-      (url) => !pinned.has(url) && !tombstoned.has(normalizeRelayUrl(url) ?? url),
-    );
-    if (fromList.length === 0) return;
-
-    updateConfig((current) => {
-      const have = new Set(current.addedRelays);
-      const missing = fromList.filter((url) => !have.has(url));
-      if (missing.length === 0) return current;
-      const next = { ...current, addedRelays: [...current.addedRelays, ...missing] };
-      // This is a SYNC-DRIVEN mutation (hydrating the user's own 10009 server
-      // list into the local cache), not a user edit. Keep the publish baseline
-      // in lockstep so the publish watcher never mistakes it for one and
-      // broadcasts it back out. We only ever broadcast direct user edits.
-      if (pulledForPubkey.current === user.pubkey) {
-        lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));
-      }
-      return next;
-    });
-  }, [user?.pubkey, groupList, updateConfig]);
+  // NOTE: there is no longer a "1b" section hydrating the kind 10009 server
+  // list into a local config cache. That cache (`addedRelays`) is gone: the
+  // rail reads the 10009 list directly, via its own folded offline snapshot.
+  // The hydration had to be a UNION — a transient empty/failed-decrypt read
+  // must never wipe the rail — and a union can only ever ADD, so every stale
+  // relay copy re-added servers the user had just removed. The tombstone
+  // machinery that vetoed those re-adds is gone with it.
 
   // ─── 1c. Blossom server list (kind 10063 `server` tags) → config ──────
   // The 10063 event is the cross-device source of truth for the user's

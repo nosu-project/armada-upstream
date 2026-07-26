@@ -16,8 +16,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
-import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { normalizeRelayUrl, PINNED_RAIL_RELAYS } from "@/lib/platform";
+import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
 import { lazyWithReload } from "@/lib/chunkReload";
 
@@ -72,17 +71,15 @@ function InviteRoute() {
  *
  * Once signed in: a hosted deployment has pinned platform relays and goes
  * straight to the first one; a standalone (rogue) client ships with NO pinned
- * relay, so fall back to the user's first added server — from the local
- * `addedRelays` cache, or (on a fresh reinstall, before that cache is
- * hydrated) straight from the synced kind-10009 server list — or, if they
- * have none yet, the welcome screen (to add one).
+ * relay, so fall back to the user's first added server, read from their synced
+ * kind-10009 list (via its folded offline snapshot) — or, if they have none
+ * yet, the welcome screen (to add one).
  */
 function HomeRedirect() {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
-  const { data: groupList } = useUserGroupList();
 
   // Cold launch from a notification tap: the launch URL resolves async (see
   // coldLaunchDeepLink). Hold the default redirect until it's known — otherwise
@@ -104,44 +101,31 @@ function HomeRedirect() {
 
   // Land on the first item of the user's *arranged* community rail — NIP-29
   // servers AND Concord V1/V2 communities intermixed in the order they chose
-  // (the same list the far-left rail renders). `addedRelays` alone is NIP-29-
-  // only, so a user whose first rail item is a Concord community would get
-  // bounced into a NIP-29 server instead. The persisted `railLayout` (seeded
-  // from the legacy flat `railOrder`) lives in app config and is therefore
-  // available synchronously on the first render — before the Concord lists
-  // rehydrate from their folded cache — so the redirect commits to the right
-  // destination without racing the rail's async load. `mergeLayout` seeds the
-  // working order from `railOrder` and appends any live NIP-29 server the
-  // layout doesn't yet know about (a fresh user who never reordered).
-  const liveServers = useMemo(
-    () =>
-      [...PINNED_RAIL_RELAYS, ...config.addedRelays].map((u) =>
-        normalizeRelayUrl(u),
-      ).filter((u): u is string => Boolean(u)),
-    [config.addedRelays],
-  );
+  // (the same list the far-left rail renders). The persisted `railLayout`
+  // (seeded from the legacy flat `railOrder`) lives in app config and is
+  // therefore available synchronously on the first render — before the server
+  // and Concord lists rehydrate from their folded caches — so the redirect
+  // commits to the right destination without racing the rail's async load.
+  // `mergeLayout` seeds the working order from `railOrder` and appends any
+  // live NIP-29 server the layout doesn't yet know about (a fresh user who
+  // never reordered).
+  const liveServers = useNip29Servers();
   const firstRoute = useMemo(() => {
     const servers = new Set(liveServers);
-    const groupServers = groupList?.servers ?? [];
     const ordered = flattenLayout(
       mergeLayout(config.railLayout, config.railOrder, liveServers),
     );
     for (const key of ordered) {
       // A NIP-29 server key (relay URL) is only a valid landing target if the
-      // user still has it: the layout keeps stale keys (a since-removed
-      // server) deliberately, so skip those. Concord keys are always navigable
-      // (their page handles a still-loading / tombstoned community).
-      if (!key.startsWith("c1:") && !key.startsWith("c2:")) {
-        const live =
-          servers.has(key) ||
-          groupServers.some((s) => normalizeRelayUrl(s) === key);
-        if (!live) continue;
-      }
+      // user still has it: the layout keeps keys for items that aren't live
+      // yet (lists still loading), so skip those. Concord keys are always
+      // navigable — their page handles a still-loading community.
+      if (!key.startsWith("c1:") && !key.startsWith("c2:") && !servers.has(key)) continue;
       const route = railKeyToRoute(key);
       if (route) return route;
     }
     return null;
-  }, [config.railLayout, config.railOrder, liveServers, groupList?.servers]);
+  }, [config.railLayout, config.railOrder, liveServers]);
 
   if (!state.ready) {
     // Launch URL not yet known — committing to a default destination here

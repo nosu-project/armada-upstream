@@ -48,8 +48,9 @@ import { useRelayUnread } from "@/hooks/useRelayUnread";
 import { useServerActions } from "@/hooks/useServerActions";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
+import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { impact } from "@/lib/haptics";
-import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
+import { PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
 import {
   applyDrop,
   dissolveFolder,
@@ -1187,22 +1188,11 @@ export function ServerRail({
   const concord2 = useLiveCommunities2();
   const [addOpen, setAddOpen] = useState(false);
 
-  // Build the full rail list (any opt-in pinned relays + user-added ones),
-  // de-duplicated. By default `PINNED_RAIL_RELAYS` is empty, so the rail shows
-  // only servers the user actually added/joined (via an invite/server link).
+  // The NIP-29 half of the rail: any opt-in pinned relays + the servers in the
+  // user's kind 10009 list. By default `PINNED_RAIL_RELAYS` is empty, so the
+  // rail shows only servers the user actually added or joined.
   // Order/grouping is applied by the layout below.
-  const servers = useMemo(() => {
-    const base: string[] = [];
-    const seen = new Set<string>();
-    for (const url of [...PINNED_RAIL_RELAYS, ...config.addedRelays]) {
-      const normalized = normalizeRelayUrl(url);
-      if (normalized && !seen.has(normalized)) {
-        seen.add(normalized);
-        base.push(normalized);
-      }
-    }
-    return base;
-  }, [config.addedRelays]);
+  const servers = useNip29Servers();
 
   // Every live rail item (NIP-29 servers and Concord V1/V2 communities) in
   // discovery order. The persisted layout arranges these into the visible

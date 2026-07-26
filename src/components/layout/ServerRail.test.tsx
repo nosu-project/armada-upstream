@@ -34,6 +34,16 @@ vi.mock("@/hooks/useRelayUnread", () => ({
 vi.mock("@/hooks/useUserGroupList", () => ({
   useUpdateUserGroupList: () => ({ mutateAsync: vi.fn(async () => undefined) }),
 }));
+// The rail's NIP-29 half now comes from the kind 10009 list. `extraServers`
+// lets a suite add members beyond the three pinned ones.
+vi.mock("@/hooks/useNip29Servers", () => ({
+  useNip29Servers: () => [
+    "wss://a.example/",
+    "wss://b.example/",
+    "wss://c.example/",
+    ...extraServers,
+  ],
+}));
 vi.mock("@/concord-v1/hooks/useConcordList", () => ({
   useConcordList: () => ({ data: undefined }),
   useConcordCommunity: () => undefined,
@@ -80,6 +90,8 @@ vi.mock("@/lib/platform", async (importOriginal) => {
 
 // Mutable config store backing the mocked AppContext.
 let config: AppConfig;
+// Servers beyond the three pinned ones, as if they were in the 10009 list.
+let extraServers: string[] = [];
 vi.mock("@/hooks/useAppContext", () => ({
   useAppContext: () => ({
     config,
@@ -187,6 +199,7 @@ describe("ServerRail drag wiring", () => {
   let restoreGeometry: () => void;
 
   beforeEach(() => {
+    extraServers = [];
     config = { ...defaultConfig, railLayout: [], railOrder: [], railOpenFolders: [] };
     restoreGeometry = installGeometry();
     return () => restoreGeometry();
@@ -361,6 +374,7 @@ describe("ServerRail active-route blade", () => {
   let restoreGeometry: () => void;
 
   beforeEach(() => {
+    extraServers = [];
     config = { ...defaultConfig, railLayout: [], railOrder: [], railOpenFolders: [] };
     restoreGeometry = installGeometry();
     return () => restoreGeometry();
@@ -394,15 +408,16 @@ describe("ServerRail active-route blade", () => {
 describe("ServerRail folder notification rollup", () => {
   let restoreGeometry: () => void;
 
-  // Five members: D and E come from addedRelays; the collapsed mini grid only
-  // shows the first four, so activity on E must surface via the folder badge.
+  // Five members: D and E come from the user's kind 10009 list; the collapsed
+  // mini grid only shows the first four, so activity on E must surface via the
+  // folder badge.
   const RELAY_D = "wss://d.example/";
   const RELAY_E = "wss://e.example/";
 
   beforeEach(() => {
+    extraServers = [RELAY_D, RELAY_E];
     config = {
       ...defaultConfig,
-      addedRelays: [RELAY_D, RELAY_E],
       railLayout: [
         { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B, RELAY_C, RELAY_D, RELAY_E] },
       ],

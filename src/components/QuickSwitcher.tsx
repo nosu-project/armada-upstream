@@ -13,8 +13,6 @@ import {
 } from "@/components/ui/command";
 import { useAppContext } from "@/hooks/useAppContext";
 import {
-  normalizeRelayUrl,
-  PINNED_RAIL_RELAYS,
   relayToRouteParam,
   routeParamToRelay,
 } from "@/lib/platform";
@@ -22,6 +20,7 @@ import { flattenLayout, mergeLayout } from "@/lib/railLayout";
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { RelayInfoDocument } from "@/hooks/useRelayInfo";
+import { useNip29Servers } from "@/hooks/useNip29Servers";
 import type { Nip29Group } from "@/lib/nip29";
 
 /**
@@ -67,18 +66,15 @@ export function QuickSwitcher() {
   // pinned relays + user-added, normalized and de-duplicated), arranged by the
   // rail's saved layout with folders flattened in place, so the palette lists
   // servers in the order the rail shows them.
+  const liveServers = useNip29Servers();
   const servers = useMemo(() => {
-    const live = new Set<string>();
-    for (const url of [...PINNED_RAIL_RELAYS, ...config.addedRelays]) {
-      const normalized = normalizeRelayUrl(url);
-      if (normalized) live.add(normalized);
-    }
+    const live = new Set(liveServers);
     // `mergeLayout` appends every live key the layout doesn't know, so nothing
     // is lost; the filter drops Concord communities (the palette is NIP-29
     // only) and any key for a server since removed.
-    const keys = flattenLayout(mergeLayout(config.railLayout, config.railOrder, [...live]));
+    const keys = flattenLayout(mergeLayout(config.railLayout, config.railOrder, liveServers));
     return keys.filter((key) => live.has(key));
-  }, [config.addedRelays, config.railLayout, config.railOrder]);
+  }, [liveServers, config.railLayout, config.railOrder]);
 
   // Snapshot the palette entries when it opens (cache reads aren't reactive,
   // and they don't need to be for the lifetime of one palette).

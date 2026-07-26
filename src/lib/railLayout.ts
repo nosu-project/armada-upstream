@@ -12,10 +12,15 @@
  * servers, `c1:${communityId}` / `c2:${communityId}` for Concord communities.
  *
  * The stored layout may reference keys that aren't currently "live" (a
- * Concord list still loading, a server since removed). Those keys are kept in
- * place — never dropped by these ops — so a drag performed before everything
- * has loaded can't destroy another device's folders. Rendering simply skips
- * them.
+ * Concord list still loading, a server on a relay that hasn't answered yet).
+ * Those keys are kept in place — never dropped by these ops — so a drag
+ * performed before everything has loaded can't destroy another device's
+ * folders. Rendering simply skips them.
+ *
+ * The one exception is {@link removeKey}, which is called when the user
+ * REMOVES a community: leaving must purge the key here as well as from the
+ * source list, or a later re-add would silently resurrect it at its old
+ * position inside its old folder.
  */
 
 import { relayToRouteParam } from "@/lib/platform";
@@ -155,6 +160,19 @@ function detachKey(nodes: RailLayoutNode[], key: string): RailLayoutNode[] {
     }
   }
   return out;
+}
+
+/**
+ * Drop an item key from the layout entirely — the counterpart to a removal
+ * from the source list (leaving a community, removing a server).
+ *
+ * Unlike the render-time filter, this is destructive on purpose. The layout
+ * otherwise keeps keys it doesn't recognize forever, so without this a user
+ * who left a community and later rejoined it would find it back in whatever
+ * folder it used to live in, at its old position.
+ */
+export function removeKey(nodes: RailLayoutNode[], key: string): RailLayoutNode[] {
+  return normalizeLayout(detachKey(nodes, key));
 }
 
 /**
