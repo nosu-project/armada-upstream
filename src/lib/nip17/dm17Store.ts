@@ -18,6 +18,12 @@
  * self-only NIP-09 pass, physically removing the targeted rumor its author
  * wrote — a peer deletes their own messages/reactions, never ours.
  *
+ * So are expirations. A rumor carrying a passed NIP-40 `expiration`
+ * (disappearing messages) is refused on write and filtered out of every read,
+ * and {@link sweepExpiredDm17Rumors} physically removes the ones that expired
+ * while they sat here. The read filter is the backstop, not the mechanism:
+ * "disappeared" has to mean gone from disk, not merely hidden.
+ *
  * Trust note: this persists DECRYPTED messages at rest — the same device-trust
  * level as the DM thread snapshots and the signer's decrypt cache. Wiped on
  * logout (see purgeClientStorage).
@@ -27,7 +33,14 @@ import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
-import { DM_RUMOR_KINDS, KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
+import {
+  DM_RUMOR_KINDS,
+  isExpired,
+  KIND_DM_CHAT,
+  KIND_DM_FILE,
+  KIND_DM_TIMER,
+  type OpenedDm,
+} from "@/lib/nip17/protocol";
 import { emitWireScopes } from "@/wire/bus";
 
 const DB_NAME = "armada-dm17-rumors";
@@ -98,10 +111,15 @@ export function storedToDm17(ev: NostrEvent): OpenedDm {
  * resolves once the write commits.
  */
 export async function writeDm17Rumors(opened: OpenedDm[]): Promise<void> {
-  if (opened.length === 0) return;
+  // Already-expired rumors never reach persistent storage. `openDmWrap` also
+  // rejects them, but this is the single choke point every writer goes through
+  // (sync, backfill, our own optimistic sends), so it's where the guarantee
+  // belongs: a disappearing message that arrives late is simply never stored.
+  const fresh = opened.filter((o) => !isExpired(o.tags));
+  if (fresh.length === 0) return;
   const s = dm17Store();
   await Promise.all(
-    opened.map((o) =>
+    fresh.map((o) =>
       s.event(dm17ToStored(o)).catch(() => {
         // Duplicate or rejected — the store's state is authoritative.
       }),
@@ -126,7 +144,30 @@ export async function queryDm17Thread(
   };
   if (opts.before !== undefined) filter.until = opts.before - 1;
   const events = await dm17Store().query([filter], { signal: opts.signal });
-  return events.map(storedToDm17);
+  return events.filter((ev) => !isExpired(ev.tags)).map(storedToDm17);
+}
+
+/**
+ * The conversation's current disappearing-messages timer in seconds (0 = off),
+ * or undefined when neither side has ever set one.
+ *
+ * Read as its own single-row query rather than off the thread window: a timer
+ * set months ago is still in force today, and the thread only reads back the
+ * newest few hundred rumors. Timer rumors never expire, so the newest one is
+ * always the live setting — whichever participant sent it.
+ */
+export async function queryDm17Timer(
+  peer: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<number | undefined> {
+  const events = await dm17Store().query(
+    [{ kinds: [KIND_DM_TIMER], "#peer": [peer], limit: 1 }],
+    { signal: opts.signal },
+  );
+  const raw = events[0]?.tags.find((t) => t[0] === "timer")?.[1];
+  if (raw === undefined) return undefined;
+  const secs = Number(raw);
+  return Number.isFinite(secs) && secs >= 0 ? Math.floor(secs) : undefined;
 }
 
 /**
@@ -148,6 +189,7 @@ export async function queryDm17Conversations(
   const byPeer = new Map<string, OpenedDm>();
   const mine = new Set<string>();
   for (const ev of events) {
+    if (isExpired(ev.tags)) continue;
     const opened = storedToDm17(ev);
     if (!opened.peer) continue;
     if (opts.self && opened.author === opts.self) mine.add(opened.peer);
@@ -176,10 +218,59 @@ export async function searchDm17Rumors(
     { signal: opts.signal },
   );
   const matches = events
+    .filter((ev) => !isExpired(ev.tags))
     .map(storedToDm17)
     .filter((o) => o.peer && o.content.toLowerCase().includes(needle))
     .sort((a, b) => b.createdAt - a.createdAt);
   return matches.slice(0, opts.limit ?? 200);
+}
+
+// ── Expiry sweep ─────────────────────────────────────────────────────────────
+
+/** Rumors scanned per sweep page. */
+const SWEEP_PAGE = 1000;
+/** Pages a single sweep will walk (bounds a huge history to a bounded cost). */
+const SWEEP_MAX_PAGES = 20;
+
+/**
+ * Physically remove every stored rumor whose NIP-40 `expiration` has passed.
+ *
+ * Read paths filter expired rumors out too, but hiding is not disappearing:
+ * the plaintext has to leave IndexedDB. `expiration` is a multi-letter tag and
+ * is not indexed (and a range query over it wouldn't exist anyway), so this
+ * walks the store newest-first by `created_at` in bounded pages and removes
+ * matches by id. Returns how many were removed.
+ */
+export async function sweepExpiredDm17Rumors(opts: { signal?: AbortSignal } = {}): Promise<number> {
+  const s = dm17Store();
+  const now = Math.floor(Date.now() / 1000);
+  let until: number | undefined;
+  let removed = 0;
+
+  for (let page = 0; page < SWEEP_MAX_PAGES; page++) {
+    const filter: { kinds: number[]; limit: number; until?: number } = {
+      kinds: DM_RUMOR_KINDS,
+      limit: SWEEP_PAGE,
+    };
+    if (until !== undefined) filter.until = until;
+    const events = await s.query([filter], { signal: opts.signal });
+    if (events.length === 0) break;
+
+    const ids = events.filter((ev) => isExpired(ev.tags, now)).map((ev) => ev.id);
+    if (ids.length > 0) {
+      await s.remove([{ ids }], { signal: opts.signal });
+      removed += ids.length;
+    }
+    if (events.length < SWEEP_PAGE) break;
+    // Page strictly older than this page's oldest row. Ties on `created_at`
+    // would otherwise loop forever on the same boundary second.
+    const oldest = Math.min(...events.map((ev) => ev.created_at));
+    if (until !== undefined && oldest - 1 >= until) break;
+    until = oldest - 1;
+  }
+
+  if (removed > 0) emitWireScopes(["dm"]);
+  return removed;
 }
 
 // ── Sync cursor ───────────────────────────────────────────────────────────────
@@ -294,7 +385,13 @@ function rememberLiveWrap(id: string): void {
  */
 export function bufferLiveDmWraps(wraps: NostrEvent[]): NostrEvent[] {
   const fresh: NostrEvent[] = [];
+  const now = Math.floor(Date.now() / 1000);
   for (const w of wraps) {
+    // A wrap whose NIP-40 deadline has already passed is dropped on arrival —
+    // never buffered, never decrypted, never allowed to ring the doorbell (and
+    // so never able to raise a notification for a message that no longer
+    // exists). `openDmWrap` re-checks; this just stops it earlier.
+    if (isExpired(w.tags, now)) continue;
     if (liveWrapSeen.has(w.id)) continue;
     if (liveWraps.size >= LIVE_WRAP_CAP) continue;
     rememberLiveWrap(w.id);

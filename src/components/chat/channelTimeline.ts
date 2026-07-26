@@ -9,12 +9,38 @@ export type GitChannelTimelineEntry =
   | { type: "git-ci-run"; id: string; createdAt: number; activity: Extract<GitTimelineActivity, { type: "ci-run" }> };
 
 /**
+ * A disappearing-messages timer change in a DM thread — Signal's "You set the
+ * disappearing message timer to 1 day" row. Not a chat message: it has no
+ * author bubble, no reactions and no reply target, just a centered notice.
+ */
+export interface DmTimerTimelineEntry {
+  type: "dm-timer";
+  id: string;
+  createdAt: number;
+  /** Who changed it. */
+  author: string;
+  /** The timer they set, in seconds; 0 means they turned it off. */
+  seconds: number;
+}
+
+/**
  * A channel timeline is deliberately broader than `ChatTransport`: Git events
- * keep their own durable Nostr identity and are never adapted into chat rows.
+ * keep their own durable Nostr identity and are never adapted into chat rows,
+ * and a DM timer change is conversation state rather than a message.
  */
 export type ChannelTimelineEntry =
   | { type: "chat"; id: string; createdAt: number; message: ChatMsg }
-  | GitChannelTimelineEntry;
+  | GitChannelTimelineEntry
+  | DmTimerTimelineEntry;
+
+/**
+ * Whether an entry is Git activity. Channel timelines carry more than one
+ * flavour of non-chat entry now (DM timer changes are the other), so a surface
+ * that only knows how to render Git rows has to ask rather than assume.
+ */
+export function isGitTimelineEntry(entry: ChannelTimelineEntry): entry is GitChannelTimelineEntry {
+  return entry.type !== "chat" && entry.type !== "dm-timer";
+}
 
 export function gitActivityEntry(activity: GitTimelineActivity): GitChannelTimelineEntry {
   if (activity.type === "ticket-opened") return { type: "git-ticket-opened", id: `git:${activity.ticket.id}`, createdAt: activity.createdAt, activity };

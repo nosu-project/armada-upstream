@@ -1,6 +1,7 @@
 import { Loader2, Reply } from "lucide-react";
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 
+import { ExpirationTimerIcon } from "@/components/chat/ExpirationTimerIcon";
 import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { BotPill } from "@/components/BotPill";
@@ -11,6 +12,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime, shortTimeAgo } from "@/lib/formatTime";
+import { formatTimeLeft } from "@/lib/nip17/disappearing";
 import { cn } from "@/lib/utils";
 import { useLongPress } from "@/hooks/useLongPress";
 import { useSwipeToReply } from "@/hooks/useSwipeToReply";
@@ -31,6 +33,51 @@ export interface MessageIdentity {
   color?: string;
   /** A muted suffix shown after the name (e.g. a mesh `#abcd` disambiguator). */
   suffix?: string;
+}
+
+/** Below this much time left, the countdown is spelled out beside the icon. */
+const EXPIRY_URGENT_SECS = 60 * 60;
+
+/**
+ * Signal's disappearing-message clock on any message carrying a NIP-40
+ * `expiration`: a live timer face that empties as the deadline approaches
+ * ({@link ExpirationTimerIcon} owns that animation and its own scheduling).
+ *
+ * The face alone carries the fact for most of a message's life — a "4w"
+ * countdown on every row would be noise — and the remaining time is spelled out
+ * only in the last hour, when it's what the reader actually wants. The tooltip
+ * always has it.
+ *
+ * This wrapper's own timer exists purely for that TEXT: once a second in the
+ * final minute, twice a minute below an hour, and otherwise a single timeout
+ * armed for the moment the label appears at all.
+ */
+function ExpirationClock({ createdAt, expiresAt }: { createdAt: number; expiresAt: number }) {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    const left = expiresAt - Math.floor(Date.now() / 1000);
+    if (left <= 0) return;
+    const delayMs =
+      left <= 60 ? 1000 : left <= EXPIRY_URGENT_SECS ? 30_000 : (left - EXPIRY_URGENT_SECS) * 1000;
+    // setTimeout's delay is a 32-bit int; a longer wait re-arms on the next tick.
+    const id = setTimeout(() => setNow(Math.floor(Date.now() / 1000)), Math.min(delayMs, 2 ** 31 - 1));
+    return () => clearTimeout(id);
+  }, [expiresAt, now]);
+
+  const left = expiresAt - now;
+  const label = formatTimeLeft(expiresAt, now);
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 shrink-0 text-[10px] text-muted-foreground/60 tabular-nums"
+      title={`Disappears in ${label}`}
+      role="img"
+      aria-label={`Disappearing message, ${label} left`}
+    >
+      <ExpirationTimerIcon createdAt={createdAt} expiresAt={expiresAt} />
+      {left <= EXPIRY_URGENT_SECS && <span>{label}</span>}
+    </span>
+  );
 }
 
 interface MessageRowProps {
@@ -63,6 +110,14 @@ interface MessageRowProps {
   pending?: boolean;
   /** Whether to show an "(edited)" marker next to the timestamp. */
   edited?: boolean;
+  /**
+   * NIP-40 deadline (unix seconds) for a disappearing message. When set, a
+   * timer glyph + countdown renders beside the timestamp. Absent on messages
+   * with no `expiration` tag — a reader can't tell whether a client that
+   * ignored the tag kept a copy, so the clock only ever claims what the
+   * message itself says.
+   */
+  expiresAt?: number;
   /**
    * A small badge rendered next to the author's name (after the bot pill) —
    * e.g. the DM page's "NIP-04" legacy-encryption marker. Hidden on
@@ -114,6 +169,7 @@ export const MessageRow = memo(function MessageRow({
   children,
   pending,
   edited,
+  expiresAt,
   nameBadge,
   actions,
   beforeBody,
@@ -292,6 +348,7 @@ export const MessageRow = memo(function MessageRow({
             {edited && (
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
+            {expiresAt !== undefined && <ExpirationClock createdAt={createdAt} expiresAt={expiresAt} />}
             {pending && (
               <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
             )}
@@ -319,9 +376,9 @@ export const MessageRow = memo(function MessageRow({
             {actions}
           </div>
         )}
-        {continuation && (edited || pending) && (
-          // Continuation rows hide the header, so surface the (edited)/sending
-          // markers in the same floated slot the toolbar uses. The toolbar
+        {continuation && (edited || pending || expiresAt !== undefined) && (
+          // Continuation rows hide the header, so surface the (edited)/sending/
+          // disappearing markers in the same floated slot the toolbar uses. The toolbar
           // (z-20) takes over that slot on hover/active, so hand off: show this
           // marker at rest and fade it out when the toolbar appears, so the two
           // never stack on top of each other.
@@ -329,6 +386,7 @@ export const MessageRow = memo(function MessageRow({
             {edited && (
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
+            {expiresAt !== undefined && <ExpirationClock createdAt={createdAt} expiresAt={expiresAt} />}
             {pending && (
               <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
             )}

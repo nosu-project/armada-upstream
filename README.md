@@ -91,3 +91,14 @@ the box; other hostnames need HTTPS.
 ## License
 
 [AGPL-3.0](LICENSE)
+
+### Third-party assets
+
+- **Disappearing-message timer icon** — the 13 clock frames in
+  `src/components/chat/ExpirationTimerIcon.tsx` are the `ic_timer_NN_12` vector
+  drawables from [Signal-Android](https://github.com/signalapp/Signal-Android)
+  (`app/src/main/res/drawable/`), copyright Signal Messenger, LLC, converted
+  from Android `<vector>` `pathData` to SVG `d` attributes with the geometry
+  unchanged. Signal-Android is licensed AGPL-3.0, the same license as Armada,
+  so the copy is license-compatible; the frames remain under their original
+  copyright and license.

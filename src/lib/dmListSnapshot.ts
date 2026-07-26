@@ -48,6 +48,13 @@ export interface DmListSnapshotRow {
    * the rest (`p`, `e`, …) are irrelevant to rendering and would bloat this.
    */
   emojiTags?: string[][];
+  /**
+   * The latest message's NIP-40 deadline, when it is a disappearing message.
+   * Read-back drops the preview past it: a message that has disappeared must
+   * not keep showing its text here just because this snapshot is faster than
+   * the live read.
+   */
+  expiresAt?: number;
   /** The viewer has authored at least one message in this conversation. */
   mine: boolean;
 }
@@ -66,6 +73,7 @@ function isRow(value: unknown): value is DmListSnapshotRow {
     typeof r.createdAt === "number" &&
     typeof r.author === "string" &&
     typeof r.mine === "boolean" &&
+    (r.expiresAt === undefined || typeof r.expiresAt === "number") &&
     (r.preview === undefined || typeof r.preview === "string") &&
     (r.emojiTags === undefined ||
       (Array.isArray(r.emojiTags) &&
@@ -84,7 +92,17 @@ export function readDmListSnapshot(self: string | undefined): DmListSnapshotRow[
     if (!raw) return undefined;
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return undefined;
-    const rows = parsed.filter(isRow);
+    // A disappearing message's preview dies with the message. The row itself
+    // stays (dropping it would make the conversation blink out and back as the
+    // live read lands); only the decrypted text and its emoji go.
+    const now = Math.floor(Date.now() / 1000);
+    const rows = parsed
+      .filter(isRow)
+      .map((row) =>
+        row.expiresAt !== undefined && row.expiresAt <= now
+          ? { ...row, preview: undefined, emojiTags: undefined }
+          : row,
+      );
     return rows.length > 0 ? rows : undefined;
   } catch {
     return undefined;

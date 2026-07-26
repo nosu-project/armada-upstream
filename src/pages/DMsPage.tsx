@@ -1,4 +1,4 @@
-import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Plus, Search, ShieldCheck, Sparkles, UserCheck, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -73,7 +73,8 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
-import { KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
+import { DISAPPEARING_PRESETS, disappearingNotice, formatDisappearingDuration } from "@/lib/nip17/disappearing";
+import { expirationOf, KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { pickEmojiTags, readDmListSnapshot, writeDmListSnapshot } from "@/lib/dmListSnapshot";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { emojify } from "@/components/chat/emojify";
@@ -436,6 +437,22 @@ function DmLegacyFallbackNotice({
  * (NIP-17 rumors aren't relay-fetchable) and render the shared "replying
  * to …" chrome. Clicking jumps the timeline to the parent.
  */
+/**
+ * A disappearing-messages timer change, rendered in the feed as a centered
+ * notice (Signal's "You set the disappearing message timer to 1 day" row).
+ * It's conversation state, not a message: no avatar, no actions, no reactions.
+ */
+function DmTimerNotice({ author, seconds, self, name }: { author: string; seconds: number; self: string | undefined; name: string }) {
+  return (
+    <div className="flex items-center justify-center gap-1.5 px-4 py-1.5 select-none" role="status">
+      <Timer className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
+      <span className="text-[11px] text-muted-foreground/80 text-center">
+        {disappearingNotice(seconds, author === self, name)}
+      </span>
+    </div>
+  );
+}
+
 function DmReplyContext({ parent, onJump }: { parent: NostrEvent | undefined; onJump: (id: string) => void }) {
   const author = useAuthor(parent?.pubkey);
   const name = parent ? getDisplayName(author.data?.metadata, parent.pubkey) : "";
@@ -468,7 +485,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const name = getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
-  const { transport, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+  const { transport, entries, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(peer);
   const { messages } = transport;
 
@@ -880,6 +897,39 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            {/* Disappearing messages ride the NIP-17 plane's sealed rumors
+                (the timer change is one, and the expiration tags go on the
+                gift wraps); legacy kind-4 has no in-band channel for either,
+                so the control is hidden on a legacy-pinned thread. */}
+            {dm17Enabled && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className="px-3 py-2">
+                  <Timer className="mr-2 size-4" />
+                  Disappearing messages
+                  {disappearingTimer > 0 && (
+                    <span className="ml-auto pl-2 text-xs text-muted-foreground">
+                      {formatDisappearingDuration(disappearingTimer)}
+                    </span>
+                  )}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-56">
+                  <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                    New messages in this chat disappear for both of you after the
+                    time you pick. Either of you can change it.
+                  </p>
+                  <DropdownMenuRadioGroup
+                    value={String(disappearingTimer)}
+                    onValueChange={(v) => setDisappearingTimer(Number(v))}
+                  >
+                    {DISAPPEARING_PRESETS.map((preset) => (
+                      <DropdownMenuRadioItem key={preset.seconds} value={String(preset.seconds)}>
+                        {preset.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
             {dittoProfileHref && (
               <DropdownMenuItem className="px-3 py-2" asChild>
                 <a href={dittoProfileHref} target="_blank" rel="noopener noreferrer">
@@ -992,6 +1042,20 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           transport={transport}
           handleRef={timelineRef}
           className="flex-1 min-h-0"
+          // Chat rows interleaved with the disappearing-messages timer
+          // notices, so a change reads as history the way Signal's does.
+          entries={entries}
+          renderEntry={(entry) =>
+            entry.type === "dm-timer" ? (
+              <DmTimerNotice
+                key={entry.id}
+                author={entry.author}
+                seconds={entry.seconds}
+                self={user?.pubkey}
+                name={name}
+              />
+            ) : null
+          }
           emptyState={
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <MessageSquare className="size-10 text-muted-foreground/40 mb-3" />
@@ -1825,6 +1889,9 @@ export function DMsPage() {
             author: c.latest.pubkey,
             preview: c.plaintext ?? previews[c.peer],
             emojiTags: pickEmojiTags(c.latest.tags),
+            // Carried so a restored preview of a disappearing message is
+            // dropped once its deadline passes (see readDmListSnapshot).
+            expiresAt: expirationOf(c.latest.tags),
             mine: c.mine,
           })),
       );

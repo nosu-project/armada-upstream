@@ -12,7 +12,7 @@ import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { GitTimelineRow, TicketSidePanel } from "@/components/chat/GitTimeline";
-import { mergeChannelTimeline } from "@/components/chat/channelTimeline";
+import { isGitTimelineEntry, mergeChannelTimeline } from "@/components/chat/channelTimeline";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { VoiceParticipantList } from "@/components/VoicePresence";
 import { CommunityInfoDialog2 } from "@/concord-v2/components/CommunityInfoDialog2";
@@ -989,7 +989,7 @@ export function ConcordV2Page() {
     mixedEntries.map((entry) => ({
       id: entry.id,
       createdAt: entry.createdAt,
-      author: entry.type === "chat" ? entry.message.pubkey : entry.type === "git-ticket-opened" ? entry.activity.ticket.author : entry.type === "git-comment" ? entry.activity.comment.author : entry.type === "git-ci-run" ? entry.activity.run.author : entry.activity.status.author,
+      author: entry.type === "chat" ? entry.message.pubkey : entry.type === "dm-timer" ? entry.author : entry.type === "git-ticket-opened" ? entry.activity.ticket.author : entry.type === "git-comment" ? entry.activity.comment.author : entry.type === "git-ci-run" ? entry.activity.run.author : entry.activity.status.author,
     })),
     user?.pubkey,
   );
@@ -2235,7 +2235,7 @@ export function ConcordV2Page() {
                     transport={transport}
                     entries={mixedEntries}
                     newDividerId={newDividerId}
-                    renderEntry={(entry, relatedEntries) => <GitTimelineRow entry={entry} members={new Set(memberPubkeys)} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} commentEntries={entry.type === "git-comment" ? relatedEntries as Extract<typeof entry, { type: "git-comment" }>[] : undefined} activities={gitActivity.activities} />}
+                    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} members={new Set(memberPubkeys)} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} commentEntries={entry.type === "git-comment" ? relatedEntries as Extract<typeof entry, { type: "git-comment" }>[] : undefined} activities={gitActivity.activities} /> : null}
                     handleRef={timelineRef}
                     syncing={channelSyncing}
                     className="flex-1 min-h-0"

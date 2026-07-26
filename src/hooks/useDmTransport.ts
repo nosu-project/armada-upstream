@@ -5,9 +5,10 @@ import { KIND_DM, useDirectMessages } from "@/hooks/useDirectMessages";
 import { useDm17Thread } from "@/hooks/useDm17";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { reactionContentKey } from "@/hooks/useReactions";
-import { KIND_DM_CHAT } from "@/lib/nip17/protocol";
+import { dmTimerSeconds, KIND_DM_CHAT } from "@/lib/nip17/protocol";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 
+import type { ChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import type { ChatMsg, ChatTransport, MessageReactions, ReactInput, ReactionTally, SendStatus } from "@/components/chat/transport";
 import type { DecryptedDM } from "@/hooks/useDirectMessages";
 import type { OpenedDm } from "@/lib/nip17/protocol";
@@ -56,6 +57,20 @@ export class LegacyFallbackRequired extends Error {
  */
 export function useDmTransport(peer: string): {
   transport: ChatTransport;
+  /**
+   * The merged timeline as generalized entries: chat rows plus the
+   * disappearing-messages timer changes, chronologically interleaved. Passed
+   * to `MessageTimeline`'s `entries` so the notices render in the feed the way
+   * Signal's do.
+   */
+  entries: ChannelTimelineEntry[];
+  /**
+   * The conversation's disappearing-messages timer in seconds (0 = off), and
+   * the setter either participant uses to change it. NIP-17 plane only —
+   * legacy kind-4 has no in-band channel for conversation state.
+   */
+  disappearingTimer: number;
+  setDisappearingTimer: (seconds: number) => void;
   /** Ids of kind-4 messages still awaiting lazy decryption (placeholder rows). */
   encryptedIds: Set<string>;
   /** Ids of NIP-17 rumors (unsigned; the page passes the `rumor` menu prop). */
@@ -194,6 +209,33 @@ export function useDmTransport(peer: string): {
       (a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : 1),
     );
   }, [kind4Messages, dm17Messages]);
+
+  // Chat rows + timer-change notices, chronologically. Built here rather than
+  // in the page so the two planes' merge stays in one place; a thread that has
+  // never had a timer produces no extra entries at all.
+  const dm17TimerChanges = dm17.timerChanges;
+  const entries = useMemo<ChannelTimelineEntry[]>(() => {
+    const out: ChannelTimelineEntry[] = chatMessages.map((message) => ({
+      type: "chat" as const,
+      id: `chat:${message.id}`,
+      createdAt: message.created_at,
+      message,
+    }));
+    for (const change of dm17TimerChanges) {
+      const seconds = dmTimerSeconds(change);
+      // A timer rumor we can't read is not a change to show — never guess
+      // "off", which would misreport the conversation's state to the user.
+      if (seconds === undefined) continue;
+      out.push({
+        type: "dm-timer",
+        id: `dm-timer:${change.rumorId}`,
+        createdAt: change.createdAt,
+        author: change.author,
+        seconds,
+      });
+    }
+    return out.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  }, [chatMessages, dm17TimerChanges]);
 
   const encryptedIds = useMemo(
     () => new Set(messages.filter((m) => m.encrypted).map((m) => m.id)),
@@ -364,6 +406,9 @@ export function useDmTransport(peer: string): {
 
   return {
     transport,
+    entries,
+    disappearingTimer: dm17.timer ?? 0,
+    setDisappearingTimer: dm17.setTimer,
     encryptedIds,
     dm17Ids,
     dm17Enabled,
