@@ -312,15 +312,14 @@ function ThreadMessage({
               />
             )}
           </div>
-          {/* Desktop hover strip. On touch the long-press sheet replaces it —
-              a floated icon row can't hold this many actions on a phone.
-              quickSlots=0: this strip is inline at the end of a narrow panel
-              row, not floated, so it has no width for a quick-reaction row. */}
+          {/* Desktop hover strip — the same shared toolbar the timeline uses,
+              including its frequent-emoji quick-reaction row (it floats over
+              the row's right edge, so the narrow panel width doesn't bound it).
+              On touch the long-press sheet replaces it. */}
           {!isTouch && !isEditing ? (
             <div className="absolute right-1.5 top-1 flex items-center opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity">
               <MessageActionToolbar
                 reactions={canReact ? reactions : undefined}
-                reactionQuickSlots={0}
                 zap={canZap ? { disabled: zapDisabled, onOpen: () => setZapOpen(true) } : undefined}
                 overflowActions={overflowActions}
               />
