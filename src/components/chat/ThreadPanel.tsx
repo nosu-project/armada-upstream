@@ -4,12 +4,24 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
+import { MessageActionSheet } from "@/components/chat/MessageActionSheet";
+import { MessageOverflowMenu } from "@/components/chat/MessageOverflowMenu";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionActions, ReactionBar } from "@/components/chat/ReactionBar";
 import { ZapButton } from "@/components/chat/ZapButton";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
 import { DisplayName } from "@/components/DisplayName";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +42,8 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useIsTouch } from "@/hooks/useIsMobile";
+import { useLongPress } from "@/hooks/useLongPress";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isTombstoneRoot } from "@/concord-v2/hooks/useConcord2Threads";
 import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
@@ -38,6 +52,7 @@ import { shortClockTime } from "@/lib/formatTime";
 import { writeClipboardText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
+import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ChatMsg, ChatTransport, MessageReactions, MessageZaps, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
 /**
@@ -108,6 +123,7 @@ function ThreadMessage({
   onEditCancel?: () => void;
 }) {
   const { user } = useCurrentUser();
+  const isTouch = useIsTouch();
   const composerBoundsRef = useComposerBoundsRef();
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
@@ -116,6 +132,10 @@ function ThreadMessage({
 
   const [jsonOpen, setJsonOpen] = useState(false);
   const [zapOpen, setZapOpen] = useState(false);
+  // The touch long-press sheet, and delete confirmation (delete now sits one
+  // tap away in the sheet/menu, so it confirms instead of firing immediately).
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   // A rumor has no signature; strip the synthetic empty `sig` the transport
   // adds for rendering so the JSON view reflects the true rumor shape.
   // Raw event source for the "View event JSON" menu item: a rumor has no
@@ -148,14 +168,67 @@ function ThreadMessage({
   const canZap = Boolean(zapEnabled && user && !isOwn);
   const zapDisabled = Boolean(author.data && !metadata?.lud16 && !metadata?.lud06);
 
+  const copyMessageId = useCallback(() => {
+    try {
+      writeClipboardText(
+        `nostr:${nip19.neventEncode({ id: event.id, author: event.pubkey })}`,
+      ).catch(() => undefined);
+    } catch {
+      writeClipboardText(event.id).catch(() => undefined);
+    }
+  }, [event.id, event.pubkey]);
+
+  const openSheet = useCallback(() => setSheetOpen(true), []);
+  const longPress = useLongPress(isTouch ? openSheet : undefined);
+
+  // One action list drives the touch long-press sheet, the desktop `⋯`
+  // overflow and the right-click menu, so they can't drift apart — matching
+  // ChatMessage's action model instead of the panel's older bespoke menu.
+  const menuActions: MessageActionItem[] = [];
+  if (canZap && !zapDisabled && !isEditing) {
+    menuActions.push({ id: "zap", label: "Zap message", icon: Zap, onSelect: () => setZapOpen(true) });
+  }
+  if (canEdit && !isEditing) {
+    menuActions.push({ id: "edit", label: "Edit message", icon: Pencil, onSelect: () => onEdit?.(event) });
+  }
+  menuActions.push({
+    id: "copy-text",
+    label: "Copy text",
+    icon: Copy,
+    groupStart: true,
+    onSelect: () => writeClipboardText(event.content).catch(() => undefined),
+  });
+  if (!isRumor) {
+    menuActions.push({ id: "copy-id", label: "Copy message ID", icon: Link2, onSelect: copyMessageId });
+  }
+  menuActions.push({ id: "json", label: "View event JSON", icon: Braces, onSelect: () => setJsonOpen(true) });
+  if (canDelete && !isEditing) {
+    menuActions.push({
+      id: "delete",
+      label: "Delete message",
+      icon: Trash2,
+      destructive: true,
+      groupStart: true,
+      onSelect: () => setConfirmDelete(true),
+    });
+  }
+  // The desktop hover strip carries zap as its own button; the rest live in `⋯`.
+  const overflowActions = menuActions.filter((a) => a.id !== "zap");
+
   return (
     <>
     <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div className={cn(
-          "group/threadmsg relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors",
-          continuation ? "py-0.5" : "py-1.5",
-        )}>
+      {/* On touch the long-press gesture belongs to the action sheet; Radix's
+          own long-press would otherwise open this menu at the same time. */}
+      <ContextMenuTrigger asChild disabled={isTouch}>
+        <div
+          {...longPress}
+          className={cn(
+            "group/threadmsg relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors",
+            continuation ? "py-0.5" : "py-1.5",
+            sheetOpen && "bg-secondary/40",
+          )}
+        >
           {continuation ? (
             <span className="shrink-0 w-9 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover/threadmsg:opacity-100 transition-opacity tabular-nums select-none">
               {shortClockTime(event.created_at)}
@@ -240,17 +313,11 @@ function ThreadMessage({
               />
             )}
           </div>
-          {(canReact && reactions && !isEditing) || (canZap && !isEditing) || (canEdit && !isEditing) ? (
-            // Hover-revealed on desktop. On touch there's no hover, so the
-            // buttons sit statically at the row's end instead — the long-press
-            // menu alone would leave reacting undiscoverable.
-            <div className="absolute right-1.5 top-1 flex items-center opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity touch:static touch:opacity-100 touch:shrink-0">
-              {canEdit && !isEditing && (
-                <button type="button" className="rounded-md p-1.5 touch:p-2.5 hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors" onClick={() => onEdit?.(event)} aria-label="Edit message">
-                  <Pencil className="size-4" />
-                </button>
-              )}
-              {canReact && reactions && !isEditing && (
+          {/* Desktop hover strip. On touch the long-press sheet replaces it —
+              a floated icon row can't hold this many actions on a phone. */}
+          {!isTouch && !isEditing ? (
+            <div className="absolute right-1.5 top-1 flex items-center opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity">
+              {canReact && reactions && (
                 // No quick row here: this strip is inline at the end of a
                 // narrow panel row, not floated, so it has no width to spare.
                 <ReactionActions
@@ -259,59 +326,54 @@ function ThreadMessage({
                   quickSlots={0}
                 />
               )}
-              {canZap && !isEditing && <ZapButton disabled={zapDisabled} onOpen={() => setZapOpen(true)} />}
+              {canZap && <ZapButton disabled={zapDisabled} onOpen={() => setZapOpen(true)} />}
+              <MessageOverflowMenu actions={overflowActions} />
             </div>
           ) : null}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52" collisionPadding={getComposerCollisionPadding(composerBoundsRef)}>
-        {canZap && !zapDisabled && (
-          <ContextMenuItem onSelect={() => setZapOpen(true)}>
-            <Zap className="mr-2 size-4" /> Zap message
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem onSelect={() => writeClipboardText(event.content).catch(() => undefined)}>
-          <Copy className="mr-2 size-4" /> Copy text
-        </ContextMenuItem>
-        {!isRumor && (
-          <ContextMenuItem
-            onSelect={() => {
-              try {
-                writeClipboardText(
-                  `nostr:${nip19.neventEncode({ id: event.id, author: event.pubkey })}`,
-                ).catch(() => undefined);
-              } catch {
-                writeClipboardText(event.id).catch(() => undefined);
-              }
-            }}
-          >
-            <Link2 className="mr-2 size-4" /> Copy message ID
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem onSelect={() => setJsonOpen(true)}>
-          <Braces className="mr-2 size-4" /> View event JSON
-        </ContextMenuItem>
-        {canDelete && (
-          <>
-            <ContextMenuSeparator />
+        {menuActions.map((action) => (
+          <div key={action.id}>
+            {action.groupStart && <ContextMenuSeparator />}
             <ContextMenuItem
-              className="text-destructive focus:text-destructive"
-              onSelect={() => onDelete?.(event)}
+              className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
+              onSelect={action.onSelect}
             >
-              <Trash2 className="mr-2 size-4" /> Delete message
+              <action.icon className="mr-2 size-4" />
+              {action.label}
             </ContextMenuItem>
-          </>
-        )}
-        {canEdit && !isEditing && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem onSelect={() => onEdit?.(event)}>
-              <Pencil className="mr-2 size-4" /> Edit message
-            </ContextMenuItem>
-          </>
-        )}
+          </div>
+        ))}
       </ContextMenuContent>
     </ContextMenu>
+    {isTouch && (
+      <MessageActionSheet
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        actions={menuActions}
+        reactions={canReact && !isEditing && reactions ? reactions : undefined}
+      />
+    )}
+    <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete message?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This can't be undone. Relays and clients that already have it may keep their copy.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={() => onDelete?.(event)}
+          >
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     {zapOpen && (
       <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} sendOnchainZap={onSendOnchainZap} />
     )}
