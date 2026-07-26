@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { AudioMessage } from "@/components/chat/AudioMessage";
+import { CashuToken } from "@/components/chat/CashuToken";
 import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { InviteEmbed } from "@/components/chat/InviteEmbed";
@@ -20,6 +21,7 @@ import { useChannelNav } from "@/hooks/useChannelNav";
 import { type MentionNameMap, useMentionNameMap } from "@/hooks/useMentionNameMap";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { CASHU_TOKEN_PATTERN, parseCashuToken } from "@/lib/cashu";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { writeClipboardText } from "@/lib/clipboard";
 import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
@@ -110,6 +112,7 @@ type ContentToken =
   | { type: "hashtag"; tag: string; raw: string }
   | { type: "relay-link"; url: string }
   | { type: "lightning-invoice"; invoice: string }
+  | { type: "cashu-token"; raw: string }
   | { type: "code-block"; code: string; lang?: string }
   | { type: "inline-code"; code: string }
   | { type: "quote"; tokens: ContentToken[] }
@@ -363,7 +366,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
 
     // Tokenize one plain-text segment (already free of markdown code spans):
     // BOLT11 invoices | URLs | nostr:-prefixed NIP-19 ids | @-prefixed or
-    // bare NIP-19 ids | hashtags.
+    // bare NIP-19 ids | hashtags | Cashu tokens.
     const tokenizeSegment = (segment: string): ContentToken[] => {
       const regex = new RegExp(
         // Markdown image `![alt](url)` (Buzz posts use it) — captured first so
@@ -373,7 +376,10 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         "|((?:https?|wss?):\\/\\/[^\\s]+)" +
         "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
         "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
-        `|(${HASHTAG_PATTERN})`,
+        `|(${HASHTAG_PATTERN})` +
+        // Cashu ecash token. Appended last so the group numbers above are
+        // untouched; nothing else in the alternation starts with `cashu`.
+        `|(${CASHU_TOKEN_PATTERN})`,
         "giu",
       );
 
@@ -389,6 +395,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         // A markdown `![…](url)` is an image regardless of the URL's extension.
         const forceImage = Boolean(mdImageUrl);
         const hashtag = match[8];
+        const cashu = match[9];
         const { 4: nostrPrefix, 5: nostrData, 6: barePrefix, 7: bareData } = match;
         const index = match.index;
 
@@ -399,6 +406,14 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
 
         if (bolt11) {
           out.push({ type: "lightning-invoice", invoice: bolt11.toLowerCase() });
+        } else if (cashu) {
+          // Only claim the match if it actually decodes; otherwise leave the
+          // text alone so a `cashu`-lookalike string renders verbatim.
+          out.push(
+            parseCashuToken(cashu)
+              ? { type: "cashu-token", raw: cashu }
+              : { type: "text", value: cashu },
+          );
         } else if (url) {
           // Strip common trailing punctuation that's likely not part of the URL
           // (skipped for a markdown image, whose URL was delimited by the `)`).
@@ -648,6 +663,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         || token.type === "nevent-embed"
         || (token.type === "naddr-embed" && (!token.url || token.addr.kind === 30030))
         || token.type === "lightning-invoice"
+        || token.type === "cashu-token"
         || token.type === "code-block" || token.type === "quote"
         || token.type === "invite-embed";
 
@@ -1088,6 +1104,8 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         );
       case "lightning-invoice":
         return <LightningInvoice key={key} invoice={token.invoice} />;
+      case "cashu-token":
+        return <CashuToken key={key} raw={token.raw} />;
     }
   };
 
