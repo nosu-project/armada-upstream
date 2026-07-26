@@ -47,10 +47,14 @@ import {
   dmChatTags,
   dmDeleteTags,
   dmReactionTags,
+  dmTimerTags,
+  expirationOf,
+  isExpired,
   KIND_DM_CHAT,
   KIND_DM_DELETE,
   KIND_DM_FILE,
   KIND_DM_REACTION,
+  KIND_DM_TIMER,
   MAX_WRAP_BACKDATE_SECS,
   openDmWrap,
   sealDmRumor,
@@ -65,9 +69,11 @@ import {
   hasBufferedLiveDmWraps,
   queryDm17Conversations,
   queryDm17Thread,
+  queryDm17Timer,
   readDm17Cursor,
   readDm17SeenWrapIds,
   rebufferLiveDmWraps,
+  sweepExpiredDm17Rumors,
   updateDm17Cursor,
   writeDm17Rumors,
   writeDm17SeenWrapIds,
@@ -87,6 +93,22 @@ const INBOX_PAGE = 500;
 const DECRYPT_WAVE = 4;
 /** Rumors read per thread window. */
 const THREAD_WINDOW = 300;
+/** Minimum interval between expired-rumor sweeps (see sweepExpiredDm17Rumors). */
+const SWEEP_MIN_INTERVAL_MS = 60_000;
+
+let lastSweepAt = 0;
+
+/**
+ * Physically drop rumors whose NIP-40 deadline passed while they sat in the
+ * store. Throttled and fire-and-forget: every DM surface calls it, and a miss
+ * costs nothing (read paths filter expired rumors regardless).
+ */
+function sweepExpiredSoon(): void {
+  const now = Date.now();
+  if (now - lastSweepAt < SWEEP_MIN_INTERVAL_MS) return;
+  lastSweepAt = now;
+  void sweepExpiredDm17Rumors().catch(() => undefined);
+}
 
 /** Whether the current signer can do NIP-17 (NIP-44 encrypt/decrypt). */
 export function useDm17Support(): boolean {
@@ -447,6 +469,24 @@ export interface Dm17Thread {
   messages: OpenedDm[];
   /** Reaction rumors grouped by their `e` target id (deletes applied). */
   reactionsByTarget: Map<string, OpenedDm[]>;
+  /**
+   * Disappearing-messages timer changes inside the loaded window, ascending —
+   * the feed renders one notice row per change (Signal-style). The live
+   * setting is {@link timer}, which is read independently of this window.
+   */
+  timerChanges: OpenedDm[];
+  /**
+   * The conversation's disappearing-messages timer in seconds; 0 (or
+   * undefined, before the store has been read) means off. Set by EITHER
+   * participant — newest change wins.
+   */
+  timer: number | undefined;
+  /**
+   * Change the conversation's timer (0 turns it off) and tell the peer. Both
+   * sides' outgoing messages then carry `sent_at + seconds` as their NIP-40
+   * expiration.
+   */
+  setTimer: (seconds: number) => void;
   isLoading: boolean;
   /**
    * Whether NIP-17 sends to this peer are possible: the signer does NIP-44
@@ -520,6 +560,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       // the background (throttled) and rings the `dm` scope on new rumors.
       const rows = await queryDm17Thread(peer!, { limit: THREAD_WINDOW, signal });
       if (ctx) void syncDm17Inbox(ctx, { interactive: true });
+      sweepExpiredSoon();
       return rows.sort((a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1));
     },
     staleTime: 10_000,
@@ -527,6 +568,18 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
+
+  // The live disappearing-messages timer, read on its own so a setting made
+  // beyond the thread window is still in force (see queryDm17Timer). Shares
+  // the thread's invalidation: a timer rumor lands through the same `dm` ring.
+  const timerQueryKey = useMemo(() => ["dm17", "timer", self, peer] as const, [self, peer]);
+  const timerQuery = useQuery<number>({
+    queryKey: timerQueryKey,
+    enabled: !!self && !!peer && support,
+    queryFn: async ({ signal }) => (await queryDm17Timer(peer!, { signal })) ?? 0,
+    staleTime: 10_000,
+  });
+  const timer = timerQuery.data;
 
   // Two DM doorbells:
   //   - `dm:wrap` — the wire buffered live inbound NIP-17 gift wrap(s) it can't
@@ -540,7 +593,10 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   //     Re-read only; never decrypt-again (that would loop on its own `dm` ring).
   useWireScopes((scopes) => {
     if (!self || !peer || !ctx) {
-      if (scopes.has("dm") || scopes.has("dm:wrap")) void queryClient.invalidateQueries({ queryKey });
+      if (scopes.has("dm") || scopes.has("dm:wrap")) {
+        void queryClient.invalidateQueries({ queryKey });
+        void queryClient.invalidateQueries({ queryKey: timerQueryKey });
+      }
       return;
     }
     if (scopes.has("dm:wrap")) {
@@ -550,13 +606,22 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     }
     if (scopes.has("dm") || scopes.has("dm:wrap")) {
       void queryClient.invalidateQueries({ queryKey });
+      // A timer change arrives as an ordinary rumor, so the same ring covers it.
+      void queryClient.invalidateQueries({ queryKey: timerQueryKey });
     }
   });
 
+  // A disappearing message must leave the screen the moment its deadline
+  // passes, not at the next refetch. `expiryTick` re-runs the fold; the effect
+  // below schedules it for the earliest deadline still in the future.
+  const [expiryTick, setExpiryTick] = useState(0);
+
   // Fold: store rows + optimistic rows (deduped by rumor id), deletes applied
   // (belt & suspenders — the store already physically removes self-deletes),
-  // split into the message timeline and per-target reactions.
-  const { messages, reactionsByTarget } = useMemo(() => {
+  // expired rumors dropped, split into the message timeline, per-target
+  // reactions and the timer-change notices.
+  const { messages, reactionsByTarget, timerChanges, nextExpiry } = useMemo(() => {
+    const now = Math.floor(Date.now() / 1000);
     const byId = new Map<string, OpenedDm>();
     for (const r of query.data ?? []) byId.set(r.rumorId, r);
     for (const p of pending.values()) if (!byId.has(p.opened.rumorId)) byId.set(p.opened.rumorId, p.opened);
@@ -573,8 +638,17 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
 
     const messages: OpenedDm[] = [];
     const reactionsByTarget = new Map<string, OpenedDm[]>();
+    const timerChanges: OpenedDm[] = [];
+    // The soonest deadline still ahead of us, so the tick can be scheduled for
+    // exactly that moment instead of polling.
+    let nextExpiry: number | undefined;
     for (const r of byId.values()) {
       if (deleted.has(r.rumorId)) continue;
+      // Client-side enforcement, independent of what the store handed back:
+      // an expired rumor is never rendered, whatever route it arrived by.
+      if (isExpired(r.tags, now)) continue;
+      const at = expirationOf(r.tags);
+      if (at !== undefined && (nextExpiry === undefined || at < nextExpiry)) nextExpiry = at;
       if (r.kind === KIND_DM_CHAT || r.kind === KIND_DM_FILE) {
         messages.push(r);
       } else if (r.kind === KIND_DM_REACTION) {
@@ -583,11 +657,28 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
         const list = reactionsByTarget.get(target) ?? [];
         list.push(r);
         reactionsByTarget.set(target, list);
+      } else if (r.kind === KIND_DM_TIMER) {
+        timerChanges.push(r);
       }
     }
     messages.sort((a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1));
-    return { messages, reactionsByTarget };
-  }, [query.data, pending]);
+    timerChanges.sort((a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1));
+    return { messages, reactionsByTarget, timerChanges, nextExpiry };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.data, pending, expiryTick]);
+
+  // Re-fold exactly when the next message expires (and sweep it off disk).
+  // setTimeout is clamped to ~24.8 days by the 32-bit delay; a longer deadline
+  // just re-arms on the next fold, which the poll/refetch guarantees.
+  useEffect(() => {
+    if (nextExpiry === undefined) return;
+    const delay = Math.min(nextExpiry * 1000 - Date.now(), 2 ** 31 - 1);
+    const id = setTimeout(() => {
+      sweepExpiredSoon();
+      setExpiryTick((t) => t + 1);
+    }, Math.max(0, delay));
+    return () => clearTimeout(id);
+  }, [nextExpiry]);
 
   const setStatus = useCallback((id: string, status: SendStatus | undefined) => {
     setPending((old) => {
@@ -647,8 +738,12 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const sealPeer = await sealDmRumor(rumor, peer, signer);
       const sealSelf = peer === self ? undefined : await sealDmRumor(rumor, self, signer);
 
-      const wrapPeer = wrapDmSeal(sealPeer, peer, { firstContact: opts?.firstContact });
-      const wrapSelf = sealSelf ? wrapDmSeal(sealSelf, self) : undefined;
+      // The rumor's own NIP-40 deadline rides all the way out: sealDmRumor
+      // copies it onto the seal, and the wrap repeats it in the clear so
+      // NIP-40-aware relays drop their stored copy too.
+      const expiresAt = expirationOf(rumor.tags);
+      const wrapPeer = wrapDmSeal(sealPeer, peer, { firstContact: opts?.firstContact, expiresAt });
+      const wrapSelf = sealSelf ? wrapDmSeal(sealSelf, self, { expiresAt }) : undefined;
 
       // Persist OUR self-addressed wrap locally BEFORE publishing. On Android
       // the event store is the same database the notification service dedupes
@@ -711,36 +806,104 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     [peer],
   );
 
+  // The resolved timer, mirrored into a ref so a send can read the CURRENT
+  // value without closing over a stale render.
+  const timerRef = useRef<number | undefined>(undefined);
+  timerRef.current = timer;
+
+  /**
+   * The conversation's timer, waiting on the store if the query hasn't landed.
+   *
+   * Never assume "off" from a not-yet-loaded query: the composer autofocuses on
+   * opening a conversation, and the first IndexedDB read after a cold Android
+   * WebView launch can take seconds — so a fast typist could otherwise put a
+   * PERMANENT message into a conversation both people set to disappear. The
+   * fallback read is a single indexed lookup and only ever runs on that race.
+   */
+  const resolveTimer = useCallback(async (): Promise<number> => {
+    const known = timerRef.current;
+    if (known !== undefined) return known;
+    if (!peer) return 0;
+    return (await queryDm17Timer(peer).catch(() => undefined)) ?? 0;
+  }, [peer]);
+
+  /** The NIP-40 deadline for something sent right now, or undefined when off. */
+  const resolveExpiry = useCallback(async (): Promise<number | undefined> => {
+    const seconds = await resolveTimer();
+    return seconds > 0 ? Math.floor(Date.now() / 1000) + seconds : undefined;
+  }, [resolveTimer]);
+
   const send = useCallback(
     async (content: string, extraTags?: string[][]) => {
       if (!canSend || !self || !peer) throw new Error("This person isn't reachable over private DMs yet.");
       const trimmed = content.trim();
       if (!trimmed) return;
+      const expiresAt = await resolveExpiry();
       const rumor = buildDmRumor({
         kind: KIND_DM_CHAT,
         content: trimmed,
-        tags: dmChatTags(peer, { extraTags }),
+        tags: dmChatTags(peer, { extraTags, expiresAt }),
         pubkey: self,
       });
       // First contact = nothing in this thread yet: add the outer `k` hint so
       // a k-aware receiver can index their cold inbox.
       dispatchRumor(rumor, openedOf(rumor), { firstContact: messages.length === 0 });
     },
-    [canSend, self, peer, dispatchRumor, openedOf, messages.length],
+    [canSend, self, peer, dispatchRumor, openedOf, messages.length, resolveExpiry],
   );
 
   const react = useCallback(
     (targetId: string, targetKind: number, content: string, emojiUrl?: string) => {
       if (!canSend || !self || !peer) return;
-      const rumor = buildDmRumor({
-        kind: KIND_DM_REACTION,
-        content,
-        tags: dmReactionTags(peer, targetId, targetKind, customEmojiReactionTags(content, emojiUrl)),
-        pubkey: self,
-      });
-      dispatchRumor(rumor, openedOf(rumor));
+      // Deferred by a microtask (or one store read on a cold open) so the
+      // reaction inherits the same deadline a message sent now would get.
+      void (async () => {
+        const expiresAt = await resolveExpiry();
+        const rumor = buildDmRumor({
+          kind: KIND_DM_REACTION,
+          content,
+          tags: dmReactionTags(
+            peer,
+            targetId,
+            targetKind,
+            customEmojiReactionTags(content, emojiUrl),
+            expiresAt,
+          ),
+          pubkey: self,
+        });
+        dispatchRumor(rumor, openedOf(rumor));
+      })();
     },
-    [canSend, self, peer, dispatchRumor, openedOf],
+    [canSend, self, peer, dispatchRumor, openedOf, resolveExpiry],
+  );
+
+  /**
+   * Change the conversation's disappearing-messages timer. Written locally
+   * first (so the notice row and the new timer apply immediately) and
+   * published wrapped to the peer, exactly like a delete. Timer rumors carry
+   * no expiration of their own — see KIND_DM_TIMER.
+   */
+  const setTimer = useCallback(
+    (seconds: number) => {
+      if (!canSend || !self || !peer) return;
+      const next = Math.max(0, Math.floor(seconds));
+      void (async () => {
+        // Compare against the RESOLVED timer, not a possibly-unloaded one:
+        // otherwise picking "Off" on a cold thread would silently no-op and
+        // leave the conversation disappearing.
+        if ((await resolveTimer()) === next) return;
+        const rumor = buildDmRumor({
+          kind: KIND_DM_TIMER,
+          content: "",
+          tags: dmTimerTags(peer, next),
+          pubkey: self,
+        });
+        await writeDm17Rumors([openedOf(rumor)]);
+        await queryClient.invalidateQueries({ queryKey: timerQueryKey });
+        await publishRumor(rumor).catch(() => {});
+      })();
+    },
+    [canSend, self, peer, resolveTimer, openedOf, publishRumor, queryClient, timerQueryKey],
   );
 
   /**
@@ -849,6 +1012,9 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   return {
     messages,
     reactionsByTarget,
+    timerChanges,
+    timer,
+    setTimer,
     isLoading: query.isLoading,
     canSend,
     hasPeerInbox,

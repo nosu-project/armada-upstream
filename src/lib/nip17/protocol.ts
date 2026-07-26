@@ -18,6 +18,23 @@
  * (`{kinds:[1059], "#p":[me], "#k":["14"]}`) — the same trick Concord direct
  * invites use (`directInvite.ts`). Established conversations omit it so the
  * hint doesn't leak the inner kind for no benefit.
+ *
+ * DISAPPEARING MESSAGES (Armada extension). A conversation can carry a
+ * disappearing-message timer, set by either participant with a kind-1740 rumor
+ * (see {@link KIND_DM_TIMER}). While a timer is set, every message/file/
+ * reaction rumor in the conversation is stamped with a NIP-40 `["expiration",
+ * "<unix>"]` tag AT ALL THREE LEVELS — rumor, seal and wrap — so:
+ *
+ *   - relays that honor NIP-40 drop the gift wrap on their own (the outer tag
+ *     is the only one they can see);
+ *   - a reader that never saw the wrap still learns the deadline from the seal
+ *     and rumor, which survive decryption and are what this client enforces.
+ *
+ * Enforcement is entirely client-side and does not trust relays: an expired
+ * envelope is rejected at {@link openDmWrap} — before it can be persisted —
+ * and every read path filters again (see `dm17Store.ts`). The deadline is
+ * absolute (`sent_at + timer`), NOT Signal's read-triggered countdown: NIP-40
+ * has only one timestamp and a receiver-started clock can't be expressed in it.
  */
 
 import { getConversationKey, encrypt as nip44Encrypt } from "nostr-tools/nip44";
@@ -34,13 +51,31 @@ export const KIND_DM_FILE = 15;
 export const KIND_DM_REACTION = 7;
 /** NIP-09 delete rumor (wrapped into the conversation per NIP-17). */
 export const KIND_DM_DELETE = 5;
+/**
+ * Disappearing-messages timer change (Armada extension; the mnemonic is
+ * NIP-17 ⊕ NIP-40). Either participant publishes one to set the conversation's
+ * timer; the newest one in the thread wins, and `0` means off. Carries the
+ * peer `p` and a `["timer", "<seconds>"]` tag; the content is empty.
+ *
+ * A timer rumor is NEVER stamped with an expiration of its own: it is the
+ * conversation's shared state, so losing it would silently un-set the timer on
+ * a device that resynced afterwards. It leaks nothing beyond "a timer changed"
+ * — the message bodies it governs are the part that disappears.
+ */
+export const KIND_DM_TIMER = 1740;
 /** NIP-59 seal. */
 export const KIND_DM_SEAL = 13;
 /** NIP-59 gift wrap. */
 export const KIND_DM_WRAP = 1059;
 
 /** Every rumor kind the DM plane stores and folds. */
-export const DM_RUMOR_KINDS = [KIND_DM_DELETE, KIND_DM_REACTION, KIND_DM_CHAT, KIND_DM_FILE];
+export const DM_RUMOR_KINDS = [
+  KIND_DM_DELETE,
+  KIND_DM_REACTION,
+  KIND_DM_CHAT,
+  KIND_DM_FILE,
+  KIND_DM_TIMER,
+];
 
 /** NIP-59: outer (seal + wrap) timestamps are tweaked into the past, ≤ 2 days. */
 export const MAX_WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
@@ -52,6 +87,31 @@ function tweakedPast(): number {
   return Math.floor(Date.now() / 1000) - Math.floor(Math.random() * MAX_WRAP_BACKDATE_SECS);
 }
 
+// ── NIP-40 expiration ────────────────────────────────────────────────────────
+
+/**
+ * The NIP-40 deadline (unix seconds) carried by these tags, or undefined when
+ * there is none. A malformed / non-finite value is treated as absent rather
+ * than as "expired": a garbage tag must not be able to hide a message.
+ */
+export function expirationOf(tags: readonly string[][]): number | undefined {
+  const raw = tags.find(([name]) => name === "expiration")?.[1];
+  if (raw === undefined) return undefined;
+  const secs = Number(raw);
+  return Number.isFinite(secs) ? secs : undefined;
+}
+
+/** Whether these tags carry a NIP-40 deadline that has already passed. */
+export function isExpired(tags: readonly string[][], nowSecs = Math.floor(Date.now() / 1000)): boolean {
+  const at = expirationOf(tags);
+  return at !== undefined && at <= nowSecs;
+}
+
+/** Append a NIP-40 `expiration` tag when `expiresAt` is set (else pass through). */
+export function withExpiration(tags: string[][], expiresAt?: number): string[][] {
+  return expiresAt === undefined ? tags : [...tags, ["expiration", String(Math.floor(expiresAt))]];
+}
+
 // ── Signer surface ───────────────────────────────────────────────────────────
 
 /** What sending/opening a NIP-17 DM needs (every nip44-capable login has it). */
@@ -59,7 +119,12 @@ export interface Dm17Signer {
   signEvent(template: EventTemplate): Promise<NostrEvent>;
   nip44?: {
     encrypt(pubkey: string, plaintext: string): Promise<string>;
-    decrypt(pubkey: string, ciphertext: string): Promise<string>;
+    /**
+     * `opts.cache: false` asks a caching signer (see `AppSigner`) NOT to
+     * persist this plaintext — used for expiring envelopes, whose whole point
+     * is to leave nothing at rest. Signers without a cache ignore it.
+     */
+    decrypt(pubkey: string, ciphertext: string, opts?: { cache?: boolean }): Promise<string>;
   };
 }
 
@@ -97,11 +162,14 @@ export function buildDmRumor(opts: {
  * composer built (imeta, q, emoji…). The peer `p` is FIRST — readers of our
  * own copies recover the conversation partner from it (see {@link dmPeerOf}).
  */
-export function dmChatTags(peer: string, opts?: { replyTo?: string; extraTags?: string[][] }): string[][] {
+export function dmChatTags(
+  peer: string,
+  opts?: { replyTo?: string; extraTags?: string[][]; expiresAt?: number },
+): string[][] {
   const tags: string[][] = [["p", peer]];
   if (opts?.replyTo) tags.push(["e", opts.replyTo]);
   for (const t of opts?.extraTags ?? []) tags.push(t);
-  return tags;
+  return withExpiration(tags, opts?.expiresAt);
 }
 
 /**
@@ -109,13 +177,44 @@ export function dmChatTags(peer: string, opts?: { replyTo?: string; extraTags?: 
  * The peer `p` leads (conversation attribution — NIP-17 receivers), then the
  * NIP-25 `e` target and `k` target-kind.
  */
-export function dmReactionTags(peer: string, targetId: string, targetKind: number, extraTags?: string[][]): string[][] {
-  return [["p", peer], ["e", targetId], ["k", String(targetKind)], ...(extraTags ?? [])];
+export function dmReactionTags(
+  peer: string,
+  targetId: string,
+  targetKind: number,
+  extraTags?: string[][],
+  expiresAt?: number,
+): string[][] {
+  return withExpiration(
+    [["p", peer], ["e", targetId], ["k", String(targetKind)], ...(extraTags ?? [])],
+    expiresAt,
+  );
 }
 
-/** Tags for a kind-5 delete rumor targeting an own rumor in this conversation. */
+/**
+ * Tags for a kind-5 delete rumor targeting an own rumor in this conversation.
+ * Deliberately NEVER expiring: a delete is a tombstone, and its target may
+ * have been sent under a longer timer (or none at all) — an expiring delete
+ * would let a message that outlives it come back.
+ */
 export function dmDeleteTags(peer: string, targetId: string, targetKind: number): string[][] {
   return [["p", peer], ["e", targetId], ["k", String(targetKind)]];
+}
+
+/** Tags for a kind-1740 timer-change rumor. `seconds` of 0 turns it off. */
+export function dmTimerTags(peer: string, seconds: number): string[][] {
+  return [["p", peer], ["timer", String(Math.max(0, Math.floor(seconds)))]];
+}
+
+/**
+ * The timer (seconds; 0 = off) a kind-1740 rumor sets, or undefined when the
+ * tag is missing/malformed — an unreadable timer change must not be mistaken
+ * for "turn it off".
+ */
+export function dmTimerSeconds(rumor: { tags: readonly string[][] }): number | undefined {
+  const raw = rumor.tags.find(([name]) => name === "timer")?.[1];
+  if (raw === undefined) return undefined;
+  const secs = Number(raw);
+  return Number.isFinite(secs) && secs >= 0 ? Math.floor(secs) : undefined;
 }
 
 /**
@@ -134,6 +233,9 @@ export function dmPeerOf(rumor: { pubkey: string; tags: string[][] }, self: stri
  * Seal a rumor to one recipient with the sender's REAL identity: kind 13,
  * nip44-encrypted to the recipient, timestamp tweaked into the past. One
  * signer round-trip. The self-copy passes the sender's own pubkey.
+ *
+ * A rumor carrying a NIP-40 `expiration` propagates it onto the seal, so a
+ * reader learns the deadline without having to trust the (relay-visible) wrap.
  */
 export async function sealDmRumor(
   rumor: DmRumor,
@@ -148,7 +250,7 @@ export async function sealDmRumor(
   return signer.signEvent({
     kind: KIND_DM_SEAL,
     content: await signer.nip44.encrypt(recipientPk, json),
-    tags: [],
+    tags: withExpiration([], expirationOf(rumor.tags)),
     created_at: tweakedPast(),
   });
 }
@@ -161,7 +263,7 @@ export async function sealDmRumor(
 export function wrapDmSeal(
   seal: NostrEvent,
   recipientPk: string,
-  opts?: { firstContact?: boolean },
+  opts?: { firstContact?: boolean; expiresAt?: number },
 ): NostrEvent {
   const wrapSk = generateSecretKey();
   const convKey = getConversationKey(wrapSk, recipientPk);
@@ -170,11 +272,14 @@ export function wrapDmSeal(
   // decrypting their whole gift-wrap backlog. Established conversations omit
   // it so it doesn't leak the inner kind for no benefit.
   if (opts?.firstContact) tags.push(["k", String(KIND_DM_CHAT)]);
+  // The outer NIP-40 tag is the ONLY expiry a relay can act on, so a
+  // disappearing message asks the relays to delete their copy too. It reveals
+  // no more than the wrap already does (a timestamped envelope to one `p`).
   return finalizeEvent(
     {
       kind: KIND_DM_WRAP,
       content: nip44Encrypt(JSON.stringify(seal), convKey),
-      tags,
+      tags: withExpiration(tags, opts?.expiresAt ?? expirationOf(seal.tags)),
       created_at: tweakedPast(),
     },
     wrapSk,
@@ -200,6 +305,11 @@ export interface OpenedDm {
   wrapId: string;
 }
 
+/** The NIP-40 deadline this opened rumor disappears at, if any. */
+export function dmExpiresAt(opened: Pick<OpenedDm, "tags">): number | undefined {
+  return expirationOf(opened.tags);
+}
+
 /** Reject rumors claiming to be from further in the future than this. */
 const MAX_FUTURE_SKEW_SECS = 3600;
 
@@ -217,6 +327,14 @@ const MAX_FUTURE_SKEW_SECS = 3600;
  *      authenticates the seal author against US, so no Schnorr verify needed);
  *   4. the rumor's id must be its NIP-01 hash (filled in when absent, rejected
  *      when it lies — an id is a display/dedup key, never trust a claimed one).
+ *
+ * Disappearing messages: a NIP-40 `expiration` that has already passed on the
+ * wrap, the seal OR the rumor rejects the whole envelope here — the earliest
+ * point that has the plaintext, and BEFORE any caller can persist it. Relays
+ * are not trusted to have dropped it, and neither is the outer tag alone (a
+ * sender could strip it): all three levels are checked. An expiring envelope
+ * also opts out of the signer's persistent decrypt cache, so the plaintext of
+ * a message that is meant to vanish is never written to disk on the way in.
  */
 export async function openDmWrap(
   wrap: NostrEvent,
@@ -224,15 +342,25 @@ export async function openDmWrap(
   self: string,
 ): Promise<OpenedDm | undefined> {
   if (wrap.kind !== KIND_DM_WRAP || !signer.nip44) return undefined;
+  const now = Math.floor(Date.now() / 1000);
+  if (isExpired(wrap.tags, now)) return undefined;
   try {
-    const seal = JSON.parse(await signer.nip44.decrypt(wrap.pubkey, wrap.content)) as NostrEvent;
+    const wrapCache = expirationOf(wrap.tags) === undefined;
+    const seal = JSON.parse(
+      await signer.nip44.decrypt(wrap.pubkey, wrap.content, { cache: wrapCache }),
+    ) as NostrEvent;
     if (seal.kind !== KIND_DM_SEAL || typeof seal.pubkey !== "string") return undefined;
+    if (!Array.isArray(seal.tags) || isExpired(seal.tags, now)) return undefined;
 
-    const rumor = JSON.parse(await signer.nip44.decrypt(seal.pubkey, seal.content)) as DmRumor;
+    const sealCache = wrapCache && expirationOf(seal.tags) === undefined;
+    const rumor = JSON.parse(
+      await signer.nip44.decrypt(seal.pubkey, seal.content, { cache: sealCache }),
+    ) as DmRumor;
     if (rumor.pubkey !== seal.pubkey) return undefined;
     if (typeof rumor.kind !== "number" || typeof rumor.content !== "string") return undefined;
     if (!Array.isArray(rumor.tags) || typeof rumor.created_at !== "number") return undefined;
-    if (rumor.created_at > Math.floor(Date.now() / 1000) + MAX_FUTURE_SKEW_SECS) return undefined;
+    if (rumor.created_at > now + MAX_FUTURE_SKEW_SECS) return undefined;
+    if (isExpired(rumor.tags, now)) return undefined;
 
     const computedId = getEventHash({
       kind: rumor.kind,
