@@ -66,7 +66,6 @@ export const AppConfigSchema = z.object({
   customTheme: ThemeConfigSchema.optional().catch(undefined),
   themes: ThemesConfigSchema.optional().catch(undefined),
   addedRelays: z.array(z.string()).catch([]),
-  serverOrder: z.array(z.string()).catch([]),
   railOrder: z.array(z.string()).catch([]),
   railLayout: z.array(RailLayoutNodeSchema).catch([]),
   railOpenFolders: z.array(z.string()).catch([]),
@@ -101,8 +100,6 @@ export const EncryptedSettingsSchema = z.looseObject({
    * 10009 read resolves. Merged (union) on the way in, never used to remove.
    */
   addedRelays: z.array(z.string()).optional(),
-  /** Legacy per-server rail order (relay URLs). */
-  serverOrder: z.array(z.string()).optional(),
   /** Unified community-rail order (relay URLs + `c1:`/`c2:` community keys). */
   railOrder: z.array(z.string()).optional(),
   /** Structured rail layout: ordered items + folders (supersedes railOrder). */

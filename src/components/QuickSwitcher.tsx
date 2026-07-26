@@ -12,7 +12,13 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { useAppContext } from "@/hooks/useAppContext";
-import { PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import {
+  normalizeRelayUrl,
+  PINNED_RAIL_RELAYS,
+  relayToRouteParam,
+  routeParamToRelay,
+} from "@/lib/platform";
+import { flattenLayout, mergeLayout } from "@/lib/railLayout";
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { RelayInfoDocument } from "@/hooks/useRelayInfo";
@@ -57,21 +63,22 @@ export function QuickSwitcher() {
   const queryClient = useQueryClient();
   const { config } = useAppContext();
 
-  // Rail-ordered server list (same construction as ServerRail: any opt-in
-  // pinned relays + user-added, de-duplicated, in the user's saved order).
+  // Rail-ordered server list: the same construction as ServerRail (any opt-in
+  // pinned relays + user-added, normalized and de-duplicated), arranged by the
+  // rail's saved layout with folders flattened in place, so the palette lists
+  // servers in the order the rail shows them.
   const servers = useMemo(() => {
-    const seen = new Set<string>();
-    const list: string[] = [];
+    const live = new Set<string>();
     for (const url of [...PINNED_RAIL_RELAYS, ...config.addedRelays]) {
-      if (!seen.has(url)) {
-        seen.add(url);
-        list.push(url);
-      }
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) live.add(normalized);
     }
-    const order = config.serverOrder.filter((u) => seen.has(u));
-    const rest = list.filter((u) => !order.includes(u));
-    return [...order, ...rest];
-  }, [config.addedRelays, config.serverOrder]);
+    // `mergeLayout` appends every live key the layout doesn't know, so nothing
+    // is lost; the filter drops Concord communities (the palette is NIP-29
+    // only) and any key for a server since removed.
+    const keys = flattenLayout(mergeLayout(config.railLayout, config.railOrder, [...live]));
+    return keys.filter((key) => live.has(key));
+  }, [config.addedRelays, config.railLayout, config.railOrder]);
 
   // Snapshot the palette entries when it opens (cache reads aren't reactive,
   // and they don't need to be for the lifetime of one palette).

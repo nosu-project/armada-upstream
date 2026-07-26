@@ -40,17 +40,6 @@ export interface AppConfig {
    */
   addedRelays: string[];
   /**
-   * User-defined display order for the server rail, by relay URL. Covers both
-   * pinned platform relays and user-added ones (the relay list itself does not
-   * carry a rail order). Any server not listed here falls back to the default
-   * order (pinned first, then added). Stored locally in app config.
-   *
-   * Legacy: superseded by `railOrder` (which orders NIP-29 servers *and*
-   * Concord communities as one unified list). Still written alongside
-   * `railOrder` for backward compatibility.
-   */
-  serverOrder: string[];
-  /**
    * User-defined display order for the *entire* community rail as one list —
    * NIP-29 servers and Concord (V1/V2) communities intermixed in any order.
    * Entries are stable rail keys: a relay URL for NIP-29 servers,
@@ -63,8 +52,9 @@ export interface AppConfig {
    * The community rail's structured layout: an ordered list of items (by
    * stable rail key — relay URLs and `c1:`/`c2:` community keys) and
    * Discord-style folders grouping them. Supersedes `railOrder` (which is
-   * still written as the flattened order for backward compatibility and the
-   * QuickSwitcher). Synced across devices via the encrypted settings event.
+   * still written as the flattened order for backward compatibility, and read
+   * only to seed this layout on first migration). Synced across devices via
+   * the encrypted settings event.
    */
   railLayout: RailLayoutNode[];
   /**
@@ -231,7 +221,6 @@ export const SYNCED_CONFIG_KEYS = [
   "customTheme",
   "themes",
   "addedRelays",
-  "serverOrder",
   "railOrder",
   "railLayout",
   "appRelays",
@@ -255,7 +244,6 @@ export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
 export const defaultConfig: AppConfig = {
   theme: "dark",
   addedRelays: [],
-  serverOrder: [],
   railOrder: [],
   railLayout: [],
   railOpenFolders: [],

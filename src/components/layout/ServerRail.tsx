@@ -1299,10 +1299,10 @@ export function ServerRail({
         ...current,
         // The structured layout (items + folders) — the source of truth.
         railLayout: normalized,
-        // Flattened orders kept in sync for the QuickSwitcher and for older
-        // clients that only understand the flat lists.
+        // Flattened order kept in sync for older clients that only understand
+        // the flat list (and as the seed `mergeLayout` reads when no layout
+        // has been stored yet).
         railOrder: keys,
-        serverOrder: keys.filter((k) => !k.startsWith("c1:") && !k.startsWith("c2:")),
       }));
 
       // Also sync the relative order of user-added relays to the kind 10009
