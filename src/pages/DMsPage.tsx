@@ -822,7 +822,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
               <MoreVertical className="size-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52 p-1.5">
+          <DropdownMenuContent align="end" className="w-64 p-1.5">
             <DropdownMenuItem className="px-3 py-2" onClick={() => setSearchOpen(true)}>
               <Search className="size-4" />
               Search messages
@@ -904,13 +904,19 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
             {dm17Enabled && (
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger className="px-3 py-2">
-                  <Timer className="mr-2 size-4" />
-                  Disappearing messages
-                  {disappearingTimer > 0 && (
-                    <span className="ml-auto pl-2 text-xs text-muted-foreground">
-                      {formatDisappearingDuration(disappearingTimer)}
-                    </span>
-                  )}
+                  <Timer className="mr-2 size-4 shrink-0" />
+                  {/* The current duration goes under the label rather than
+                      beside it: the label alone nearly fills the menu width,
+                      and a trailing value competes with the chevron's ml-auto
+                      and wraps "Disappearing messages" into a squashed column. */}
+                  <div className="min-w-0">
+                    <div>Disappearing messages</div>
+                    {disappearingTimer > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {formatDisappearingDuration(disappearingTimer)}
+                      </p>
+                    )}
+                  </div>
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="w-56">
                   <p className="px-2 py-1.5 text-xs text-muted-foreground">
