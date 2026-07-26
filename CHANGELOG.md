@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.42.0] - 2026-07-26
+
+Ecash tokens pasted into chat now render as a card showing the amount, with the mint and the raw token a tap away, and the card asks the mint whether the token has already been redeemed. Typing indicators work with browser extensions and remote signers and are on by default. Thread replies gain the same reaction row and action menu as timeline messages. Servers you remove stay removed, and leaving a community clears its slot in the sidebar for good.
+
+### Added
+- Ecash tokens in chat render as a card with the amount, a copy button, and the mint and raw token in a popover
+- Ecash cards check with the mint and mark a token that has already been redeemed
+- The frequent-reaction quick row and the full message action menu on thread replies
+
+### Changed
+- Typing indicators in direct messages work with browser extensions and remote signers, and are enabled by default
+- The message edit box grows to fit its wrapped content
+- Messages sent in a community show as sent immediately instead of holding a spinner until every relay answers
+- Channels open faster
+- Visiting a server link no longer adds that server to the sidebar; a server is added by joining a channel or adding it explicitly
+
+### Fixed
+- Removed servers no longer reappear from a device holding an older copy of the list
+- Leaving, declining, or being removed from a community clears its sidebar slot, so rejoining no longer lands back in the old folder
+- Dialogs stay clear of the Android status bar, keeping the close button reachable
+- A trailing parenthesis stays with a link when the URL's own parentheses are balanced
+- The message toolbar is no longer clipped at the top of the thread panel
+- Joining or leaving a community no longer fails when the community's own relays reject the update
+
 ## [0.41.0] - 2026-07-25
 
 Direct messages gain disappearing messages: either person sets a timer for the conversation, and expiring messages carry an animated countdown clock that empties as the deadline approaches. Typing indicators arrive as an opt-in setting, and conversations can be pinned to the top of the message list. Android notifications now clear when you read a conversation in the app or on another device.
