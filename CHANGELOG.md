@@ -4,6 +4,28 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.41.0] - 2026-07-25
+
+Direct messages gain disappearing messages: either person sets a timer for the conversation, and expiring messages carry an animated countdown clock that empties as the deadline approaches. Typing indicators arrive as an opt-in setting, and conversations can be pinned to the top of the message list. Android notifications now clear when you read a conversation in the app or on another device.
+
+### Added
+- Disappearing messages in direct messages, with a shared per-conversation timer either person can set
+- An animated countdown clock beside expiring messages, spelling out the remaining time in the final hour
+- Typing indicators in direct messages, off by default and enabled in Settings (unavailable when signing with a browser extension or remote signer)
+- Pinned conversations in the direct message list, pinned by right-click or long-press and synced across devices
+
+### Changed
+- The quick switcher lists servers in the same order as the sidebar rail
+- Single-emoji messages render a step larger, with room so they aren't cropped
+- The reaction picker drawer sizes itself to the picker
+- Project cards, stat pills, and the emoji pack remove button lose their borders
+- The ticket comment composer matches the composer used elsewhere in the app
+
+### Fixed
+- Android notifications for a conversation clear when it is read in the app or on another device
+- Enter no longer sends a message while confirming an in-progress composition in Chinese, Japanese, Korean, and other multi-keystroke input methods
+- The Bitcoin wallet stops contacting a third-party service while the wallet dialog is closed
+
 ## [0.40.0] - 2026-07-25
 
 Communities gain a Projects workspace for tracking work items: browse issues, pull requests, and comments from connected repositories, filter by status and labels, and edit items directly in Armada. Repositories attach to channels, integrate their git activity into the chat timeline, and sync updates live. Image attachments open in a cinematic lightbox, custom emoji rendering is polished across the app, and message actions are redesigned into a touch-friendly sheet on mobile and a desktop menu.
