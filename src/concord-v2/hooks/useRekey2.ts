@@ -7,7 +7,7 @@ import { useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPla
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toJoinMaterial } from "@/concord-v2/lib/communityList";
 import { controlGroups, currentControlGroup, foldControlState, openControlEditions } from "@/concord-v2/lib/control";
-import { controlSweepTruncated, sweepControl } from "@/concord-v2/lib/planeSync";
+import { sweepControl } from "@/concord-v2/lib/planeSync";
 import { channelRekeyGroupKey, controlGroupKey, guestbookGroupKey } from "@/concord-v2/lib/derive";
 import {
   baseRekeyGroupKey,
@@ -27,6 +27,7 @@ import {
   findBlob,
   groupRotations,
   lowerKeyWins,
+  mintOrReuseRotationKey,
   myLocator,
   parseRekey,
   rekeyScopeId,
@@ -672,16 +673,44 @@ export function useRefound2(community: CommunityV2 | undefined) {
       // no longer serve (or serve gapped) ABORTS the Refounding; otherwise it
       // would be silently dropped from, or compacted stale into, the new epoch
       // — for every member, forever.
+      // Tallied from THIS sweep's own callbacks, not the shared verdict map:
+      // a background sweep of another relay can invalidate an entry in the gap
+      // between our sweep resolving and us reading it, aborting a rotation for
+      // no reason during exactly the raid it is needed for.
+      let reached = 0;
+      let short = false;
       try {
         // Exhaustive: a rotation may only compact a plane it has read WHOLE,
         // and plane depth is attacker-controlled. Capping here would let any
-        // member hold rotation hostage by flooding past the hop budget.
-        await sweepControl(nostr, community, { exhaustive: true });
+        // member hold rotation hostage by flooding past the event budget.
+        await sweepControl(nostr, community, {
+          exhaustive: true,
+          onReached: () => {
+            reached++;
+          },
+          onTruncated: () => {
+            short = true;
+          },
+        });
       } catch {
         throw new Error("Couldn't re-fetch the community's control plane; check your connection and try again.");
       }
-      if (controlSweepTruncated(community)) {
-        throw new Error("The community's control plane is too deep to fetch fully right now; rotation aborted so nothing is lost.");
+      // A MAJORITY of relays must have answered. Not "must have been
+      // exhausted" — no client can establish that — but compaction rewrites
+      // the whole community, so reading too few sources drops state for
+      // everyone. Majority rather than all: relays die, and demanding every
+      // one would let a stale list entry block rotation forever.
+      const total = community.relays.length;
+      if (reached < Math.floor(total / 2) + 1) {
+        throw new Error(
+          `Only ${reached} of this community's ${total} relays responded; rotation aborted so nothing is lost. Try again, or remove relays that are no longer running.`,
+        );
+      }
+      // An exhaustive read has no budget, so this can only mean the plane is
+      // being stuffed at one timestamp — the one shape of flood a cursor
+      // cannot page through. Compaction would erase whatever is behind it.
+      if (short) {
+        throw new Error("This community's history is being flooded and couldn't be read in full; rotation aborted so nothing is lost.");
       }
       const stored = await queryByStreams(controlGroups(community).map((g) => g.pk));
       const verifySnap =
@@ -708,8 +737,11 @@ export function useRefound2(community: CommunityV2 | undefined) {
       const recipients = [...new Set([user.pubkey, ...keep])].filter((pk) => !excluded.has(pk));
 
       const newEpoch = community.rootEpoch + 1n;
-      const newRoot = random32();
       const prevCommit = bytesToHex(epochKeyCommitment(community.rootEpoch, community.root));
+      // Reserved, not freshly minted: a rotation retried after a relay refusal
+      // must carry the SAME key, or the two attempts merge into one rotation
+      // set and split the community across two roots at one epoch.
+      const newRoot = await mintOrReuseRotationKey(community.idHex, { kind: "root" }, newEpoch, prevCommit);
 
       // Acquire everything BEFORE the first publish (resumable, never half-lost).
       const plain = bytesToBase64(encodeWrappedKey(ZERO_SCOPE, newEpoch, newRoot));
@@ -719,7 +751,39 @@ export function useRefound2(community: CommunityV2 | undefined) {
         blobs.push({ locator: myLocator(user.pubkey, pk, "0".repeat(64), newEpoch), wrapped });
       }
 
-      // 1. The root roll: rekey blobs at the base address under the PRIOR root.
+      // 1. Compaction FIRST: re-wrap each entity's current head under the new
+      // epoch (plaintext seals keep the original signatures verifiable).
+      //
+      // These wraps are addressed at a key nobody holds yet, so until the roll
+      // below hands `newRoot` out they are undiscoverable and undecryptable —
+      // inert. That makes the ROLL the commit point: if any head fails to land
+      // we abort before the epoch exists at all, instead of announcing an epoch
+      // whose plane is missing entities. Readers sweep the current epoch only,
+      // so a head that never landed would be gone for every later joiner.
+      // A retry re-mints a root and re-publishes; the orphans stay inert.
+      const newControl = controlGroupKey(newRoot, community.id, newEpoch);
+      for (const head of folded.headEditions.values()) {
+        let rewrapped: NostrEvent;
+        try {
+          rewrapped = rewrapSeal(head.opened.seal, newControl);
+        } catch {
+          // An encrypted-seal head can't re-wrap; control heads are plaintext
+          // by construction, so this is defensive only.
+          continue;
+        }
+        const results = await Promise.allSettled(
+          community.relays.map((url) => nostr.relay(url).event(rewrapped, { signal: AbortSignal.timeout(8000) })),
+        );
+        // Gate on an ack: a head that fails to land is not recoverable later,
+        // so abort while the epoch is still unannounced.
+        if (!results.some((r) => r.status === "fulfilled")) {
+          throw new Error("No relay accepted the community's state during rotation; nothing was lost, try again.");
+        }
+      }
+
+      // 2. The root roll: rekey blobs at the base address under the PRIOR root.
+      // This is the commit — the first thing any member can see, and the only
+      // thing that makes the compaction above readable.
       const address = baseRekeyGroupKey(community.root, community.id, newEpoch);
       const rumors = buildRekeyRumors(
         user.pubkey,
@@ -737,20 +801,30 @@ export function useRefound2(community: CommunityV2 | undefined) {
         }
       }
 
-      // 2. Compaction, only after the roll published: re-wrap each entity's
-      // current head (plaintext seals keep the original signatures verifiable).
-      const newControl = controlGroupKey(newRoot, community.id, newEpoch);
-      for (const head of folded.headEditions.values()) {
-        try {
-          const rewrapped = rewrapSeal(head.opened.seal, newControl);
-          await Promise.allSettled(
-            community.relays.map((url) => nostr.relay(url).event(rewrapped, { signal: AbortSignal.timeout(8000) })),
-          );
-        } catch {
-          // An encrypted-seal head can't re-wrap; control heads are plaintext
-          // by construction, so this is defensive only.
-        }
-      }
+      // 2a. Record the epoch NOW, not at the end. The roll is the commit: every
+      // keeper can already see and adopt it. Leaving the local entry behind
+      // until the whole mutation finishes means a later step throwing (a
+      // channel the relays refuse) leaves this client believing it is still at
+      // the prior epoch — and the retry then rotates to the SAME (newEpoch,
+      // prevCommit) with a different exclusion set. `groupRotations` correlates
+      // rotations by exactly that tuple, so both attempts merge into one set
+      // and the member this retry exists to remove finds their blob from
+      // attempt one. Advancing here makes the retry a genuine next rotation.
+      // Private channels stay as they are: they have not rotated yet, and
+      // §3 addresses their rekeys under the PRIOR root, which is captured.
+      await updateList({
+        type: "refresh-current",
+        current: toJoinMaterial(
+          {
+            ...community,
+            root: newRoot,
+            rootEpoch: newEpoch,
+            heldRoots: [{ epoch: newEpoch, key: newRoot }, ...community.heldRoots],
+            refounder: user.pubkey,
+          },
+          { prior: entry?.current, relays: entry?.current.relays },
+        ),
+      });
 
       // 2b. Rotate every held Private Channel (CORD-06 §3: "all Private
       // Channels relevant to the removed user(s) are rekeyed"). This client
@@ -764,7 +838,13 @@ export function useRefound2(community: CommunityV2 | undefined) {
       const rotatedChannels: PrivateChannelKey[] = [];
       for (const ch of community.privateChannels) {
         const chEpoch = ch.epoch + 1n;
-        const chKey = random32();
+        const chPrevCommit = bytesToHex(epochKeyCommitment(ch.epoch, ch.key));
+        const chKey = await mintOrReuseRotationKey(
+          community.idHex,
+          { kind: "channel", channelId: ch.id },
+          chEpoch,
+          chPrevCommit,
+        );
         const chIdHex = bytesToHex(ch.id);
         const chPlain = bytesToBase64(encodeWrappedKey(ch.id, chEpoch, chKey));
         const chBlobs: RekeyBlob[] = [];
@@ -778,7 +858,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
             scope: { kind: "channel", channelId: ch.id },
             newEpoch: chEpoch,
             prevEpoch: ch.epoch,
-            prevCommit: bytesToHex(epochKeyCommitment(ch.epoch, ch.key)),
+            prevCommit: chPrevCommit,
           },
           chBlobs,
           Date.now(),

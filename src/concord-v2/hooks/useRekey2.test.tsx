@@ -106,6 +106,8 @@ class FakeRelay {
   events: NostrEvent[] = [];
   published: NostrEvent[] = [];
   queries: Filter[] = [];
+  /** Reject any publish whose author matches — a relay refusing one step. */
+  refuseAuthor: string | undefined;
 
   async query(filters: Filter[]): Promise<NostrEvent[]> {
     this.queries.push(...filters);
@@ -124,6 +126,7 @@ class FakeRelay {
   }
 
   async event(ev: NostrEvent): Promise<void> {
+    if (this.refuseAuthor && ev.pubkey === this.refuseAuthor) throw new Error("relay refused");
     this.published.push(ev);
     this.events.push(ev);
   }
@@ -682,6 +685,55 @@ describe("useRefound2 (CORD-06 §3 channel rotations)", () => {
       expect(vended.channels).toEqual([
         { id: bytesToHex(ch.id), key: bytesToHex(newChKey), epoch: 1, name: "sec" },
       ]);
+    },
+  );
+
+  it(
+    "a rotation that fails AFTER the root roll still records the epoch, so the retry is a new rotation",
+    { timeout: 30_000 },
+    async () => {
+      // The root roll is the commit: every keeper can already see and adopt it.
+      // Leaving the local entry behind until the whole mutation finishes meant a
+      // channel step failing left this client believing it was still at the
+      // prior epoch — and the retry then rotated to the SAME
+      // (newEpoch, prevCommit). groupRotations correlates on exactly that
+      // tuple, so both attempts merged into ONE set and the member the retry
+      // existed to remove found their blob from attempt one.
+      const owner = member();
+      const alice = member();
+      const mallory = member();
+      const { community: base } = mintCommunity("Fleet", owner.pubkey, [RELAY]);
+      const ch: PrivateChannelKey = { id: random32(), key: random32(), epoch: 0n, name: "sec" };
+      const community: CommunityV2 = { ...base, privateChannels: [ch] };
+
+      const relay = new FakeRelay();
+      // Refuse only the channel rekey (step 2b), leaving the root roll landed.
+      relay.refuseAuthor = channelRekeyGroupKey(community.root, ch.id, 1n).pk;
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(owner);
+      h.folded = foldedFor(owner.pubkey);
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(() => useRefound2(community), { wrapper });
+      await act(async () => {
+        await expect(
+          result.current.refound({ keep: [alice.pubkey], exclude: [mallory.pubkey] }),
+        ).rejects.toThrow();
+      });
+
+      // The root roll landed, so epoch 1 exists for every member…
+      const rollAddress = baseRekeyGroupKey(community.root, community.id, 1n);
+      expect(relay.published.some((e) => e.pubkey === rollAddress.pk), "the roll must have landed").toBe(true);
+      // …and this client must have recorded it despite the later failure.
+      expect(h.updateList, "the committed epoch must be recorded before the throw").toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "refresh-current",
+          current: expect.objectContaining({ root_epoch: 1 }),
+        }),
+      );
     },
   );
 });
