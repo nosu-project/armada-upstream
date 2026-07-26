@@ -12,16 +12,21 @@ import {
   dmReactionTags,
   dmTimerSeconds,
   dmTimerTags,
+  dmTypingTags,
+  DM_RUMOR_KINDS,
   expirationOf,
   isExpired,
   KIND_DM_CHAT,
   KIND_DM_DELETE,
   KIND_DM_REACTION,
+  KIND_DM_TYPING,
   KIND_DM_WRAP,
+  KIND_DM_WRAP_EPHEMERAL,
   MAX_WRAP_BACKDATE_SECS,
   openDmWrap,
   sealDmRumor,
   wrapDmSeal,
+  wrapDmSealEphemeral,
   type Dm17Signer,
 } from "@/lib/nip17/protocol";
 
@@ -210,7 +215,10 @@ describe("disappearing messages (NIP-40)", () => {
   it("stamps the deadline on the rumor, the seal AND the wrap", async () => {
     const rumor = expiringRumor(600);
     const deadline = expirationOf(rumor.tags);
-    expect(deadline).toBe(now() + 600);
+    // Tolerant: `expiringRumor` read the clock a moment ago, and re-reading it
+    // here races the wall-clock second ticking over mid-test.
+    expect(deadline).toBeGreaterThanOrEqual(now() + 599);
+    expect(deadline).toBeLessThanOrEqual(now() + 600);
 
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
     const wrap = wrapDmSeal(seal, recipientPk);
@@ -227,7 +235,9 @@ describe("disappearing messages (NIP-40)", () => {
 
     const opened = await openDmWrap(wrap, rawSigner(recipientSk), recipientPk);
     expect(opened).toBeDefined();
-    expect(dmExpiresAt(opened!)).toBe(now() + 600);
+    // Against the deadline the rumor actually carries — recomputing it from a
+    // fresh `now()` races the second ticking over between build and assertion.
+    expect(dmExpiresAt(opened!)).toBe(expirationOf(rumor.tags));
   });
 
   it("rejects an envelope whose deadline has passed", async () => {
@@ -304,5 +314,81 @@ describe("disappearing messages (NIP-40)", () => {
     expect(isExpired([["expiration", "nonsense"]])).toBe(false);
     expect(isExpired([["expiration", String(now() - 1)]])).toBe(true);
     expect(isExpired([["expiration", String(now() + 60)]])).toBe(false);
+  });
+});
+
+describe("typing indicators (ephemeral plane)", () => {
+  const now = () => Math.floor(Date.now() / 1000);
+  const senderSk = generateSecretKey();
+  const senderPk = getPublicKey(senderSk);
+  const recipientSk = generateSecretKey();
+  const recipientPk = getPublicKey(recipientSk);
+
+  function typingWrap() {
+    const rumor = buildDmRumor({
+      kind: KIND_DM_TYPING,
+      content: "",
+      tags: dmTypingTags(recipientPk),
+      pubkey: senderPk,
+    });
+    return { rumor, seal: sealDmRumor(rumor, recipientPk, rawSigner(senderSk)) };
+  }
+
+  it("wraps a typing rumor in a kind-21059 ephemeral wrap and round-trips it", async () => {
+    const { rumor, seal } = typingWrap();
+    const wrap = wrapDmSealEphemeral(await seal, recipientPk);
+
+    expect(wrap.kind).toBe(KIND_DM_WRAP_EPHEMERAL);
+    expect(wrap.tags).toEqual([["p", recipientPk]]);
+    // Same NIP-59 anonymity as a durable wrap: a throwaway author.
+    expect(wrap.pubkey).not.toBe(senderPk);
+
+    const opened = await openDmWrap(wrap, rawSigner(recipientSk), recipientPk, {
+      wrapKind: KIND_DM_WRAP_EPHEMERAL,
+    });
+    expect(opened).toBeDefined();
+    expect(opened!.kind).toBe(KIND_DM_TYPING);
+    expect(opened!.author).toBe(senderPk);
+    expect(opened!.peer).toBe(senderPk);
+    expect(opened!.content).toBe("");
+    expect(opened!.rumorId).toBe(rumor.id);
+  });
+
+  it("is NOT backdated — a stale signal must be detectable as stale", async () => {
+    const { seal } = typingWrap();
+    const wrap = wrapDmSealEphemeral(await seal, recipientPk);
+    // wrapDmSeal randomizes up to 2 days into the past; this one is now.
+    expect(Math.abs(wrap.created_at - now())).toBeLessThanOrEqual(2);
+  });
+
+  it("carries no expiration tag on any layer", async () => {
+    const { seal } = typingWrap();
+    const resolved = await seal;
+    const wrap = wrapDmSealEphemeral(resolved, recipientPk);
+    expect(dmTypingTags(recipientPk).some(([n]) => n === "expiration")).toBe(false);
+    expect(expirationOf(resolved.tags)).toBeUndefined();
+    expect(expirationOf(wrap.tags)).toBeUndefined();
+  });
+
+  it("does not open an ephemeral wrap through the durable (default) path", async () => {
+    const { seal } = typingWrap();
+    const wrap = wrapDmSealEphemeral(await seal, recipientPk);
+    // The inbox sync opens with the default wrapKind, so a typing signal can
+    // never be mistaken for a message and land in the rumor store.
+    expect(await openDmWrap(wrap, rawSigner(recipientSk), recipientPk)).toBeUndefined();
+  });
+
+  it("does not open a durable wrap through the ephemeral path", async () => {
+    const { seal } = typingWrap();
+    const wrap = wrapDmSeal(await seal, recipientPk);
+    expect(
+      await openDmWrap(wrap, rawSigner(recipientSk), recipientPk, {
+        wrapKind: KIND_DM_WRAP_EPHEMERAL,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the typing kind out of the stored/folded rumor set", () => {
+    expect(DM_RUMOR_KINDS).not.toContain(KIND_DM_TYPING);
   });
 });

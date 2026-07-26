@@ -202,6 +202,14 @@ export function SettingsPage() {
   };
 
   /**
+   * Toggle DM typing indicators. Off by default — see `dmTypingIndicators`.
+   * Local config only (synced across devices); publishes nothing.
+   */
+  const setDmTypingIndicators = (value: boolean) => {
+    updateConfig((current) => ({ ...current, dmTypingIndicators: value }));
+  };
+
+  /**
    * Persist the user's own DM relays. kind-10050 is the user's canonical,
    * discoverable inbox and holds ONLY their personal relays — never the app
    * defaults. So publish exactly the edited list (a direct edit to their own
@@ -379,6 +387,20 @@ export function SettingsPage() {
                 />
               </SettingsRow>
             )}
+            <SettingsRow
+              label="Typing indicators"
+              description={
+                user && user.method !== "nsec"
+                  ? "Unavailable on extension and remote signers — every signal would need a separate approval."
+                  : "Show when the other person is typing, and let them see when you are. Sends a small encrypted signal every few seconds while you type, so your relays can tell the conversation is active right now."
+              }
+            >
+              <Switch
+                checked={config.dmTypingIndicators}
+                onCheckedChange={setDmTypingIndicators}
+                disabled={!!user && user.method !== "nsec"}
+              />
+            </SettingsRow>
             {effective.length > 0 ? (
               <SettingsRow
                 label="DMs currently use"

@@ -63,10 +63,32 @@ export const KIND_DM_DELETE = 5;
  * — the message bodies it governs are the part that disappears.
  */
 export const KIND_DM_TIMER = 1740;
+/**
+ * Typing indicator (Armada extension). The same rumor kind Concord V2 uses for
+ * its channel typing signal (CORD-02 Appendix B), reused here so one kind means
+ * one thing everywhere; only the envelope differs. Empty content, peer `p` tag,
+ * no expiration — the event's existence IS the signal, and it is never stored.
+ *
+ * Deliberately NOT in {@link DM_RUMOR_KINDS}: a typing signal must never reach
+ * the rumor store or the thread fold. It lives for {@link TYPING_WINDOW_SECS}
+ * in memory and then it's gone.
+ */
+export const KIND_DM_TYPING = 23311;
 /** NIP-59 seal. */
 export const KIND_DM_SEAL = 13;
 /** NIP-59 gift wrap. */
 export const KIND_DM_WRAP = 1059;
+/**
+ * Ephemeral gift wrap (Armada extension, mirroring Concord V2's kind-21059
+ * wrap). Relays in the 20000–29999 range broadcast to current subscribers and
+ * store nothing, which is the whole point: a durable kind-1059 typing signal
+ * would pile up in the recipient's inbox forever and be replayed by every cold
+ * backfill. The inside is an ordinary NIP-59 seal, so the crypto is unchanged.
+ */
+export const KIND_DM_WRAP_EPHEMERAL = 21059;
+
+/** How long a typing signal stays live before it ages out. */
+export const TYPING_WINDOW_SECS = 8;
 
 /** Every rumor kind the DM plane stores and folds. */
 export const DM_RUMOR_KINDS = [
@@ -206,6 +228,16 @@ export function dmTimerTags(peer: string, seconds: number): string[][] {
 }
 
 /**
+ * Tags for a kind-23311 typing rumor: the peer `p` and nothing else. No
+ * `expiration` — the freshness check is the rumor's own `created_at` against
+ * {@link TYPING_WINDOW_SECS}, and a NIP-40 tag would only add a relay-visible
+ * hint about a wrap the relay is already forbidden to keep.
+ */
+export function dmTypingTags(peer: string): string[][] {
+  return [["p", peer]];
+}
+
+/**
  * The timer (seconds; 0 = off) a kind-1740 rumor sets, or undefined when the
  * tag is missing/malformed — an unreadable timer change must not be mistaken
  * for "turn it off".
@@ -286,6 +318,32 @@ export function wrapDmSeal(
   );
 }
 
+/**
+ * Wrap a signed seal in an EPHEMERAL (kind-21059) gift wrap — same single-use
+ * key and same NIP-44 conversation key as {@link wrapDmSeal}, so a reader opens
+ * it identically; only the outer kind and the timestamp differ.
+ *
+ * The timestamp is NOT backdated. NIP-59's random ≤2-day tweak exists to blur
+ * *when* a stored message was sent; an ephemeral wrap is never stored, is
+ * meaningless once {@link TYPING_WINDOW_SECS} has passed, and some relays drop
+ * far-past events outright — so a real `created_at` is both required and costs
+ * nothing extra. What the relay learns from a 21059 is that someone is sending
+ * this `p` a live signal right now; the outer kind already says that, and the
+ * sender stays hidden behind the throwaway wrap key either way.
+ */
+export function wrapDmSealEphemeral(seal: NostrEvent, recipientPk: string): NostrEvent {
+  const wrapSk = generateSecretKey();
+  return finalizeEvent(
+    {
+      kind: KIND_DM_WRAP_EPHEMERAL,
+      content: nip44Encrypt(JSON.stringify(seal), getConversationKey(wrapSk, recipientPk)),
+      tags: [["p", recipientPk]],
+      created_at: Math.floor(Date.now() / 1000),
+    },
+    wrapSk,
+  );
+}
+
 // ── Opening (receiving) ──────────────────────────────────────────────────────
 
 /** A fully-opened, verified DM rumor, attributed to its conversation. */
@@ -314,7 +372,9 @@ export function dmExpiresAt(opened: Pick<OpenedDm, "tags">): number | undefined 
 const MAX_FUTURE_SKEW_SECS = 3600;
 
 /**
- * Open a kind-1059 gift wrap addressed to `self`. Returns the verified rumor,
+ * Open a kind-1059 gift wrap addressed to `self` (or, with `opts.wrapKind`, an
+ * ephemeral kind-21059 one — the layers inside are identical). Returns the
+ * verified rumor,
  * or undefined for anything this signer can't open or that fails verification
  * — a scan loop skips garbage without throwing. Rumor kinds are NOT filtered
  * here (a Concord direct invite p-tagged at us opens fine and the caller
@@ -340,12 +400,16 @@ export async function openDmWrap(
   wrap: NostrEvent,
   signer: Pick<Dm17Signer, "nip44">,
   self: string,
+  opts?: { wrapKind?: number; cache?: boolean },
 ): Promise<OpenedDm | undefined> {
-  if (wrap.kind !== KIND_DM_WRAP || !signer.nip44) return undefined;
+  if (wrap.kind !== (opts?.wrapKind ?? KIND_DM_WRAP) || !signer.nip44) return undefined;
   const now = Math.floor(Date.now() / 1000);
   if (isExpired(wrap.tags, now)) return undefined;
   try {
-    const wrapCache = expirationOf(wrap.tags) === undefined;
+    // `cache: false` opts the whole envelope out of the signer's persistent
+    // decrypt cache — what the ephemeral (typing) plane asks for, so a signal
+    // that exists for 8 seconds doesn't write anything to disk.
+    const wrapCache = opts?.cache !== false && expirationOf(wrap.tags) === undefined;
     const seal = JSON.parse(
       await signer.nip44.decrypt(wrap.pubkey, wrap.content, { cache: wrapCache }),
     ) as NostrEvent;

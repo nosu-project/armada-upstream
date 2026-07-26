@@ -10,6 +10,7 @@ import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/c
 import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpers";
 import { MessageRow } from "@/components/chat/MessageRow";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
+import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
@@ -67,6 +68,7 @@ import { useAdoptDmInbox, useDm17Conversations, useDm17Support } from "@/hooks/u
 import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
+import { useDmTyping } from "@/hooks/useDmTyping";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
@@ -536,6 +538,10 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const muteUser = useMuteUser();
   const { pref: dmProtocol, setPref: setDmProtocol } = useDmProtocolPref(peer);
   const isTouch = useIsTouch();
+  // Typing indicators ride the ephemeral NIP-17 plane, so they're only
+  // available where that plane is: a legacy kind-4 thread has no envelope to
+  // carry them. Opt-in and nsec-only on top of that — see useDmTyping.
+  const { typers, publishTyping } = useDmTyping(peer, dm17Enabled);
 
   // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no
   // in-band convention, so the control is hidden on legacy threads).
@@ -1163,6 +1169,10 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         />
       )}
 
+      {/* Sits directly above the composer, and only on the live thread — the
+          search view is a filtered snapshot, not the conversation. */}
+      {!normalizedSearch && <TypingIndicator pubkeys={typers} />}
+
       {legacyBlocked ? (
         <DmLegacyFallbackNotice peer={peer} name={name} onEnable={() => setLegacyAllowed(true)} />
       ) : (
@@ -1190,6 +1200,9 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           // Not on touch: there the soft keyboard would spring up over the
           // thread mid slide-in, before the reader has seen any of it.
           autoFocus={!isTouch}
+          // Throttled inside the hook (one signal per 4s), and a no-op unless
+          // the user turned typing indicators on.
+          onTyping={publishTyping}
           sendOverride={handleSubmit}
         />
       )}
