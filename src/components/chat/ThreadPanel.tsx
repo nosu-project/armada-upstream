@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -136,6 +137,7 @@ function ThreadMessage({
   // only provides editMessage for kinds it can edit, so no kind check needed.
   const canEdit = isOwn && Boolean(onEdit);
   const [editText, setEditText] = useState(event.content);
+  const editRef = useAutosizeTextarea(editText);
   // Sync edit text when entering edit mode (content may have changed).
   useEffect(() => {
     if (isEditing) setEditText(event.content);
@@ -186,6 +188,7 @@ function ThreadMessage({
             {isEditing ? (
               <div className="mt-0.5">
                 <textarea
+                  ref={editRef}
                   autoFocus
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
@@ -200,8 +203,8 @@ function ThreadMessage({
                       onEditCancel?.();
                     }
                   }}
-                  rows={Math.min(6, Math.max(1, editText.split("\n").length))}
-                  className="w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  rows={1}
+                  className="block w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] max-h-40 overflow-y-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 />
                 <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-muted-foreground">
                   <button

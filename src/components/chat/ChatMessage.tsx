@@ -39,6 +39,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
@@ -460,6 +461,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const canPin = Boolean(onTogglePin) && canModerate && !isPending && !isFailed;
   const wasEdited = event.tags.some(([name]) => name === "edited");
   const [editText, setEditText] = useState(event.content);
+  const editRef = useAutosizeTextarea(editText);
   // Deleting is irreversible and now sits one tap away in the action sheet, so
   // it confirms. (It used to be a two-step "arm the trash icon" gesture, which
   // only worked because it WAS a bare icon on the hover strip.)
@@ -630,6 +632,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       {isEditing ? (
         <div className="mt-0.5">
           <textarea
+            ref={editRef}
             autoFocus
             value={editText}
             onChange={(e) => setEditText(e.target.value)}
@@ -642,8 +645,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
                 onEditCancel?.();
               }
             }}
-            rows={Math.min(6, Math.max(1, editText.split("\n").length))}
-            className="w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            rows={1}
+            className="block w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] max-h-40 overflow-y-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
           <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-muted-foreground">
             <button
