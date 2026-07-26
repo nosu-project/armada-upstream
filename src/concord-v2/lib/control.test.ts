@@ -10,6 +10,7 @@ import {
   buildRegistryEdition,
   buildRoleEdition,
   foldControlState,
+  banShouldRotate,
   hasForeignLiveLinks,
   isCommunityPublic,
   isDissolved,
@@ -939,6 +940,32 @@ describe("control plane fold (CORD-04)", () => {
     expect(hasForeignLiveLinks(folded, otherAdmin)).toBe(true);
     // ...unless the link creator is the very target of the ban being judged.
     expect(hasForeignLiveLinks(folded, otherAdmin, owner.pubkey)).toBe(false);
+  });
+
+  it("banShouldRotate: a foreign live link blocks a rotation, but never a forced one", async () => {
+    // An ordinary ban must not strand another admin's invite link on a dead
+    // epoch. A ban answering control-plane abuse must, because the rotation is
+    // the only thing that takes the flooder's root away — a banlist silences
+    // them but leaves them minting junk.
+    const { owner, communityId, control } = await makeCommunity();
+    const wraps = [
+      await sealEdition(
+        buildRegistryEdition(communityId, owner.pubkey, [bytesToHex(random32())], { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    const otherAdmin = bytesToHex(random32());
+    const bystander = bytesToHex(random32());
+
+    expect(banShouldRotate(folded, owner.pubkey, bystander), "my own link is refreshed by the rotation").toBe(true);
+    expect(banShouldRotate(folded, otherAdmin, bystander), "someone else's link would be stranded").toBe(false);
+    expect(
+      banShouldRotate(folded, otherAdmin, bystander, true),
+      "a forced rotation accepts that cost",
+    ).toBe(true);
+    expect(banShouldRotate(undefined, otherAdmin, bystander, true), "no fold, nothing to rotate from").toBe(false);
   });
 
   it("a compaction re-wrap folds for a fresh joiner despite the dangling prev", async () => {

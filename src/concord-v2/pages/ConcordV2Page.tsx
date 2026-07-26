@@ -21,6 +21,7 @@ import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
 import { RolesDialog2 } from "@/concord-v2/components/RolesDialog2";
 import { AuditLogView } from "@/concord-v2/components/AuditLogView2";
 import { BannedView } from "@/concord-v2/components/BannedView2";
+import { SuspiciousActivityBanner2 } from "@/concord-v2/components/SuspiciousActivityBanner2";
 import { useBanSelfRemove2 } from "@/concord-v2/hooks/useBanSelfRemove2";
 import { useLinkAuthorityWatch2 } from "@/concord-v2/hooks/useInvites2";
 import { InvitesView } from "@/concord-v2/components/InvitesView2";
@@ -1723,6 +1724,7 @@ export function ConcordV2Page() {
       preChannels={
         user && community ? (
           <>
+            <SuspiciousActivityBanner2 community={community} folded={folded} ban={moderation.ban} />
             <button
               type="button"
               onClick={() => {

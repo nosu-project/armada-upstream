@@ -697,6 +697,27 @@ export function hasForeignLiveLinks(folded: FoldedControl, viewer: string, exclu
   return false;
 }
 
+/**
+ * Whether banning `target` should also rotate the keys.
+ *
+ * Ordinarily no, while a foreign live link exists — see
+ * {@link hasForeignLiveLinks}. `force` overrides that, and exists for a ban
+ * answering control-plane abuse: there the rotation IS the remedy, because a
+ * banlist silences a flooder but leaves them holding the root they mint junk
+ * with. Stranding a foreign link (until its creator next opens the app and
+ * republishes its bundle) is the lesser harm against an attack that otherwise
+ * continues indefinitely.
+ */
+export function banShouldRotate(
+  folded: FoldedControl | undefined,
+  viewer: string,
+  target: string,
+  force = false,
+): boolean {
+  if (!folded) return false;
+  return force || !hasForeignLiveLinks(folded, viewer, target);
+}
+
 function foldOnce(
   editions: ParsedEdition[],
   communityId: Uint8Array,
