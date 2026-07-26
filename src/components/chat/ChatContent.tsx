@@ -404,8 +404,18 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
           // (skipped for a markdown image, whose URL was delimited by the `)`).
           const trailingPunctMatch = forceImage ? null : url.match(/^(.*?)([.,;:!?)\]]+)$/);
           if (trailingPunctMatch) {
-            const [, urlWithoutPunct] = trailingPunctMatch;
-            if (urlWithoutPunct && urlWithoutPunct.length > 10) {
+            let [, urlWithoutPunct, trailingPunct] = trailingPunctMatch;
+            // Re-attach any trailing `)` that balances a `(` inside the URL, so
+            // Wikipedia-style paths like `/wiki/Ditto_(Pokémon)` keep their
+            // closing paren instead of it being treated as sentence punctuation.
+            while (trailingPunct.startsWith(")")) {
+              const opens = (urlWithoutPunct.match(/\(/g) ?? []).length;
+              const closes = (urlWithoutPunct.match(/\)/g) ?? []).length;
+              if (opens <= closes) break;
+              urlWithoutPunct += ")";
+              trailingPunct = trailingPunct.slice(1);
+            }
+            if (trailingPunct && urlWithoutPunct && urlWithoutPunct.length > 10) {
               url = urlWithoutPunct;
               fullMatch = urlWithoutPunct;
             }
