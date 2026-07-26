@@ -3,11 +3,11 @@ import { useCallback, useMemo } from "react";
 import { useAppContext } from "@/hooks/useAppContext";
 
 export interface UsePinnedDmsReturn {
-  /** Pinned peers (hex pubkeys) in pin order — oldest pin first. */
+  /** The pinned peers (hex pubkeys). Order is insertion order, not meaningful. */
   pinned: string[];
   /** Membership test, stable across renders for the same pinned set. */
   isPinned: (peer: string) => boolean;
-  /** Pin a peer, appending it to the end of the pinned section. */
+  /** Pin a peer. */
   pin: (peer: string) => void;
   /** Unpin a peer. */
   unpin: (peer: string) => void;
@@ -19,9 +19,9 @@ export interface UsePinnedDmsReturn {
  * Read/write the user's pinned DM conversations, persisted to app config and
  * synced across devices.
  *
- * Pin order is insertion order (a new pin lands at the bottom of the pinned
- * section) and is independent of message recency, so a pinned conversation
- * holds its place as messages arrive elsewhere.
+ * This is a set: pinning lifts a conversation into the DM list's pinned
+ * section, which is still ordered newest-message-first. The stored array's
+ * order is just insertion order and never reaches the UI.
  */
 export function usePinnedDms(): UsePinnedDmsReturn {
   const { config, updateConfig } = useAppContext();

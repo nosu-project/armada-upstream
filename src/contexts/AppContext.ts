@@ -169,12 +169,12 @@ export interface AppConfig {
    */
   dmProtocol: Record<string, "auto" | "nip17" | "nip04">;
   /**
-   * Pinned direct-message conversations, as hex pubkeys, in PIN order — a
-   * newly pinned peer is appended, so the pinned section keeps the order the
-   * user built rather than re-sorting by message recency (Signal's behavior).
-   * Pinned conversations render in their own section above the rest of the
-   * list. Raw pubkeys, not `dm:`-scoped keys: this list holds nothing but DM
-   * peers. Synced across devices.
+   * Pinned direct-message conversations, as hex pubkeys. Pinned conversations
+   * render in their own section above the rest of the DM list, still sorted
+   * newest-message-first within that section — this is a SET, and its array
+   * order (pins appended as they're made) carries no display meaning. Raw
+   * pubkeys, not `dm:`-scoped keys: this list holds nothing but DM peers.
+   * Synced across devices.
    */
   pinnedDms: string[];
   /**

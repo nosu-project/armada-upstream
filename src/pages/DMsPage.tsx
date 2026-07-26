@@ -1573,17 +1573,16 @@ function ConversationList({
   );
   const { data: voiceRelay } = useDmVoiceRelay(voiceCandidates);
 
-  // Pinned conversations are lifted into their own section above the rest,
-  // ordered by when they were pinned rather than by message recency — so a
-  // pinned row holds its place as traffic arrives elsewhere.
+  // Pinned conversations are lifted into their own section above the rest.
+  // Both sections stay in `rows` order — newest message first — so a pinned
+  // conversation that just received a message rises to the top of its section.
   const { pinned: pinnedPeers, isPinned, togglePin } = usePinnedDms();
   const [pinnedRows, otherRows] = useMemo(() => {
     const pinnedSet = new Set(pinnedPeers);
-    const order = new Map(pinnedPeers.map((peer, i) => [peer, i]));
-    const top = rows.filter((c) => pinnedSet.has(c.peer));
-    const rest = rows.filter((c) => !pinnedSet.has(c.peer));
-    top.sort((a, b) => (order.get(a.peer) ?? 0) - (order.get(b.peer) ?? 0));
-    return [top, rest];
+    return [
+      rows.filter((c) => pinnedSet.has(c.peer)),
+      rows.filter((c) => !pinnedSet.has(c.peer)),
+    ];
   }, [rows, pinnedPeers]);
 
   // While searching the list is a flat result set: a row hides itself when it
