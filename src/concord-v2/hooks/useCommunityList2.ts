@@ -22,6 +22,7 @@ import {
   type CommunityListEntry,
   type JoinMaterial,
 } from "@/concord-v2/lib/communityList";
+import { STOCK_RELAYS } from "@/concord-v2/lib/invite";
 import { KIND_COMMUNITY_LIST } from "@/concord-v2/lib/kinds";
 import { NIP44_MAX_PLAINTEXT } from "@/concord-v2/lib/stream";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
@@ -92,16 +93,29 @@ async function readListEvent(
  * the folded cache.
  */
 export async function syncCommunityList2(
-  nostr: { query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]> },
+  nostr: {
+    query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]>;
+    group?(relays: string[]): { query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]> };
+  },
   user: NUser,
   queryClient: QueryClient,
   signal?: AbortSignal,
 ): Promise<ListData> {
   const queryKey = listQueryKey(user.pubkey);
-  const events = await nostr.query(
-    [{ kinds: [KIND_COMMUNITY_LIST], authors: [user.pubkey], limit: 1 }],
+  const listFilter: NostrFilter[] = [{ kinds: [KIND_COMMUNITY_LIST], authors: [user.pubkey], limit: 1 }];
+  let events = await nostr.query(
+    listFilter,
     { signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(8000)]) },
   );
+  if (events.length === 0 && nostr.group) {
+    // The vault can live only on the stock CORD relays when the user's own
+    // relays refuse kind 13302 (see useUpdateCommunityList2's publish
+    // fallback), so an empty pool read checks them before concluding there
+    // is no list.
+    events = await nostr.group([...STOCK_RELAYS])
+      .query(listFilter, { signal: AbortSignal.timeout(8000) })
+      .catch(() => []);
+  }
   const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
   const prev = queryClient.getQueryData<ListData>(queryKey);
 
@@ -216,11 +230,17 @@ export function useUpdateCommunityList2() {
       if (!user) throw new Error("User is not logged in");
       if (!user.signer.nip44) throw new Error("NIP-44 encryption not supported by this signer");
 
-      // Read-modify-write against fresh relay state.
-      const events = await nostr.query(
-        [{ kinds: [KIND_COMMUNITY_LIST], authors: [user.pubkey], limit: 1 }],
-        { signal: AbortSignal.timeout(8000) },
-      );
+      // Read-modify-write against fresh relay state. An empty pool read also
+      // checks the stock CORD relays: the publish below falls back to them
+      // when the user's own relays refuse the kind, so the newest list may
+      // live only there.
+      const listFilter: NostrFilter[] = [{ kinds: [KIND_COMMUNITY_LIST], authors: [user.pubkey], limit: 1 }];
+      let events = await nostr.query(listFilter, { signal: AbortSignal.timeout(8000) });
+      if (events.length === 0) {
+        events = await nostr.group([...STOCK_RELAYS])
+          .query(listFilter, { signal: AbortSignal.timeout(8000) })
+          .catch(() => []);
+      }
       const prev = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
       const { list: relayList, decryptFailed } = await readListEvent(prev, user.signer, user.pubkey);
       if (decryptFailed) {
@@ -253,7 +273,21 @@ export function useUpdateCommunityList2() {
 
       queryClient.setQueryData<ListData>(listQueryKey(user.pubkey), { event, list: next });
       void writeFolded(foldKeyOf(user.pubkey), { event, list: next } satisfies PersistedList);
-      await nostr.event(event, { signal: AbortSignal.timeout(8000) });
+      try {
+        await nostr.event(event, { signal: AbortSignal.timeout(8000) });
+      } catch {
+        // The pool publish needs only ONE configured relay to accept, but a
+        // user whose relays all refuse kind 13302 (kind whitelists, auth
+        // gates, outages) would strand every create/join here with a raw
+        // "All promises were rejected". The list is the vault, so fall back
+        // to the stock CORD relays, which are write-open for Concord kinds.
+        const results = await Promise.allSettled(
+          STOCK_RELAYS.map((url) => nostr.relay(url).event(event, { signal: AbortSignal.timeout(8000) })),
+        );
+        if (!results.some((r) => r.status === "fulfilled")) {
+          throw new Error("No relay accepted your community list update.");
+        }
+      }
       return next;
     },
     onSuccess: () => {
