@@ -589,7 +589,10 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           onScroll={handleScroll}
           className="h-full overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable"
         >
-          <div ref={contentRef}>
+          {/* Top padding leaves room for the root message's floated hover
+              toolbar, which sits above its row's top edge and would otherwise
+              be clipped by the scroll viewport's top. */}
+          <div ref={contentRef} className="pt-3">
             {listHeader}
             {!isLoading && replies.map((reply, index) => {
               // Collapse consecutive same-author replies within a short window
