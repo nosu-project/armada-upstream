@@ -223,7 +223,7 @@ function ThreadMessage({
         <div
           {...longPress}
           className={cn(
-            "group/threadmsg relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors",
+            "group/threadmsg relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
             continuation ? "py-0.5" : "py-1.5",
             sheetOpen && "bg-secondary/40",
           )}
@@ -317,7 +317,13 @@ function ThreadMessage({
               the row's right edge, so the narrow panel width doesn't bound it).
               On touch the long-press sheet replaces it. */}
           {!isTouch && !isEditing ? (
-            <div className="absolute right-1.5 top-1 flex items-center opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity">
+            // Floated panel above the row's top-right edge — solid background,
+            // border and lift so it stays legible over whatever it overlaps,
+            // matching the timeline's toolbar (MessageRow).
+            <div className={cn(
+              "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity",
+              continuation ? "-top-3" : "-top-2.5",
+            )}>
               <MessageActionToolbar
                 reactions={canReact ? reactions : undefined}
                 zap={canZap ? { disabled: zapDisabled, onOpen: () => setZapOpen(true) } : undefined}
