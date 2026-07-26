@@ -1,6 +1,6 @@
 # Armada
 
-> **Canonical repository:** [gitworkshop.dev/soapbox@ditto.pub/armada](https://gitworkshop.dev/soapbox@ditto.pub/armada) — the GitLab repository is a read-only mirror.
+> **Canonical repository:** [gitworkshop.dev/soapbox.pub/armada](https://gitworkshop.dev/soapbox.pub/armada) — the GitLab repository is a read-only mirror.
 
 Discord without the company. **No host required.** Your keys, your people.
 
