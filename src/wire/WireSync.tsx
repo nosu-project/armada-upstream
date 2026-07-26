@@ -37,7 +37,7 @@ import type { GitRepositoryWireInput } from "@/wire/spec";
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /**
  * Floor for a relay's `since` when we have no cursor yet (fresh device): a
@@ -342,32 +342,34 @@ export function WireSync() {
   };
 
   // ── Web sockets: one REQ per relay, resumed from the persisted cursor ─────
+  // Loops are diffed PER RELAY rather than keyed on the whole spec: the spec
+  // settles several times during startup as its inputs resolve (groupList,
+  // followData, concordData, concord2 folds, git repositories, git ticket
+  // roots), and tearing down every relay's standing REQ on each settle aborted
+  // catch-up replays mid-flight and re-issued/re-authed every subscription —
+  // most with identical filters. Only relays whose own filter set changed are
+  // restarted; the rest keep their round and cursor untouched.
+  const loopsRef = useRef(new Map<string, { sig: string; stop: () => void; bump: () => void }>());
+  const loopsOwnerRef = useRef<{ nostr: unknown; pubkey?: string } | null>(null);
+  // Explicit-`since` filters (git child / CI bootstrap timestamps) that have
+  // completed a stored replay this session, keyed relay + filter shape.
+  // Honoring the deep root-based `since` on EVERY loop start re-downloaded the
+  // full comment/status/CI history each time the relay's filters changed; once
+  // a bootstrap replay reaches EOSE that history is in the store, and later
+  // rounds resume from the relay cursor like every other filter.
+  const bootstrappedRef = useRef(new Set<string>());
+
   useEffect(() => {
-    if (!user || spec.subs.length === 0) return;
-    const controller = new AbortController();
+    const loops = loopsRef.current;
 
-    // Per-relay "restart your round now" hooks: aborts the in-flight round and
-    // skips any backoff sleep, so the loop re-REQs immediately. Driven by the
-    // socket-reopen signal below.
-    const bumps = new Map<string, () => void>();
-    const offReopen = onRelayReopened((url) => bumps.get(url)?.());
-
-    // A backgrounded browser tab has its timers throttled and its sockets
-    // idled by the engine, so the watchdog's re-REQ (30s/90s) stretches to
-    // minutes and a silently-dead subscription isn't noticed until long after
-    // the user returns. Kick every relay's round the instant the tab becomes
-    // visible again: an immediate re-REQ from the cursor is lossless and
-    // drains anything the throttled round missed, so refocus is prompt instead
-    // of waiting out a throttled watchdog tick.
-    const onVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      for (const bump of bumps.values()) bump();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-
-    for (const { relay, filters } of spec.subs) {
+    const startRelayLoop = (relay: string, filters: NostrFilter[]) => {
+      const controller = new AbortController();
+      // "Restart your round now": aborts the in-flight round and skips any
+      // backoff sleep, so the loop re-REQs immediately. Reassigned each round;
+      // driven by the socket-reopen / tab-visibility effect below.
+      let bumpRound = () => {};
       void (async () => {
-        // Resubscribe with backoff for the effect's lifetime. NRelay1 keeps
+        // Resubscribe with backoff for the loop's lifetime. NRelay1 keeps
         // the SOCKET alive across drops, but a relay-initiated CLOSED (an
         // auth-gating relay rejecting the REQ before AUTH lands, a policy
         // refusal) terminates the req generator and nothing brings the
@@ -376,7 +378,7 @@ export function WireSync() {
         // until restart. Each fresh REQ gets a new sub id and with it a fresh
         // auth-retry from the pool, so the wire heals as soon as AUTH lands.
         let backoff = 1_000;
-        // Signal-aware, bump-aware sleep: effect cleanup or a socket reopen
+        // Signal-aware, bump-aware sleep: loop teardown or a socket reopen
         // resolves it early so the retry never lags behind a live socket.
         let wakeSleep: (() => void) | undefined;
         const sleep = (ms: number) =>
@@ -415,11 +417,11 @@ export function WireSync() {
           //   - a socket reopen bumps the round immediately (see relayReopen).
           const round = new AbortController();
           const roundSignal = AbortSignal.any([controller.signal, round.signal]);
-          bumps.set(relay, () => {
+          bumpRound = () => {
             logSync("wire", `${relay}: socket reopened — restarting round`);
             round.abort();
             wakeSleep?.();
-          });
+          };
           let sawAnything = false;
           // Whether the round's stored replay has finished (EOSE seen): events
           // after it are LIVE arrivals. Ingest uses this to keep replayed DM
@@ -439,11 +441,16 @@ export function WireSync() {
               round.abort();
             }
           }, WATCHDOG_TICK_MS);
-          const bootstrapRound = firstRound;
-          if (bootstrapRound) {
+          if (firstRound) {
             logSync("wire", `${relay}: round open (since=${since}, ${filters.length} filter(s))`);
             firstRound = false;
           }
+          // Partition out explicit-`since` filters still awaiting their
+          // bootstrap replay: they keep their deep timestamp for this round;
+          // everything else — and every filter afterwards — takes the cursor.
+          const bootKey = (f: NostrFilter) => `${relay}\u0000${JSON.stringify(f)}`;
+          const pending = filters.filter((f) => f.since !== undefined && !bootstrappedRef.current.has(bootKey(f)));
+          const settled = pending.length === 0 ? filters : filters.filter((f) => !pending.includes(f));
           // Pre-EOSE events are a stored replay — buffer them and flush in
           // batches (see REPLAY_BATCH_MAX); post-EOSE events are live and
           // ingest one-by-one as they arrive.
@@ -459,10 +466,7 @@ export function WireSync() {
           try {
             try {
               for await (const msg of nostr.relay(relay).req(
-                // A newly-added Git child filter carries a root-based bootstrap
-                // timestamp. Honor it for this first round; later rotations use
-                // the relay cursor as normal.
-                stampRoundSince(filters, since, now, bootstrapRound),
+                [...stampRoundSince(settled, since, now), ...stampRoundSince(pending, since, now, true)],
                 { signal: roundSignal },
               )) {
                 sawAnything = true;
@@ -470,6 +474,9 @@ export function WireSync() {
                 if (msg[0] === "EOSE") {
                   await flushReplay();
                   eosed = true;
+                  // Bootstrap replay complete. Marked only at EOSE, so a round
+                  // torn down mid-replay retries the deep `since` next round.
+                  for (const f of pending) bootstrappedRef.current.add(bootKey(f));
                 }
                 if (msg[0] === "EVENT") {
                   backoff = 1_000;
@@ -511,15 +518,57 @@ export function WireSync() {
           backoff = Math.min(backoff * 2, 60_000);
         }
       })();
+      return {
+        sig: JSON.stringify(filters),
+        stop: () => controller.abort(),
+        bump: () => bumpRound(),
+      };
+    };
+
+    // A new pool or user invalidates every loop's captured socket/auth context.
+    if (loopsOwnerRef.current?.nostr !== nostr || loopsOwnerRef.current?.pubkey !== user?.pubkey) {
+      for (const loop of loops.values()) loop.stop();
+      loops.clear();
+      loopsOwnerRef.current = { nostr, pubkey: user?.pubkey };
     }
+    const desired = new Map<string, NostrFilter[]>(user ? spec.subs.map(({ relay, filters }) => [relay, filters]) : []);
+    for (const [relay, loop] of loops) {
+      const filters = desired.get(relay);
+      if (!filters || JSON.stringify(filters) !== loop.sig) {
+        loop.stop();
+        loops.delete(relay);
+      }
+    }
+    for (const [relay, filters] of desired) {
+      if (!loops.has(relay)) loops.set(relay, startRelayLoop(relay, filters));
+    }
+    // Loops deliberately outlive this effect (the teardown effect below owns
+    // them); re-diff only when the actual subscription set changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nostr, user?.pubkey, spec.sig]);
+
+  // A backgrounded browser tab has its timers throttled and its sockets
+  // idled by the engine, so the watchdog's re-REQ (30s/90s) stretches to
+  // minutes and a silently-dead subscription isn't noticed until long after
+  // the user returns. Kick every relay's round the instant the tab becomes
+  // visible again: an immediate re-REQ from the cursor is lossless and
+  // drains anything the throttled round missed, so refocus is prompt instead
+  // of waiting out a throttled watchdog tick. Socket reopens kick just the
+  // affected relay's round the same way (see relayReopen.ts).
+  useEffect(() => {
+    const offReopen = onRelayReopened((url) => loopsRef.current.get(url)?.bump());
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      for (const loop of loopsRef.current.values()) loop.bump();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       offReopen();
-      controller.abort();
+      for (const loop of loopsRef.current.values()) loop.stop();
+      loopsRef.current.clear();
     };
-    // Resubscribe only when the actual subscription set changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, spec.sig]);
+  }, []);
 
   // ── APK bridge: the persistent service is a funnel into the same ingest ──
   useEffect(() => {
