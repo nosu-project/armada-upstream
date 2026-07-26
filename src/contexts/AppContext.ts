@@ -169,6 +169,15 @@ export interface AppConfig {
    */
   dmProtocol: Record<string, "auto" | "nip17" | "nip04">;
   /**
+   * Pinned direct-message conversations, as hex pubkeys, in PIN order — a
+   * newly pinned peer is appended, so the pinned section keeps the order the
+   * user built rather than re-sorting by message recency (Signal's behavior).
+   * Pinned conversations render in their own section above the rest of the
+   * list. Raw pubkeys, not `dm:`-scoped keys: this list holds nothing but DM
+   * peers. Synced across devices.
+   */
+  pinnedDms: string[];
+  /**
    * Bluetooth-mesh incognito mode. When on (the default), this device announces
    * a derived `anon<peerid>` nickname over the mesh rather than the user's
    * Armada display name — matching bitchat's anonymous-by-default behavior.
@@ -234,6 +243,7 @@ export const SYNCED_CONFIG_KEYS = [
   "mutedChannels",
   "notifLevels",
   "dmProtocol",
+  "pinnedDms",
   "defaultZapAmount",
   "defaultZapMethod",
   "zapsEnabled",
@@ -259,6 +269,7 @@ export const defaultConfig: AppConfig = {
   mutedChannels: [],
   notifLevels: {},
   dmProtocol: {},
+  pinnedDms: [],
   meshIncognito: true,
   meshEnabled: false,
   defaultZapAmount: 100,

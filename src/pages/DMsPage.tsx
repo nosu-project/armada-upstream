@@ -1,6 +1,6 @@
-import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
@@ -35,6 +35,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -66,6 +72,7 @@ import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLevels";
+import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
@@ -151,7 +158,9 @@ function ConversationRow({
   query,
   messageMatch,
   active,
+  pinned,
   onClick,
+  onTogglePin,
 }: {
   peer: string;
   preview: NostrEvent | undefined;
@@ -163,7 +172,9 @@ function ConversationRow({
   query: string;
   messageMatch: string | undefined;
   active: boolean;
+  pinned: boolean;
   onClick: () => void;
+  onTogglePin: () => void;
 }) {
   const author = useAuthor(peer);
   const metadata = author.data?.metadata;
@@ -197,61 +208,78 @@ function ConversationRow({
   const secondLineHighlight = q && secondLine ? secondLine.toLowerCase().includes(q) : false;
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        // Scaled up relative to a channel row: this is a contact list, so the
-        // avatar carries recognition and the preview line has to be readable at
-        // a glance rather than merely present.
-        "flex items-center gap-3 w-full px-2.5 py-2.5 rounded-lg text-left transition-colors",
-        active ? "bg-secondary" : "hover:bg-secondary/60",
-      )}
-    >
-      <Avatar shape={getAvatarShape(metadata)} className="size-12 shrink-0">
-        <AvatarImage src={metadata?.picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-primary text-base">
-          {name[0]?.toUpperCase()}
-        </AvatarFallback>
-      </Avatar>
-      <div className="min-w-0 flex-1 space-y-0.5">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <div className={cn("text-[15px] truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
-            {q ? (
-              <Highlight text={name} query={query} emojiTags={author.data?.event?.tags} />
-            ) : (
-              <DisplayName pubkey={peer} name={name} />
-            )}
-          </div>
-          <BotPill metadata={metadata} />
-        </div>
-        {(preview || secondLine) && (
-          <div className={cn("text-sm truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
-            {secondLine ? (
-              <Highlight
-                text={secondLine}
-                query={secondLineHighlight ? query : ""}
-                emojiTags={preview?.tags}
-              />
-            ) : (
-              "Encrypted message"
-            )}
-          </div>
-        )}
-      </div>
-      {inCall ? (
-        <span
-          className="shrink-0 flex size-6 items-center justify-center rounded-full bg-success text-success-foreground"
-          aria-label="Voice call in progress"
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          className={cn(
+            // Scaled up relative to a channel row: this is a contact list, so
+            // the avatar carries recognition and the preview line has to be
+            // readable at a glance rather than merely present.
+            "flex items-center gap-3 w-full px-2.5 py-2.5 rounded-lg text-left transition-colors",
+            active ? "bg-secondary" : "hover:bg-secondary/60",
+          )}
         >
-          <Headphones className="size-3.5" />
-        </span>
-      ) : othersInVoice ? (
-        <VoicePresence participants={others} className="text-success/90" />
-      ) : unread ? (
-        <span className="shrink-0 size-2.5 rounded-full bg-primary" aria-label="Unread messages" />
-      ) : null}
-    </button>
+          <Avatar shape={getAvatarShape(metadata)} className="size-12 shrink-0">
+            <AvatarImage src={metadata?.picture} alt={name} />
+            <AvatarFallback className="bg-primary/20 text-primary text-base">
+              {name[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <div className={cn("text-[15px] truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
+                {q ? (
+                  <Highlight text={name} query={query} emojiTags={author.data?.event?.tags} />
+                ) : (
+                  <DisplayName pubkey={peer} name={name} />
+                )}
+              </div>
+              <BotPill metadata={metadata} />
+            </div>
+            {(preview || secondLine) && (
+              <div className={cn("text-sm truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
+                {secondLine ? (
+                  <Highlight
+                    text={secondLine}
+                    query={secondLineHighlight ? query : ""}
+                    emojiTags={preview?.tags}
+                  />
+                ) : (
+                  "Encrypted message"
+                )}
+              </div>
+            )}
+          </div>
+          {inCall ? (
+            <span
+              className="shrink-0 flex size-6 items-center justify-center rounded-full bg-success text-success-foreground"
+              aria-label="Voice call in progress"
+            >
+              <Headphones className="size-3.5" />
+            </span>
+          ) : othersInVoice ? (
+            <VoicePresence participants={others} className="text-success/90" />
+          ) : unread ? (
+            <span className="shrink-0 size-2.5 rounded-full bg-primary" aria-label="Unread messages" />
+          ) : null}
+        </button>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        <ContextMenuItem onSelect={onTogglePin}>
+          {pinned ? (
+            <>
+              <PinOff className="mr-2 size-4" /> Unpin
+            </>
+          ) : (
+            <>
+              <Pin className="mr-2 size-4" /> Pin
+            </>
+          )}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -1449,6 +1477,29 @@ function ConversationRowSkeletons() {
   );
 }
 
+/**
+ * A section label inside the conversation list ("Pinned" / "Recent"),
+ * formatted like the pane's own "Messages" header one size down.
+ */
+function ConversationSectionHeader({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "px-2.5 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 function ConversationList({
   rows,
   previews,
@@ -1521,6 +1572,49 @@ function ConversationList({
     [dmRelays],
   );
   const { data: voiceRelay } = useDmVoiceRelay(voiceCandidates);
+
+  // Pinned conversations are lifted into their own section above the rest,
+  // ordered by when they were pinned rather than by message recency — so a
+  // pinned row holds its place as traffic arrives elsewhere.
+  const { pinned: pinnedPeers, isPinned, togglePin } = usePinnedDms();
+  const [pinnedRows, otherRows] = useMemo(() => {
+    const pinnedSet = new Set(pinnedPeers);
+    const order = new Map(pinnedPeers.map((peer, i) => [peer, i]));
+    const top = rows.filter((c) => pinnedSet.has(c.peer));
+    const rest = rows.filter((c) => !pinnedSet.has(c.peer));
+    top.sort((a, b) => (order.get(a.peer) ?? 0) - (order.get(b.peer) ?? 0));
+    return [top, rest];
+  }, [rows, pinnedPeers]);
+
+  // While searching the list is a flat result set: a row hides itself when it
+  // matches neither the contact nor any decrypted message (the parent can't
+  // know which rows survive), so a section header here could end up labelling
+  // nothing.
+  const sectioned = search.trim().length === 0 && pinnedRows.length > 0;
+
+  const renderRow = (c: (typeof rows)[number]) => (
+    <ConversationRow
+      key={c.peer}
+      peer={c.peer}
+      preview={c.latest}
+      previewText={c.plaintext ?? previews[c.peer]}
+      query={search}
+      messageMatch={messageMatches.get(c.peer)?.text}
+      unread={
+        Boolean(c.latest) &&
+        c.latest.pubkey !== user?.pubkey &&
+        c.latest.created_at > getLastRead(dmReadKey(c.peer)) &&
+        c.peer !== activePeer
+      }
+      active={c.peer === activePeer}
+      pinned={isPinned(c.peer)}
+      inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.peer}
+      selfPubkey={user?.pubkey}
+      voiceRelay={voiceRelay ?? undefined}
+      onClick={() => openPeer(c.peer)}
+      onTogglePin={() => togglePin(c.peer)}
+    />
+  );
 
   // Register this pane's slot so the persistent call bar portals above the
   // account pill on desktop (mirrors ChannelSidebar). The mobile fixed bottom
@@ -1667,27 +1761,18 @@ function ConversationList({
           </p>
         ) : (
           <>
-            {rows.map((c) => (
-              <ConversationRow
-                key={c.peer}
-                peer={c.peer}
-                preview={c.latest}
-                previewText={c.plaintext ?? previews[c.peer]}
-                query={search}
-                messageMatch={messageMatches.get(c.peer)?.text}
-                unread={
-                  Boolean(c.latest) &&
-                  c.latest.pubkey !== user?.pubkey &&
-                  c.latest.created_at > getLastRead(dmReadKey(c.peer)) &&
-                  c.peer !== activePeer
-                }
-                active={c.peer === activePeer}
-                inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.peer}
-                selfPubkey={user?.pubkey}
-                voiceRelay={voiceRelay ?? undefined}
-                onClick={() => openPeer(c.peer)}
-              />
-            ))}
+            {sectioned ? (
+              <>
+                <ConversationSectionHeader className="pt-1">Pinned</ConversationSectionHeader>
+                {pinnedRows.map(renderRow)}
+                {otherRows.length > 0 && (
+                  <ConversationSectionHeader>Recent</ConversationSectionHeader>
+                )}
+                {otherRows.map(renderRow)}
+              </>
+            ) : (
+              [...pinnedRows, ...otherRows].map(renderRow)
+            )}
             {isLoadingMore && (
               <div className="flex justify-center py-3">
                 <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -1743,6 +1828,7 @@ export function DMsPage() {
   // an explicit save in Settings).
   useAdoptDmInbox();
   const { data: followData, isLoading: followsLoading } = useFollowList();
+  const { isPinned } = usePinnedDms();
   const [composing, setComposing] = useState(false);
   // The conversation list is narrowed to people the user follows (kind 3) plus
   // anyone the user has messaged — unsolicited DMs from strangers are never
@@ -1829,14 +1915,18 @@ export function DMsPage() {
     }
     let list = [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
     // Followed peers, conversations the viewer started (so a thread you opened
-    // with someone you don't follow doesn't vanish when you close it), and the
-    // open peer are kept; unsolicited stranger DMs stay hidden.
-    list = list.filter((c) => followedPubkeys.has(c.peer) || c.mine || c.peer === activePeer);
+    // with someone you don't follow doesn't vanish when you close it), pinned
+    // peers (an explicit "keep this one" that must outlive an unfollow), and
+    // the open peer are kept; unsolicited stranger DMs stay hidden.
+    list = list.filter(
+      (c) =>
+        followedPubkeys.has(c.peer) || c.mine || c.peer === activePeer || isPinned(c.peer),
+    );
     if (activePeer && !list.some((c) => c.peer === activePeer)) {
       list.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent, mine: false });
     }
     return list;
-  }, [conversations, dm17Conversations, activePeer, followedPubkeys]);
+  }, [conversations, dm17Conversations, activePeer, followedPubkeys, isPinned]);
 
   // The list as it was last rendered, restored synchronously. Because what was
   // stored is the merged/filtered/sorted OUTCOME — not any one source's partial
