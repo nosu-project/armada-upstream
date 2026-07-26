@@ -540,7 +540,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   const isTouch = useIsTouch();
   // Typing indicators ride the ephemeral NIP-17 plane, so they're only
   // available where that plane is: a legacy kind-4 thread has no envelope to
-  // carry them. Opt-in and nsec-only on top of that — see useDmTyping.
+  // carry them. Subject to the user's `dmTypingIndicators` — see useDmTyping.
   const { typers, publishTyping } = useDmTyping(peer, dm17Enabled);
 
   // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no

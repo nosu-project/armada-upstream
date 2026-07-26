@@ -389,17 +389,9 @@ export function SettingsPage() {
             )}
             <SettingsRow
               label="Typing indicators"
-              description={
-                user && user.method !== "nsec"
-                  ? "Unavailable on extension and remote signers — every signal would need a separate approval."
-                  : "Show when the other person is typing, and let them see when you are. Sends a small encrypted signal every few seconds while you type, so your relays can tell the conversation is active right now."
-              }
+              description="Show when the other person is typing, and let them see when you are. Sends a small encrypted signal every few seconds while you type, so your relays can tell the conversation is active right now."
             >
-              <Switch
-                checked={config.dmTypingIndicators}
-                onCheckedChange={setDmTypingIndicators}
-                disabled={!!user && user.method !== "nsec"}
-              />
+              <Switch checked={config.dmTypingIndicators} onCheckedChange={setDmTypingIndicators} />
             </SettingsRow>
             {effective.length > 0 ? (
               <SettingsRow

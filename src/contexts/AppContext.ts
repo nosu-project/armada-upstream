@@ -170,18 +170,16 @@ export interface AppConfig {
   dmProtocol: Record<string, "auto" | "nip17" | "nip04">;
   /**
    * Whether to send and show typing indicators in direct messages (kind-23311
-   * rumors in ephemeral kind-21059 wraps — see `useDmTyping`). OFF by default,
-   * and deliberately so: a signal every few seconds tells the relays that this
-   * conversation is live RIGHT NOW, which the ordinary DM flow (batched, and
-   * backdated up to two days by NIP-59) does not reveal. It's a metadata
-   * tradeoff the user opts into, never one made for them. Reciprocal in the
-   * Signal sense only by construction — turning it off stops our own signals
-   * AND tears down the subscription, so we neither send nor see them.
+   * rumors in ephemeral kind-21059 wraps — see `useDmTyping`). ON by default.
+   * Worth knowing what it costs: a signal every few seconds tells the relays
+   * that this conversation is live RIGHT NOW, which the ordinary DM flow
+   * (batched, and backdated up to two days by NIP-59) does not reveal. Turn it
+   * off to get that back. Reciprocal in the Signal sense by construction —
+   * turning it off stops our own signals AND tears down the subscription, so
+   * we neither send nor see them.
    *
-   * Has no effect on prompting signers (NIP-07 extension / NIP-46 bunker):
-   * the per-signal sign+encrypt would be an approval storm, so the hook
-   * requires a local `nsec` login regardless of this flag. Synced across
-   * devices.
+   * Applies to every login that can do NIP-44, remote signers included.
+   * Synced across devices.
    */
   dmTypingIndicators: boolean;
   /**
@@ -286,7 +284,7 @@ export const defaultConfig: AppConfig = {
   mutedChannels: [],
   notifLevels: {},
   dmProtocol: {},
-  dmTypingIndicators: false,
+  dmTypingIndicators: true,
   pinnedDms: [],
   meshIncognito: true,
   meshEnabled: false,

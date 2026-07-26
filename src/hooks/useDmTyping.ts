@@ -14,17 +14,10 @@
  *     published to the peer's kind-10050 inbox ∪ our own DM relays, the same
  *     targets a message wrap goes to.
  *
- * Two things gate this, both deliberately conservative:
- *
- *   - The user must opt in (`config.dmTypingIndicators`, default off). A steady
- *     signal every few seconds tells the relay that this conversation is live
- *     RIGHT NOW, at a resolution the ordinary DM flow — batched and backdated up
- *     to two days by NIP-59 — does not give it. That's a real metadata
- *     regression, so it isn't made for anyone silently.
- *   - The signer must not prompt (`nsec` logins only). Every signal costs a
- *     nip44 encrypt plus a signEvent, and every received one costs two
- *     decrypts; on a NIP-07 extension or a NIP-46 bunker that's an approval
- *     storm every few seconds, which is worse than having no feature.
+ * One thing gates this: `config.dmTypingIndicators`. Every login that can do
+ * NIP-44 participates — the send path is throttled to one signal per
+ * TYPING_THROTTLE_MS and a missed signal costs nothing, so there is no signer
+ * fast enough to require and none slow enough to have to exclude.
  */
 
 import { useNostr } from "@nostrify/react";
@@ -34,7 +27,6 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList, useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import {
   buildDmRumor,
   dmTypingTags,
@@ -81,13 +73,9 @@ export function useDmTyping(peer: string | undefined, enabled = true): DmTyping 
   const lastSent = useRef(0);
 
   const self = user?.pubkey;
-  // Silent signers only: see the module doc. `nsec` is the one login that
-  // encrypts and signs inline with an in-memory key.
-  const silentSigner = !!user && !signerNeedsApproval(user.method);
   const on =
     enabled &&
     config.dmTypingIndicators &&
-    silentSigner &&
     !!self &&
     !!peer &&
     // A note-to-self thread would just show us our own indicator.
@@ -142,8 +130,13 @@ export function useDmTyping(peer: string | undefined, enabled = true): DmTyping 
           )) {
             if (msg[0] === "EVENT") void apply(msg[2] as NostrEvent);
           }
-        } catch {
-          // Subscription ended (abort, relay closed, or no ephemeral support).
+        } catch (err) {
+          // Teardown aborts every sub; only a real failure is worth reporting.
+          // A relay that rejects kind 21059 (or the filter) surfaces here, and
+          // silence made that indistinguishable from "nobody is typing".
+          if (!controller.signal.aborted) {
+            console.warn(`[dm-typing] subscription to ${url} ended:`, err);
+          }
         }
       })();
     }
