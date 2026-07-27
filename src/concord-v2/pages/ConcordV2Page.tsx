@@ -1195,10 +1195,14 @@ export function ConcordV2Page() {
   // The community-name header menu (Discord-style): expands inline below the
   // header, pushing the channel list down with a height animation.
   const [communityMenuOpen, setCommunityMenuOpen] = useState(false);
-  /** Member roster pane. Defaults OFF on touch devices (a landscape phone
-   * crosses the 900px breakpoint but is too short to spare the roster width);
-   * openable from the header toggle. On real desktop it stays on. */
-  const [membersVisible, setMembersVisible] = useState(() => !isTouchDevice);
+  /** Member roster pane, persisted in app config (`memberListVisible`). Defaults
+   * OFF on touch devices (a landscape phone crosses the 900px breakpoint but is
+   * too short to spare the roster width); openable from the header toggle. On
+   * real desktop it stays on. Once the user hides or shows it, that choice is
+   * remembered across visits. */
+  const membersVisible = config.memberListVisible ?? !isTouchDevice;
+  const toggleMembersVisible = () =>
+    updateConfig((c) => ({ ...c, memberListVisible: !(c.memberListVisible ?? !isTouchDevice) }));
   const [membersOpen, setMembersOpen] = useState(false);
   // Header message search: expands inline over the header, swapping the timeline
   // for community-wide (cross-channel) results while active. `searchFilters`
@@ -2034,7 +2038,7 @@ export function ConcordV2Page() {
                     className={cn("size-8 hidden sidebar:inline-flex text-muted-foreground", membersVisible && "text-foreground")}
                     aria-label={membersVisible ? "Hide members" : "Show members"}
                     aria-pressed={membersVisible}
-                    onClick={() => setMembersVisible((v) => !v)}
+                    onClick={toggleMembersVisible}
                   >
                     <Users className="size-4" />
                   </Button>
