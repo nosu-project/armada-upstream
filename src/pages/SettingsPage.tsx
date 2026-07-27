@@ -375,12 +375,12 @@ export function SettingsPage() {
             >
               <Switch checked={config.useAppRelays} onCheckedChange={setUseAppRelays} />
             </SettingsRow>
-            {!config.useAppRelays && (
+            {!config.useAppRelays && !(config.useUserRelays && userRelayUrls.length > 0) && (
               <SettingsRow>
                 <p className="text-sm text-destructive leading-snug">
-                  App relays are off. Your profile, follow lists, and emoji packs
-                  won't load or sync unless your own relays (NIP-65) or joined
-                  servers can carry them.
+                  App relays are off and you have no personal relays (NIP-65).
+                  Your profile, follow lists, and emoji packs won't load or sync
+                  unless your joined servers can carry them.
                 </p>
               </SettingsRow>
             )}
