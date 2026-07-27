@@ -751,39 +751,11 @@ export function useRefound2(community: CommunityV2 | undefined) {
         blobs.push({ locator: myLocator(user.pubkey, pk, "0".repeat(64), newEpoch), wrapped });
       }
 
-      // 1. Compaction FIRST: re-wrap each entity's current head under the new
-      // epoch (plaintext seals keep the original signatures verifiable).
-      //
-      // These wraps are addressed at a key nobody holds yet, so until the roll
-      // below hands `newRoot` out they are undiscoverable and undecryptable —
-      // inert. That makes the ROLL the commit point: if any head fails to land
-      // we abort before the epoch exists at all, instead of announcing an epoch
-      // whose plane is missing entities. Readers sweep the current epoch only,
-      // so a head that never landed would be gone for every later joiner.
-      // A retry re-mints a root and re-publishes; the orphans stay inert.
-      const newControl = controlGroupKey(newRoot, community.id, newEpoch);
-      for (const head of folded.headEditions.values()) {
-        let rewrapped: NostrEvent;
-        try {
-          rewrapped = rewrapSeal(head.opened.seal, newControl);
-        } catch {
-          // An encrypted-seal head can't re-wrap; control heads are plaintext
-          // by construction, so this is defensive only.
-          continue;
-        }
-        const results = await Promise.allSettled(
-          community.relays.map((url) => nostr.relay(url).event(rewrapped, { signal: AbortSignal.timeout(8000) })),
-        );
-        // Gate on an ack: a head that fails to land is not recoverable later,
-        // so abort while the epoch is still unannounced.
-        if (!results.some((r) => r.status === "fulfilled")) {
-          throw new Error("No relay accepted the community's state during rotation; nothing was lost, try again.");
-        }
-      }
-
-      // 2. The root roll: rekey blobs at the base address under the PRIOR root.
-      // This is the commit — the first thing any member can see, and the only
-      // thing that makes the compaction above readable.
+      // 1. The root roll: rekey blobs at the base address under the PRIOR root.
+      // CORD-06 §3 orders this FIRST and republishes the compaction "only after
+      // confirmed publication of the root roll". The gap it leaves is the one
+      // the spec chose: existing members already hold the new root and keep
+      // their old Control fold, so only a fresh joiner waits on the re-anchor.
       const address = baseRekeyGroupKey(community.root, community.id, newEpoch);
       const rumors = buildRekeyRumors(
         user.pubkey,
@@ -801,7 +773,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
         }
       }
 
-      // 2a. Record the epoch NOW, not at the end. The roll is the commit: every
+      // 1a. Record the epoch NOW, not at the end. The roll is the commit: every
       // keeper can already see and adopt it. Leaving the local entry behind
       // until the whole mutation finishes means a later step throwing (a
       // channel the relays refuse) leaves this client believing it is still at
@@ -825,6 +797,34 @@ export function useRefound2(community: CommunityV2 | undefined) {
           { prior: entry?.current, relays: entry?.current.relays },
         ),
       });
+
+      // 2. Compaction, only after the roll published (CORD-06 §3): re-wrap
+      // each entity's current head under the new epoch. Plaintext seals keep
+      // the original signatures verifiable, so a fresh joiner can check them.
+      //
+      // Each head is ack-gated. Readers sweep the current epoch only, so a head
+      // that never lands is gone for every later joiner, and the reserved root
+      // means a resumed rotation re-publishes these same wraps rather than
+      // orphaning them under a sibling key (§3 idempotency).
+      const newControl = controlGroupKey(newRoot, community.id, newEpoch);
+      for (const head of folded.headEditions.values()) {
+        let rewrapped: NostrEvent;
+        try {
+          rewrapped = rewrapSeal(head.opened.seal, newControl);
+        } catch {
+          // An encrypted-seal head can't re-wrap; control heads are plaintext
+          // by construction, so this is defensive only.
+          continue;
+        }
+        const results = await Promise.allSettled(
+          community.relays.map((url) => nostr.relay(url).event(rewrapped, { signal: AbortSignal.timeout(8000) })),
+        );
+        // Gate on an ack: a head that fails to land is not recoverable later,
+        // so abort while the epoch is still unannounced.
+        if (!results.some((r) => r.status === "fulfilled")) {
+          throw new Error("No relay accepted the community's state during rotation; nothing was lost, try again.");
+        }
+      }
 
       // 2b. Rotate every held Private Channel (CORD-06 §3: "all Private
       // Channels relevant to the removed user(s) are rekeyed"). This client
