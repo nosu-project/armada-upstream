@@ -45,6 +45,17 @@ export const KIND_EDIT = 3302;
 export const KIND_ZAP = 9735;
 /** On-chain Bitcoin zap attribution (NIP-? §8333 shape, sealed as a rumor). */
 export const KIND_ONCHAIN_ZAP = 8333;
+/**
+ * Poll (CORD.md "Polls"): the NIP-88 kind-1068 poll, sealed as a Chat Plane
+ * rumor. Renders as a visible timeline message and is the `e`-target of votes.
+ */
+export const KIND_POLL = 1068;
+/**
+ * Poll vote (CORD.md "Polls"): the NIP-88 kind-1018 vote, an `e`-referencing
+ * side event sealed like a reaction. Tallied per poll (latest per pubkey wins),
+ * never shown as its own timeline row.
+ */
+export const KIND_POLL_VOTE = 1018;
 /** WebXDC peer signal. */
 export const KIND_WEBXDC = 3310;
 /** Typing indicator — ephemeral rumor (rides a 21059 wrap). */

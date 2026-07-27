@@ -14,8 +14,9 @@
 
 import type { NostrEvent } from "nostr-tools/pure";
 
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
+import type { PollVote } from "@/lib/polls";
 import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
@@ -179,6 +180,8 @@ export interface FoldedTimeline {
   reactions: Map<string, Map<string, ReactionEntry>>;
   /** target rumor id → VERIFIED zaps (CORD.md §4; unverified never enter). */
   zaps: Map<string, ZapEntry[]>;
+  /** poll rumor id → its raw votes (tallied per poll by the transport). */
+  pollVotes: Map<string, PollVote[]>;
 }
 
 /**
@@ -235,6 +238,11 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
   // author's legitimate one).
   const edits = new Map<string, Array<{ author: string; content: string; ms: number }>>();
   const reactions = new Map<string, Map<string, ReactionEntry>>();
+  // Raw votes bucketed by their poll's rumor id. Left untallied here (the
+  // transport folds them against each poll's declared options + endsAt), and
+  // kept even when the poll itself isn't in this window — an orphan vote resolves
+  // automatically once its poll decodes and the next fold re-runs.
+  const pollVotes = new Map<string, PollVote[]>();
   // Verified zap candidates, deduped by payment hash (Lightning) or txid
   // (on-chain) after the loop: an announced proof or txid is visible to every
   // member, so without this anyone could replay someone else's and inflate
@@ -338,9 +346,22 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
       });
       continue;
     }
-    if (ev.kind === KIND_MESSAGE || ev.kind === KIND_COMMENT) {
-      // kind-9 top-level messages and kind-1111 threaded replies both land in
-      // the timeline pool; the reader splits them by their NIP-22 root pointer.
+    if (ev.kind === KIND_POLL_VOTE) {
+      // A vote is an `e`-referencing side event (like a reaction): bucket it
+      // under its poll, latest-per-pubkey resolved by the tally downstream.
+      const target = eTargetOf(ev);
+      if (!target) continue;
+      const optionIds = ev.tags.filter(([n, v]) => n === "response" && v).map(([, v]) => v);
+      if (optionIds.length === 0) continue;
+      let list = pollVotes.get(target);
+      if (!list) pollVotes.set(target, (list = []));
+      list.push({ pubkey: ev.author, optionIds, ms: ev.ms });
+      continue;
+    }
+    if (ev.kind === KIND_MESSAGE || ev.kind === KIND_COMMENT || ev.kind === KIND_POLL) {
+      // kind-9 top-level messages, kind-1111 threaded replies, and kind-1068
+      // polls all land in the timeline pool; the reader splits them by their
+      // NIP-22 root pointer (a poll has none, so it's always top-level).
       byId.set(ev.rumorId, ev);
     }
   }
@@ -401,5 +422,6 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
     messages: [...byId.values()].sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1)),
     reactions,
     zaps,
+    pollVotes,
   };
 }

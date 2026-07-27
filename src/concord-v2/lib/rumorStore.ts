@@ -172,7 +172,7 @@ export function storedToOpenedChat(ev: NostrEvent, channelIdHex: string): Opened
 // ── Reads / writes ────────────────────────────────────────────────────────────
 
 /** All chat-plane rumor kinds we persist and fold. */
-const CHAT_KINDS = [5, 7, 9, 1111, 3302, 8333, 9735];
+const CHAT_KINDS = [5, 7, 9, 1018, 1068, 1111, 3302, 8333, 9735];
 
 /**
  * Read a channel's cached chat rumors, newest-first up to `limit`. A `channel`
@@ -274,7 +274,7 @@ export async function countChannelRumors(channelIdHex: string): Promise<number> 
 }
 
 /** Message kinds whose content is user-searchable: chat + NIP-22 thread comments. */
-const SEARCHABLE_KINDS = [9, 1111];
+const SEARCHABLE_KINDS = [9, 1068, 1111];
 
 /**
  * Upper bound on rumors scanned per search. The store has NO content index

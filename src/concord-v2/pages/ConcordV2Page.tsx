@@ -106,7 +106,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
 
 import { authorsByRecency, threadSummary } from "@/components/chat/transport";
-import type { ChatMsg, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
@@ -177,6 +177,8 @@ interface ChatMessage2Props {
   zaps: MessageZaps | undefined;
   onSendZap: ((target: ChatMsg, payment: ZapPayment) => Promise<void>) | undefined;
   onSendOnchainZap: ((target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>) | undefined;
+  /** Poll tally + vote callback when this message is a poll (kind 1068). */
+  poll: MessagePoll | undefined;
   /** This message's thread replies (stable ref from the transport), for the badge. */
   replies: ChatMsg[];
   continuation: boolean;
@@ -214,6 +216,7 @@ const ChatMessage2 = memo(function ChatMessage2({
   zaps,
   onSendZap,
   onSendOnchainZap,
+  poll,
   replies,
   continuation,
   canWrite,
@@ -258,6 +261,7 @@ const ChatMessage2 = memo(function ChatMessage2({
       zaps={zaps}
       onSendZap={onSendZap}
       onSendOnchainZap={onSendOnchainZap}
+      poll={poll}
       sendStatus={sendStatus}
       continuation={continuation}
       active={active}
@@ -2258,6 +2262,7 @@ export function ConcordV2Page() {
                         zaps={transport.zapsFor?.(msg.id)}
                         onSendZap={config.zapsEnabled ? transport.sendZap : undefined}
                         onSendOnchainZap={config.zapsEnabled ? transport.sendOnchainZap : undefined}
+                        poll={transport.pollFor?.(msg.id)}
                         replies={transport.threadRepliesFor?.(msg.id) ?? EMPTY_REPLIES}
                         continuation={continuation}
                         canWrite={transport.canWrite}
@@ -2359,6 +2364,7 @@ export function ConcordV2Page() {
                         conversationRelays={community?.relays}
                         placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                         sendOverride={handleSend}
+                        onPollSubmit={transport.sendPoll}
                         replyTo={replyTo}
                         replyMarker="nipc7"
                         onCancelReply={() => setReplyTo(undefined)}

@@ -16,6 +16,7 @@
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
 import type { SendStatus } from "@/hooks/useGroupMessages";
+import type { PollOption, PollTally, PollType } from "@/lib/polls";
 import type { ZapTally } from "@/lib/zaps";
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -99,6 +100,21 @@ export interface MessageReactions {
 /** Per-message zap state, resolved by the transport for one message. */
 export interface MessageZaps {
   tally: ZapTally;
+}
+
+/** Per-poll tally + vote callback, resolved by the transport for a poll message. */
+export interface MessagePoll {
+  tally: PollTally;
+  vote: (optionIds: string[]) => void;
+}
+
+/** A poll to publish, handed by the composer to a transport's {@link ChatTransport.sendPoll}. */
+export interface PollDraft {
+  question: string;
+  options: PollOption[];
+  pollType: PollType;
+  /** Days until the poll closes; 0 = no end. */
+  durationDays: number;
 }
 
 /**
@@ -225,6 +241,21 @@ export interface ChatTransport {
    * community/channel context). Absent = publish publicly via relays (NIP-29).
    */
   sendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
+
+  /**
+   * Resolved poll tally + vote callback for a poll (kind 1068) message id. Its
+   * presence lets a poll render its live results and accept votes. NIP-29
+   * carries polls through the relay-querying {@link import("./PollCard").PollCard}
+   * instead, so it omits this; Concord v2 supplies it from the sealed chat fold.
+   */
+  pollFor?: (id: string) => MessagePoll | undefined;
+  /**
+   * Publish a new poll as a chat-plane event (Concord v2 sealed rumor). Its
+   * presence enables the composer's poll mode on the delegated send path. NIP-29
+   * publishes polls directly to its host relay, so it omits this.
+   */
+  sendPoll?: (draft: PollDraft) => Promise<void>;
+
   /** Open the threaded-replies panel for a message. */
   openThread?: (event: ChatMsg, focusReply?: boolean) => void;
 

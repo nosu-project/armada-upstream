@@ -19,6 +19,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { BotCommandComposer } from "@/components/chat/BotCommandComposer";
 import { authorsByRecency } from "@/components/chat/transport";
+import type { PollDraft } from "@/components/chat/transport";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { firstImageRef } from "@/components/chat/messageHelpers";
@@ -62,6 +63,7 @@ import { resizeImage } from "@/lib/resizeImage";
 import { processVideo } from "@/lib/video/processVideo";
 import { invocationTags, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
+import { buildPollTags, KIND_POLL } from "@/lib/polls";
 import { cn } from "@/lib/utils";
 
 import type { AddrCoords } from "@/hooks/useEvent";
@@ -71,9 +73,6 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
 const LazyEmojiPicker = lazy(() => import("@/components/chat/EmojiPicker").then((m) => ({ default: m.EmojiPicker })));
-
-/** NIP-88 poll kind. */
-const KIND_POLL = 1068;
 
 /** How many recently used bot commands the `/` menu keeps, per account. */
 const BOT_RECENTS_CAP = 8;
@@ -253,8 +252,9 @@ interface ChatComposerProps {
    * When provided, the composer sends via this callback (with the final text,
    * including any appended attachment URLs) instead of publishing a NIP-29
    * kind-9 group message. Used by DMs, where the whole content is encrypted
-   * and NIP-29 group tagging / polls don't apply. Poll mode is hidden in this
-   * mode. The returned promise resolving means "sent" (composer is reset).
+   * and NIP-29 group tagging doesn't apply. Poll mode is hidden in this mode
+   * unless {@link onPollSubmit} is supplied (Concord seals polls too). The
+   * returned promise resolving means "sent" (composer is reset).
    *
    * `tags` carries the content-derived NIP-30 emoji / NIP-92 imeta / NIP-27
    * mention / NIP-10 reply tags the composer built for this message, so an
@@ -262,6 +262,13 @@ interface ChatComposerProps {
    * emoji, media and mentions just like NIP-29 does.
    */
   sendOverride?: (finalText: string, tags: string[][]) => Promise<void>;
+  /**
+   * Publish a composed poll through a delegated path (Concord v2 seals it as a
+   * Chat Plane rumor). Its presence re-enables poll mode alongside
+   * `sendOverride` — without it, `sendOverride` hides poll mode (a plain DM has
+   * no polls). NIP-29 omits it and publishes polls to its host relay directly.
+   */
+  onPollSubmit?: (draft: PollDraft) => Promise<void>;
   /**
    * Explicit candidate set for @-mention autocomplete, used when the composer
    * can't derive a room roster itself. In NIP-29 mode the composer builds this
@@ -381,7 +388,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, replyExtraTags, messageKind = KIND_GROUP_CHAT }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -423,13 +430,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // slash commands without the NIP-29-specific ones.
   const slashCapabilities = useMemo(() => {
     const caps = new Set<SlashCapability>();
-    if (!sendOverride && pollsEnabled) caps.add("poll"); // poll mode is the group publish path
+    // Poll mode rides the group publish path, OR a delegated poll publisher
+    // (Concord's `onPollSubmit`) when the send path is otherwise overridden.
+    if ((!sendOverride || onPollSubmit) && pollsEnabled) caps.add("poll");
     if (onSlashAction) {
       caps.add("thread");
       if (canModerate) caps.add("moderation");
     }
     return caps;
-  }, [sendOverride, pollsEnabled, onSlashAction, canModerate]);
+  }, [sendOverride, pollsEnabled, onPollSubmit, onSlashAction, canModerate]);
 
   const draftKey = `chat-draft:${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
@@ -1377,31 +1386,32 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const handlePollSubmit = useCallback(async () => {
     const finalContent = content.trim();
-    const filledOptions = pollOptions.filter((o) => o.label.trim());
+    const filledOptions = pollOptions
+      .filter((o) => o.label.trim())
+      .map((o) => ({ id: o.id, label: o.label.trim() }));
     if (!finalContent || filledOptions.length < 2 || !user || isSending || isUploading) return;
 
-    const tags = buildMessageTags(finalContent);
-    for (const opt of filledOptions) {
-      tags.push(["option", opt.id, opt.label.trim()]);
-    }
-    tags.push(["polltype", pollType]);
-    // NIP-88: votes must be sent to the relays listed in `relay` tags —
-    // route them to the group's host relay so membership is enforced.
-    tags.push(["relay", relayUrl]);
-    if (pollDuration > 0) {
-      tags.push(["endsAt", String(Math.floor(Date.now() / 1000) + pollDuration * 86_400)]);
-    }
-    tags.push(["alt", `Poll: ${finalContent}`]);
-
     try {
-      await createEvent({ kind: KIND_POLL, content: finalContent, tags, relay: relayUrl });
+      if (onPollSubmit) {
+        // Delegated path (Concord v2): the transport seals the poll as a Chat
+        // Plane rumor. The channel binding is added there; no `relay` routing
+        // tag, since votes ride the sealed plane rather than a NIP-88 relay.
+        await onPollSubmit({ question: finalContent, options: filledOptions, pollType, durationDays: pollDuration });
+      } else {
+        const tags = buildMessageTags(finalContent);
+        tags.push(...buildPollTags(finalContent, filledOptions, pollType, pollDuration));
+        // NIP-88: votes must be sent to the relays listed in `relay` tags —
+        // route them to the group's host relay so membership is enforced.
+        tags.push(["relay", relayUrl]);
+        await createEvent({ kind: KIND_POLL, content: finalContent, tags, relay: relayUrl });
+      }
       resetComposeState();
       onSent?.();
       toast({ title: "Poll published!" });
     } catch {
       toast({ title: "Error", description: "Failed to publish poll.", variant: "destructive" });
     }
-  }, [content, pollOptions, user, isSending, isUploading, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, toast]);
+  }, [content, pollOptions, user, isSending, isUploading, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, toast, onPollSubmit]);
 
   /** Stop recording, upload, and send as a voice message (kind 9 + imeta). */
   const handleStopAndSendVoice = useCallback(async () => {
@@ -1795,10 +1805,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                         setPlusOpen(false);
                         textareaRef.current?.focus();
                       }}
-                      hidden={Boolean(sendOverride) || !pollsEnabled}
+                      hidden={(Boolean(sendOverride) && !onPollSubmit) || !pollsEnabled}
                       className={cn(
                         "flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm transition-colors",
-                        (sendOverride || !pollsEnabled) && "hidden",
+                        ((sendOverride && !onPollSubmit) || !pollsEnabled) && "hidden",
                         mode === "poll"
                           ? "text-primary bg-primary/10"
                           : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",

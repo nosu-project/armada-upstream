@@ -14,7 +14,7 @@ import {
   type FoldedTimeline,
   type OpenedChat,
 } from "@/concord-v2/lib/chat";
-import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { whenAuthSettled } from "@/concord-v2/lib/planeSync";
 import {
   clearChannelExhausted,
@@ -559,7 +559,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 
   const loadOlder = useCallback(async (): Promise<number> => {
     if (!hasMore || isLoadingOlder) return 0;
-    const before = query.data?.filter((m) => m.kind === KIND_MESSAGE).length ?? 0;
+    const before = query.data?.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length ?? 0;
     const cursorKeyId = channelIdHex ?? "";
     setIsLoadingOlder(true);
     try {
@@ -600,7 +600,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       }
 
       const result = await query.refetch();
-      const after = result.data?.filter((m) => m.kind === KIND_MESSAGE).length ?? 0;
+      const after = result.data?.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length ?? 0;
       return Math.max(0, after - before);
     } finally {
       setIsLoadingOlder(false);
@@ -752,7 +752,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       // relay held it for the whole publish timeout. A message the user typed
       // must never silently vanish: sign or broadcast failure flips it to
       // "failed" (retry/discard affordance) instead of eating it.
-      const isVisible = effectiveKind === KIND_MESSAGE || effectiveKind === KIND_COMMENT;
+      const isVisible = effectiveKind === KIND_MESSAGE || effectiveKind === KIND_COMMENT || effectiveKind === KIND_POLL;
       const opened: OpenedChat = {
         rumorId: rumor.id,
         author: user.pubkey,
