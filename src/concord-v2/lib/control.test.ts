@@ -18,8 +18,8 @@ import {
   sealDissolved,
   sealEdition,
 } from "@/concord-v2/lib/control";
-import { bytesToHex, communityIdOf, controlGroupKey, grantLocator, hex32, random32, type GroupKey } from "@/concord-v2/lib/derive";
-import { rewrapSeal, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { bytesToHex, communityIdOf, controlGroupKey, dissolvedGroupKey, grantLocator, hex32, random32, type GroupKey } from "@/concord-v2/lib/derive";
+import { buildRumor, openWrap, rewrapSeal, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { adminRole, badgeOf, hasPermission, isAdmin, moderatorRole, Permissions, type Role } from "@/concord-v2/lib/roles";
 import {
@@ -1323,5 +1323,54 @@ describe("dissolution (CORD-02 §9)", () => {
 
     expect(isDissolved([fake], communityId, owner.pubkey)).toBe(false);
     expect(isDissolved([fake, real], communityId, owner.pubkey)).toBe(true);
+  });
+
+  it("a tombstone cannot be replayed onto another community of the same owner", async () => {
+    // The dissolved plane's keypair derives from the community_id with NO
+    // secret input, and the id is public (it ships in every invite). So anyone
+    // holding two public ids can read one community's dissolved plane and sign
+    // at another's — the only thing they lack is an owner-signed vsk-10 rumor.
+    //
+    // With the frozen §9 all-zero `eid` that rumor names nothing, so an owner's
+    // genuine tombstone for X is a working weapon against every OTHER community
+    // the same owner runs: lift the plaintext seal, re-wrap it at Y's dissolved
+    // address, and Y is dead. No membership, no keys, and no un-dissolve.
+    // Committing the community_id inside the signed payload is what stops it.
+    const owner = signer();
+    const x = communityIdOf(hex32(owner.pubkey), random32());
+    const y = communityIdOf(hex32(owner.pubkey), random32());
+    expect(bytesToHex(x)).not.toBe(bytesToHex(y));
+
+    const tombstoneX = await sealDissolved(x, owner.pubkey, owner);
+    expect(isDissolved([tombstoneX], x, owner.pubkey), "it really does kill X").toBe(true);
+
+    // Lift X's seal and re-wrap it at Y's dissolved address — derivable by
+    // anyone from Y's public id, and rewrapSeal is already in the codebase
+    // because compaction needs it.
+    const openedX = openWrap(tombstoneX, dissolvedGroupKey(x));
+    const replayed = rewrapSeal(openedX.seal, dissolvedGroupKey(y));
+
+    expect(
+      isDissolved([replayed], y, owner.pubkey),
+      "a seal minted for X must never kill Y",
+    ).toBe(false);
+  });
+
+  it("refuses an all-zero eid rather than grandfathering it", async () => {
+    // Accepting the frozen shape IS the vulnerability, so it is refused rather
+    // than kept for compatibility. The failure mode of refusing is a community
+    // that reads alive and can simply be re-dissolved; the failure mode of
+    // accepting is one that dies permanently with no recovery.
+    const { owner, communityId } = await makeCommunity();
+    const group = dissolvedGroupKey(communityId);
+    const legacy = buildRumor({
+      kind: 3308,
+      content: "",
+      tags: [["vsk", "10"], ["eid", "0".repeat(64)]],
+      pubkey: owner.pubkey,
+      ms: null,
+    });
+    const seal = await sealRumor(legacy, KIND_SEAL_PLAINTEXT, group, owner);
+    expect(isDissolved([wrapSeal(seal, group)], communityId, owner.pubkey)).toBe(false);
   });
 });

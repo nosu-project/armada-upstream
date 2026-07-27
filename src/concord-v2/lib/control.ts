@@ -957,20 +957,34 @@ function foldOnce(
 
 // ── Dissolution (CORD-02 §9) ─────────────────────────────────────────────────
 
-const ZERO32_HEX = "0".repeat(64);
 
 /**
- * Build the owner-dissolution tombstone rumor: chainless (no ev/ep/vac),
- * eid = 0…0, empty content. Published at `dissolved_pk` — a coordinate derived
- * from the community_id alone, so every member past or present resolves it.
+ * Build the owner-dissolution tombstone rumor: chainless (no ev/ep/vac), empty
+ * content, `eid` = the community_id. Published at `dissolved_pk`, a coordinate
+ * derived from the community_id alone, so every member past or present
+ * resolves it.
+ *
+ * The `eid` binds the tombstone to the community it kills, and MUST. The
+ * dissolved plane's key derives from the community_id with no secret input, so
+ * anyone holding that public id (it ships in every invite) can derive the
+ * keypair, read the plane, and sign at it — the only thing an attacker lacks is
+ * an owner-signed vsk-10 rumor. With the frozen §9 all-zero `eid` that rumor
+ * names nothing, so an owner's genuine tombstone for community X can be lifted,
+ * re-wrapped at the dissolved address of any OTHER community the same owner
+ * runs, and kill it permanently — no membership, no keys, and no un-dissolve.
+ * Committing the community_id makes a seal minted for X fail the check at Y.
  */
-export function buildDissolvedRumor(ownerPubkey: string, createdAtSecs?: number): Rumor {
+export function buildDissolvedRumor(
+  ownerPubkey: string,
+  communityId: Uint8Array,
+  createdAtSecs?: number,
+): Rumor {
   return buildRumor({
     kind: 3308,
     content: "",
     tags: [
       ["vsk", VSK_DISSOLVED],
-      ["eid", ZERO32_HEX],
+      ["eid", bytesToHex(communityId)],
     ],
     pubkey: ownerPubkey,
     ms: null,
@@ -981,7 +995,7 @@ export function buildDissolvedRumor(ownerPubkey: string, createdAtSecs?: number)
 /** Sign + wrap the dissolution tombstone at the community's dissolved address. */
 export async function sealDissolved(communityId: Uint8Array, ownerPubkey: string, signer: StreamSigner): Promise<NostrEvent> {
   const group = dissolvedGroupKey(communityId);
-  const rumor = buildDissolvedRumor(ownerPubkey);
+  const rumor = buildDissolvedRumor(ownerPubkey, communityId);
   const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, group, signer);
   return wrapSeal(seal, group);
 }
@@ -1001,16 +1015,26 @@ export function isDissolved(wraps: NostrEvent[], communityId: Uint8Array, ownerH
     } catch {
       continue;
     }
-    if (isDissolvedOpened(opened, ownerHex)) return true;
+    if (isDissolvedOpened(opened, ownerHex, communityId)) return true;
   }
   return false;
 }
 
-/** Whether an already-opened dissolved-address event is a valid owner tombstone. */
-export function isDissolvedOpened(opened: OpenedEvent, ownerHex: string): boolean {
+/**
+ * Whether an already-opened dissolved-address event is a valid owner tombstone
+ * FOR THIS COMMUNITY.
+ *
+ * The `eid` check is the replay binding (see {@link buildDissolvedRumor}), and
+ * the address it was found at proves nothing — an attacker chooses where to
+ * publish. An all-zero `eid` is REFUSED rather than grandfathered: accepting it
+ * is the vulnerability itself, and the failure mode of refusing is a community
+ * that reads alive and can simply be re-dissolved, against one that dies
+ * permanently with no recovery.
+ */
+export function isDissolvedOpened(opened: OpenedEvent, ownerHex: string, communityId: Uint8Array): boolean {
   if (opened.author !== ownerHex) return false;
   if (opened.sealKind !== KIND_SEAL_PLAINTEXT) return false; // control-family seals are plaintext (CORD-02 §5)
   const vsk = opened.tags.find((t) => t[0] === "vsk")?.[1];
   const eid = opened.tags.find((t) => t[0] === "eid")?.[1];
-  return opened.kind === 3308 && vsk === VSK_DISSOLVED && eid === ZERO32_HEX;
+  return opened.kind === 3308 && vsk === VSK_DISSOLVED && eid === bytesToHex(communityId);
 }

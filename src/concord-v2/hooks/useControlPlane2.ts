@@ -223,7 +223,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
       // A dissolution tombstone is terminal and immutable — if we've already
       // stored one, we're done without touching the network.
       const cached = await queryByStreams([group.pk]);
-      if (cached.some((o) => isDissolvedOpened(o, community!.owner))) return true;
+      if (cached.some((o) => isDissolvedOpened(o, community!.owner, community!.id))) return true;
 
       const results = await Promise.all(
         community!.relays.map((url) =>
@@ -237,7 +237,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
       );
       const opened = openPlaneWraps(results.flat(), [group]);
       if (opened.length > 0) writeOpened(opened);
-      return opened.some((o) => isDissolvedOpened(o, community!.owner));
+      return opened.some((o) => isDissolvedOpened(o, community!.owner, community!.id));
     },
   });
 }
