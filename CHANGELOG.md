@@ -4,6 +4,24 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.42.1] - 2026-07-27
+
+Unknown-sender direct messages are now held in a separate request tier — visible but quiet, with no avatar loaded until you reply. Community discover cards show when you're already a member. The relay settings section gains descriptions and new toggles for which relay pools the app uses. Creating a community shows which relays it will live on before you submit. The first emoji pack you add no longer fails.
+
+### Added
+- DM requests: messages from unknown senders appear in a separate tier, with no avatar loaded (to avoid confirming receipt to the sender) and a shared community shown when one is known
+- A block action on request conversations, available from the right-click or long-press menu
+- A settings toggle to hide the DM request tier entirely
+- Community discover cards show a "Joined — Open" button when you're already a member
+
+### Changed
+- Creating a community shows which relays it will live on before you submit
+- The relay settings section has descriptions for each relay type and new toggles to control which pools the app uses
+- The servers settings section has a description explaining what NIP-29 servers are
+
+### Fixed
+- Adding the first emoji pack no longer fails
+
 ## [0.42.0] - 2026-07-26
 
 Ecash tokens pasted into chat now render as a card showing the amount, with the mint and the raw token a tap away, and the card asks the mint whether the token has already been redeemed. Typing indicators work with browser extensions and remote signers and are on by default. Thread replies gain the same reaction row and action menu as timeline messages. Servers you remove stay removed, and leaving a community clears its slot in the sidebar for good.
