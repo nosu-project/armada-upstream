@@ -56,6 +56,17 @@ export const KIND_POLL = 1068;
  * never shown as its own timeline row.
  */
 export const KIND_POLL_VOTE = 1018;
+/**
+ * Calendar events (CORD.md "Calendar Events"): NIP-52 date-based (31922) and
+ * time-based (31923) events, sealed as Chat Plane rumors. Not timeline messages
+ * — surfaced in the events bar. Addressable identity is (author, `d`) within the
+ * channel; RSVPs reference an event by its rumor id via an `e` tag (there is no
+ * `a`-coordinate for an unsigned rumor).
+ */
+export const KIND_CALENDAR_DATE = 31922;
+export const KIND_CALENDAR_TIME = 31923;
+/** Calendar RSVP (NIP-52 kind 31925), an `e`-referencing side event like a vote. */
+export const KIND_CALENDAR_RSVP = 31925;
 /** WebXDC peer signal. */
 export const KIND_WEBXDC = 3310;
 /** Typing indicator — ephemeral rumor (rides a 21059 wrap). */

@@ -1,4 +1,4 @@
-import { AtSign, Ban, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -10,6 +10,8 @@ import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
+import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
+import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { GitTimelineRow, TicketSidePanel } from "@/components/chat/GitTimeline";
 import { isGitTimelineEntry, mergeChannelTimeline } from "@/components/chat/channelTimeline";
@@ -979,7 +981,7 @@ export function ConcordV2Page() {
   const { data: dissolved } = useDissolved2(community);
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
 
-  const { transport: baseTransport, reactionsFor, allMessages } = useTransport2(community, channel, canWrite, canModerateMessages);
+  const { transport: baseTransport, reactionsFor, allMessages, calendar } = useTransport2(community, channel, canWrite, canModerateMessages);
   // Git activity remains its own event domain. The store-first channel hook
   // supplies attached repository activity; this page only merges its display
   // order with decrypted chat rumors.
@@ -1213,6 +1215,8 @@ export function ConcordV2Page() {
   // holds the structured query (text + channels + authors + media facet).
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFilters2>(EMPTY_SEARCH_FILTERS);
+  const [eventsOpen, setEventsOpen] = useState(false);
+  const [createEventOpen, setCreateEventOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Mobile: landing on the community root (no channel in the URL) shows the
   // channel list, not a chat pane — selecting a community should let you pick a
@@ -2050,6 +2054,24 @@ export function ConcordV2Page() {
                 <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
               </Tooltip>
 
+              {view === "channel" && channel && (calendar.events.length > 0 || calendar.canModerate) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn("size-8 touch:size-11 text-muted-foreground", eventsOpen && "text-foreground")}
+                      aria-label={eventsOpen ? "Hide events" : "Show events"}
+                      aria-pressed={eventsOpen}
+                      onClick={() => setEventsOpen((v) => !v)}
+                    >
+                      <CalendarClock className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Events</TooltipContent>
+                </Tooltip>
+              )}
+
               {/* Overflow … menu — shown at every width. Invite and Mute always
                   live here (they were the least-used inline buttons cluttering
                   the desktop bar); Search + Members are here only on mobile,
@@ -2238,6 +2260,13 @@ export function ConcordV2Page() {
                 </div>
               ) : (
                 <>
+                  <CalendarEventsBar
+                    open={eventsOpen}
+                    calendar={calendar}
+                    onClose={() => setEventsOpen(false)}
+                    onCreate={() => setCreateEventOpen(true)}
+                    onDelete={(event) => { void calendar.remove(event); }}
+                  />
                   <MessageTimeline
                     key={channel?.idHex ?? "none"}
                     transport={transport}
@@ -2384,6 +2413,11 @@ export function ConcordV2Page() {
               connectedCoordinates={connectedCoordinates}
               onCreateText={handleCreateTextChannel}
               onCreateRepository={handleCreateRepositoryChannel}
+            />
+            <CreateEventDialog
+              calendar={calendar}
+              open={createEventOpen}
+              onOpenChange={setCreateEventOpen}
             />
             </ComposerBoundsProvider>
 

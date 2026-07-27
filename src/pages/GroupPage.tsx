@@ -49,7 +49,7 @@ import { useHeaderOverflow } from "@/hooks/useHeaderOverflow";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
 import { channelMuteKey, useMutes } from "@/hooks/useMutes";
-import { useCalendarEvents } from "@/hooks/useCalendarEvents";
+import { useNip29CalendarTransport } from "@/hooks/useCalendarEvents";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
@@ -235,8 +235,8 @@ export function GroupPage() {
   const { pinnedRefs, unpin } = usePinnedMessages(relayUrl, groupId);
   const hasPins = pinnedRefs.length > 0;
 
-  const { events: calendarEvents, remove: removeEvent } = useCalendarEvents(relayUrl, groupId);
-  const hasEvents = calendarEvents.length > 0;
+  const calendar = useNip29CalendarTransport(relayUrl, groupId, isAdmin);
+  const hasEvents = calendar.events.length > 0;
 
   // Header action overflow. Pins + Events are the lower-priority toggles; on a
   // narrow phone (e.g. iPhone SE) where the bar can't fit everything alongside
@@ -761,13 +761,10 @@ export function GroupPage() {
         {/* Calendar events bar — slides open below the header. */}
         <CalendarEventsBar
           open={eventsOpen}
-          events={calendarEvents}
-          relayUrl={relayUrl}
-          groupId={groupId}
-          canModerate={isAdmin}
+          calendar={calendar}
           onClose={() => setEventsOpen(false)}
           onCreate={() => setCreateEventOpen(true)}
-          onDelete={(event) => { void removeEvent(event); }}
+          onDelete={(event) => { void calendar.remove(event); }}
         />
 
         {/* Top-of-chat call stage: the active call's participants + video tiles
@@ -885,8 +882,7 @@ export function GroupPage() {
         onOpenChange={setServerProfileOpen}
       />
       <CreateEventDialog
-        relayUrl={relayUrl}
-        groupId={groupId}
+        calendar={calendar}
         open={createEventOpen}
         onOpenChange={setCreateEventOpen}
       />

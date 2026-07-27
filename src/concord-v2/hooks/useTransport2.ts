@@ -9,9 +9,10 @@ import {
 } from "@/concord-v2/hooks/useChannel2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_CALENDAR_RSVP, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { markReactionDeleted, type OpenedChat } from "@/concord-v2/lib/chat";
 import { channelKey } from "@/concord-v2/hooks/useChannel2";
+import { buildCalendarTags, type CalendarEvent, type CalendarEventInput, type CalendarTransport, parseCalendarEvents, type RsvpStatus, type RsvpTally, tallyRsvps } from "@/lib/calendar";
 import { buildPollTags, parsePoll, tallyPollVotes, type PollTally, type PollVote } from "@/lib/polls";
 import { zapRumorTags, type ZapTally } from "@/lib/zaps";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
@@ -66,6 +67,8 @@ export function useTransport2(
   reactionsFor: (id: string) => MessageReactions;
   /** The full decoded message list (member enumeration, reply resolution). */
   allMessages: ChatMsg[];
+  /** The channel's calendar events + RSVPs, for the shared events bar. */
+  calendar: CalendarTransport;
 } {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
@@ -356,6 +359,58 @@ export function useTransport2(
     [send],
   );
 
+  // Calendar events (CORD.md): folded calendar rumors adapted to the shared
+  // NostrEvent shape and parsed/deduped by the same helper the NIP-29 path uses.
+  const calendarEvents = useMemo(
+    () => parseCalendarEvents(folded.calendarEvents.map(openedToChatMsg)),
+    [folded.calendarEvents],
+  );
+  const rsvpsFor = useCallback(
+    (event: CalendarEvent): RsvpTally => tallyRsvps(folded.rsvps.get(event.event.id) ?? [], user?.pubkey),
+    [folded.rsvps, user?.pubkey],
+  );
+  // Seal a new calendar event (kind 31922/31923). Not a timeline message — the
+  // binding is added by `send`; NIP-52 tags come from the shared builder.
+  const saveCalendar = useCallback(
+    async (input: CalendarEventInput) => {
+      await send({ content: input.description ?? "", kind: input.kind, extraTags: buildCalendarTags(input) });
+    },
+    [send],
+  );
+  const removeCalendar = useCallback(
+    async (event: CalendarEvent) => {
+      await send({ content: "", kind: KIND_DELETE, target: event.event.id, targetKind: event.kind });
+    },
+    [send],
+  );
+  // Seal an RSVP (kind 31925) `e`-tagging the event's rumor id — a side event
+  // folded into the event's tally, latest per pubkey winning.
+  const setRsvp = useCallback(
+    (event: CalendarEvent, status: RsvpStatus) => {
+      void send({
+        content: "",
+        kind: KIND_CALENDAR_RSVP,
+        target: event.event.id,
+        extraTags: [["status", status], ["k", String(event.kind)], ["p", event.event.pubkey]],
+      }).catch(() => {});
+    },
+    [send],
+  );
+  const calendar = useMemo<CalendarTransport>(
+    () => ({
+      events: calendarEvents,
+      canModerate,
+      canRsvp: canWrite,
+      isSaving: false,
+      isSettingRsvp: false,
+      save: saveCalendar,
+      remove: removeCalendar,
+      rsvpsFor,
+      setRsvp,
+    }),
+    [calendarEvents, canModerate, canWrite, saveCalendar, removeCalendar, rsvpsFor, setRsvp],
+  );
+
   // Concord edit: a kind-3302 rumor targeting the original message's rumor
   // id. The fold applies the latest author-matching edit (non-destructive —
   // the original keeps its id, so reactions, replies, and quotes stay intact).
@@ -410,5 +465,5 @@ export function useTransport2(
     [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, threadRepliesFor, sendThreadReply],
   );
 
-  return { transport, reactionsFor, allMessages: messages };
+  return { transport, reactionsFor, allMessages: messages, calendar };
 }

@@ -14,8 +14,9 @@
 
 import type { NostrEvent } from "nostr-tools/pure";
 
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_CALENDAR_DATE, KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
+import type { RsvpVote } from "@/lib/calendar";
 import type { PollVote } from "@/lib/polls";
 import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
@@ -182,6 +183,10 @@ export interface FoldedTimeline {
   zaps: Map<string, ZapEntry[]>;
   /** poll rumor id → its raw votes (tallied per poll by the transport). */
   pollVotes: Map<string, PollVote[]>;
+  /** Surviving calendar events (kinds 31922/31923); NOT timeline messages. */
+  calendarEvents: OpenedChat[];
+  /** event rumor id → its raw RSVPs (tallied per event by the transport). */
+  rsvps: Map<string, RsvpVote[]>;
 }
 
 /**
@@ -243,6 +248,10 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
   // kept even when the poll itself isn't in this window — an orphan vote resolves
   // automatically once its poll decodes and the next fold re-runs.
   const pollVotes = new Map<string, PollVote[]>();
+  // Calendar events (kinds 31922/31923), addressably folded downstream, and
+  // their RSVPs bucketed by the event rumor id they `e`-reference.
+  const calendarById = new Map<string, OpenedChat>();
+  const rsvps = new Map<string, RsvpVote[]>();
   // Verified zap candidates, deduped by payment hash (Lightning) or txid
   // (on-chain) after the loop: an announced proof or txid is visible to every
   // member, so without this anyone could replay someone else's and inflate
@@ -358,6 +367,25 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
       list.push({ pubkey: ev.author, optionIds, ms: ev.ms });
       continue;
     }
+    if (ev.kind === KIND_CALENDAR_RSVP) {
+      // An RSVP `e`-references its event's rumor id (v2 has no `a`-coordinate);
+      // bucket it like a poll vote, latest-per-pubkey resolved by the tally.
+      const target = eTargetOf(ev);
+      if (!target) continue;
+      const status = ev.tags.find((t) => t[0] === "status")?.[1];
+      if (status !== "accepted" && status !== "declined" && status !== "tentative") continue;
+      let list = rsvps.get(target);
+      if (!list) rsvps.set(target, (list = []));
+      list.push({ pubkey: ev.author, status, ms: ev.ms });
+      continue;
+    }
+    if (ev.kind === KIND_CALENDAR_DATE || ev.kind === KIND_CALENDAR_TIME) {
+      // A calendar event is NOT a timeline message — it surfaces in the events
+      // bar. Deletes/moderation are applied below, then parsing + addressable
+      // dedup happen in the transport (shared with the NIP-29 path).
+      calendarById.set(ev.rumorId, ev);
+      continue;
+    }
     if (ev.kind === KIND_MESSAGE || ev.kind === KIND_COMMENT || ev.kind === KIND_POLL) {
       // kind-9 top-level messages, kind-1111 threaded replies, and kind-1068
       // polls all land in the timeline pool; the reader splits them by their
@@ -386,6 +414,18 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
       deleters.has(msg.author) ||
       (moderation && [...deleters].some((d) => moderation.canDelete(d, msg.author)));
     if (deleted) byId.delete(id);
+  }
+
+  // Calendar deletes: same authorization as messages (self, or a moderator with
+  // MANAGE_MESSAGES). The store's NIP-09 covers the durable case; this handles a
+  // delete folded alongside its target before the async removal commits.
+  for (const [id, ev] of calendarById) {
+    const deleters = deletes.get(id);
+    if (!deleters) continue;
+    const deleted =
+      deleters.has(ev.author) ||
+      (moderation && [...deleters].some((d) => moderation.canDelete(d, ev.author)));
+    if (deleted) calendarById.delete(id);
   }
 
   // In-batch reaction deletes: a kind-5 targeting a reaction rumor removes
@@ -423,5 +463,7 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
     reactions,
     zaps,
     pollVotes,
+    calendarEvents: [...calendarById.values()],
+    rsvps,
   };
 }

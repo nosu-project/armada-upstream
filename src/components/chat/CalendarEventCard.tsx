@@ -4,17 +4,16 @@ import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useEventRsvps } from "@/hooks/useEventRsvps";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { dittoHashtagUrl } from "@/lib/dittoUrl";
 import {
   type CalendarEvent,
-  calendarEventCoord,
+  type CalendarTransport,
   formatCalendarEventWhen,
   KIND_CALENDAR_TIME,
   type RsvpStatus,
-} from "@/lib/nip29";
+  type RsvpTally,
+} from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 
 /** A small stacked avatar row for a set of RSVP'd pubkeys. */
@@ -47,30 +46,28 @@ function AttendeeAvatar({ pubkey }: { pubkey: string }) {
 }
 
 interface RsvpControlsProps {
-  relayUrl: string;
-  groupId: string;
-  event: CalendarEvent;
+  tally: RsvpTally;
+  /** Whether the current user may RSVP (shows the Going/Maybe/Can't-go row). */
+  canRsvp: boolean;
+  isSettingRsvp: boolean;
+  onSet: (status: RsvpStatus) => void;
 }
 
-/** Going / Maybe / Can't-go controls plus the current attendee tallies. */
-export function RsvpControls({ relayUrl, groupId, event }: RsvpControlsProps) {
-  const { user } = useCurrentUser();
-  const coord = calendarEventCoord(event.kind, event.event.pubkey, event.identifier);
-  const { accepted, declined, tentative, myStatus, setRsvp, isSettingRsvp } = useEventRsvps({
-    relayUrl,
-    groupId,
-    eventCoord: coord,
-    eventId: event.event.id,
-    eventAuthor: event.event.pubkey,
-  });
+/**
+ * Going / Maybe / Can't-go controls plus the current attendee tallies. Purely
+ * presentational — the tally + RSVP setter come from a {@link CalendarTransport}
+ * (a relay query for NIP-29, the sealed chat fold for Concord).
+ */
+export function RsvpControls({ tally, canRsvp, isSettingRsvp, onSet }: RsvpControlsProps) {
+  const { accepted, declined, tentative, mine: myStatus } = tally;
 
   const choose = (status: RsvpStatus) => {
-    void setRsvp(status);
+    onSet(status);
   };
 
   return (
     <div className="space-y-3">
-      {user && (
+      {canRsvp && (
         <div className="grid grid-cols-3 gap-2">
           <RsvpButton
             active={myStatus === "accepted"}
@@ -171,15 +168,14 @@ function RsvpButton({
 }
 
 interface EventDetailDialogProps {
-  relayUrl: string;
-  groupId: string;
+  calendar: CalendarTransport;
   event: CalendarEvent | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
 /** Full detail view of a single calendar event with RSVP controls. */
-export function EventDetailDialog({ relayUrl, groupId, event, open, onOpenChange }: EventDetailDialogProps) {
+export function EventDetailDialog({ calendar, event, open, onOpenChange }: EventDetailDialogProps) {
   const organizer = useAuthor(event?.event.pubkey);
   const organizerName = useScopedDisplayName(event?.event.pubkey, organizer.data?.metadata);
 
@@ -235,7 +231,12 @@ export function EventDetailDialog({ relayUrl, groupId, event, open, onOpenChange
           )}
 
           <div className="border-t border-border/60 pt-4">
-            <RsvpControls relayUrl={relayUrl} groupId={groupId} event={event} />
+            <RsvpControls
+              tally={calendar.rsvpsFor(event)}
+              canRsvp={calendar.canRsvp}
+              isSettingRsvp={calendar.isSettingRsvp}
+              onSet={(status) => calendar.setRsvp(event, status)}
+            />
           </div>
         </div>
       </ChromeDialogContent>

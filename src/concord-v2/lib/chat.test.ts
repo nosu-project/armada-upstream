@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildV2CommentTags, foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
 import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { parseCalendarEvents, tallyRsvps } from "@/lib/calendar";
 import { parsePoll, tallyPollVotes } from "@/lib/polls";
 import { MOCK_PREIMAGE as ZAP_PREIMAGE, paymentHashOf } from "@/test/bolt11Mock";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
@@ -352,6 +353,67 @@ describe("chat plane (CORD-03)", () => {
     const { options } = parsePoll(folded.messages[0]);
     const tally = tallyPollVotes(folded.pollVotes.get(poll.id) ?? [], options, endsAt, bob.pubkey);
     expect(tally.totalVoters).toBe(0);
+  });
+
+  it("folds calendar events (not into the timeline) and tallies their RSVPs by rumor id", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+    const carol = signer();
+
+    const event = chatRumor(alice, KIND_CALENDAR_TIME, "Community call", 1000, [
+      ["d", "cal1"],
+      ["title", "Community call"],
+      ["start", "5000"],
+    ]);
+    // RSVPs `e`-reference the event's rumor id (v2 has no `a`-coordinate).
+    const bobGoing = chatRumor(bob, KIND_CALENDAR_RSVP, "", 1100, [["e", event.id], ["status", "accepted"]]);
+    const carolMaybe = chatRumor(carol, KIND_CALENDAR_RSVP, "", 1200, [["e", event.id], ["status", "tentative"]]);
+    const carolFinal = chatRumor(carol, KIND_CALENDAR_RSVP, "", 1300, [["e", event.id], ["status", "accepted"]]);
+    // A regular message shares the channel to prove calendar events stay out of it.
+    const msg = chatRumor(alice, KIND_MESSAGE, "hi", 1400);
+
+    const wraps = await Promise.all([
+      wrapChat(event, channel, alice),
+      wrapChat(bobGoing, channel, bob),
+      wrapChat(carolMaybe, channel, carol),
+      wrapChat(carolFinal, channel, carol),
+      wrapChat(msg, channel, alice),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+
+    // The calendar event is NOT a timeline message.
+    expect(folded.messages.map((m) => m.content)).toEqual(["hi"]);
+
+    const parsed = parseCalendarEvents(
+      folded.calendarEvents.map((m) => ({
+        id: m.rumorId, pubkey: m.author, created_at: Math.floor(m.ms / 1000),
+        kind: m.kind, tags: m.tags, content: m.content, sig: "",
+      })),
+    );
+    expect(parsed.map((e) => e.title)).toEqual(["Community call"]);
+
+    const tally = tallyRsvps(folded.rsvps.get(event.id) ?? [], carol.pubkey);
+    // Carol's later "accepted" supersedes her "tentative".
+    expect(tally.accepted.sort()).toEqual([bob.pubkey, carol.pubkey].sort());
+    expect(tally.tentative).toEqual([]);
+    expect(tally.mine).toBe("accepted");
+  });
+
+  it("removes a calendar event when its author deletes it in-batch", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+
+    const event = chatRumor(alice, KIND_CALENDAR_TIME, "Gone", 1000, [
+      ["d", "cal2"],
+      ["title", "Gone"],
+      ["start", "5000"],
+    ]);
+    const del = chatRumor(alice, KIND_DELETE, "", 2000, [["e", event.id], ["k", String(KIND_CALENDAR_TIME)]]);
+
+    const wraps = await Promise.all([wrapChat(event, channel, alice), wrapChat(del, channel, alice)]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+    expect(folded.calendarEvents.length).toBe(0);
   });
 
   it("counts a payment once: a replayed proof never re-enters the tally", async () => {

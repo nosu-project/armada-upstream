@@ -9,19 +9,18 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/hooks/useToast";
-import { useCalendarEvents } from "@/hooks/useCalendarEvents";
 import {
   type CalendarEvent,
   type CalendarEventInput,
+  type CalendarTransport,
   KIND_CALENDAR_DATE,
   KIND_CALENDAR_TIME,
   randomCalendarId,
-} from "@/lib/nip29";
+} from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 
 interface CreateEventDialogProps {
-  relayUrl: string;
-  groupId: string;
+  calendar: CalendarTransport;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** When set, the dialog edits this event instead of creating a new one. */
@@ -58,8 +57,8 @@ function fromLocalInput(value: string): number | undefined {
  * inside a NIP-29 group. Admins/moderators only — the relay enforces it; the
  * caller should also gate the entry point.
  */
-export function CreateEventDialog({ relayUrl, groupId, open, onOpenChange, editing }: CreateEventDialogProps) {
-  const { save, isSaving } = useCalendarEvents(relayUrl, groupId);
+export function CreateEventDialog({ calendar, open, onOpenChange, editing }: CreateEventDialogProps) {
+  const { save, isSaving } = calendar;
 
   const [mode, setMode] = useState<Mode>("time");
   const [detailsOpen, setDetailsOpen] = useState(false);

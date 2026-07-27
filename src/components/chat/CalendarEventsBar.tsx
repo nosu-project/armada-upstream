@@ -4,8 +4,7 @@ import { useState } from "react";
 import { EventDetailDialog } from "@/components/chat/CalendarEventCard";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { isUpcoming } from "@/hooks/useCalendarEvents";
-import { type CalendarEvent, formatCalendarEventWhen, KIND_CALENDAR_TIME } from "@/lib/nip29";
+import { type CalendarEvent, type CalendarTransport, formatCalendarEventWhen, isUpcoming, KIND_CALENDAR_TIME } from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 
 /** One row in the events bar: a clickable preview + optional delete. */
@@ -68,31 +67,26 @@ function EventRow({
 
 interface CalendarEventsBarProps {
   open: boolean;
-  events: CalendarEvent[];
-  relayUrl: string;
-  groupId: string;
-  canModerate: boolean;
+  calendar: CalendarTransport;
   onClose: () => void;
   onCreate: () => void;
   onDelete: (event: CalendarEvent) => void;
 }
 
 /**
- * A bar that slides open below the channel header to browse a group's calendar
+ * A bar that slides open below the channel header to browse a channel's calendar
  * events. Mirrors PinnedMessagesBar: animates open/closed, lists upcoming
  * events first, opens a detail/RSVP dialog per row, and lets admins/mods create
- * and delete.
+ * and delete. Transport-agnostic — NIP-29 and Concord both render it.
  */
 export function CalendarEventsBar({
   open,
-  events,
-  relayUrl,
-  groupId,
-  canModerate,
+  calendar,
   onClose,
   onCreate,
   onDelete,
 }: CalendarEventsBarProps) {
+  const { events, canModerate } = calendar;
   const [detail, setDetail] = useState<CalendarEvent | undefined>(undefined);
 
   // Upcoming first (soonest first, already sorted), then past (most recent first).
@@ -161,8 +155,7 @@ export function CalendarEventsBar({
       </div>
 
       <EventDetailDialog
-        relayUrl={relayUrl}
-        groupId={groupId}
+        calendar={calendar}
         event={detail}
         open={Boolean(detail)}
         onOpenChange={(o) => { if (!o) setDetail(undefined); }}

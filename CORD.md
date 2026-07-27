@@ -342,6 +342,91 @@ In the Armada client:
 
 ---
 
+## Calendar Events
+
+[NIP-52](https://github.com/nostr-protocol/nips/blob/master/52.md) calendar
+events, carried inside the sealed Chat Plane so a Community's schedule — its
+events, and who's attending — never leaves it. An event is a sealed rumor
+surfaced in the channel's events bar (not the message timeline); an RSVP is an
+`e`-referencing side event folded into the event's attendee tally, like a poll
+vote. A client unaware of the extension ignores both.
+
+### Events
+
+A date-based (kind `31922`, all-day) or time-based (kind `31923`) event, sealed
+like any message:
+
+```jsonc
+{
+  "kind": 31923,
+  "content": "Monthly sync — agenda in the thread.",
+  "tags": [
+    ["channel", "<channel_id>"],      // CORD-03 binding, like every chat rumor
+    ["epoch", "0"],
+    ["ms", "417"],
+    ["d", "<random id>"],             // NIP-52 identifier (author-scoped)
+    ["title", "Community call"],
+    ["start", "1735689600"],          // 31923: unix seconds; 31922: YYYY-MM-DD
+    ["end", "1735693200"],            // optional, exclusive
+    ["start_tzid", "America/New_York"],
+    ["location", "Voice channel"]     // + optional summary/image/t/r/p
+  ]
+}
+```
+
+An RSVP is a kind `31925` rumor `e`-tagging the event, with a `status` of
+`accepted`/`declined`/`tentative`:
+
+```jsonc
+{
+  "kind": 31925,
+  "content": "",
+  "tags": [
+    ["channel", "<channel_id>"],
+    ["epoch", "0"],
+    ["ms", "912"],
+    ["e", "<event rumor id>"],
+    ["status", "accepted"]
+  ]
+}
+```
+
+### Addressing — rumor ids, not `a`-coordinates
+
+NIP-52 events are addressable (`kind:pubkey:d`) and RSVPs point at that
+coordinate. A sealed rumor is **unsigned and identified by its rumor id**, with
+no relay-side replaceable dedup, so the coordinate model does not carry over:
+
+- An RSVP references its event by the event's **rumor id** via an `e` tag (the
+  same mechanism a poll vote uses), not an `a` coordinate.
+- "Newest per author+`d`" replacement moves from the relay to the fold: a client
+  keeps the newest event per `(author, d)` and the newest RSVP per pubkey (by
+  `ms`), so every member computes the same events and attendee lists.
+- Deletion is a kind-5 naming the event's rumor id (author, or a moderator with
+  MANAGE_MESSAGES) — the same authorization as a message delete.
+
+### Privacy
+
+Events and RSVPs are sealed under the Channel key at the Channel's stream
+address; relays store only ciphertext and no public kind `31922`/`31923`/`31925`
+is ever emitted. Authorship — who scheduled, who's coming — rests on each
+rumor's seal signature, and the `channel`/`epoch` binding is checked as on any
+chat rumor (CORD-03 §3).
+
+### Implementation
+
+In the Armada client:
+
+- `client/src/lib/calendar.ts` — the transport-agnostic core shared with the
+  NIP-29 relay path: `parseCalendarEvents`, `buildCalendarTags`, `tallyRsvps`,
+  and the `CalendarTransport` contract the shared events UI renders through.
+- `client/src/concord-v2/lib/chat.ts` — folds events (kept out of the timeline)
+  and buckets RSVPs per event rumor id.
+- `client/src/concord-v2/hooks/useTransport2.ts` — seals events (`save`), RSVPs
+  (`setRsvp`), and deletes, and exposes the per-event tally (`rsvpsFor`).
+
+---
+
 ## In-Call Reactions and Raise-Hand
 
 Zoom/Signal-style raise-hand and emoji reactions during a Concord voice/video
