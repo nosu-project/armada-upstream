@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, ShieldCheck } from "lucide-react";
+import { ArrowRight, Check, ShieldCheck } from "lucide-react";
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -9,6 +9,7 @@ import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
+import { useCommunityEntry2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import {
   inviteSourceBlurb,
@@ -57,7 +58,11 @@ export function CommunityListingCard({ invite, className }: CommunityListingCard
   const initial = name.charAt(0).toUpperCase() || "·";
   const channelCount = Array.isArray(bundle?.channels) ? bundle!.channels.length : 0;
 
+  const memberEntry = useCommunityEntry2(bundle?.community_id);
+  const isMember = !!memberEntry;
+
   const onJoin = () => navigate(inviteUrlToLocalRoute(invite.inviteUrl));
+  const onOpen = () => navigate(`/c/${encodeURIComponent(bundle!.community_id)}`);
 
   return (
     <div
@@ -106,10 +111,17 @@ export function CommunityListingCard({ invite, className }: CommunityListingCard
           </button>
         </ProfilePreviewCard>
 
-        <Button className="mt-auto w-full clip-corner-lg" onClick={onJoin}>
-          Join
-          <ArrowRight className="size-4" />
-        </Button>
+        {isMember ? (
+          <Button variant="secondary" className="mt-auto w-full clip-corner-lg" onClick={onOpen}>
+            <Check className="size-4" />
+            Joined — Open
+          </Button>
+        ) : (
+          <Button className="mt-auto w-full clip-corner-lg" onClick={onJoin}>
+            Join
+            <ArrowRight className="size-4" />
+          </Button>
+        )}
       </div>
     </div>
   );
