@@ -1,6 +1,38 @@
 import { APP_NAME } from "@/lib/platform";
 
 /**
+ * A rose crest shape with the pulsing halo, drawn as two copies of the same
+ * path: a glow copy carrying a *static* drop-shadow whose `opacity` pulses,
+ * and the solid shape on top of it. Only the halo shows through.
+ *
+ * The glow used to be a single path animating `filter: drop-shadow()`
+ * directly, but an animated `filter` re-runs the blur and repaints the subtree
+ * every frame — the same reason `.animate-terminal-expand` in `index.css`
+ * avoids it. Animating `opacity` over a filter that's rasterized once is a
+ * compositor-only property change, and these crests run `infinite` on screens
+ * (onboarding, and eight dialogs) that can stay open indefinitely.
+ *
+ * The inline `opacity: 0` is the resting value: CSS animations outrank inline
+ * styles in the cascade, so the keyframes drive it while running, and under
+ * `prefers-reduced-motion` (where `ArmadaCrestKeyframes` sets `animation:
+ * none`) it falls back to a hidden halo — matching the old behavior, where
+ * suppressing the animation left no filter at all.
+ */
+function GlowPath({ d }: { d: string }) {
+  return (
+    <>
+      <path
+        d={d}
+        fill="hsl(var(--primary))"
+        className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
+        style={{ opacity: 0, filter: "drop-shadow(0 0 10px hsl(var(--primary) / 0.65))" }}
+      />
+      <path d={d} fill="hsl(var(--primary))" />
+    </>
+  );
+}
+
+/**
  * The animated Armada crest. Built from the same vessel silhouette as
  * `public/logo-mark.svg`, but split into independently-animated parts:
  *   - the cut-corner hull frame draws on (stroke-dash),
@@ -37,11 +69,7 @@ export function ArmadaCrest({ size = 132, className = "" }: { size?: number; cla
         className="animate-[armada-blade-in_0.7s_cubic-bezier(0.34,1.56,0.64,1)_0.5s_both]"
         style={{ transformOrigin: "128px 128px" }}
       >
-        <path
-          d="M128 56 L180 162 H158 L128 100 L98 162 H76 Z"
-          fill="hsl(var(--primary))"
-          className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
-        />
+        <GlowPath d="M128 56 L180 162 H158 L128 100 L98 162 H76 Z" />
         {/* Waterline crossbar (negative cut). */}
         <path d="M106 134 H150 L158 150 H98 Z" fill="hsl(var(--background))" />
       </g>
@@ -108,17 +136,9 @@ export function ArmadaKey({ size = 132, className = "" }: { size?: number; class
           className="animate-[armada-blade-in_0.7s_cubic-bezier(0.34,1.56,0.64,1)_0.5s_both]"
           style={{ transformOrigin: "128px 128px" }}
         >
-          <path
-            d="M118 120 H228 V160 H212 V136 H196 V152 H180 V136 H118 Z"
-            fill="hsl(var(--primary))"
-            className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
-          />
+          <GlowPath d="M118 120 H228 V160 H212 V136 H196 V152 H180 V136 H118 Z" />
           {/* The bit: a rose diamond in the bow, echoing the crest's blade. */}
-          <path
-            d="M76 110 L94 128 L76 146 L58 128 Z"
-            fill="hsl(var(--primary))"
-            className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
-          />
+          <GlowPath d="M76 110 L94 128 L76 146 L58 128 Z" />
         </g>
       </g>
 
@@ -174,16 +194,8 @@ export function ArmadaIdentity({ size = 132, className = "" }: { size?: number; 
         className="animate-[armada-blade-in_0.7s_cubic-bezier(0.34,1.56,0.64,1)_0.5s_both]"
         style={{ transformOrigin: "128px 120px" }}
       >
-        <path
-          d="M128 48 L160 80 L128 112 L96 80 Z"
-          fill="hsl(var(--primary))"
-          className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
-        />
-        <path
-          d="M104 128 H152 L184 168 H72 Z"
-          fill="hsl(var(--primary))"
-          className="animate-[armada-glow_2.4s_ease-in-out_1.2s_infinite]"
-        />
+        <GlowPath d="M128 48 L160 80 L128 112 L96 80 Z" />
+        <GlowPath d="M104 128 H152 L184 168 H72 Z" />
       </g>
 
       {/* Cyan signature line — the wake, writing the name. */}
@@ -227,9 +239,11 @@ export function ArmadaCrestKeyframes() {
         from { opacity: 0; transform: scale(0.6); }
         to   { opacity: 1; transform: scale(1); }
       }
+      /* Fades the halo layer painted by GlowPath. Compositor-only — see the
+         note there for why this isn't an animated \`filter\`. */
       @keyframes armada-glow {
-        0%, 100% { filter: drop-shadow(0 0 0 hsl(var(--primary) / 0)); }
-        50%      { filter: drop-shadow(0 0 10px hsl(var(--primary) / 0.65)); }
+        0%, 100% { opacity: 0; }
+        50%      { opacity: 1; }
       }
       @keyframes armada-wake {
         0%       { stroke-dasharray: 1; stroke-dashoffset: 1; opacity: 0; }
