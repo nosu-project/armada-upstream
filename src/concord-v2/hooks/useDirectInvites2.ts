@@ -132,7 +132,7 @@ export function useDirectInvites2() {
       }
 
       if (wraps.length > 0) {
-        const stored = new Set((await queryStoredInvites({ signal })).map((i) => i.wrapId));
+        const stored = new Set((await queryStoredInvites(pubkey, { signal })).map((i) => i.wrapId));
 
         // Consent gate: opening each fresh wrap is two nip-44 signer decrypts —
         // a bunker/extension storm on a cold inbox. This is a BACKGROUND poller,
@@ -153,7 +153,7 @@ export function useDirectInvites2() {
             if (!unwrapped) continue;
             fresh.push({ wrap, unwrapped });
           }
-          writeStoredInvites(fresh);
+          writeStoredInvites(pubkey, fresh);
           if (newestWrap > 0) await advanceInviteInboxCursor(pubkey, newestWrap);
         }
       }
@@ -171,7 +171,7 @@ export function useDirectInvites2() {
       // Read the parked set back from the store (no re-decrypt), then apply
       // the consent filters against the current membership list.
       const parked = new Map<string, ParkedInvite2>();
-      for (const record of await queryStoredInvites({ signal })) {
+      for (const record of await queryStoredInvites(pubkey, { signal })) {
         // The outer `k` tag was a hint; the rumor's kind + validation are the
         // authority (bounds, self-certifying owner — a forged bundle drops).
         const bundle = parseDirectInviteRumor(record.rumor.kind, record.rumor.content);

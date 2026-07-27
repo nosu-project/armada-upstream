@@ -151,32 +151,51 @@ describe("direct-invite inbox store", () => {
     const seal = await sealDirectInvite(rumor, recipientPk, rawSigner(inviterSk));
     const wrap = wrapDirectInvite(seal, recipientPk);
     const unwrapped = (await unwrapDirectInvite(wrap, rawSigner(recipientSk)))!;
-    return { wrap, unwrapped, bundle, inviterPk: getPublicKey(inviterSk) };
+    return { wrap, unwrapped, bundle, recipientPk, inviterPk: getPublicKey(inviterSk) };
   }
 
   it("round-trips an unwrapped invite through the codec", async () => {
-    const { wrap, unwrapped, inviterPk } = await makeUnwrapped();
+    const { wrap, unwrapped, recipientPk, inviterPk } = await makeUnwrapped();
 
-    const stored = unwrappedToStored(wrap, unwrapped);
+    const stored = unwrappedToStored(wrap, unwrapped, recipientPk);
     expect(stored.id).toBe(wrap.id);
     expect(stored.sig).toBe("");
     expect(stored.kind).toBe(KIND_DIRECT_INVITE);
     expect(stored.pubkey).toBe(inviterPk);
+    // The recipient is stamped as an indexed `#p` tag so reads stay scoped.
+    expect(stored.tags).toContainEqual(["p", recipientPk]);
 
     const back = storedToInvite(stored);
     expect(back.wrapId).toBe(wrap.id);
     expect(back.sender).toBe(inviterPk);
     expect(back.rumor.content).toBe(unwrapped.rumor.content);
-    // Provenance tags are stripped from the reconstructed rumor.
-    expect(back.rumor.tags.some((t) => t[0] === "wrap" || t[0] === "sender" || t[0] === "wrapts")).toBe(false);
+    // Provenance tags — including the recipient `p` — are stripped from the
+    // reconstructed rumor.
+    expect(
+      back.rumor.tags.some((t) => t[0] === "wrap" || t[0] === "sender" || t[0] === "wrapts" || t[0] === "p"),
+    ).toBe(false);
   });
 
   it("persists and queries invites without re-decrypting", async () => {
-    const { wrap, unwrapped, bundle } = await makeUnwrapped();
-    writeStoredInvites([{ wrap: wrap as NostrEvent, unwrapped }]);
-    const got = await eventually(() => queryStoredInvites(), (r) => r.some((i) => i.wrapId === wrap.id));
+    const { wrap, unwrapped, bundle, recipientPk } = await makeUnwrapped();
+    writeStoredInvites(recipientPk, [{ wrap: wrap as NostrEvent, unwrapped }]);
+    const got = await eventually(
+      () => queryStoredInvites(recipientPk),
+      (r) => r.some((i) => i.wrapId === wrap.id),
+    );
     const mine = got.find((i) => i.wrapId === wrap.id)!;
     expect(JSON.parse(mine.rumor.content).community_id).toBe(bundle.community_id);
+  });
+
+  it("scopes reads to the recipient — another account never sees the invite", async () => {
+    const { wrap, unwrapped, recipientPk } = await makeUnwrapped();
+    const otherPk = getPublicKey(generateSecretKey());
+    writeStoredInvites(recipientPk, [{ wrap: wrap as NostrEvent, unwrapped }]);
+    // The recipient reads it back…
+    await eventually(() => queryStoredInvites(recipientPk), (r) => r.some((i) => i.wrapId === wrap.id));
+    // …but a different logged-in account never does (the leak this guards).
+    const forOther = await queryStoredInvites(otherPk);
+    expect(forOther.some((i) => i.wrapId === wrap.id)).toBe(false);
   });
 
   it("cursor resumes a backdate window behind the newest wrap scanned", async () => {

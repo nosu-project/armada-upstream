@@ -11,8 +11,15 @@
  * Backed by `@nostrify/indexeddb` (the strfry-port NStore), a SEPARATE
  * database from `armada-events` (which never stores gift wraps at all — see
  * NostrBatcher.cacheEvents). Stored records are keyed by the WRAP id (the
- * inbox dedup key), carry the seal author (sender) and the wrap's
- * `created_at`, and are sig-less.
+ * inbox dedup key), carry the seal author (sender), the wrap's `created_at`,
+ * and the RECIPIENT (the account the wrap was addressed to), and are sig-less.
+ *
+ * The recipient is stamped as an indexed single-letter `#p` tag and every read
+ * is scoped to it: the store is one database shared by every logged-in profile,
+ * so without this scope a decrypted invite persisted while account A was active
+ * would be read back — and parked — for account B after an account switch,
+ * flooding B with A's community invites. Reads return ONLY the active account's
+ * invites; the whole database is still wiped on final logout.
  *
  * The `since` cursor resumes from the newest wrap already scanned. NIP-59
  * backdates the outer `created_at` up to two days, so the cursor rewinds that
@@ -39,6 +46,9 @@ export const WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
 const TAG_WRAP = "wrap";
 const TAG_SENDER = "sender";
 const TAG_WRAP_CREATED = "wrapts";
+/** Recipient scope — the account the wrap was addressed to. Single-letter so
+ * NIndexedDB's tag index covers it (only single-letter tags are indexed). */
+const TAG_RECIPIENT = "p";
 
 let store: NIndexedDB | undefined;
 
@@ -75,15 +85,25 @@ export interface StoredDirectInvite {
  * Build the stored record for an unwrapped invite. The record `id` is the WRAP
  * id (the inbox dedup key), `pubkey` the sender, `kind`/`content`/`tags` the
  * inner rumor, `sig: ""`. The wrap's own `created_at` is stashed in a tag so
- * the cursor can advance by it.
+ * the cursor can advance by it, and `recipient` (the account the wrap was
+ * addressed to) is stamped as an indexed `#p` tag so reads stay scoped to the
+ * active account.
  */
-export function unwrappedToStored(wrap: NostrEvent, unwrapped: UnwrappedInvite): NostrEvent {
+export function unwrappedToStored(
+  wrap: NostrEvent,
+  unwrapped: UnwrappedInvite,
+  recipient: string,
+): NostrEvent {
   return {
     id: wrap.id,
     kind: unwrapped.rumor.kind,
     content: unwrapped.rumor.content,
     tags: [
       ...unwrapped.rumor.tags,
+      // Recipient scope. A single-letter tag so NIndexedDB indexes it; direct-
+      // invite rumors carry no tags of their own, so this `p` is unambiguously
+      // provenance (stripped back off in storedToInvite).
+      [TAG_RECIPIENT, recipient],
       [TAG_WRAP, wrap.id],
       [TAG_SENDER, unwrapped.sender],
       [TAG_WRAP_CREATED, String(wrap.created_at)],
@@ -94,7 +114,7 @@ export function unwrappedToStored(wrap: NostrEvent, unwrapped: UnwrappedInvite):
   };
 }
 
-const PROVENANCE = new Set([TAG_WRAP, TAG_SENDER, TAG_WRAP_CREATED]);
+const PROVENANCE = new Set([TAG_RECIPIENT, TAG_WRAP, TAG_SENDER, TAG_WRAP_CREATED]);
 
 /** Reconstruct a StoredDirectInvite from a stored record. */
 export function storedToInvite(ev: NostrEvent): StoredDirectInvite {
@@ -114,19 +134,36 @@ export function storedToInvite(ev: NostrEvent): StoredDirectInvite {
 
 // ── Reads / writes ──────────────────────────────────────────────────────────
 
-/** All cached direct-invite rumors (kind 3313), newest first. */
-export async function queryStoredInvites(opts?: { signal?: AbortSignal }): Promise<StoredDirectInvite[]> {
-  const events = await inviteInbox().query([{ kinds: [KIND_DIRECT_INVITE] }], { signal: opts?.signal });
+/**
+ * The cached direct-invite rumors (kind 3313) addressed to `recipient`, newest
+ * first. Scoped by the recipient `#p` tag so one profile never reads back the
+ * invites another logged-in profile decrypted into this shared store.
+ */
+export async function queryStoredInvites(
+  recipient: string,
+  opts?: { signal?: AbortSignal },
+): Promise<StoredDirectInvite[]> {
+  const events = await inviteInbox().query(
+    [{ kinds: [KIND_DIRECT_INVITE], "#p": [recipient] }],
+    { signal: opts?.signal },
+  );
   return events.map(storedToInvite);
 }
 
-/** Persist decrypted invites (fire-and-forget). Failures are swallowed. */
-export function writeStoredInvites(records: { wrap: NostrEvent; unwrapped: UnwrappedInvite }[]): void {
+/**
+ * Persist decrypted invites addressed to `recipient` (fire-and-forget). Failures
+ * are swallowed. The recipient is stamped so {@link queryStoredInvites} can scope
+ * reads to the active account.
+ */
+export function writeStoredInvites(
+  recipient: string,
+  records: { wrap: NostrEvent; unwrapped: UnwrappedInvite }[],
+): void {
   if (records.length === 0) return;
   const s = inviteInbox();
-  void Promise.all(records.map(({ wrap, unwrapped }) => s.event(unwrappedToStored(wrap, unwrapped)))).catch(
-    () => undefined,
-  );
+  void Promise.all(
+    records.map(({ wrap, unwrapped }) => s.event(unwrappedToStored(wrap, unwrapped, recipient))),
+  ).catch(() => undefined);
 }
 
 // ── Sync cursor ───────────────────────────────────────────────────────────────
