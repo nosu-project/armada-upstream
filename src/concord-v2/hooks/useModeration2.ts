@@ -6,7 +6,7 @@ import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } fro
 import { useGuestbookPublisher2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useRefound2 } from "@/concord-v2/hooks/useRekey2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { buildBanlistEdition, buildGrantEdition, hasForeignLiveLinks } from "@/concord-v2/lib/control";
+import { banShouldRotate, buildBanlistEdition, buildGrantEdition, hasForeignLiveLinks } from "@/concord-v2/lib/control";
 import { banlistLocator, bytesToHex, grantLocator, hex32 } from "@/concord-v2/lib/derive";
 import { addReadCutPending, clearReadCutPending, readCutPending } from "@/concord-v2/lib/readCutPending";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
@@ -100,16 +100,22 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
   const ban = useMutation<
     { rekeyed: boolean; publicBan: boolean },
     Error,
-    { target: string; onPhase?: (phase: BanPhase) => void }
+    { target: string; onPhase?: (phase: BanPhase) => void; forceRotate?: boolean }
   >({
-    mutationFn: async ({ target, onPhase }) => {
+    mutationFn: async ({ target, onPhase, forceRotate }) => {
       if (!user || !community) throw new Error("Not ready.");
       if (!canActOn(target, Permissions.BAN)) throw new Error("You don't have permission to ban this member.");
 
       // Fail-fast BEFORE publishing anything: a rotating ban must read-cut, and
       // a rotation needs a NIP-44 signer. Publishing the banlist first would
       // leave a "banned but still readable" member with no cut coming.
-      const willRotate = !!folded && !hasForeignLiveLinks(folded, user.pubkey, target);
+      //
+      // `forceRotate` is for a ban answering control-plane abuse. There the
+      // rotation IS the remedy — it strands the flooder's root, which a banlist
+      // alone never does — and that outweighs the cost it normally avoids
+      // (foreign live links pointing at a dead epoch until their creators next
+      // open the app and republish their bundles).
+      const willRotate = banShouldRotate(folded, user.pubkey, target, forceRotate);
       if (willRotate && !canRefound) {
         throw new Error(
           "Banning from a private community rotates the community keys, which your signer can't do. Ask an admin whose signer supports encryption to carry out the ban.",
@@ -132,7 +138,9 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
       // epoch). My own links rotate safely: the refound refreshes their
       // bundles behind the same URLs. Judged as-of after this ban: the
       // target's registry dies with their authority.
-      if (folded && hasForeignLiveLinks(folded, user.pubkey, target)) return { rekeyed: false, publicBan: true };
+      if (folded && !banShouldRotate(folded, user.pubkey, target, forceRotate)) {
+        return { rekeyed: false, publicBan: true };
+      }
       if (!canRefound) return { rekeyed: false, publicBan: false };
       onPhase?.("rekey");
       // Durable intent: mark BEFORE the attempt (with the keep-list captured

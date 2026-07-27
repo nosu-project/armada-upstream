@@ -21,6 +21,7 @@ import {
   findBlob,
   groupRotations,
   lowerKeyWins,
+  mintOrReuseRotationKey,
   myLocator,
   parseRekey,
   rekeyScopeId,
@@ -233,3 +234,29 @@ describe("exclusion vs. history (join-onto-a-past-Refounding, liveness-only bug)
   });
 });
 
+
+describe("rotation key reservation (retry safety)", () => {
+  const CID = "c1".repeat(32);
+  const COMMIT = "ab".repeat(32);
+
+  it("hands a retry the SAME key it minted for the first attempt", async () => {
+    // groupRotations keys a set by (rotator, scope, newEpoch, prevCommit) —
+    // every one of which a retry reproduces. A retry that re-minted would
+    // merge into the first attempt's set chunk-for-chunk, and members would
+    // adopt whichever key rode the chunk carrying their locator: the community
+    // splits in half at one epoch, both halves continuity-valid.
+    const first = await mintOrReuseRotationKey(CID, { kind: "root" }, 3n, COMMIT);
+    const retry = await mintOrReuseRotationKey(CID, { kind: "root" }, 3n, COMMIT);
+    expect(bytesToHex(retry)).toBe(bytesToHex(first));
+  });
+
+  it("mints a distinct key per epoch, scope and base", async () => {
+    const chan = new Uint8Array(32).fill(0x5a);
+    const base = await mintOrReuseRotationKey(CID, { kind: "root" }, 7n, COMMIT);
+    const nextEpoch = await mintOrReuseRotationKey(CID, { kind: "root" }, 8n, COMMIT);
+    const channel = await mintOrReuseRotationKey(CID, { kind: "channel", channelId: chan }, 7n, COMMIT);
+    const forked = await mintOrReuseRotationKey(CID, { kind: "root" }, 7n, "cd".repeat(32));
+    const hexes = [base, nextEpoch, channel, forked].map(bytesToHex);
+    expect(new Set(hexes).size, "a reservation is only shared by genuine retries").toBe(4);
+  });
+});

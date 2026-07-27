@@ -17,7 +17,11 @@ import {
   _configureSweepPagingForTests,
   _resetPlaneSweepMemoForTests,
   controlScope,
+  controlSweepAnswered,
   controlSweepTruncated,
+  controlSweepQuorum,
+  controlSweepReach,
+  controlSweepUnreadable,
   guestbookScope,
   sweepControl,
   sweepGuestbook,
@@ -80,6 +84,16 @@ class FakeRelay {
   }
 }
 
+/**
+ * REQs that opened a sweep, excluding the pager's follow-ups. The batching and
+ * single-flight tests are about how many rounds a sweep OPENS; the completeness
+ * pager then issues its own `until`-bearing probes on top, which are not what
+ * those tests measure.
+ */
+function openingCalls(relay: FakeRelay): number {
+  return relay.calls.filter((fs) => !fs.some((f) => f.until !== undefined)).length;
+}
+
 function poolOf(relays: Record<string, FakeRelay>) {
   return { relay: (url: string) => relays[url] };
 }
@@ -87,6 +101,7 @@ function poolOf(relays: Record<string, FakeRelay>) {
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 const RELAY_A = "wss://relay-a.test";
+const RELAY_B = "wss://relay-b.test";
 
 function signer(sk = generateSecretKey()) {
   return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
@@ -135,7 +150,7 @@ async function wrapAt(
 beforeEach(() => {
   _resetStreamAuthRegistry();
   _resetPlaneSweepMemoForTests();
-  _configureSweepPagingForTests({ pageLimit: 500, maxPages: 8 });
+  _configureSweepPagingForTests({ pageLimit: 500, maxEvents: 15_000, wallPage: 10_000, queryTimeoutMs: 25_000 });
   // Most tests exercise the fetch discipline, not the auth gate — let sweeps
   // proceed immediately (maxWaitMs 0 = the cap expires at once).
   _configureAuthWaitForTests({ maxWaitMs: 0 });
@@ -164,7 +179,7 @@ describe("sweepRelayScopes — stream-auth gate", () => {
     const fresh = await sweep;
 
     // …and only then does the REQ go out.
-    expect(relay.calls.length).toBe(1);
+    expect(openingCalls(relay)).toBe(1);
     expect(fresh.map((e) => e.rumorId)).toContain(e1.rumor.id);
   });
 
@@ -195,7 +210,7 @@ describe("sweepRelayScopes — stream-auth gate", () => {
     groups.forEach((_, i) => noteAuthResult(RELAY_A, `auth-ev-${i}`, true));
     const fresh = await sweep;
 
-    expect(relay.calls.length).toBe(1);
+    expect(openingCalls(relay)).toBe(1);
     expect(fresh.map((e) => e.rumorId)).toContain(e1.rumor.id);
   });
 
@@ -241,7 +256,7 @@ describe("sweepRelayScopes — stream-auth gate", () => {
 
     const fresh = await sweepControl(nostr, community);
 
-    expect(relay.calls.length, "the cap must not let a sweep hang forever").toBe(1);
+    expect(openingCalls(relay), "the cap must not let a sweep hang forever").toBe(1);
     expect(fresh).toEqual([]);
   });
 
@@ -270,7 +285,7 @@ describe("sweepRelayScopes — stream-auth gate", () => {
     );
     const [aFresh] = await sweeps;
 
-    expect(relay.calls.length, "held sweeps must merge into one REQ per relay").toBe(1);
+    expect(openingCalls(relay), "held sweeps must merge into one REQ per relay").toBe(1);
     expect(relay.calls[0].length, "one filter per scope").toBe(4);
     expect(aFresh.map((e) => e.rumorId)).toContain(aCtl.rumor.id);
   });
@@ -302,7 +317,7 @@ describe("sweepRelayScopes — stream-auth gate", () => {
       const fresh = await sweepControl(nostr, community);
       const took = Date.now() - started;
 
-      expect(relay.calls.length).toBe(1);
+      expect(openingCalls(relay)).toBe(1);
       expect(fresh.map((e) => e.rumorId)).toContain(e1.rumor.id);
       // The gate tracks the batch's own keys, so foreign churn (other
       // communities registering) must not delay the sweep toward the cap.
@@ -328,7 +343,7 @@ describe("sweepRelayScopes — resilience", () => {
 
     const fresh = await sweepControl(nostr, community);
 
-    expect(relay.calls.length, "one retry after the lost round").toBe(2);
+    expect(openingCalls(relay), "one retry after the lost round").toBe(2);
     expect(fresh.map((e) => e.rumorId)).toContain(e1.rumor.id);
   });
 
@@ -345,7 +360,7 @@ describe("sweepRelayScopes — resilience", () => {
     const nostr = poolOf({ [RELAY_A]: relay });
 
     const fresh = await sweepControl(nostr, community);
-    expect(relay.calls.length).toBe(2);
+    expect(openingCalls(relay)).toBe(2);
     expect(fresh).toEqual([]);
 
     // The next sweep must re-ask from scratch — no cursor advanced.
@@ -376,7 +391,7 @@ describe("sweepRelayScopes — one REQ per relay, per-scope filters", () => {
     ];
     const result = await sweepRelayScopes(nostr, RELAY_A, scopes);
 
-    expect(relay.calls.length, "the whole catch-up must be one REQ").toBe(1);
+    expect(openingCalls(relay), "the whole catch-up must be one REQ").toBe(1);
     expect(relay.calls[0].length, "one filter per community-plane").toBe(4);
     expect(result.get(scopes[0].scope)?.map((e) => e.rumorId)).toContain(aCtl.rumor.id);
     expect(result.get(scopes[3].scope)?.map((e) => e.rumorId)).toContain(bGb.rumor.id);
@@ -400,7 +415,7 @@ describe("sweepRelayScopes — one REQ per relay, per-scope filters", () => {
     await sweepRelayScopes(nostr, RELAY_A, scopesOf());
     await sweepRelayScopes(nostr, RELAY_A, scopesOf());
 
-    expect(relay.calls.length).toBe(2);
+    expect(openingCalls(relay)).toBe(2);
     const [aFilter, bFilter] = relay.calls[1];
     expect(aFilter.since, "A saw a motion — its cursor advances").toBe(aGb.wrap.created_at);
     // B must be re-asked from the start: A's newer motion must NEVER move
@@ -426,7 +441,7 @@ describe("sweepRelayScopes — one REQ per relay, per-scope filters", () => {
       sweepControl(nostr, a),
     ]);
 
-    expect(relay.calls.length, "the hook must join the in-flight batch, not re-fetch").toBe(1);
+    expect(openingCalls(relay), "the hook must join the in-flight batch, not re-fetch").toBe(1);
     expect(batch.get(controlScope(a, RELAY_A).scope)?.map((e) => e.rumorId)).toContain(aCtl.rumor.id);
     expect(hook.map((e) => e.rumorId), "the joining sweep must receive the shared result").toContain(
       aCtl.rumor.id,
@@ -468,7 +483,7 @@ describe("sweepRelayScopes — one REQ per relay, per-scope filters", () => {
     await sweepGuestbook(nostr, community);
     await sweepGuestbook(nostr, community);
 
-    expect(relay.calls.length).toBe(2);
+    expect(openingCalls(relay)).toBe(2);
     expect(relay.calls[0][0].since, "first sweep is a full read").toBeUndefined();
     expect(relay.calls[1][0].since, "second sweep must be cursor-gated").toBe(e1.wrap.created_at);
   });
@@ -489,7 +504,7 @@ describe("control completeness — the whole plane, every sweep", () => {
     const first = await sweepControl(nostr, community);
     const second = await sweepControl(nostr, community);
 
-    expect(relay.calls.length).toBe(2);
+    expect(openingCalls(relay)).toBe(2);
     expect(relay.calls[0][0].since, "control must not trust a forward cursor").toBeUndefined();
     expect(relay.calls[1][0].since, "…on ANY sweep, not just the first").toBeUndefined();
     expect(first.map((e) => e.rumorId)).toContain(e1.rumor.id);
@@ -545,12 +560,11 @@ describe("control completeness — the whole plane, every sweep", () => {
     }
   });
 
-  it("flags truncation when the plane exceeds the pager budget (the refound safety gate)", async () => {
-    // A plane deeper than pageLimit*maxPages: the sweep leaves editions behind
-    // this round, and MUST advertise it so a Refounding aborts rather than
-    // compact a truncated plane (dropping unfetched entities from the new epoch
-    // for every member, forever).
-    _configureSweepPagingForTests({ pageLimit: 2, maxPages: 1 });
+  it("flags truncation ONLY when it hits our own event budget", async () => {
+    // The single honest completeness claim: not "the relay ran out" (which no
+    // client can establish) but "we stopped". A Refounding aborts on it, and
+    // the login warm-up refuses to persist the fold it produced.
+    _configureSweepPagingForTests({ pageLimit: 2, maxEvents: 2 });
     const owner = signer();
     const community = communityOf(90, owner.pubkey);
     const control = controlGroupKey(community.root, community.id, 0);
@@ -563,9 +577,10 @@ describe("control completeness — the whole plane, every sweep", () => {
     relay.events = wraps.map((w) => w.wrap);
     const nostr = poolOf({ [RELAY_A]: relay });
 
-    expect(controlSweepTruncated(community), "clean before any sweep").toBe(false);
+    expect(controlSweepTruncated(community), "nothing is claimed before a sweep runs").toBe(false);
     await sweepControl(nostr, community);
-    expect(controlSweepTruncated(community), "the pager hit its budget — refound must abort").toBe(true);
+    expect(controlSweepTruncated(community), "the budget was spent with plane left over").toBe(true);
+    expect(controlSweepAnswered(community), "the relay still answered — a short read is not silence").toBe(true);
   });
 
   it("clears a prior truncation verdict once the plane fits the budget again", async () => {
@@ -580,16 +595,372 @@ describe("control completeness — the whole plane, every sweep", () => {
     relay.events = wraps.map((w) => w.wrap);
     const nostr = poolOf({ [RELAY_A]: relay });
 
-    _configureSweepPagingForTests({ pageLimit: 2, maxPages: 1 });
+    _configureSweepPagingForTests({ pageLimit: 2, maxEvents: 2 });
     await sweepControl(nostr, community);
     expect(controlSweepTruncated(community)).toBe(true);
 
     // A generous budget on the next round reaches the whole plane: the verdict
     // must lift (a transient deep-plane must not wedge future refounds).
     _resetPlaneSweepMemoForTests();
-    _configureSweepPagingForTests({ pageLimit: 500, maxPages: 8 });
+    _configureSweepPagingForTests({ pageLimit: 500, maxEvents: 15_000 });
     await sweepControl(nostr, community);
     expect(controlSweepTruncated(community)).toBe(false);
+    expect(controlSweepAnswered(community)).toBe(true);
+  });
+
+  it("leaves NO verdict standing when the sweep never got an answer", async () => {
+    // A stale "reached, not truncated" from the round before would let a
+    // Refounding compact against a picture this sweep never established.
+    const owner = signer();
+    const community = communityOf(89, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [e1.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepControl(nostr, community);
+    expect(controlSweepQuorum(community), "one good round reaches the relay").toBe(true);
+
+    relay.failNext = 2; // both attempts
+    await sweepControl(nostr, community);
+    expect(controlSweepQuorum(community), "a dead round must invalidate the prior verdict").toBe(false);
+    expect(controlSweepAnswered(community)).toBe(false);
+  });
+
+  it("ignores events a relay slips into a later page that the filter never asked for", async () => {
+    // Page one is demuxed by wrap author upstream; pages after it were not, so
+    // a relay could inject an off-filter event to (a) drag the `until` cursor
+    // below the rest of the plane and (b) get that event's id memoed as
+    // processed — which would permanently stop the real wrap behind it from
+    // ever being decrypted, by this pager or the live wire that shares the memo.
+    _configureSweepPagingForTests({ pageLimit: 2 });
+    const owner = signer();
+    const community = communityOf(97, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = await Promise.all(
+      [0, 1, 2, 3].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+    // A foreign event, far older, authored by a key this scope never asked for.
+    const foreign = finalizeEvent({ kind: 1059, content: "x", tags: [], created_at: 1_000 }, generateSecretKey());
+
+    // A relay that does NOT honour the filter — the only kind this defends
+    // against. FakeRelay filters faithfully, so it cannot express the attack.
+    const honest = new FakeRelay();
+    honest.events = wraps.map((w) => w.wrap);
+    const relay = {
+      calls: honest.calls,
+      async query(filters: Filter[]) {
+        const real = await honest.query(filters);
+        // Slip the off-filter event into every page after the first.
+        return honest.calls.length > 1 ? [...real, foreign] : real;
+      },
+    } as unknown as FakeRelay;
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, community);
+
+    for (const w of wraps) {
+      expect(fresh.map((e) => e.rumorId), "the cursor must not be dragged past the real plane").toContain(w.rumor.id);
+    }
+    expect(controlSweepTruncated(community), "and the sweep never claims it fell short").toBe(false);
+  });
+
+  it("counts wraps it fetched but could not open", async () => {
+    // The cheapest flood is junk that never decrypts: no encryption to do, just
+    // a signature with a key every member holds. It never becomes an opened
+    // event, so NOTHING downstream can see it — the sweep is the only witness,
+    // and it still spends the fetch budget on every sync.
+    const owner = signer();
+    const community = communityOf(96, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const real = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+    // Authored by the plane key (so the filter returns it) but not a wrap.
+    const junk = [0, 1, 2].map((i) =>
+      finalizeEvent({ kind: 1059, content: `garbage-${i}`, tags: [], created_at: now - 50 + i }, control.sk),
+    );
+
+    const relay = new FakeRelay();
+    relay.events = [real.wrap, ...junk];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, community);
+
+    expect(fresh.map((e) => e.rumorId), "the real edition still lands").toContain(real.rumor.id);
+    expect(controlSweepUnreadable(community), "every unopenable wrap is counted").toBe(junk.length);
+  });
+
+  it("sweeps only the CURRENT epoch's control plane, not retired ones", async () => {
+    // Concord's control plane is compaction-bounded: a Refounding re-wraps
+    // every head into the new epoch, so prior planes are history, not
+    // authority. Still sweeping them would let a plane any member can inflate
+    // follow the community through every future rotation — defeating the one
+    // operation that escapes a flood.
+    const owner = signer();
+    const community = communityOf(95, owner.pubkey);
+    const oldRoot = community.root;
+    const newRoot = new Uint8Array(32).fill(0x7e);
+    const rotated: CommunityV2 = {
+      ...community,
+      root: newRoot,
+      rootEpoch: 1n,
+      heldRoots: [
+        { epoch: 1n, key: newRoot },
+        { epoch: 0n, key: oldRoot },
+      ],
+    };
+    const now = Math.floor(Date.now() / 1000);
+    const retired = await wrapAt(controlGroupKey(oldRoot, community.id, 0), owner, "aa".repeat(32), now - 500);
+    const current = await wrapAt(controlGroupKey(newRoot, community.id, 1), owner, "bb".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [retired.wrap, current.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, rotated);
+    const ids = fresh.map((e) => e.rumorId);
+
+    expect(ids, "the current epoch's plane must be swept").toContain(current.rumor.id);
+    expect(ids, "a retired plane must not be swept").not.toContain(retired.rumor.id);
+    const authors = relay.calls.flat().flatMap((f) => f.authors ?? []);
+    expect(authors, "the retired plane's address must not even be asked for").not.toContain(
+      controlGroupKey(oldRoot, community.id, 0).pk,
+    );
+  });
+
+  it("an exhaustive sweep reaches the whole plane however deep it is", async () => {
+    // The Refounding path's escape from the deadlock: a member can flood the
+    // plane past the event budget, and a capped sweep would then refuse to
+    // rotate — the one operation that retires the flood. Exhaustive pays the
+    // depth instead of giving up.
+    _configureSweepPagingForTests({ pageLimit: 2, maxEvents: 2 });
+    const owner = signer();
+    const community = communityOf(94, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = await Promise.all(
+      [0, 1, 2, 3, 4, 5].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+
+    const relay = new FakeRelay();
+    relay.events = wraps.map((w) => w.wrap);
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, community, { exhaustive: true });
+
+    expect(controlSweepTruncated(community), "exhaustive ignores the budget").toBe(false);
+    for (const w of wraps) {
+      expect(fresh.map((e) => e.rumorId), "every edition must be reached").toContain(w.rumor.id);
+    }
+  });
+
+  it("drains a same-second wall, then steps below it", async () => {
+    // `until` is INCLUSIVE, so a block of identical timestamps wider than a
+    // page is a cursor no `until` steps past — a full page of nothing new,
+    // forever. That is the cheapest silent starve: a wrap's created_at is the
+    // publisher's to choose, so bury a ban under one second's worth of wraps
+    // and a naive pager never sees past it. One wide ask for that second
+    // recovers it; the cursor then steps below.
+    _configureSweepPagingForTests({ pageLimit: 2, wallPage: 10_000 });
+    const owner = signer();
+    const community = communityOf(92, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wall = await Promise.all(
+      [0, 1, 2, 3].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100)),
+    );
+    const buried = await wrapAt(control, owner, "ee".repeat(32), now - 900);
+
+    const relay = new FakeRelay();
+    relay.events = [...wall.map((w) => w.wrap), buried.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const ids = (await sweepControl(nostr, community)).map((e) => e.rumorId);
+
+    for (const w of wall) {
+      expect(ids, "the wall itself must be drained, not stepped over").toContain(w.rumor.id);
+    }
+    expect(ids, "and what is buried behind it must be reached").toContain(buried.rumor.id);
+    expect(controlSweepTruncated(community), "a drainable second costs nothing").toBe(false);
+  });
+
+  it("reports a shortfall when a CAPPED relay cannot serve a whole second", async () => {
+    // The residual case, and the one that must never be silent: a relay whose
+    // own limit sits below the second's size answers a wide ask with its cap,
+    // which looks exactly like a drained second. Comparing the answer to the
+    // limit we ASKED for reads a capped relay as an exhausted one and loses
+    // the remainder with no signal at all. The honest test is whether the wide
+    // ask taught us anything new.
+    _configureSweepPagingForTests({ pageLimit: 2, wallPage: 2 });
+    const owner = signer();
+    const community = communityOf(98, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wall = await Promise.all(
+      [0, 1, 2, 3].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100)),
+    );
+    const buried = await wrapAt(control, owner, "ee".repeat(32), now - 900);
+
+    const relay = new FakeRelay();
+    relay.events = [...wall.map((w) => w.wrap), buried.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepControl(nostr, community);
+
+    expect(controlSweepTruncated(community), "a second we cannot read whole is a short read").toBe(true);
+    expect(controlSweepAnswered(community), "a short read is still an answer — it IS the alarm").toBe(true);
+  });
+
+  it("an exhaustive sweep never JOINS a budgeted one already in flight", async () => {
+    // The rotation path's whole guarantee. Scope keys are shared, so without a
+    // separate flight identity the Refounding's exhaustive read silently
+    // inherits a capped one — and compacts a plane it never saw the end of.
+    _configureSweepPagingForTests({ pageLimit: 2, maxEvents: 2 });
+    const owner = signer();
+    const community = communityOf(85, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = await Promise.all(
+      [0, 1, 2, 3, 4, 5].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+
+    const relay = new FakeRelay();
+    relay.delayMs = 20;
+    relay.events = wraps.map((w) => w.wrap);
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const budgeted = sweepControl(nostr, community);
+    const exhaustive = sweepControl(nostr, community, { exhaustive: true });
+    await Promise.all([budgeted, exhaustive]);
+
+    expect(controlSweepTruncated(community), "the exhaustive read must settle the verdict").toBe(false);
+    const stored = (await exhaustive).map((e) => e.rumorId);
+    for (const w of wraps) {
+      expect(stored, "every edition must be reached").toContain(w.rumor.id);
+    }
+  });
+
+  it("reports truncation when ANY relay came up short, not just all of them", async () => {
+    // Relays hold different depths. A shallow one that answers everything it
+    // has proves nothing about the year another holds, so one relay hitting
+    // the budget is enough to say we did not read the union.
+    _configureSweepPagingForTests({ pageLimit: 2, maxEvents: 2 });
+    const owner = signer();
+    const community: CommunityV2 = { ...communityOf(86, owner.pubkey), relays: [RELAY_A, RELAY_B] };
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const deep = await Promise.all(
+      [0, 1, 2, 3, 4, 5].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+
+    const shallow = new FakeRelay();
+    shallow.events = [deep[0].wrap];
+    const flooded = new FakeRelay();
+    flooded.events = deep.map((w) => w.wrap);
+    const nostr = poolOf({ [RELAY_A]: shallow, [RELAY_B]: flooded });
+
+    await sweepControl(nostr, community);
+
+    expect(controlSweepTruncated(community), "one short relay is a short read").toBe(true);
+    expect(controlSweepQuorum(community), "but both relays answered").toBe(true);
+  });
+
+  it("loses quorum when half the relays go silent, keeps it when a majority answer", async () => {
+    // The Refounding gate. Compaction rewrites the whole community, so reading
+    // too few sources drops state for everyone — but demanding EVERY relay
+    // would let one permanently dead entry in the list block rotation forever,
+    // which is the same wedge an attacker was after.
+    const owner = signer();
+    const three = [RELAY_A, RELAY_B, "wss://relay-c.test"];
+    const community: CommunityV2 = { ...communityOf(87, owner.pubkey), relays: three };
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+
+    const live = () => {
+      const r = new FakeRelay();
+      r.events = [e1.wrap];
+      return r;
+    };
+    const dead = () => {
+      const r = new FakeRelay();
+      r.failNext = 2;
+      return r;
+    };
+
+    // 2 of 3 answer: a majority, so rotation may proceed.
+    await sweepControl(poolOf({ [three[0]]: live(), [three[1]]: live(), [three[2]]: dead() }), community);
+    expect(controlSweepReach(community)).toEqual({ reached: 2, total: 3 });
+    expect(controlSweepQuorum(community), "2 of 3 is a majority").toBe(true);
+    expect(controlSweepTruncated(community), "silence is not the same as a short read").toBe(false);
+
+    // 1 of 3 answers: too little of the union to compact around.
+    _resetPlaneSweepMemoForTests();
+    await sweepControl(poolOf({ [three[0]]: live(), [three[1]]: dead(), [three[2]]: dead() }), community);
+    expect(controlSweepQuorum(community), "1 of 3 is not").toBe(false);
+    expect(controlSweepAnswered(community), "but the watchdog still gets its junk tally").toBe(true);
+  });
+
+  it("does not mistake a relay's OWN cap for a drained second", async () => {
+    // The silent-loss case. A relay that caps at 3 answers a 10,000-wide ask
+    // with 3, which is indistinguishable from a second that holds exactly 3.
+    // Judging the answer against the limit we ASKED for reads the capped relay
+    // as exhausted and drops the remainder with no signal at all — strictly
+    // worse than the stall it replaced, because nothing downstream can tell.
+    _configureSweepPagingForTests({ pageLimit: 2, wallPage: 10_000 });
+    const owner = signer();
+    const community = communityOf(84, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wall = await Promise.all(
+      [0, 1, 2, 3, 4].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100)),
+    );
+
+    const honest = new FakeRelay();
+    honest.events = wall.map((w) => w.wrap);
+    // A relay with a hard ceiling of 2, whatever the filter asks for.
+    const capped = {
+      calls: honest.calls,
+      async query(filters: Filter[]) {
+        return (await honest.query(filters.map((f) => ({ ...f, limit: Math.min(f.limit ?? 2, 2) })))).slice(0, 2);
+      },
+    } as unknown as FakeRelay;
+    const nostr = poolOf({ [RELAY_A]: capped });
+
+    await sweepControl(nostr, community);
+
+    expect(
+      controlSweepTruncated(community),
+      "a cap we cannot see past must never read as a complete second",
+    ).toBe(true);
+  });
+
+  it("never claims truncation when the last page is simply the end of the plane", async () => {
+    // A short page is the ordinary end of a read. Treating it as a shortfall
+    // would wedge refounds on perfectly healthy communities.
+    _configureSweepPagingForTests({ pageLimit: 2 });
+    const owner = signer();
+    const community = communityOf(93, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = await Promise.all(
+      [0, 1].map((i) => wrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)),
+    );
+
+    const relay = new FakeRelay();
+    relay.events = wraps.map((w) => w.wrap);
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const fresh = await sweepControl(nostr, community);
+
+    expect(controlSweepTruncated(community)).toBe(false);
+    for (const w of wraps) {
+      expect(fresh.map((e) => e.rumorId)).toContain(w.rumor.id);
+    }
   });
 });
 

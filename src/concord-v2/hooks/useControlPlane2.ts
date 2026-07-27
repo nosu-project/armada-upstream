@@ -154,6 +154,16 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
     community ? controlFoldKey(community.idHex) : null,
     () => {
       if (!community || !events) return undefined;
+      // Folds whatever has arrived, on purpose. The control plane is
+      // procedural: members process editions as they come and converge, and a
+      // member who is one sweep behind reads and writes fine — they just don't
+      // have the newest metadata, roles and bans yet. Refusing to fold until
+      // the plane is "proven complete" would hand any member a lockup switch,
+      // since anyone can inflate the plane past any budget. The defenses that
+      // matter are local and already here: monotonic per-entity floors (a
+      // flood can't downgrade an entity we've advanced past) and `incomplete`
+      // (floored entities the served set can't account for), which is what the
+      // Refounding path aborts on.
       const editions = openControlEditions(events);
       // Once the community has Refounded, editions under the CURRENT epoch's
       // control group fold by version-anchored bootstrap (the compaction
@@ -213,7 +223,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
       // A dissolution tombstone is terminal and immutable — if we've already
       // stored one, we're done without touching the network.
       const cached = await queryByStreams([group.pk]);
-      if (cached.some((o) => isDissolvedOpened(o, community!.owner))) return true;
+      if (cached.some((o) => isDissolvedOpened(o, community!.owner, community!.id))) return true;
 
       const results = await Promise.all(
         community!.relays.map((url) =>
@@ -227,7 +237,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
       );
       const opened = openPlaneWraps(results.flat(), [group]);
       if (opened.length > 0) writeOpened(opened);
-      return opened.some((o) => isDissolvedOpened(o, community!.owner));
+      return opened.some((o) => isDissolvedOpened(o, community!.owner, community!.id));
     },
   });
 }

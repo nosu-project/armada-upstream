@@ -19,6 +19,7 @@
 import { bytesToHex, epochKeyCommitment, random32, recipientLocator } from "@/concord-v2/lib/derive";
 import { KIND_REKEY, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import { buildRumor, type OpenedEvent, type Rumor } from "@/concord-v2/lib/stream";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 
 /** Per-recipient blobs per rekey event (CORD-06 §1). */
 export const REKEY_BLOBS_PER_EVENT = 120;
@@ -299,6 +300,44 @@ export function lowerKeyWins(a: Uint8Array, b: Uint8Array): Uint8Array {
 /** Mint the fresh key for a rotation. */
 export function mintRotationKey(): Uint8Array {
   return random32();
+}
+
+/**
+ * Mint the key for a rotation ONCE and hand the SAME one back to every retry.
+ *
+ * A rotation publishes in stages — compaction, then the root roll, then each
+ * private channel — and any stage can lose its relays. Retrying is the
+ * expected recovery. But {@link groupRotations} keys a rotation set by
+ * `(rotator, scope, newEpoch, prevCommit)`, and a retry matches on all four,
+ * so a second attempt carrying a FRESHLY minted key merges into the first
+ * attempt's set chunk-for-chunk. Members then adopt whichever key happened to
+ * ride the chunk carrying their locator: the community splits in half at the
+ * same epoch, both halves continuity-valid, with nothing to signal it.
+ *
+ * Reserving the key under those same four inputs makes a retry byte-identical
+ * to the attempt it resumes. A reservation that can't be persisted (private
+ * mode, no IndexedDB) falls back to a fresh key — no worse than before, and
+ * the caller is a human clicking retry, not a loop.
+ *
+ * DEVICE-LOCAL. Two devices signed in as the same rotator, both rotating the
+ * same continuity point, still mint two keys into one correlated set. Closing
+ * that needs a deterministic derivation from a rotator-only secret, which a
+ * NIP-46 bunker will not hand over. What keeps it rare is that the rotation
+ * path advances the local epoch the instant the roll lands, so the second
+ * device's next rotation starts from a different tuple.
+ */
+export async function mintOrReuseRotationKey(
+  communityIdHex: string,
+  scope: RekeyScope,
+  newEpoch: bigint,
+  prevCommit: string,
+): Promise<Uint8Array> {
+  const key = `rekey-mint:${communityIdHex}:${bytesToHex(rekeyScopeId(scope))}:${newEpoch}:${prevCommit}`;
+  const held = await readFolded<Uint8Array>(key);
+  if (held instanceof Uint8Array && held.length === 32) return held;
+  const minted = mintRotationKey();
+  await writeFolded(key, minted);
+  return minted;
 }
 
 /** Compute my locator for a rotation (public inputs only — bunker-friendly). */

@@ -28,9 +28,14 @@ import { KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { buildRumor, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
-import { useControlEvents2 } from "./useControlPlane2";
+import { useControlEvents2, useControlFold2 } from "./useControlPlane2";
 
-import { _configureAuthWaitForTests } from "@/concord-v2/lib/planeSync";
+import {
+  _configureAuthWaitForTests,
+  _configureSweepPagingForTests,
+  _resetPlaneSweepMemoForTests,
+  controlSweepTruncated,
+} from "@/concord-v2/lib/planeSync";
 
 // These tests exercise the on-open sweep, not planeSync's NIP-42 auth gate
 // (planeSync.test.ts owns that) — let the sweep's REQs fly immediately.
@@ -40,13 +45,20 @@ beforeAll(() => {
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
-const h = vi.hoisted(() => ({ pool: undefined as unknown }));
+const h = vi.hoisted(() => ({
+  pool: undefined as unknown,
+  /** The latest fold thunk handed to useDeferredFold, so a test can run it. */
+  compute: undefined as (() => unknown) | undefined,
+}));
 
 vi.mock("@nostrify/react", () => ({
   useNostr: () => ({ nostr: h.pool }),
 }));
 vi.mock("@/concord-v2/hooks/useDeferredFold2", () => ({
-  useDeferredFold: () => undefined,
+  useDeferredFold: (_key: string | null, compute: () => unknown) => {
+    h.compute = compute;
+    return undefined;
+  },
 }));
 
 // ── Fake relay ───────────────────────────────────────────────────────────────
@@ -200,5 +212,68 @@ describe("useControlEvents2 — on-open sweep (no standing socket)", () => {
 
     expect(relayA.queries.length + relayB.queries.length, "inactive hook must not sweep").toBe(0);
     expect(relayA.reqCount + relayB.reqCount).toBe(0);
+  });
+});
+
+describe("useControlFold2 — a short sweep still folds", () => {
+  /**
+   * Render the fold hook, wait for its sweep to settle, and hand back a
+   * re-render trigger.
+   */
+  async function renderFold(community: CommunityV2, relay: FakeRelay) {
+    h.compute = undefined;
+    h.pool = { relay: () => relay };
+    const { wrapper } = makeWrapper();
+    const { rerender } = renderHook(() => useControlFold2(community), { wrapper });
+    await waitFor(() => expect(relay.queries.length).toBeGreaterThan(0), { timeout: 10_000 });
+    await waitFor(() => expect(h.compute).toBeDefined(), { timeout: 10_000 });
+    return rerender;
+  }
+
+  it("folds normally when the sweep read the plane comfortably", { timeout: 30_000 }, async () => {
+    _resetPlaneSweepMemoForTests();
+    _configureSweepPagingForTests({ pageLimit: 500, maxEvents: 15_000 });
+    const owner = signer();
+    const community = communityOf(61, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    relay.events = [(await editionWrapAt(control, owner, "ab".repeat(32), now - 100)).wrap];
+
+    const rerender = await renderFold(community, relay);
+    await waitFor(
+      () => {
+        rerender();
+        expect(h.compute!()).toBeDefined();
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it("still folds when the sweep hit its budget", { timeout: 30_000 }, async () => {
+    // Anyone can inflate the plane past any budget, so refusing to fold a
+    // short read hands every member a lockup switch. The plane is procedural:
+    // fold what arrived, converge on later sweeps. What a short read DOES
+    // forfeit is the durable snapshot (loginWarmup) and the right to compact
+    // (useRekey2) — not the ability to see the community at all.
+    _resetPlaneSweepMemoForTests();
+    _configureSweepPagingForTests({ pageLimit: 2, maxEvents: 2 });
+    const owner = signer();
+    const community = communityOf(62, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    relay.events = await Promise.all(
+      [0, 1, 2, 3, 4, 5].map(async (i) =>
+        (await editionWrapAt(control, owner, i.toString(16).padStart(2, "0").repeat(32), now - 100 - i * 10)).wrap,
+      ),
+    );
+
+    const rerender = await renderFold(community, relay);
+    await waitFor(() => expect(controlSweepTruncated(community)).toBe(true), { timeout: 10_000 });
+    rerender();
+    expect(h.compute!(), "a member must still see the community").toBeDefined();
+
+    _configureSweepPagingForTests({ pageLimit: 500, maxEvents: 15_000 });
   });
 });

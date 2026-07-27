@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useControlEvents2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { bytesToHex } from "@/concord-v2/lib/derive";
+import { classifyEditions, type AuditValidity } from "@/concord-v2/lib/auditLog";
 import { openControlEditions, type FoldedControl } from "@/concord-v2/lib/control";
 import type { ParsedEdition } from "@/concord-v2/lib/edition";
 import {
@@ -52,61 +53,13 @@ export function AuditLogView({ community }: { community: CommunityV2 }) {
   const rows = useMemo<AuditRow[]>(() => {
     if (!control.data) return [];
     const editions = openControlEditions(control.data);
-
-    // Classify each edition against the fold's decision. The fold accepts one
-    // HEAD edition per entity (the current, authority-verified state). An
-    // edition is only "superseded" if it is a genuine ANCESTOR of that head on
-    // the verified hash chain (prevHash → selfHash) — i.e. it really was the
-    // honored state before a later, chained edition replaced it. Anything else
-    // at the entity (a forgery at any version, an unauthorized edition, a
-    // same-version fork loser, an unchained plant) was NEVER honored: it is
-    // "not applied", regardless of the version number it claims.
-    const acceptedHead = folded?.headEditions;
-    const currentRumorId = new Set<string>();
-    const supersededRumorId = new Set<string>();
-    if (acceptedHead) {
-      // Index every edition by (eid, selfHash) so we can walk a head's chain.
-      const byEidHash = new Map<string, ParsedEdition>();
-      for (const e of editions) {
-        byEidHash.set(`${bytesToHex(e.entityId)}:${bytesToHex(e.selfHash)}`, e);
-      }
-      for (const [eid, head] of acceptedHead) {
-        // The head edition may live in headEditions but we key off its rumor id.
-        currentRumorId.add(bytesToHex(head.rumorId));
-        // Walk backwards from the head through prevHash links. Each hop must
-        // resolve to an edition we actually hold at this entity; stop at the
-        // chain root (no prevHash) or a dangling link (a compaction bootstrap).
-        let cursor: ParsedEdition | undefined = editions.find(
-          (e) => bytesToHex(e.entityId) === eid && bytesToHex(e.rumorId) === bytesToHex(head.rumorId),
-        );
-        const guard = new Set<string>(); // cycle guard on selfHash
-        while (cursor?.prevHash) {
-          const prevKey = `${eid}:${bytesToHex(cursor.prevHash)}`;
-          if (guard.has(prevKey)) break;
-          guard.add(prevKey);
-          const prev: ParsedEdition | undefined = byEidHash.get(prevKey);
-          if (!prev) break; // dangling (compacted-away) — nothing more to mark
-          supersededRumorId.add(bytesToHex(prev.rumorId));
-          cursor = prev;
-        }
-      }
-    }
-
+    // The verdicts are shared with the suspicious-activity watchdog, so both
+    // read the same decision rather than each classifying for itself.
+    const validity = classifyEditions(editions, folded);
     return editions
       .map((e) => {
         const rumorHex = bytesToHex(e.rumorId);
-        let validity: Validity;
-        if (!folded) {
-          validity = "unknown";
-        } else if (currentRumorId.has(rumorHex)) {
-          validity = "current";
-        } else if (supersededRumorId.has(rumorHex)) {
-          validity = "superseded";
-        } else {
-          // Not the head and not on the head's verified chain — never honored.
-          validity = "dropped";
-        }
-        return toRow(e, folded?.roster, folded, validity, rumorHex);
+        return toRow(e, folded?.roster, folded, validity.get(rumorHex) ?? "unknown", rumorHex);
       })
       .sort((a, b) =>
         b.createdAt !== a.createdAt ? b.createdAt - a.createdAt : a.key < b.key ? 1 : -1,
@@ -139,7 +92,7 @@ export function AuditLogView({ community }: { community: CommunityV2 }) {
   );
 }
 
-type Validity = "current" | "superseded" | "dropped" | "unknown";
+type Validity = AuditValidity;
 
 /** A normalised audit row derived from one raw control edition. */
 interface AuditRow {
