@@ -6,6 +6,7 @@ import { ChatContent } from "@/components/chat/ChatContent";
 import { MessageActionSheet } from "@/components/chat/MessageActionSheet";
 import { MessageActionToolbar } from "@/components/chat/MessageActionToolbar";
 import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
+import { CalendarEventMessageCard } from "@/components/chat/CalendarEventCard";
 import { PollCard } from "@/components/chat/PollCard";
 import { PollView } from "@/components/chat/PollView";
 import { ReactionBar } from "@/components/chat/ReactionBar";
@@ -58,10 +59,11 @@ import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
-import type { ChatMsg, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, MessageCalendar, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ReactNode } from "react";
 
+import { KIND_CALENDAR_DATE, KIND_CALENDAR_TIME } from "@/lib/calendar";
 import { KIND_POLL } from "@/lib/polls";
 
 /** A `nostr:npub…`/`nostr:nprofile…`/bare-bech32 mention inside preview text. */
@@ -286,6 +288,13 @@ export interface ChatMessageProps {
    * {@link pollContext} instead.
    */
   poll?: MessagePoll;
+  /**
+   * Resolved calendar event + RSVP state for a calendar (kind 31922/31923)
+   * message. When present it renders the inline event card with RSVP controls.
+   * Both NIP-29 and Concord v2 supply it; transports without calendar events omit
+   * it and a calendar kind would never appear in their timeline.
+   */
+  calendar?: MessageCalendar;
   /** Resolved reaction tallies + toggle for this message. */
   reactions?: MessageReactions;
   /** Whether this surface supports zaps (shows the ⚡ button on others' messages). */
@@ -404,6 +413,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   identityOverride,
   pollContext,
   poll,
+  calendar,
   reactions,
   zapEnabled,
   zaps,
@@ -683,6 +693,16 @@ const ChatMessageInner = memo(function ChatMessageInner({
             <PollView event={event} tally={poll.tally} canVote={canWrite} onVote={poll.vote} />
           ) : null}
         </>
+      ) : event.kind === KIND_CALENDAR_TIME || event.kind === KIND_CALENDAR_DATE ? (
+        calendar ? (
+          <CalendarEventMessageCard
+            event={calendar.event}
+            tally={calendar.tally}
+            canRsvp={calendar.canRsvp}
+            isSettingRsvp={calendar.isSettingRsvp}
+            onSetRsvp={calendar.setRsvp}
+          />
+        ) : null
       ) : invocation ? (
         // The same third-person action line `/me` uses. The arguments are left
         // out on purpose: they were addressed to the bot, not to the room, and

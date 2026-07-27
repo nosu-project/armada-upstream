@@ -810,6 +810,7 @@ export function GroupPage() {
               canWrite={canWrite}
               membershipPending={membershipPending}
               canModerate={isAdmin}
+              calendar={calendar}
               searchQuery={searchOpen ? searchQuery : ""}
               scrollToMessageRef={scrollToMessageRef}
             />

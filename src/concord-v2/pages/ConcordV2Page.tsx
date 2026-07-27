@@ -108,7 +108,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
 
 import { authorsByRecency, threadSummary } from "@/components/chat/transport";
-import type { ChatMsg, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, MessageCalendar, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
@@ -181,6 +181,8 @@ interface ChatMessage2Props {
   onSendOnchainZap: ((target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>) | undefined;
   /** Poll tally + vote callback when this message is a poll (kind 1068). */
   poll: MessagePoll | undefined;
+  /** Calendar event + RSVP state when this message is a calendar event (31922/31923). */
+  calendar: MessageCalendar | undefined;
   /** This message's thread replies (stable ref from the transport), for the badge. */
   replies: ChatMsg[];
   continuation: boolean;
@@ -219,6 +221,7 @@ const ChatMessage2 = memo(function ChatMessage2({
   onSendZap,
   onSendOnchainZap,
   poll,
+  calendar,
   replies,
   continuation,
   canWrite,
@@ -264,6 +267,7 @@ const ChatMessage2 = memo(function ChatMessage2({
       onSendZap={onSendZap}
       onSendOnchainZap={onSendOnchainZap}
       poll={poll}
+      calendar={calendar}
       sendStatus={sendStatus}
       continuation={continuation}
       active={active}
@@ -2292,6 +2296,7 @@ export function ConcordV2Page() {
                         onSendZap={config.zapsEnabled ? transport.sendZap : undefined}
                         onSendOnchainZap={config.zapsEnabled ? transport.sendOnchainZap : undefined}
                         poll={transport.pollFor?.(msg.id)}
+                        calendar={transport.calendarFor?.(msg.id)}
                         replies={transport.threadRepliesFor?.(msg.id) ?? EMPTY_REPLIES}
                         continuation={continuation}
                         canWrite={transport.canWrite}

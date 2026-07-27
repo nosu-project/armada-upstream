@@ -18,7 +18,7 @@ import { zapRumorTags, type ZapTally } from "@/lib/zaps";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
 import { stableZapsFor, toChatMsg } from "@/components/chat/transport";
-import type { ChatMsg, ChatTransport, MessagePoll, MessageReactions, OnchainZapAnnouncement, PollDraft, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, ChatTransport, MessageCalendar, MessagePoll, MessageReactions, OnchainZapAnnouncement, PollDraft, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
 
 /** Shared empty tally array, so messages with no reactions keep a stable prop. */
 const EMPTY_TALLIES: ReactionTally[] = [];
@@ -411,6 +411,35 @@ export function useTransport2(
     [calendarEvents, canModerate, canWrite, saveCalendar, removeCalendar, rsvpsFor, setRsvp],
   );
 
+  // Calendar events ALSO render inline in the timeline (an event card), in
+  // addition to the events bar. Each deduped event's rumor is already a ChatMsg
+  // (adapted before parsing); slot them into the timeline by announcement time.
+  const calendarMsgs = useMemo<ChatMsg[]>(() => calendarEvents.map((c) => c.event as ChatMsg), [calendarEvents]);
+  const timeline = useMemo<ChatMsg[]>(() => {
+    if (calendarMsgs.length === 0) return topLevel;
+    return [...topLevel, ...calendarMsgs].sort((a, b) =>
+      a.created_at !== b.created_at ? a.created_at - b.created_at : a.id < b.id ? -1 : 1,
+    );
+  }, [topLevel, calendarMsgs]);
+
+  // Per-event RSVP binding for the inline card, mirroring `pollFor`. Recomputed
+  // when the event set or RSVP fold changes; identity-stable in between so an
+  // unchanged calendar row keeps its `calendar` prop (React.memo).
+  const calendarMessages = useMemo(() => {
+    const map = new Map<string, MessageCalendar>();
+    for (const c of calendarEvents) {
+      map.set(c.event.id, {
+        event: c,
+        tally: rsvpsFor(c),
+        canRsvp: canWrite,
+        isSettingRsvp: false,
+        setRsvp: (status) => setRsvp(c, status),
+      });
+    }
+    return map;
+  }, [calendarEvents, rsvpsFor, canWrite, setRsvp]);
+  const calendarFor = useCallback((id: string) => calendarMessages.get(id), [calendarMessages]);
+
   // Concord edit: a kind-3302 rumor targeting the original message's rumor
   // id. The fold applies the latest author-matching edit (non-destructive —
   // the original keeps its id, so reactions, replies, and quotes stay intact).
@@ -439,7 +468,7 @@ export function useTransport2(
 
   const transport = useMemo<ChatTransport>(
     () => ({
-      messages: topLevel,
+      messages: timeline,
       isLoading,
       canWrite,
       canModerate,
@@ -459,10 +488,11 @@ export function useTransport2(
       sendOnchainZap,
       pollFor,
       sendPoll,
+      calendarFor,
       threadRepliesFor,
       sendThreadReply,
     }),
-    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, threadRepliesFor, sendThreadReply],
+    [timeline, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply],
   );
 
   return { transport, reactionsFor, allMessages: messages, calendar };

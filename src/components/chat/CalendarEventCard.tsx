@@ -10,6 +10,7 @@ import {
   type CalendarEvent,
   type CalendarTransport,
   formatCalendarEventWhen,
+  isUpcoming,
   KIND_CALENDAR_TIME,
   type RsvpStatus,
   type RsvpTally,
@@ -164,6 +165,70 @@ function RsvpButton({
       {icon}
       {label}
     </button>
+  );
+}
+
+interface CalendarEventMessageCardProps {
+  event: CalendarEvent;
+  tally: RsvpTally;
+  /** Whether the current user may RSVP (membership / write access). */
+  canRsvp: boolean;
+  isSettingRsvp: boolean;
+  onSetRsvp: (status: RsvpStatus) => void;
+}
+
+/**
+ * An inline chat card for a calendar event (kind 31922/31923) — the Discord-like
+ * "event" embed rendered in the message timeline. Transport-agnostic: the tally
+ * and RSVP setter are supplied, so NIP-29 and Concord v2 render the same card
+ * (the same events also list in {@link CalendarEventsBar}). Reuses
+ * {@link RsvpControls} for the Going/Maybe/Can't-go row + attendee tallies.
+ */
+export function CalendarEventMessageCard({
+  event,
+  tally,
+  canRsvp,
+  isSettingRsvp,
+  onSetRsvp,
+}: CalendarEventMessageCardProps) {
+  const past = !isUpcoming(event);
+  return (
+    <div className="max-w-md rounded-xl border border-border bg-secondary/20 px-3 py-2.5 my-1.5 space-y-2.5">
+      <div className="flex items-start gap-3">
+        <div
+          className={cn(
+            "flex size-11 shrink-0 items-center justify-center clip-corner-lg",
+            past ? "bg-secondary text-muted-foreground" : "bg-primary/15 text-primary",
+          )}
+        >
+          {event.kind === KIND_CALENDAR_TIME ? <Clock className="size-5" /> : <CalendarDays className="size-5" />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {past ? "Past event" : "Event"}
+          </div>
+          <h3 className="font-semibold leading-tight break-words">{event.title}</h3>
+          <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Calendar className="size-3.5 shrink-0" />
+            <span className="break-words">{formatCalendarEventWhen(event)}</span>
+          </div>
+          {event.location && (
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <MapPin className="size-3.5 shrink-0" />
+              <span className="break-words">{event.location}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {event.description && (
+        <p className="whitespace-pre-wrap break-words text-sm text-foreground/90 line-clamp-4">
+          {event.description}
+        </p>
+      )}
+
+      <RsvpControls tally={tally} canRsvp={canRsvp && !past} isSettingRsvp={isSettingRsvp} onSet={onSetRsvp} />
+    </div>
   );
 }
 

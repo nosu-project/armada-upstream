@@ -35,7 +35,8 @@ import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 import { threadSummary } from "@/components/chat/transport";
-import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
+import type { ChatMsg, ChatTransport, MessageCalendar } from "@/components/chat/transport";
+import type { CalendarTransport } from "@/lib/calendar";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /** NIP-29 reply context: fetch the replied-to event from the relay, then render
@@ -138,6 +139,7 @@ function Nip29ChatMessage({
       canWrite={transport.canWrite}
       canModerate={transport.canModerate}
       pollContext={pollContext}
+      calendar={transport.calendarFor?.(event.id)}
       reactions={transport.reactionsFor?.(event.id)}
       zapEnabled={config.zapsEnabled && Boolean(transport.zapsFor)}
       zaps={transport.zapsFor?.(event.id)}
@@ -209,6 +211,12 @@ interface GroupChatProps {
   /** Whether the current user can moderate (delete messages). */
   canModerate: boolean;
   /**
+   * The group's NIP-52 calendar events + RSVPs (assembled by GroupPage from the
+   * relay hooks). Its events render inline in the timeline as event cards — the
+   * same events the header's events bar lists.
+   */
+  calendar?: CalendarTransport;
+  /**
    * Active search query. When non-empty, the timeline is replaced by matching
    * messages (filtered in-place in the chat area, not a separate view).
    */
@@ -227,7 +235,7 @@ interface GroupChatProps {
  * and rendered through the shared {@link MessageTimeline}/{@link ChatMessage}/
  * {@link ChatComposer}, the same components Concord uses.
  */
-export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, searchQuery = "", scrollToMessageRef }: GroupChatProps) {
+export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, calendar, searchQuery = "", scrollToMessageRef }: GroupChatProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { data: groupDetails } = useGroup(relayUrl, groupId);
@@ -487,11 +495,41 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     [editMessage, removeOptimistic, insertOptimistic, markSent],
   );
 
+  // Calendar events render inline in the timeline as event cards, alongside the
+  // header's events bar. They come from a separate relay query (not
+  // `useGroupMessages`), so merge them into a display timeline by created_at and
+  // expose each event's RSVP state per id for the row's card.
+  const calendarEvents = calendar?.events;
+  const calendarMsgs = useMemo<ChatMsg[]>(
+    () => (calendarEvents ?? []).map((c) => c.event as ChatMsg),
+    [calendarEvents],
+  );
+  const timelineMessages = useMemo<ChatMsg[]>(() => {
+    if (calendarMsgs.length === 0) return messages;
+    return [...messages, ...calendarMsgs].sort((a, b) =>
+      a.created_at !== b.created_at ? a.created_at - b.created_at : a.id < b.id ? -1 : 1,
+    );
+  }, [messages, calendarMsgs]);
+  const calendarFor = useMemo(() => {
+    if (!calendar) return undefined;
+    const map = new Map<string, MessageCalendar>();
+    for (const c of calendar.events) {
+      map.set(c.event.id, {
+        event: c,
+        tally: calendar.rsvpsFor(c),
+        canRsvp: calendar.canRsvp,
+        isSettingRsvp: calendar.isSettingRsvp,
+        setRsvp: (status) => calendar.setRsvp(c, status),
+      });
+    }
+    return (id: string) => map.get(id);
+  }, [calendar]);
+
   // Assemble the NIP-29 transport: the shared timeline/message components read
   // capabilities from here. Every method maps onto the existing NIP-29 hooks.
   const transport = useMemo<ChatTransport>(
     () => ({
-      messages,
+      messages: timelineMessages,
       isLoading,
       canWrite: Boolean(user && canWrite),
       canModerate,
@@ -508,6 +546,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       replyCountFor,
       reactionsFor,
       zapsFor,
+      calendarFor,
       openThread,
       threadRepliesFor,
       sendThreadReply: async (root, content, tags) => {
@@ -515,7 +554,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       },
     }),
     [
-      messages,
+      timelineMessages,
       isLoading,
       user,
       canWrite,
@@ -533,6 +572,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       replyCountFor,
       reactionsFor,
       zapsFor,
+      calendarFor,
       openThread,
       threadRepliesFor,
       sendThreadReply,

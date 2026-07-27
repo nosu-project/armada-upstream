@@ -16,6 +16,7 @@
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
 import type { SendStatus } from "@/hooks/useGroupMessages";
+import type { CalendarEvent, RsvpStatus, RsvpTally } from "@/lib/calendar";
 import type { PollOption, PollTally, PollType } from "@/lib/polls";
 import type { ZapTally } from "@/lib/zaps";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -106,6 +107,25 @@ export interface MessageZaps {
 export interface MessagePoll {
   tally: PollTally;
   vote: (optionIds: string[]) => void;
+}
+
+/**
+ * Per-calendar-event RSVP state + setter, resolved by the transport for a
+ * calendar (kind 31922/31923) message. Its presence lets the row render its
+ * inline event card with live RSVP tallies. Both NIP-29 (relay query) and
+ * Concord v2 (sealed fold) supply it; the card itself is transport-agnostic.
+ */
+export interface MessageCalendar {
+  /** The parsed, addressably-deduped event (newest per author/`d`). */
+  event: CalendarEvent;
+  /** The resolved RSVP tally (going / maybe / can't-go + the user's own). */
+  tally: RsvpTally;
+  /** Whether the current user may RSVP (membership / write access). */
+  canRsvp: boolean;
+  /** Whether an RSVP publish is in flight (drives the button disabled state). */
+  isSettingRsvp: boolean;
+  /** Set the current user's RSVP for this event. */
+  setRsvp: (status: RsvpStatus) => void;
 }
 
 /** A poll to publish, handed by the composer to a transport's {@link ChatTransport.sendPoll}. */
@@ -249,6 +269,13 @@ export interface ChatTransport {
    * instead, so it omits this; Concord v2 supplies it from the sealed chat fold.
    */
   pollFor?: (id: string) => MessagePoll | undefined;
+  /**
+   * Resolved calendar event + RSVP state for a calendar (kind 31922/31923)
+   * message id, so the row renders an inline event card. Both transports also
+   * surface these events in the events bar; this is the timeline copy. NIP-29
+   * resolves it from a relay query, Concord v2 from the sealed chat fold.
+   */
+  calendarFor?: (id: string) => MessageCalendar | undefined;
   /**
    * Publish a new poll as a chat-plane event (Concord v2 sealed rumor). Its
    * presence enables the composer's poll mode on the delegated send path. NIP-29
