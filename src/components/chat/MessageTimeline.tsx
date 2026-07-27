@@ -174,7 +174,11 @@ function restoreAnchor(scroller: HTMLElement, content: HTMLElement, anchor: Scro
 
 /** Imperative handle a parent can use to jump the timeline to a message by id. */
 export interface MessageTimelineHandle {
-  scrollToMessage: (id: string) => void;
+  /**
+   * Reveal and center a loaded message. Returns false when the id is not part
+   * of this timeline (for example, a reply that belongs in a thread panel).
+   */
+  scrollToMessage: (id: string) => boolean;
   /** Re-anchor to the bottom and resume auto-scroll (e.g. after sending). */
   pinToBottom: () => void;
   /**
@@ -693,13 +697,14 @@ export function MessageTimeline({
       // message id, which is what callers jump by.
       const all = entriesRef.current;
       const index = all.findIndex((entry) => entry.type === "chat" && entry.message.id === id);
-      if (index === -1) return;
+      if (index === -1) return false;
       if (index < startIndexRef.current) {
         pendingJumpRef.current = id;
         setWindowStart(all[Math.max(0, index - JUMP_CONTEXT)].id);
-        return;
+        return true;
       }
       jumpToRow(id);
+      return true;
     },
     [jumpToRow, setWindowStart],
   );
