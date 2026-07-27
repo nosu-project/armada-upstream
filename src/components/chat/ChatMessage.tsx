@@ -49,6 +49,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { expirationOf } from "@/lib/nip17/protocol";
+import { parseProxyTag } from "@/lib/nip48";
 import { requestCommand } from "@/hooks/useCommandBus";
 import { commandLine } from "@/lib/botCommands";
 import { isMeAction, meActionText } from "@/lib/slashCommands";
@@ -780,6 +781,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
           // thing that entitles a row to the disappearing-message clock, and
           // it's carried by the message itself on every surface that has one.
           expiresAt={expirationOf(event.tags)}
+          // NIP-48: marks a message that was bridged in from another network.
+          proxy={parseProxyTag(event.tags)}
           nameBadge={nameBadge}
           // Touch gets the long-press sheet instead: a horizontal strip of
           // icon buttons floated over the row can't hold this many actions on

@@ -6,6 +6,7 @@ import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { BotPill } from "@/components/BotPill";
 import { DisplayName } from "@/components/DisplayName";
+import { ProxyPill } from "@/components/ProxyPill";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -17,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { useLongPress } from "@/hooks/useLongPress";
 import { useSwipeToReply } from "@/hooks/useSwipeToReply";
 
+import type { ProxyInfo } from "@/lib/nip48";
 import type { ReactNode } from "react";
 
 /**
@@ -124,6 +126,11 @@ interface MessageRowProps {
    * continuation rows (no header line).
    */
   nameBadge?: ReactNode;
+  /**
+   * NIP-48 origin of a bridged message, shown as a pill next to the bot pill.
+   * Absent on messages that weren't bridged.
+   */
+  proxy?: ProxyInfo | null;
   /** Extra controls rendered right-aligned on the header row (action toolbar). */
   actions?: ReactNode;
   /** Extra content rendered above the body (e.g. a reply-context line). */
@@ -171,6 +178,7 @@ export const MessageRow = memo(function MessageRow({
   edited,
   expiresAt,
   nameBadge,
+  proxy,
   actions,
   beforeBody,
   afterBody,
@@ -336,6 +344,7 @@ export const MessageRow = memo(function MessageRow({
               </ProfilePreviewCard>
             )}
             <BotPill metadata={metadata} />
+            <ProxyPill proxy={proxy} />
             {nameBadge}
             {label && (
               <Badge variant="secondary" className="text-[10px] font-medium shrink min-w-0 max-w-[35%]">
