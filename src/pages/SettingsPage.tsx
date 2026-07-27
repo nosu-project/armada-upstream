@@ -220,6 +220,15 @@ export function SettingsPage() {
   };
 
   /**
+   * Toggle whether unknown-sender DMs are surfaced in the request tier. On by
+   * default — see `showDmRequests`. Local config only (synced across devices);
+   * publishes nothing and drops no messages.
+   */
+  const setShowDmRequests = (value: boolean) => {
+    updateConfig((current) => ({ ...current, showDmRequests: value }));
+  };
+
+  /**
    * Persist the user's own DM relays. kind-10050 is the user's canonical,
    * discoverable inbox and holds ONLY their personal relays — never the app
    * defaults. So publish exactly the edited list (a direct edit to their own
@@ -459,6 +468,12 @@ export function SettingsPage() {
                 emptyText="No personal DM relays yet. Add one, or rely on the app DM relays above."
                 placeholder="wss://dm-relay.example.com"
               />
+            </SettingsRow>
+            <SettingsRow
+              label="Message requests"
+              description="Show DMs from people you don't follow and haven't written to in a separate Requests list. Turn off to hide them from your inbox entirely."
+            >
+              <Switch checked={config.showDmRequests} onCheckedChange={setShowDmRequests} />
             </SettingsRow>
             <SettingsRow
               label="Typing indicators"

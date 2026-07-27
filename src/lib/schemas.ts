@@ -147,6 +147,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   pinnedDms: z.array(z.string()).optional(),
   /** DM peers accepted out of the request tier (hex pubkeys) — see AppConfig. */
   acceptedDms: z.array(z.string()).optional(),
+  /** Whether unknown-sender DMs are surfaced in the request tier — see AppConfig. */
+  showDmRequests: z.boolean().optional(),
   /**
    * The user's quick-reaction frequency table. Merged per key on the way in
    * (highest count / most recent use wins) rather than replaced, so two

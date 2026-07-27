@@ -246,6 +246,15 @@ export interface AppConfig {
    */
   acceptedDms: string[];
   /**
+   * Whether unknown-sender DMs are surfaced in the request tier. ON by default.
+   * When off, conversations with people the user neither follows nor has
+   * written to are hidden from the DM list entirely — the "Requests" entry
+   * point never appears. Purely a display preference: it hides the pile, it
+   * does not delete `acceptedDms` or drop any messages, and an explicit deep
+   * link to such a peer still opens the thread. Synced across devices.
+   */
+  showDmRequests: boolean;
+  /**
    * Bluetooth-mesh incognito mode. When on (the default), this device announces
    * a derived `anon<peerid>` nickname over the mesh rather than the user's
    * Armada display name — matching bitchat's anonymous-by-default behavior.
@@ -316,6 +325,7 @@ export const SYNCED_CONFIG_KEYS = [
   "dmTypingIndicators",
   "pinnedDms",
   "acceptedDms",
+  "showDmRequests",
   "defaultZapAmount",
   "defaultZapMethod",
   "zapsEnabled",
@@ -346,6 +356,7 @@ export const defaultConfig: AppConfig = {
   dmTypingIndicators: true,
   pinnedDms: [],
   acceptedDms: [],
+  showDmRequests: true,
   meshIncognito: true,
   meshEnabled: false,
   defaultZapAmount: 100,

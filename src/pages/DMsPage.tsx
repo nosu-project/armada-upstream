@@ -2060,7 +2060,7 @@ function ConversationList({
             {/* Above the pinned section: the request tier is a property of the
                 whole list, not of any one section within it. Hidden while
                 searching — search is a flat result set over the inbox. */}
-            {requestRows.length > 0 && search.trim().length === 0 && (
+            {config.showDmRequests && requestRows.length > 0 && search.trim().length === 0 && (
               <RequestsEntryRow
                 count={requestRows.length}
                 onClick={() => onViewChange("requests")}
