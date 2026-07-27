@@ -231,6 +231,21 @@ export interface AppConfig {
    */
   pinnedDms: string[];
   /**
+   * DM peers that have been let through the request tier, as hex pubkeys. A
+   * conversation with someone the user neither follows nor has written to
+   * lands in "Requests" instead of the main list.
+   *
+   * Written only when the user replies to a request or picks a recipient in
+   * the compose pane — there is no accept button, because writing to someone
+   * IS accepting them (see useAcceptedDms).
+   *
+   * Deliberately NOT the follow list: replying to a message is not a public
+   * social-graph edge, and writing kind 3 as a side effect of it would leak
+   * who talks to whom. This is a private, synced preference. Sticky — it must
+   * outlive an unfollow, exactly like `pinnedDms`.
+   */
+  acceptedDms: string[];
+  /**
    * Bluetooth-mesh incognito mode. When on (the default), this device announces
    * a derived `anon<peerid>` nickname over the mesh rather than the user's
    * Armada display name — matching bitchat's anonymous-by-default behavior.
@@ -300,6 +315,7 @@ export const SYNCED_CONFIG_KEYS = [
   "dmProtocol",
   "dmTypingIndicators",
   "pinnedDms",
+  "acceptedDms",
   "defaultZapAmount",
   "defaultZapMethod",
   "zapsEnabled",
@@ -329,6 +345,7 @@ export const defaultConfig: AppConfig = {
   dmProtocol: {},
   dmTypingIndicators: true,
   pinnedDms: [],
+  acceptedDms: [],
   meshIncognito: true,
   meshEnabled: false,
   defaultZapAmount: 100,

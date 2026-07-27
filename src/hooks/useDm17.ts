@@ -427,6 +427,43 @@ async function runInboxSync(
   }
 }
 
+/**
+ * Page the global `#p` gift-wrap stream one page older than `until`, opening
+ * and storing whatever comes back. Returns the new floor and whether the
+ * relays appear to be out of history.
+ *
+ * The stream is global on purpose — a wrap's author is ephemeral, so there is
+ * no per-peer filter to narrow it with. Every backfill page therefore pulls
+ * older history for EVERY correspondent at once, which is what lets the
+ * conversation list recover senders it has never seen.
+ *
+ * `exhausted` is an inference, not a fact: a relay that silently caps our
+ * `limit` returns a short page that looks identical to running out. Callers
+ * that latch it must be able to un-latch (see useDm17Backfill).
+ */
+async function pageOlderDmWraps(
+  ctx: SyncCtx,
+  until: number,
+  interactive: boolean,
+): Promise<{ oldest?: number; exhausted: boolean }> {
+  const wraps = await ctx.nostr
+    .group(ctx.relays)
+    .query([{ kinds: [1059], "#p": [ctx.self], until, limit: INBOX_PAGE }], {
+      signal: AbortSignal.timeout(8000),
+    });
+  if (wraps.length === 0) return { exhausted: true };
+  const oldest = Math.min(...wraps.map((w) => w.created_at)) - 1;
+  await loadSeenWraps(ctx.self);
+  const seen = seenSetFor(ctx.self);
+  await openAndStore(
+    ctx,
+    wraps.filter((w) => !seen.has(w.id)),
+    interactive,
+  );
+  await updateDm17Cursor(ctx.self, { oldest });
+  return { oldest, exhausted: wraps.length < INBOX_PAGE };
+}
+
 /** Build the stable sync context for the current viewer (or undefined). */
 function useDm17SyncCtx(): SyncCtx | undefined {
   const { nostr } = useNostr();
@@ -981,23 +1018,11 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const until =
         oldestRef.current ??
         (messages.length > 0 ? messages[0].createdAt : Math.floor(Date.now() / 1000));
-      const filters: Array<{ kinds: number[]; "#p": string[]; until: number; limit: number }> = [
-        { kinds: [1059], "#p": [self], until, limit: INBOX_PAGE },
-      ];
-      const wraps = await ctx.nostr.group(ctx.relays).query(filters, { signal: AbortSignal.timeout(8000) });
-      if (wraps.length === 0) {
-        setHasMore(false);
-        return 0;
-      }
-      oldestRef.current = Math.min(...wraps.map((w) => w.created_at)) - 1;
-      if (wraps.length < INBOX_PAGE) setHasMore(false);
-
-      await loadSeenWraps(self);
-      const seen = seenSetFor(self);
       const before = await queryDm17Thread(peer, { limit: THREAD_WINDOW * 2 });
-      await openAndStore(ctx, wraps.filter((w) => !seen.has(w.id)), true);
+      const { oldest, exhausted } = await pageOlderDmWraps(ctx, until, true);
+      if (oldest !== undefined) oldestRef.current = oldest;
+      if (exhausted) setHasMore(false);
       const after = await queryDm17Thread(peer, { limit: THREAD_WINDOW * 2 });
-      void updateDm17Cursor(self, { oldest: oldestRef.current });
       const added = Math.max(0, after.length - before.length);
       if (added > 0) void queryClient.invalidateQueries({ queryKey });
       return added;
@@ -1032,6 +1057,88 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
 }
 
 // ── Conversations ─────────────────────────────────────────────────────────────
+
+export interface Dm17Backfill {
+  /**
+   * Page one screenful of older wraps. Resolves the peers that were NOT in the
+   * conversation list before the page — deliberately the raw peer list rather
+   * than a count, because a page recovers history for every correspondent at
+   * once and only the caller knows which tier (or mute state) each one lands
+   * in. A caller reporting "found N" must narrow this to the list it's showing.
+   */
+  loadOlder: () => Promise<string[]>;
+  /** False once a page comes back empty or short THIS session. */
+  hasMore: boolean;
+  isLoading: boolean;
+}
+
+/**
+ * Conversation-level older-history backfill: the same global `#p` paging the
+ * thread uses, but driven from the conversation list so senders with no open
+ * thread can be recovered at all.
+ *
+ * This exists because the automatic sync only ever moves FORWARD.
+ * `runInboxSync` fetches the newest `INBOX_PAGE` wraps once and thereafter
+ * tops up with a `since`-scoped query, so anything older than that first page
+ * is never fetched by any automatic path — and a correspondent whose only
+ * messages predate it is invisible rather than merely un-listed.
+ *
+ * Deliberately NOT wired to scroll: each page costs two NIP-44 opens per wrap
+ * (and on a prompting signer, the consent gate), so it stays an explicit
+ * user-initiated action rather than something a stray flick can trigger.
+ *
+ * The persisted cursor's `exhausted` flag is NOT consulted. It's inferred from
+ * a short page, which is indistinguishable from a relay silently capping our
+ * `limit` — honoring it would let one capped response permanently disable a
+ * button the user is deliberately pressing. One wasted round-trip against a
+ * genuinely empty inbox is the cheaper mistake.
+ */
+export function useDm17Backfill(): Dm17Backfill {
+  const { user } = useCurrentUser();
+  const queryClient = useQueryClient();
+  const ctx = useDm17SyncCtx();
+  const self = user?.pubkey;
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const oldestRef = useRef<number | undefined>(undefined);
+  const loadingRef = useRef(false);
+
+  useEffect(() => {
+    oldestRef.current = undefined;
+    setHasMore(true);
+  }, [self]);
+
+  const loadOlder = useCallback(async (): Promise<string[]> => {
+    if (!ctx || !self || loadingRef.current) return [];
+    loadingRef.current = true;
+    setIsLoading(true);
+    try {
+      // Resume from the persisted floor on the first press of the session, so
+      // pressing it again after a reload doesn't re-walk history already paged.
+      const cursor = oldestRef.current === undefined ? await readDm17Cursor(self) : undefined;
+      const until =
+        oldestRef.current ??
+        (cursor?.oldest ? cursor.oldest - 1 : Math.floor(Date.now() / 1000));
+      const before = await queryDm17Conversations({ self });
+      const known = new Set(before.map((c) => c.peer));
+      const { oldest, exhausted } = await pageOlderDmWraps(ctx, until, true);
+      if (oldest !== undefined) oldestRef.current = oldest;
+      if (exhausted) setHasMore(false);
+      const after = await queryDm17Conversations({ self });
+      // Unconditional: a page can add messages to conversations that already
+      // exist without changing how many there are.
+      void queryClient.invalidateQueries({ queryKey: ["dm17", "conversations"] });
+      return after.map((c) => c.peer).filter((peer) => !known.has(peer));
+    } catch {
+      return [];
+    } finally {
+      loadingRef.current = false;
+      setIsLoading(false);
+    }
+  }, [ctx, self, queryClient]);
+
+  return { loadOlder, hasMore, isLoading };
+}
 
 export interface Dm17Conversation {
   peer: string;

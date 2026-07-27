@@ -7,6 +7,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDm17Conversations } from "@/hooks/useDm17";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
+import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
@@ -703,16 +704,18 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
  * conversation (kind-4 or NIP-17) is from the peer and newer than the thread's
  * last-read stamp. Drives the unread dot on the DMs button in the server rail.
  *
- * NIP-17 conversations are additionally narrowed to followed peers (or ones the
- * viewer has messaged), matching the kind-4 plane's relay-level friends-only
+ * NIP-17 conversations are additionally narrowed to KNOWN peers (see
+ * `useKnownDmPeers`), matching the kind-4 plane's relay-level friends-only
  * scoping — an unsolicited stranger's gift wrap must not light a dot for a
- * conversation the list would never show.
+ * conversation the main list would never show. This is what keeps the request
+ * tier from being an attention channel: a request is discovered by opening
+ * DMs, never by the rail demanding it.
  */
 export function useHasUnreadDMs(): boolean {
   const { user } = useCurrentUser();
   const { conversations } = useDMConversations();
   const { conversations: dm17Conversations } = useDm17Conversations();
-  const { data: followData } = useFollowList();
+  const { isKnown } = useKnownDmPeers();
   const { getLastRead } = useReadState();
 
   return useMemo(() => {
@@ -726,14 +729,13 @@ export function useHasUnreadDMs(): boolean {
     ) {
       return true;
     }
-    const follows = new Set(followData?.pubkeys ?? []);
     return dm17Conversations.some(
       (c) =>
-        (follows.has(c.peer) || c.mine) &&
+        isKnown(c.peer, c.mine) &&
         c.latest.author !== user.pubkey &&
         c.latest.createdAt > getLastRead(dmReadKey(c.peer)),
     );
-  }, [user, conversations, dm17Conversations, followData?.pubkeys, getLastRead]);
+  }, [user, conversations, dm17Conversations, isKnown, getLastRead]);
 }
 
 /**

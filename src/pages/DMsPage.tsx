@@ -1,4 +1,4 @@
-import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, Headphones, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, Users, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -55,7 +55,6 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useFollowList } from "@/hooks/useFollowList";
 import { useMuteUser } from "@/hooks/useMuteList";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
 import {
@@ -64,7 +63,7 @@ import {
   useHasUnreadDMs,
 } from "@/hooks/useDirectMessages";
 import { useBotManifests } from "@/hooks/useBotManifests";
-import { useAdoptDmInbox, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
+import { useAdoptDmInbox, useDm17Backfill, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
 import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
@@ -75,6 +74,9 @@ import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLevels";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
+import { useAcceptedDms } from "@/hooks/useAcceptedDms";
+import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
+import { useSharedCommunities } from "@/hooks/useSharedCommunities";
 import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
@@ -161,8 +163,11 @@ function ConversationRow({
   messageMatch,
   active,
   pinned,
+  request,
+  sharedCommunity,
   onClick,
   onTogglePin,
+  onBlock,
 }: {
   peer: string;
   preview: NostrEvent | undefined;
@@ -175,8 +180,17 @@ function ConversationRow({
   messageMatch: string | undefined;
   active: boolean;
   pinned: boolean;
+  /**
+   * This row is in the request tier. It renders without the peer's profile
+   * picture (loading it would hand an unknown sender our IP on sight) and
+   * swaps the pin menu for accept/block.
+   */
+  request?: boolean;
+  /** A community both parties are in, when one is known — see useSharedCommunities. */
+  sharedCommunity?: string;
   onClick: () => void;
   onTogglePin: () => void;
+  onBlock?: () => void;
 }) {
   const author = useAuthor(peer);
   const metadata = author.data?.metadata;
@@ -224,7 +238,10 @@ function ConversationRow({
           )}
         >
           <Avatar shape={getAvatarShape(metadata)} className="size-12 shrink-0">
-            <AvatarImage src={metadata?.picture} alt={name} />
+            {/* A request's avatar is never fetched: the URL comes from the
+                sender's own profile, so rendering it would confirm to an
+                unknown party that their message reached a live reader. */}
+            {!request && <AvatarImage src={metadata?.picture} alt={name} />}
             <AvatarFallback className="bg-primary/20 text-primary text-base">
               {name[0]?.toUpperCase()}
             </AvatarFallback>
@@ -253,6 +270,16 @@ function ConversationRow({
                 )}
               </div>
             )}
+            {/* Positive assertion only. No label means we have no membership
+                data for this peer (Concord v1 can't enumerate members, and
+                many NIP-29 relays publish no member list) — never that they
+                share nothing with you. */}
+            {request && sharedCommunity && (
+              <div className="flex items-center gap-1 text-[11px] text-muted-foreground/80">
+                <Users className="size-3 shrink-0" aria-hidden />
+                <span className="truncate">Also in {sharedCommunity}</span>
+              </div>
+            )}
           </div>
           {inCall ? (
             <span
@@ -269,17 +296,28 @@ function ConversationRow({
         </button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-44">
-        <ContextMenuItem onSelect={onTogglePin}>
-          {pinned ? (
-            <>
-              <PinOff className="mr-2 size-4" /> Unpin
-            </>
-          ) : (
-            <>
-              <Pin className="mr-2 size-4" /> Pin
-            </>
-          )}
-        </ContextMenuItem>
+        {request ? (
+          // No accept: opening the conversation and replying is the way in,
+          // and the notice above the composer says so.
+          <ContextMenuItem
+            className="text-destructive focus:text-destructive"
+            onSelect={() => onBlock?.()}
+          >
+            <UserX className="mr-2 size-4" /> Block
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem onSelect={onTogglePin}>
+            {pinned ? (
+              <>
+                <PinOff className="mr-2 size-4" /> Unpin
+              </>
+            ) : (
+              <>
+                <Pin className="mr-2 size-4" /> Pin
+              </>
+            )}
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -510,7 +548,79 @@ function dmReplyToId(msg: NostrEvent): string | undefined {
   return getQuoteReplyToId(msg) ?? msg.tags.find(([name, value]) => name === "e" && value)?.[1];
 }
 
-function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
+/**
+ * Shown above the composer while reading a request.
+ *
+ * There is no accept button: replying IS accepting, and a separate control for
+ * it was a third way to say the same thing whose effect the user couldn't see
+ * (it moves a row in a list they're not looking at). So the notice states the
+ * rule instead, and the only action offered is the one with no other path —
+ * blocking, which is the ordinary NIP-51 mute and removes the peer from both
+ * DM planes.
+ */
+function DmRequestNotice({
+  peer,
+  name,
+  sharedCommunity,
+  onBlock,
+  blocking,
+}: {
+  peer: string;
+  name: string;
+  sharedCommunity?: string;
+  onBlock: () => void;
+  blocking: boolean;
+}) {
+  return (
+    // Two lines with the action beside them, not under them: this notice ADDS
+    // to the composer's height rather than replacing it (unlike
+    // DmLegacyFallbackNotice, whose card shape this deliberately no longer
+    // copies), so every stacked row is height taken from the conversation.
+    <div className="mx-2 mb-3 rounded-lg border border-border/60 bg-muted/40 px-4 py-2.5 text-sm">
+      <div className="flex items-center gap-3">
+        <Inbox className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 flex-1">
+          {/* Wraps rather than truncates: on a narrow phone the button leaves
+              this column ~25 characters, so truncating would eat the community
+              hint (and sometimes the peer's name) entirely. A taller card is
+              the right trade against hiding what the notice is for. */}
+          <p className="text-muted-foreground break-words">
+            <span className="font-medium text-foreground">
+              <DisplayName pubkey={peer} name={name} />
+            </span>{" "}
+            isn't someone you follow
+            {sharedCommunity && ` · also in ${sharedCommunity}`}
+          </p>
+          <p className="text-xs text-muted-foreground/80">
+            Reply to accept. They aren't notified.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="shrink-0 touch:h-11 text-destructive hover:text-destructive"
+          onClick={onBlock}
+          disabled={blocking}
+        >
+          <UserX className="size-4" />
+          {blocking ? "Blocking…" : "Block"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function Conversation({
+  peer,
+  isRequest,
+  onAccept,
+  onBack,
+}: {
+  peer: string;
+  isRequest: boolean;
+  onAccept: () => void;
+  onBack: () => void;
+}) {
   const author = useAuthor(peer);
   const name = getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
@@ -541,7 +651,13 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
   // Typing indicators ride the ephemeral NIP-17 plane, so they're only
   // available where that plane is: a legacy kind-4 thread has no envelope to
   // carry them. Subject to the user's `dmTypingIndicators` — see useDmTyping.
-  const { typers, publishTyping } = useDmTyping(peer, dm17Enabled);
+  // Never on an unaccepted request: reading a stranger's message must not send
+  // that stranger a live signal that someone is on the other end.
+  const { typers, publishTyping } = useDmTyping(peer, dm17Enabled && !isRequest);
+  // The tier-2 hint, for the accept banner. One local read, and only while a
+  // request is actually open.
+  const requestPeers = useMemo(() => (isRequest ? [peer] : []), [isRequest, peer]);
+  const sharedCommunity = useSharedCommunities(requestPeers, isRequest).get(peer);
 
   // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no
   // in-band convention, so the control is hidden on legacy threads).
@@ -741,6 +857,10 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         // so foreign clients render the reply relationship too.
         const finalTags = replyTo ? [...tags, ["e", replyTo.id]] : tags;
         await send(text, finalTags, { allowLegacy: legacyAllowed });
+        // Replying is accepting. The cross-plane `mine` flag would eventually
+        // say the same thing, but it lags the conversation queries — recording
+        // it here moves the row out of the request pile in this same frame.
+        if (isRequest) onAccept();
         // Sending is an explicit "I'm at the present", so follow the new
         // message even from a reader who had scrolled up — the timeline's own
         // stick-to-bottom deliberately won't, and group and Buzz chat both pin
@@ -766,7 +886,7 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
         throw e;
       }
     },
-    [send, toast, replyTo, legacyAllowed],
+    [send, toast, replyTo, legacyAllowed, isRequest, onAccept],
   );
 
   const handleMute = useCallback(async () => {
@@ -1173,6 +1293,16 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
           search view is a filtered snapshot, not the conversation. */}
       {!normalizedSearch && <TypingIndicator pubkeys={typers} />}
 
+      {isRequest && (
+        <DmRequestNotice
+          peer={peer}
+          name={name}
+          sharedCommunity={sharedCommunity}
+          onBlock={() => setMuteConfirmOpen(true)}
+          blocking={muteUser.isPending}
+        />
+      )}
+
       {legacyBlocked ? (
         <DmLegacyFallbackNotice peer={peer} name={name} onEnable={() => setLegacyAllowed(true)} />
       ) : (
@@ -1210,8 +1340,10 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
       <AlertDialog open={muteConfirmOpen} onOpenChange={setMuteConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
+            {/* Blocking a request and muting a contact are the same NIP-51
+                action; only the word the user clicked differs. */}
             <AlertDialogTitle>
-              Mute <DisplayName pubkey={peer} name={name} />?
+              {isRequest ? "Block" : "Mute"} <DisplayName pubkey={peer} name={name} />?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This conversation will be hidden and you won't see new messages from{" "}
@@ -1228,7 +1360,13 @@ function Conversation({ peer, onBack }: { peer: string; onBack: () => void }) {
               }}
               disabled={muteUser.isPending}
             >
-              {muteUser.isPending ? "Muting…" : "Mute"}
+              {muteUser.isPending
+                ? isRequest
+                  ? "Blocking…"
+                  : "Muting…"
+                : isRequest
+                  ? "Block"
+                  : "Mute"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1513,8 +1651,45 @@ function ConversationSectionHeader({
   );
 }
 
+/** Which tier the conversation list is showing: the inbox or the request pile. */
+type DmListView = "inbox" | "requests";
+
+/**
+ * The single row at the top of the conversation list that holds the request
+ * tier, shown only when there's something in it.
+ *
+ * Deliberately low-salience: a muted count, no primary-colored dot, and no
+ * corresponding badge on the server rail (see `useHasUnreadDMs`). Requests are
+ * found by opening DMs, never by the app demanding attention — otherwise
+ * flooding a stranger's inbox becomes a way to light up their UI, and the
+ * feature makes the app worse than hiding the messages did.
+ */
+function RequestsEntryRow({ count, onClick }: { count: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-3 w-full px-2.5 py-2.5 rounded-lg text-left transition-colors hover:bg-secondary/60"
+    >
+      <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Inbox className="size-5" aria-hidden />
+      </span>
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <div className="text-[15px] font-medium truncate">Message requests</div>
+        <div className="text-sm text-muted-foreground truncate">
+          {count} {count === 1 ? "person you don't follow" : "people you don't follow"}
+        </div>
+      </div>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+    </button>
+  );
+}
+
 function ConversationList({
   rows,
+  requestRows,
+  view,
+  onViewChange,
   previews,
   events,
   activePeer,
@@ -1530,6 +1705,10 @@ function ConversationList({
   className,
 }: {
   rows: { peer: string; latest: NostrEvent; plaintext?: string }[];
+  /** Conversations in the request tier — see useKnownDmPeers. */
+  requestRows: { peer: string; latest: NostrEvent; plaintext?: string }[];
+  view: DmListView;
+  onViewChange: (view: DmListView) => void;
   previews: Record<string, string>;
   events: NostrEvent[];
   activePeer: string | undefined;
@@ -1548,9 +1727,53 @@ function ConversationList({
   const { getLastRead } = useReadState();
   const { registerCallBarSlot, activeCall } = useCall();
   const { config } = useAppContext();
+  const muteUser = useMuteUser();
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const requesting = view === "requests";
+
+  // The tier-2 trust hint, resolved only while the request list is on screen —
+  // it's one local IndexedDB read, so there's no reason to run it for an inbox
+  // the user is just scrolling past.
+  const requestPeers = useMemo(() => requestRows.map((c) => c.peer), [requestRows]);
+  const sharedCommunities = useSharedCommunities(requestPeers, requesting);
+
+  // Older-history recovery for the request tier, and the outcome of the last
+  // press (so a page that found nothing says so instead of looking inert).
+  const backfill = useDm17Backfill();
+  const [recovered, setRecovered] = useState<string[] | undefined>(undefined);
+  const loadOlderRequests = useCallback(async () => {
+    setRecovered(undefined);
+    setRecovered(await backfill.loadOlder());
+  }, [backfill]);
+  // A page recovers history for EVERY correspondent, so most of what it finds
+  // lands in the inbox (or is muted). Report only what this view gained, or the
+  // number claimed won't match the rows under it.
+  const olderFound = useMemo(
+    () =>
+      recovered === undefined
+        ? undefined
+        : recovered.filter((peer) => requestRows.some((c) => c.peer === peer)).length,
+    [recovered, requestRows],
+  );
+
+  const blockPeer = useCallback(
+    async (peer: string) => {
+      try {
+        await muteUser.mutateAsync(peer);
+      } catch (e) {
+        toast({
+          title: "Couldn't block",
+          description: e instanceof Error ? e.message : "Please try again.",
+          variant: "destructive",
+        });
+      }
+    },
+    [muteUser, toast],
+  );
 
   // Search across locally-decrypted message history (both DM planes), grouped
   // per peer. Purely local — never prompts the signer.
@@ -1604,7 +1827,7 @@ function ConversationList({
   // nothing.
   const sectioned = search.trim().length === 0 && pinnedRows.length > 0;
 
-  const renderRow = (c: (typeof rows)[number]) => (
+  const renderRow = (c: (typeof rows)[number], request = false) => (
     <ConversationRow
       key={c.peer}
       peer={c.peer}
@@ -1620,11 +1843,14 @@ function ConversationList({
       }
       active={c.peer === activePeer}
       pinned={isPinned(c.peer)}
+      request={request}
+      sharedCommunity={request ? sharedCommunities.get(c.peer) : undefined}
       inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.peer}
       selfPubkey={user?.pubkey}
       voiceRelay={voiceRelay ?? undefined}
       onClick={() => openPeer(c.peer)}
       onTogglePin={() => togglePin(c.peer)}
+      onBlock={() => void blockPeer(c.peer)}
     />
   );
 
@@ -1669,11 +1895,27 @@ function ConversationList({
           Search expands inline over this row behind the search icon. */}
       <div className="px-1 pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] shrink-0">
         <div className="relative overflow-hidden">
-          <div className="flex items-center justify-between pl-4 pr-2 py-1 min-h-6">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Messages
-            </span>
-            <div className="flex items-center gap-2">
+          <div
+            className={cn(
+              "flex items-center justify-between pr-2 py-1 min-h-6",
+              requesting ? "pl-1" : "pl-4",
+            )}
+          >
+            {requesting ? (
+              <button
+                type="button"
+                onClick={() => onViewChange("inbox")}
+                className="flex items-center gap-1 pr-2 py-1 rounded text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronLeft className="size-4" aria-hidden />
+                Requests
+              </button>
+            ) : (
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Messages
+              </span>
+            )}
+            <div className={cn("flex items-center gap-2", requesting && "hidden")}>
               {hasUnread && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1765,25 +2007,76 @@ function ConversationList({
           <p className="text-sm text-muted-foreground p-3">
             Your signer doesn't support encryption, so direct messages are unavailable.
           </p>
+        ) : requesting ? (
+          <>
+            <p className="px-2.5 pt-1 pb-2 text-xs text-muted-foreground">
+              Messages from people you don't follow. Reply to one and it moves
+              to your inbox. Nobody here is told you've seen theirs.
+            </p>
+            {requestRows.map((c) => renderRow(c, true))}
+            {/* The automatic sync only moves forward, so a sender whose
+                messages all predate this device's first sync never appears on
+                its own. Explicit, one page at a time — see useDm17Backfill. */}
+            <div className="flex flex-col items-center gap-1 py-3">
+              {backfill.hasMore ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground"
+                  disabled={backfill.isLoading}
+                  onClick={() => void loadOlderRequests()}
+                >
+                  {backfill.isLoading ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Looking…
+                    </>
+                  ) : (
+                    "Look for older requests"
+                  )}
+                </Button>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  That's everything your relays still have.
+                </p>
+              )}
+              {olderFound !== undefined && (
+                <p className="text-xs text-muted-foreground">
+                  {olderFound === 0
+                    ? "No older requests found."
+                    : `Found ${olderFound} older ${olderFound === 1 ? "request" : "requests"}.`}
+                </p>
+              )}
+            </div>
+          </>
         ) : isLoading ? (
           <ConversationRowSkeletons />
-        ) : rows.length === 0 ? (
+        ) : rows.length === 0 && requestRows.length === 0 ? (
           <p className="text-sm text-muted-foreground p-3">
             No conversations yet. Start one with the + button.
           </p>
         ) : (
           <>
+            {/* Above the pinned section: the request tier is a property of the
+                whole list, not of any one section within it. Hidden while
+                searching — search is a flat result set over the inbox. */}
+            {requestRows.length > 0 && search.trim().length === 0 && (
+              <RequestsEntryRow
+                count={requestRows.length}
+                onClick={() => onViewChange("requests")}
+              />
+            )}
             {sectioned ? (
               <>
                 <ConversationSectionHeader className="pt-1">Pinned</ConversationSectionHeader>
-                {pinnedRows.map(renderRow)}
+                {pinnedRows.map((c) => renderRow(c))}
                 {otherRows.length > 0 && (
                   <ConversationSectionHeader>Recent</ConversationSectionHeader>
                 )}
-                {otherRows.map(renderRow)}
+                {otherRows.map((c) => renderRow(c))}
               </>
             ) : (
-              [...pinnedRows, ...otherRows].map(renderRow)
+              [...pinnedRows, ...otherRows].map((c) => renderRow(c))
             )}
             {isLoadingMore && (
               <div className="flex justify-center py-3">
@@ -1839,16 +2132,10 @@ export function DMsPage() {
   // (local config only — NEVER publishes; a 10050 list is only ever written by
   // an explicit save in Settings).
   useAdoptDmInbox();
-  const { data: followData, isLoading: followsLoading } = useFollowList();
-  const { isPinned } = usePinnedDms();
+  const { isKnown, isLoading: followsLoading } = useKnownDmPeers();
+  const { accept } = useAcceptedDms();
   const [composing, setComposing] = useState(false);
-  // The conversation list is narrowed to people the user follows (kind 3) plus
-  // anyone the user has messaged — unsolicited DMs from strangers are never
-  // shown. Muted people are also excluded upstream in useDMConversations.
-  const followedPubkeys = useMemo(
-    () => new Set(followData?.pubkeys ?? []),
-    [followData?.pubkeys],
-  );
+  const [listView, setListView] = useState<DmListView>("inbox");
 
   // True until EVERY input to `rows` has settled. Each one changes the list's
   // contents or its order — NIP-17 rumors supply the newest message for many
@@ -1889,11 +2176,12 @@ export function DMsPage() {
 
   // Conversations plus the active peer if it's a brand-new thread. Kind-4 and
   // NIP-17 conversations merge per peer (newest message wins; a NIP-17 rumor
-  // is already plaintext, so it carries its own preview text). The list is
-  // narrowed to followed peers and threads the viewer has messaged — but always
-  // keep the peer whose thread is currently open so the row you're reading never
-  // vanishes.
-  const rows = useMemo(() => {
+  // is already plaintext, so it carries its own preview text), then split into
+  // the inbox and the request tier by the shared `isKnown` predicate.
+  //
+  // The split is the ONLY thing separating the two lists, so neither can gain
+  // or lose a row the other doesn't correspondingly lose or gain.
+  const [rows, requestRows] = useMemo(() => {
     const byPeer = new Map<
       string,
       { peer: string; latest: NostrEvent; plaintext?: string; mine: boolean }
@@ -1925,20 +2213,31 @@ export function DMsPage() {
         mine,
       });
     }
-    let list = [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
-    // Followed peers, conversations the viewer started (so a thread you opened
-    // with someone you don't follow doesn't vanish when you close it), pinned
-    // peers (an explicit "keep this one" that must outlive an unfollow), and
-    // the open peer are kept; unsolicited stranger DMs stay hidden.
-    list = list.filter(
-      (c) =>
-        followedPubkeys.has(c.peer) || c.mine || c.peer === activePeer || isPinned(c.peer),
-    );
-    if (activePeer && !list.some((c) => c.peer === activePeer)) {
-      list.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent, mine: false });
+    const sorted = [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
+    const known: typeof sorted = [];
+    const requests: typeof sorted = [];
+    for (const c of sorted) (isKnown(c.peer, c.mine) ? known : requests).push(c);
+    // A peer with no messages at all that we've navigated to is a thread the
+    // user deliberately started: it belongs in the inbox, not the request pile.
+    // (An EXISTING stranger conversation opened by deep link stays a request —
+    // the list switches to the request view to show it instead.)
+    if (activePeer && !sorted.some((c) => c.peer === activePeer)) {
+      known.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent, mine: false });
     }
-    return list;
-  }, [conversations, dm17Conversations, activePeer, followedPubkeys, isPinned]);
+    return [known, requests];
+  }, [conversations, dm17Conversations, activePeer, isKnown]);
+
+  // Open a request's thread and the list follows it into the request view —
+  // covers both clicking through and landing on `/dms/<stranger>` cold. It only
+  // ever switches INTO requests: a peer that graduates to the inbox mid-thread
+  // (you replied, so `mine` flipped) shouldn't yank the list out from under the
+  // conversation being read. The empty-list effect below handles that instead.
+  useEffect(() => {
+    if (activePeer && requestRows.some((c) => c.peer === activePeer)) setListView("requests");
+  }, [activePeer, requestRows]);
+  useEffect(() => {
+    if (requestRows.length === 0) setListView("inbox");
+  }, [requestRows.length]);
 
   // The list as it was last rendered, restored synchronously. Because what was
   // stored is the merged/filtered/sorted OUTCOME — not any one source's partial
@@ -1980,9 +2279,10 @@ export function DMsPage() {
 
   // Persist the settled list for the next launch, debounced so a burst of live
   // messages coalesces. Gated on `!isLoading`, so a partial view is never
-  // stored, and taken AFTER the mute/follow filters, so a muted or unfollowed
-  // peer can't be painted back on the next cold start. An empty settled list
-  // clears the snapshot rather than leaving stale rows to be restored.
+  // stored, and taken from the INBOX rows only — snapshotting the unsplit list
+  // would paint requests into the inbox on the next cold start, for the whole
+  // window before the live rows land. An empty settled list clears the snapshot
+  // rather than leaving stale rows to be restored.
   useEffect(() => {
     const self = user?.pubkey;
     if (isLoading || !self) return;
@@ -2021,20 +2321,38 @@ export function DMsPage() {
     [navigate],
   );
 
+  // Picking someone in the new-message pane is an explicit "I want to talk to
+  // this person", so it accepts them outright. Without this, composing to
+  // someone you don't follow would drop the thread into your own request pile
+  // until the first message lands and `mine` flips.
+  const openNewRecipient = useCallback(
+    (pubkey: string) => {
+      accept(pubkey);
+      openPeer(pubkey);
+    },
+    [accept, openPeer],
+  );
+
   // "Mark all as read": stamp every conversation whose latest message is from
   // the peer (monotonic stamps, so already-read conversations no-op). Covers
   // both DM planes — the same set the rail's unread dot checks.
   const { markRead } = useReadState();
   const hasUnreadDms = useHasUnreadDMs();
+  // Requests are skipped: the action lives in the inbox header and clearing an
+  // unread marker there must not quietly triage a pile the user hasn't looked at.
   const markAllDmsRead = useCallback(() => {
     if (!user) return;
     for (const c of conversations) {
-      if (c.latest.pubkey !== user.pubkey) markRead(dmReadKey(c.peer), c.latest.created_at);
+      if (c.latest.pubkey !== user.pubkey && isKnown(c.peer, c.mine)) {
+        markRead(dmReadKey(c.peer), c.latest.created_at);
+      }
     }
     for (const c of dm17Conversations) {
-      if (c.latest.author !== user.pubkey) markRead(dmReadKey(c.peer), c.latest.createdAt);
+      if (c.latest.author !== user.pubkey && isKnown(c.peer, c.mine)) {
+        markRead(dmReadKey(c.peer), c.latest.createdAt);
+      }
     }
-  }, [user, conversations, dm17Conversations, markRead]);
+  }, [user, conversations, dm17Conversations, isKnown, markRead]);
 
   if (!user) {
     return <Navigate to="/" replace />;
@@ -2072,6 +2390,9 @@ export function DMsPage() {
           <ServerRail />
           <ConversationList
             rows={displayRows}
+            requestRows={requestRows}
+            view={listView}
+            onViewChange={setListView}
             previews={previews}
             events={events}
             activePeer={activePeer}
@@ -2101,10 +2422,12 @@ export function DMsPage() {
           <Conversation
             key={renderedPeer}
             peer={renderedPeer}
+            isRequest={requestRows.some((c) => c.peer === renderedPeer)}
+            onAccept={() => accept(renderedPeer)}
             onBack={revealList}
           />
         ) : composing ? (
-          <NewDMPane onSelectRecipient={openPeer} onCancel={revealList} />
+          <NewDMPane onSelectRecipient={openNewRecipient} onCancel={revealList} />
         ) : (
           <div className="flex flex-1 items-center justify-center text-muted-foreground p-8 text-center">
             <div className="flex flex-col items-center gap-3 max-w-sm">

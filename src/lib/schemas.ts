@@ -92,6 +92,7 @@ export const AppConfigSchema = z.object({
   notifLevels: z.record(z.string(), z.enum(["all", "mentions", "nothing"])).catch({}),
   dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).catch({}),
   pinnedDms: z.array(z.string()).catch([]),
+  acceptedDms: z.array(z.string()).catch([]),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
 });
@@ -144,6 +145,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).optional(),
   /** Pinned DM peers (hex pubkeys) in pin order — see AppConfig. */
   pinnedDms: z.array(z.string()).optional(),
+  /** DM peers accepted out of the request tier (hex pubkeys) — see AppConfig. */
+  acceptedDms: z.array(z.string()).optional(),
   /**
    * The user's quick-reaction frequency table. Merged per key on the way in
    * (highest count / most recent use wins) rather than replaced, so two
