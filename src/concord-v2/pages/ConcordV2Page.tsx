@@ -1063,19 +1063,17 @@ export function ConcordV2Page() {
   // (useActiveRoom is called below, after `threadRoot` is defined, so it can
   // also pass thread-level keys for notification suppression.)
 
-  // Fulfil a pending mention jump: once the target channel is active AND its
-  // timeline has loaded the target message, scroll+highlight it, then clear
-  // the target. `scrollToMessage` is a no-op if the row isn't mounted yet, so
-  // we retry as `allMessages` grows (backfill) until it lands or the channel
-  // changes out from under us.
+  // Fulfil a pending mention jump once the target channel is active and its
+  // timeline has loaded the target message. MessageTimeline queues the jump
+  // while its opening window is still mounting, so this can run immediately
+  // after the channel switch without a timing delay.
   useEffect(() => {
     if (!jumpTarget || view !== "channel") return;
     if (channel?.idHex !== jumpTarget.channelIdHex) return;
     if (!allMessages.some((m) => m.id === jumpTarget.messageId)) return;
-    const id = jumpTarget.messageId;
-    const t = setTimeout(() => timelineRef.current?.scrollToMessage(id), 60);
-    setJumpTarget(null);
-    return () => clearTimeout(t);
+    if (timelineRef.current?.scrollToMessage(jumpTarget.messageId)) {
+      setJumpTarget(null);
+    }
   }, [jumpTarget, view, channel?.idHex, allMessages]);
 
   // Mark the open channel read up to its newest timeline entry (chat or git)

@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createRef } from "react";
 
 import type { ChannelTimelineEntry } from "@/components/chat/channelTimeline";
-import { MessageTimeline } from "@/components/chat/MessageTimeline";
+import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 
 // The shared setup stubs ResizeObserver as a plain function; the timeline
@@ -80,5 +81,32 @@ describe("MessageTimeline with generalized entries", () => {
       />,
     );
     expect(screen.getByText("nothing here")).toBeInTheDocument();
+  });
+
+  it("queues a message jump while the opening window is still mounting", async () => {
+    const messages = Array.from({ length: 40 }, (_, i) => message(`m${i}`, 1000 + i));
+    const handle = createRef<MessageTimelineHandle>();
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      render(
+        <MessageTimeline
+          transport={transportOf(messages)}
+          handleRef={handle}
+          renderMessage={(msg) => <span data-event-id={msg.id}>chat:{msg.id}</span>}
+        />,
+      );
+
+      act(() => {
+        expect(handle.current?.scrollToMessage("m5")).toBe(true);
+      });
+
+      expect(await screen.findByText("chat:m5")).toBeInTheDocument();
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(3));
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 });
