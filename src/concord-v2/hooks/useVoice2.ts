@@ -13,15 +13,15 @@ import {
   wrapSeal,
 } from "@/concord-v2/lib/stream";
 import {
-  fetchAvToken,
+  fetchAvTokenFromAny,
   foldVoicePresence,
+  heartbeatDelayMs,
   parsePresence,
   parseReaction,
   presenceTags,
   probeAvBroker,
   reactionTag,
   rendezvousCandidates,
-  VOICE_HEARTBEAT_MS,
   VOICE_STALE_MS,
   type AvToken,
   type VoicePresenceEntry,
@@ -229,11 +229,18 @@ export function useVoiceHeartbeat2(
   useEffect(() => {
     if (!identity || !broker || !user || !community || !channel) return;
     void publish("joined", identity, broker).catch(() => undefined);
-    const timer = setInterval(() => {
-      void publish("joined", identity, broker).catch(() => undefined);
-    }, VOICE_HEARTBEAT_MS);
+    // Self-rescheduling rather than a fixed interval, so each hop re-jitters
+    // (see `heartbeatDelayMs` for why the spread is downward only).
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        void publish("joined", identity, broker).catch(() => undefined);
+        schedule();
+      }, heartbeatDelayMs());
+    };
+    schedule();
     return () => {
-      clearInterval(timer);
+      clearTimeout(timer);
       void publish("left").catch(() => undefined);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -426,11 +433,17 @@ export function useAvToken2(
   channel: ChannelV2 | undefined,
   broker: string | undefined,
   enabled: boolean,
+  /**
+   * Further §5 candidates to try if `broker` cannot mint. Deliberately absent
+   * from the query key: presence churns the candidate list constantly, and
+   * rekeying on it would remint — handing the room a NEW identity mid-call.
+   */
+  fallbacks: readonly string[] = [],
 ) {
   return useQuery<AvToken>({
     queryKey: ["concord2", "av-token", channel?.idHex ?? null, channel?.current.epoch.toString(), broker],
     enabled: enabled && Boolean(channel?.voice && broker),
-    queryFn: async () => fetchAvToken(broker!, channel!.voice.room),
+    queryFn: async () => fetchAvTokenFromAny([broker!, ...fallbacks], channel!.voice.room),
     staleTime: Infinity,
     gcTime: 0,
     refetchOnMount: false,

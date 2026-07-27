@@ -44,7 +44,13 @@ import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { random32, voiceSenderKey } from "@/concord-v2/lib/derive";
 import { rendezvousCandidates, verifiedAuthorOf } from "@/concord-v2/lib/voice";
 import { useCallSync2 } from "@/concord-v2/hooks/useCallSync2";
-import { useAvToken2, useVoiceHeartbeat2, useVoicePresence2, useVoiceReactions2 } from "@/concord-v2/hooks/useVoice2";
+import {
+  ownAvServers,
+  useAvToken2,
+  useVoiceHeartbeat2,
+  useVoicePresence2,
+  useVoiceReactions2,
+} from "@/concord-v2/hooks/useVoice2";
 import { CallSignalsContext, type CallSignals } from "@/contexts/CallSignalsContext";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
@@ -678,7 +684,23 @@ function ConcordVoiceRoom({
   const { user } = useCurrentUser();
   const { joinConcordCall, registerFocusActiveCall, setRaisedHands } = useCall();
   const navigate = useNavigate();
-  const { data: tokenData, error, isLoading } = useAvToken2(channel, broker, true);
+  // Live presence (§4): the identity→member verification input, the rendezvous
+  // hint stream (§5), and the input to our own heartbeat below. Resolved before
+  // the token so a failed mint has somewhere to fall through to.
+  const fold = useVoicePresence2(community, channel);
+
+  // The §5 candidates behind `ctx.broker`. `resolveVoiceBroker` already probed
+  // one at join time, but a probe only proves the broker answered a moment ago —
+  // it can still fail to mint, and without these that is a dead end.
+  const fallbackBrokers = useMemo(
+    () =>
+      channel.voice.room.pk
+        ? rendezvousCandidates(channel.voice.room.pk, fold, ownAvServers()).filter((o) => o !== broker)
+        : ownAvServers().filter((o) => o !== broker),
+    [channel.voice.room.pk, fold, broker],
+  );
+
+  const { data: tokenData, error, isLoading } = useAvToken2(channel, broker, true, fallbackBrokers);
 
   // Raise-hand + emoji reactions (Armada client feature; Concord calls only —
   // they ride additive tags on the encrypted presence rumor, so brokers stay
@@ -703,16 +725,17 @@ function ConcordVoiceRoom({
     return () => registerFocusActiveCall(null);
   }, [registerFocusActiveCall, navigate, community.idHex, channel.idHex]);
 
-  // Live presence (§4): the identity→member verification input, the rendezvous
-  // hint stream (§5), and our own heartbeat (joined every 30s, left on leave) —
-  // which also carries our sticky raised-hand state and, via `sendReaction`,
-  // fires transient emoji (both Armada client extensions on the same rumor).
-  const fold = useVoicePresence2(community, channel);
+  // Our own heartbeat (§4): `joined` every 30s, `left` on leave — also carrying
+  // the sticky raised-hand state and, via `sendReaction`, transient emoji (both
+  // Armada client extensions on the same rumor). The broker announced is the one
+  // that actually minted the token, not the one the rendezvous nominated: after
+  // a fall-through those differ, and advertising the unreachable origin would
+  // steer everyone else at a broker that is not hosting this call.
   const { sendReaction } = useVoiceHeartbeat2(
     community,
     channel,
     tokenData?.identity,
-    tokenData ? broker : undefined,
+    tokenData?.origin,
     handRaised,
   );
   // Live in-call emoji reactions from every member (own reactions echo back).
@@ -843,11 +866,15 @@ function ConcordVoiceRoom({
     const occupiedByOther = fold.present.some(
       (p) => p.broker === winner && p.identity !== tokenData.identity,
     );
-    if (winner && winner !== broker && occupiedByOther) {
+    // Compared against the origin we are actually connected through, not the
+    // one `ctx` nominated — after a mint fall-through those differ, and using
+    // `ctx.broker` would either migrate us to where we already are or hide a
+    // migration we genuinely need.
+    if (winner && winner !== tokenData.origin && occupiedByOther) {
       migrated.current = true;
       joinConcordCall({ ...ctx, broker: winner });
     }
-  }, [fold, tokenData, broker, channel, ctx, joinConcordCall]);
+  }, [fold, tokenData, channel, ctx, joinConcordCall]);
 
   // Identity → member resolution for the call UI (§4): our own identity is
   // ourselves; anyone else's renders as a member only under a sole fresh

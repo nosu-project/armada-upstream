@@ -18,7 +18,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { finalizeEvent } from "nostr-tools/pure";
 
-import { bytesToHex, hexToBytes, type GroupKey } from "@/concord-v2/lib/derive";
+import { bytesToHex, hexToBytes, random32, type GroupKey } from "@/concord-v2/lib/derive";
 import { KIND_VOICE_PRESENCE } from "@/concord-v2/lib/kinds";
 import type { OpenedEvent } from "@/concord-v2/lib/stream";
 
@@ -30,6 +30,20 @@ export const KIND_HTTP_AUTH = 27235;
 export const VOICE_HEARTBEAT_MS = 30_000;
 /** A `joined` older than 90s (three missed heartbeats) counts as absent (§4). */
 export const VOICE_STALE_MS = 90_000;
+
+/**
+ * The delay until the next heartbeat: 80–100% of §4's 30s.
+ *
+ * Jittered so members who joined together — everyone in a channel after a rekey
+ * remounts the room — don't stay phase-locked and beat the relays in
+ * synchronized bursts. Jittered DOWNWARD only, and that direction is the whole
+ * point: at or under 30s, three missed heartbeats still fit inside the 90s
+ * staleness window, so the margin only widens. Jittering above 30s would shrink
+ * it to two missed heartbeats and make members flicker out of rosters.
+ */
+export function heartbeatDelayMs(random: () => number = Math.random): number {
+  return VOICE_HEARTBEAT_MS * (0.8 + random() * 0.2);
+}
 /** Bound the broker candidates taken from (untrusted) presence hints (§5). */
 export const MAX_VOICE_BROKERS = 3;
 
@@ -97,12 +111,27 @@ export interface AvToken {
   url: string;
   /** The broker-assigned random SFU identity — announced in presence (§4). */
   identity: string;
+  /**
+   * The broker origin that actually minted this token. Not always the one the
+   * rendezvous picked: when that broker is unreachable we fall through to the
+   * next candidate, and it is THIS origin that must ride presence as the §5
+   * hint — announcing the one we failed to reach would send everyone else to a
+   * broker that is not hosting the call.
+   */
+  origin: string;
 }
 
 /**
  * Sign the token grant (§2): a kind-27235 event self-signed with
  * `voice_key.sk`, so `event.pubkey` equals the room name. The grant lives only
  * in the Authorization header; it never touches a relay.
+ *
+ * The `nonce` tag carries 32 fresh random bytes and is REQUIRED (§2). Every
+ * member of a Channel derives and signs with the SAME `voice_key.sk`, so
+ * without it two members joining one room in the same second build
+ * byte-identical events — same id — and the broker's anti-replay set (which
+ * keys on the id) rejects whichever arrives second. NIP-98, whose shape this
+ * borrows, never needs one: each request there is signed by its own user's key.
  */
 export function signAvGrant(voice: GroupKey, url: string): string {
   const event = finalizeEvent(
@@ -112,6 +141,7 @@ export function signAvGrant(voice: GroupKey, url: string): string {
       tags: [
         ["u", url],
         ["method", "GET"],
+        ["nonce", bytesToHex(random32())],
       ],
       created_at: Math.floor(Date.now() / 1000),
     },
@@ -152,7 +182,35 @@ export async function fetchAvToken(origin: string, voice: GroupKey): Promise<AvT
   const identity = typeof data.identity === "string" ? data.identity : "";
   if (!token || !sfuUrl || !identity) throw new Error("Voice token response missing token, url, or identity");
   if (!/^wss:\/\//i.test(sfuUrl)) throw new Error("Broker returned a non-wss SFU url");
-  return { token, url: sfuUrl, identity };
+  return { token, url: sfuUrl, identity, origin };
+}
+
+/**
+ * Mint from the first candidate that answers, in §5 rendezvous order.
+ *
+ * The capability probe (§5) only says a broker was reachable a moment ago; it
+ * can still fail to mint — restarting, at capacity, or its SFU gone. Without a
+ * fall-through that is a dead end for the caller, since a client resolves one
+ * broker per join and has nothing to retry against. It is also what lets a
+ * broker shed load honestly at the token endpoint: refusing a room it does not
+ * host now moves the caller on instead of stranding them.
+ *
+ * Rejections are not sorted by kind — a grant this room's key cannot satisfy
+ * fails everywhere, so trying the rest costs a few requests once, while
+ * treating a 503 as fatal would cost the call.
+ */
+export async function fetchAvTokenFromAny(origins: string[], voice: GroupKey): Promise<AvToken> {
+  const candidates = [...new Set(origins.filter(Boolean))];
+  if (candidates.length === 0) throw new Error("No voice server to request a token from");
+  let lastError: unknown;
+  for (const origin of candidates) {
+    try {
+      return await fetchAvToken(origin, voice);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("No reachable voice server");
 }
 
 // ── Presence (§4) ────────────────────────────────────────────────────────────

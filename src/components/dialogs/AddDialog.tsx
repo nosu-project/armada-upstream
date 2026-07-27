@@ -78,13 +78,14 @@ export function AddBody({ onDone }: { onDone: () => void }) {
   const [name, setName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
 
-  // Advanced: which relays the community is minted on. `null` = untouched (the
-  // create path picks its own default); once the user edits, `relays` holds the
-  // explicit set. The candidate query (gated on the menu being open) resolves
-  // the same default for pre-selection.
+  // Which relays the community is minted on. `null` = untouched (use the
+  // resolved default candidates); once the user edits the picker, `relays`
+  // holds the explicit set. Candidates resolve eagerly (not gated on the
+  // advanced menu) so the effective home-relay list is shown up front, and
+  // passing it at submit keeps what's shown identical to what's actually used.
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [relays, setRelays] = useState<string[] | null>(null);
-  const { data: candidates } = useCreateRelayCandidates2(advancedOpen);
+  const { data: candidates } = useCreateRelayCandidates2();
   const effectiveRelays = relays ?? candidates ?? [];
 
   const handleCreate = async () => {
@@ -93,7 +94,11 @@ export function AddBody({ onDone }: { onDone: () => void }) {
       // New communities are always Concord V2.
       const { communityId, name: created } = await create({
         name: name.trim(),
-        relays: relays ?? undefined,
+        // Pass the resolved candidates when the picker wasn't touched, so the
+        // community is minted on exactly the relays shown below. Falls back to
+        // undefined only if candidates haven't resolved yet (create then picks
+        // its own default).
+        relays: relays ?? candidates ?? undefined,
       });
       onDone();
       toast({ title: "Encrypted community ready", description: created });
@@ -174,11 +179,22 @@ export function AddBody({ onDone }: { onDone: () => void }) {
             </CollapsibleTrigger>
           </div>
 
+          {/* The relays the community will be minted on, shown up front so the
+              choice isn't hidden behind the picker. Expand (chevron) to edit. */}
+          {!advancedOpen && effectiveRelays.length > 0 && (
+            <p className="mt-2 text-left text-xs text-muted-foreground">
+              Lives on {effectiveRelays.length}{" "}
+              {effectiveRelays.length === 1 ? "relay" : "relays"}:{" "}
+              {effectiveRelays
+                .map((r) => r.replace(/^wss?:\/\//, "").replace(/\/$/, ""))
+                .join(", ")}
+            </p>
+          )}
+
           <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
             <p className="mb-2 mt-3 text-left text-xs text-muted-foreground">
-              Where this community lives. Members read and write here, so pick
-              relays that accept your writes. An auth-only or DM-only relay can
-              reject the genesis and strand the create.
+              Where this community lives. Everyone in it reads and posts here,
+              so pick relays that will let you post.
             </p>
             <RelayListEditor
               relays={effectiveRelays}

@@ -31,6 +31,14 @@ export const BlossomServerMetadataSchema = z.object({
   updatedAt: z.number(),
 });
 
+/** The user's NIP-65 relay list + kind 10002 sync timestamp. */
+export const RelayMetadataSchema = z.object({
+  relays: z.array(
+    z.object({ url: z.string(), read: z.boolean(), write: z.boolean() }),
+  ),
+  updatedAt: z.number(),
+});
+
 /**
  * A node in the community rail's structured layout: a bare item (by stable
  * rail key) or a Discord-style folder of items. See lib/railLayout.ts.
@@ -70,6 +78,9 @@ export const AppConfigSchema = z.object({
   railOpenFolders: z.array(z.string()).catch([]),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
+  useAppRelays: z.boolean().catch(defaultConfig.useAppRelays),
+  useUserRelays: z.boolean().catch(defaultConfig.useUserRelays),
+  relayMetadata: RelayMetadataSchema.catch(defaultConfig.relayMetadata),
   useAppDmRelays: z.boolean().catch(defaultConfig.useAppDmRelays),
   useOwnDmRelays: z.boolean().catch(defaultConfig.useOwnDmRelays),
   dmRelays: z.array(z.string()).catch(defaultConfig.dmRelays),
@@ -105,6 +116,12 @@ export const EncryptedSettingsSchema = z.looseObject({
   appRelays: z.array(z.string()).optional(),
   /** NIP-50 search relays. */
   searchRelays: z.array(z.string()).optional(),
+  /** Whether the app relays are used in the general pool (foot-gun when off). */
+  useAppRelays: z.boolean().optional(),
+  /** Whether the user's own NIP-65 relays are folded into the general pool. */
+  useUserRelays: z.boolean().optional(),
+  /** The user's NIP-65 relay list (canonical source: kind 10002). */
+  relayMetadata: RelayMetadataSchema.optional(),
   /** Whether DMs use the app's default DM relays. */
   useAppDmRelays: z.boolean().optional(),
   /** Whether DMs also use the user's own relays. */

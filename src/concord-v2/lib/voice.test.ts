@@ -1,5 +1,5 @@
 import { verifyEvent } from "nostr-tools/pure";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { voiceGroupKey } from "@/concord-v2/lib/derive";
 import { KIND_VOICE_PRESENCE } from "@/concord-v2/lib/kinds";
@@ -7,7 +7,10 @@ import type { OpenedEvent } from "@/concord-v2/lib/stream";
 import {
   brokerRank,
   canonicalOrigin,
+  fetchAvToken,
+  fetchAvTokenFromAny,
   foldVoicePresence,
+  heartbeatDelayMs,
   KIND_HTTP_AUTH,
   orderBrokers,
   parsePresence,
@@ -17,6 +20,7 @@ import {
   rendezvousCandidates,
   signAvGrant,
   verifiedAuthorOf,
+  VOICE_HEARTBEAT_MS,
   VOICE_STALE_MS,
   type VoicePresenceEntry,
 } from "@/concord-v2/lib/voice";
@@ -70,6 +74,102 @@ describe("token grant (§2)", () => {
     expect(event.tags).toContainEqual(["u", url]);
     expect(event.tags).toContainEqual(["method", "GET"]);
     expect(verifyEvent(event)).toBe(true);
+  });
+
+  it("carries a fresh 32-byte nonce, so same-second grants never share an id", () => {
+    const voice = voiceGroupKey(A, B, 0);
+    const url = `https://broker.example/.well-known/concord/av/${voice.pk}`;
+    const grant = () => JSON.parse(atob(signAvGrant(voice, url))) as { id: string; tags: string[][] };
+    const a = grant();
+    const b = grant();
+    const nonceOf = (e: { tags: string[][] }) => e.tags.find((t) => t[0] === "nonce")?.[1];
+    expect(nonceOf(a)).toMatch(/^[0-9a-f]{64}$/);
+    expect(nonceOf(b)).not.toBe(nonceOf(a));
+    // The property that matters (§2): every member of a Channel signs with the
+    // SAME voice_key.sk, so without the nonce two joiners in one second build
+    // byte-identical events, and the broker's anti-replay set — which keys on
+    // the id — drops the second one to arrive.
+    expect(a.id).not.toBe(b.id);
+  });
+});
+
+describe("token minting fall-through (§5)", () => {
+  const voice = voiceGroupKey(A, B, 0);
+  const body = (identity: string) =>
+    new Response(JSON.stringify({ token: "jwt", url: "wss://sfu.example.com", identity }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reports the origin that actually minted the token", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => body("id-1")));
+    const token = await fetchAvToken("https://a.example", voice);
+    expect(token).toMatchObject({ identity: "id-1", origin: "https://a.example" });
+  });
+
+  it("falls through to the next candidate, and reports THAT origin", async () => {
+    // The origin matters: it rides presence as the §5 hint, so announcing the
+    // broker we failed to reach would steer everyone else away from the call.
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      if (String(input).startsWith("https://down.example")) throw new Error("connection refused");
+      return body("id-2");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const token = await fetchAvTokenFromAny(["https://down.example", "https://up.example"], voice);
+    expect(token.origin).toBe("https://up.example");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("moves past a broker that answers but refuses to mint", async () => {
+    // A capability probe only proves the broker was reachable a moment ago; a
+    // 503 here is how a loaded broker sheds a room it does not host.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) =>
+        String(input).startsWith("https://full.example")
+          ? new Response(null, { status: 503 })
+          : body("id-3"),
+      ),
+    );
+    const token = await fetchAvTokenFromAny(["https://full.example", "https://spare.example"], voice);
+    expect(token.origin).toBe("https://spare.example");
+  });
+
+  it("dedupes candidates and skips empties", async () => {
+    const fetchMock = vi.fn(async () => body("id-4"));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchAvTokenFromAny(["https://a.example", "https://a.example", ""], voice);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the last failure when every candidate is exhausted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 502 })),
+    );
+    await expect(fetchAvTokenFromAny(["https://a.example", "https://b.example"], voice)).rejects.toThrow(
+      /HTTP 502/,
+    );
+    await expect(fetchAvTokenFromAny([], voice)).rejects.toThrow(/No voice server/);
+  });
+});
+
+describe("heartbeatDelayMs (§4)", () => {
+  it("never exceeds the 30s heartbeat, so the 90s staleness margin only widens", () => {
+    // Three heartbeats must still fit inside VOICE_STALE_MS. Jittering upward
+    // would leave room for only two, and members would flicker out of rosters.
+    expect(heartbeatDelayMs(() => 0)).toBe(24_000);
+    expect(heartbeatDelayMs(() => 0.999999)).toBeLessThanOrEqual(VOICE_HEARTBEAT_MS);
+    for (let i = 0; i < 200; i++) {
+      const delay = heartbeatDelayMs();
+      expect(delay).toBeLessThanOrEqual(VOICE_HEARTBEAT_MS);
+      expect(delay * 3).toBeLessThanOrEqual(VOICE_STALE_MS);
+    }
   });
 });
 

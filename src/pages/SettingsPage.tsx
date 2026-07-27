@@ -52,7 +52,7 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { APP_RELAYS, PINNED_RAIL_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, DM_RELAYS, PINNED_RAIL_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -193,6 +193,25 @@ export function SettingsPage() {
   };
 
   /**
+   * Toggle whether the app relays are used in the general pool at all. On by
+   * default; turning it off is a foot-gun (see the warning rendered alongside).
+   * Local config only; publishes nothing.
+   */
+  const setUseAppRelays = (value: boolean) => {
+    updateConfig((current) => ({ ...current, useAppRelays: value }));
+  };
+
+  /**
+   * Toggle whether the general relay pool also uses the user's own NIP-65
+   * (kind 10002) relays. Local-only and publishes nothing: `relayMetadata` is
+   * a read-only mirror of the user's published list (synced by NostrSync), so
+   * this only controls whether this client reads/writes on those relays too.
+   */
+  const setUseUserRelays = (value: boolean) => {
+    updateConfig((current) => ({ ...current, useUserRelays: value }));
+  };
+
+  /**
    * Toggle DM typing indicators. Off by default — see `dmTypingIndicators`.
    * Local config only (synced across devices); publishes nothing.
    */
@@ -320,40 +339,102 @@ export function SettingsPage() {
         );
       case "servers":
         return (
-          <SettingsRow>
-            <RelayListEditor
-              pinned={PINNED_RAIL_RELAYS}
-              relays={servers}
-              onChange={setAddedRelays}
-              emptyText="No extra servers added. Use the + button in the server rail to add one."
-              placeholder="wss://server.example.com"
-            />
-          </SettingsRow>
+          <>
+            <SettingsRow>
+              <p className="text-xs text-muted-foreground leading-snug">
+                Trust-the-host NIP-29 servers you've connected to. Each is a
+                single relay that stores that server's channels and messages.
+                Usually added by joining, with the + button in the server rail.
+              </p>
+            </SettingsRow>
+            <SettingsRow>
+              <RelayListEditor
+                pinned={PINNED_RAIL_RELAYS}
+                relays={servers}
+                onChange={setAddedRelays}
+                emptyText="No extra servers added. Use the + button in the server rail to add one."
+                placeholder="wss://server.example.com"
+              />
+            </SettingsRow>
+          </>
         );
-      case "app-relays":
+      case "app-relays": {
+        const userRelayUrls = config.relayMetadata.relays.map((r) => r.url);
         return (
-          <SettingsRow>
-            <RelayListEditor
-              relays={config.appRelays}
-              onChange={setRelays("appRelays")}
-              onReset={() => setRelays("appRelays")([...APP_RELAYS])}
-              emptyText="No app relays — profiles and lists are stored on your internal servers only."
-            />
-          </SettingsRow>
+          <>
+            <SettingsRow>
+              <p className="text-xs text-muted-foreground leading-snug">
+                The relays where Armada keeps and looks up your account data:
+                your profile, follow list, emoji packs, and the other personal
+                lists that follow you between devices.
+              </p>
+            </SettingsRow>
+            <SettingsRow
+              label="Use app relays"
+              description="Read and write your account data on the app relays below. Leave this on unless you really know you want it off."
+            >
+              <Switch checked={config.useAppRelays} onCheckedChange={setUseAppRelays} />
+            </SettingsRow>
+            {!config.useAppRelays && (
+              <SettingsRow>
+                <p className="text-sm text-destructive leading-snug">
+                  App relays are off. Your profile, follow lists, and emoji packs
+                  won't load or sync unless your own relays (NIP-65) or joined
+                  servers can carry them.
+                </p>
+              </SettingsRow>
+            )}
+            <SettingsRow>
+              <RelayListEditor
+                relays={config.appRelays}
+                onChange={setRelays("appRelays")}
+                onReset={() => setRelays("appRelays")([...APP_RELAYS])}
+                emptyText="No app relays yet. Your account data lives on your joined servers only."
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Use my own relays (NIP-65)"
+              description="Also read and write profiles and lists on the relays from your published NIP-65 relay list, on top of the app relays above."
+            >
+              <Switch checked={config.useUserRelays} onCheckedChange={setUseUserRelays} />
+            </SettingsRow>
+            {config.useUserRelays && (
+              <SettingsRow
+                label="Your relays"
+                description={
+                  userRelayUrls.length > 0
+                    ? userRelayUrls.join(", ")
+                    : "No NIP-65 relay list found yet — publish one from another client and it'll appear here."
+                }
+              />
+            )}
+          </>
         );
+      }
       case "search-relays":
         return (
-          <SettingsRow>
-            <RelayListEditor
-              relays={config.searchRelays}
-              onChange={setRelays("searchRelays")}
-              onReset={() => setRelays("searchRelays")([...SEARCH_RELAYS])}
-              emptyText="No search relays — search falls back to your app relays."
-            />
-          </SettingsRow>
+          <>
+            <SettingsRow>
+              <p className="text-xs text-muted-foreground leading-snug">
+                Relays queried when you search for people or communities by name
+                (NIP-50). Leave empty to fall back to your app relays.
+              </p>
+            </SettingsRow>
+            <SettingsRow>
+              <RelayListEditor
+                relays={config.searchRelays}
+                onChange={setRelays("searchRelays")}
+                onReset={() => setRelays("searchRelays")([...SEARCH_RELAYS])}
+                emptyText="No search relays — search falls back to your app relays."
+              />
+            </SettingsRow>
+          </>
         );
       case "dms": {
         const effective = effectiveDmRelays(config);
+        // The app DM relays are the app relays plus the platform DM relay(s),
+        // exactly what `effectiveDmRelays` folds in when the toggle is on.
+        const appDmRelays = [...new Set([...config.appRelays, ...DM_RELAYS])];
         return (
           <>
             <SettingsRow
@@ -368,16 +449,15 @@ export function SettingsPage() {
             >
               <Switch checked={config.useOwnDmRelays} onCheckedChange={setUseOwnDmRelays} />
             </SettingsRow>
-            {config.useOwnDmRelays && (
-              <SettingsRow>
-                <RelayListEditor
-                  relays={config.dmRelays}
-                  onChange={setDmRelays}
-                  emptyText="No personal DM relays yet — add at least one."
-                  placeholder="wss://dm-relay.example.com"
-                />
-              </SettingsRow>
-            )}
+            <SettingsRow>
+              <RelayListEditor
+                pinned={config.useAppDmRelays ? appDmRelays : []}
+                relays={config.dmRelays}
+                onChange={setDmRelays}
+                emptyText="No personal DM relays yet. Add one, or rely on the app DM relays above."
+                placeholder="wss://dm-relay.example.com"
+              />
+            </SettingsRow>
             <SettingsRow
               label="Typing indicators"
               description="Show when the other person is typing, and let them see when you are. Sends a small encrypted signal every few seconds while you type, so your relays can tell the conversation is active right now."
@@ -392,7 +472,7 @@ export function SettingsPage() {
             ) : (
               <SettingsRow>
                 <p className="text-sm text-destructive">
-                  No DM relays selected — you can't send or receive direct
+                  No DM relays selected. You can't send or receive direct
                   messages. Turn on at least one option above.
                 </p>
               </SettingsRow>

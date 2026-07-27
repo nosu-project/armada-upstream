@@ -18,6 +18,26 @@ import type { NostrEvent } from "@nostrify/nostrify";
 /** NIP-30 emoji set (a shareable pack). */
 export const KIND_EMOJI_SET = 30030;
 
+/**
+ * Whether a durable, reload-surviving palette exists for `pubkey`.
+ *
+ * `useCustomEmojis` owns `armada:custom-emojis:<pubkey>` in localStorage and
+ * only writes it once a palette has actually resolved (never from a failed
+ * read). It therefore answers "has this account ever had emojis?" across page
+ * loads — the in-memory React Query caches are wiped on reload and are empty
+ * exactly when a cold-start read is most likely to race out. The key is kept in
+ * sync with `useCustomEmojis` by hand; we can't import it without a module
+ * cycle (that hook already imports from here).
+ */
+function hasDurableEmojis(pubkey: string): boolean {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(`armada:custom-emojis:${pubkey}`) ?? "");
+    return Array.isArray(parsed) && parsed.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** The outcome of reading the user's kind-10030 list. */
 export interface EmojiListRead {
   /** Newest list from the relays or the local event store, if one was found. */
@@ -173,29 +193,29 @@ export function useAddEmojiPack(): UseMutationResult<
       // Never publish a list built from an empty base. Kind 10030 is
       // replaceable, so doing that on a read that merely FAILED replaces every
       // emoji the user has with this one pack. Creating the list from scratch
-      // is only allowed when a relay completed the read and reported nothing,
-      // the local store has nothing, and nothing we've already rendered says
-      // otherwise. Short of all three we publish nothing and say so.
-      let base = prev;
+      // is only allowed when a relay completed the read (EOSE) and reported
+      // nothing, the local store has nothing, and no local record — durable or
+      // in-memory — says a list ever existed. Short of that we publish nothing
+      // and say so.
+      const base = prev;
       if (!base) {
         const knownRefs = queryClient.getQueryData<string[]>(["emoji-pack-refs", user.pubkey]);
         const knownEmojis = queryClient.getQueryData<unknown[]>(["custom-emojis", user.pubkey]);
-        const seenAList = (knownRefs?.length ?? 0) > 0 || (knownEmojis?.length ?? 0) > 0;
+        // The durable localStorage palette is the reload-surviving evidence a
+        // list exists (AGENTS.md: "refuse to build on an empty/failed read when
+        // local persisted state says a non-empty list existed"). It is what
+        // makes a single conclusive read safe enough to build a first list on,
+        // so we don't need a second, identical re-read — one the replaceable
+        // batcher tends to collapse into a no-EOSE hang, which used to make the
+        // very first add impossible.
+        const seenAList =
+          (knownRefs?.length ?? 0) > 0 ||
+          (knownEmojis?.length ?? 0) > 0 ||
+          hasDurableEmojis(user.pubkey);
         if (!conclusive || seenAList) {
           throw new Error("Couldn't read your emoji list. Check your connection and try again.");
         }
-        // `conclusive` is only "a round finished": the pool emits its merged
-        // EOSE once the FIRST relay is done plus a grace window, so one relay
-        // without a copy can end the round while the relay holding the list is
-        // still connecting. That is far too thin to build a from-scratch list
-        // on, which would replace every emoji the user has. Confirm with a
-        // second, independent read before treating the absence as real.
-        const confirm = await readEmojiList(nostr, store, user.pubkey, AbortSignal.timeout(15_000));
-        if (confirm.event) {
-          base = confirm.event;
-        } else if (!confirm.conclusive) {
-          throw new Error("Couldn't read your emoji list. Check your connection and try again.");
-        }
+        // base stays null → create the user's first list from scratch.
       }
 
       const tags: string[][] = base ? base.tags.map((t) => [...t]) : [];
@@ -261,7 +281,10 @@ export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: st
         // place on the network). Short of that, surface the failure.
         const knownRefs = queryClient.getQueryData<string[]>(["emoji-pack-refs", user.pubkey]);
         const knownEmojis = queryClient.getQueryData<unknown[]>(["custom-emojis", user.pubkey]);
-        const seenAList = (knownRefs?.length ?? 0) > 0 || (knownEmojis?.length ?? 0) > 0;
+        const seenAList =
+          (knownRefs?.length ?? 0) > 0 ||
+          (knownEmojis?.length ?? 0) > 0 ||
+          hasDurableEmojis(user.pubkey);
         if (!conclusive || seenAList) {
           throw new Error("Couldn't read your emoji list. Check your connection and try again.");
         }

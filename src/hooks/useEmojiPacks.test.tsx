@@ -102,6 +102,7 @@ function publishedTags(): string[][] {
 }
 
 beforeEach(() => {
+  localStorage.clear(); // the durable-palette guard reads armada:custom-emojis:<pk>
   h.req.mockReset();
   h.storeQuery.mockReset().mockResolvedValue([]);
   h.publish.mockReset().mockResolvedValue({
@@ -179,6 +180,47 @@ describe("useAddEmojiPack (kind 10030 read-modify-write)", () => {
     const arg = h.publish.mock.calls[0][0] as { kind: number; tags: string[][]; content: string };
     expect(arg.kind).toBe(10030);
     expect(arg.tags).toEqual([["a", COORD]]);
+  });
+
+  it("creates a fresh list on a single conclusive read (no second confirming re-read)", async () => {
+    // The first add used to require a SECOND, identical read to also EOSE. The
+    // replaceable batcher tends to collapse that immediate re-read into a
+    // no-EOSE hang, which made adding your very first pack impossible. One
+    // conclusive empty read with no durable evidence must be enough: even if a
+    // second read would fail outright, the pack is still added.
+    let call = 0;
+    h.req.mockImplementation(() => {
+      call += 1;
+      return call === 1 ? reqConclusive([])() : reqFailed()();
+    });
+
+    const result = renderAdd();
+    await act(async () => {
+      await result.current.mutateAsync({ pubkey: PACK_PK, identifier: "mypack" });
+    });
+
+    expect(h.publish).toHaveBeenCalledTimes(1);
+    expect(publishedTags()).toEqual([["a", COORD]]);
+  });
+
+  it("REFUSES to create from an empty read when a durable palette exists (cold-reload wipe)", async () => {
+    // localStorage is the reload-surviving record that this account HAS emojis;
+    // the in-memory caches are empty on a cold load, so without this guard a
+    // spurious conclusive-empty read would rebuild the list from scratch and
+    // wipe every emoji. Even an EOSE'd empty read must back off here.
+    localStorage.setItem(
+      `armada:custom-emojis:${SELF}`,
+      JSON.stringify([{ shortcode: "cat", url: "https://x/cat.png" }]),
+    );
+    h.req.mockImplementation(reqConclusive([]));
+
+    const result = renderAdd();
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({ pubkey: PACK_PK, identifier: "mypack" }),
+      ).rejects.toThrow(/couldn't read/i);
+    });
+    expect(h.publish).not.toHaveBeenCalled();
   });
 
   it("uses the cached list as a floor when the relay read fails (non-destructive append)", async () => {

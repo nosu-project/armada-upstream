@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
 import { setBuzzMediaSigner } from "@/buzz/media";
-import { SYNCED_CONFIG_KEYS, type AppConfig } from "@/contexts/AppContext";
+import { SYNCED_CONFIG_KEYS, type AppConfig, type RelayMetadata } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
@@ -22,6 +22,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { useReadState } from "@/hooks/useReadState";
 import { parseBlossomServerList } from "@/lib/blossom";
 import { KIND_BLOSSOM_SERVERS } from "@/hooks/useBlossomServerList";
+import { normalizeRelayUrl } from "@/lib/platform";
 import { type EncryptedSettings } from "@/lib/schemas";
 import {
   KIND_APP_SPECIFIC,
@@ -58,6 +59,28 @@ const SELF_SYNC_FLUSH_MS = 60;
 function dTagOf(event: NostrEvent): string | undefined {
   for (const t of event.tags) if (t[0] === "d") return t[1];
   return undefined;
+}
+
+/** NIP-65 relay list. */
+const KIND_RELAY_LIST = 10002;
+
+/**
+ * Parse a kind-10002 event's `r` tags into `RelayMetadata` relays. A bare `r`
+ * tag (`["r", url]`) is both read and write; a marker (`"read"`/`"write"`)
+ * restricts it. URLs are normalized and deduped, first-wins.
+ */
+function parseRelayList(event: NostrEvent): RelayMetadata["relays"] {
+  const out: RelayMetadata["relays"] = [];
+  const seen = new Set<string>();
+  for (const t of event.tags) {
+    if (t[0] !== "r" || !t[1]) continue;
+    const url = normalizeRelayUrl(t[1]);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    const marker = t[2];
+    out.push({ url, read: !marker || marker === "read", write: !marker || marker === "write" });
+  }
+  return out;
 }
 
 /** Pick just the synced fields out of AppConfig, dropping undefined values. */
@@ -116,6 +139,7 @@ export function NostrSync() {
 
   const dittoCheckedPubkey = useRef<string | undefined>(undefined);
   const blossomAppliedPubkey = useRef<string | undefined>(undefined);
+  const relayListAppliedPubkey = useRef<string | undefined>(undefined);
   // The remote sync timestamp we've most recently folded into local config.
   const appliedSyncTs = useRef<number>(-1);
   // Whether the initial incoming pull has settled for the current account.
@@ -147,6 +171,7 @@ export function NostrSync() {
     pulledForPubkey.current = undefined;
     lastSyncedSnapshot.current = undefined;
     blossomAppliedPubkey.current = undefined;
+    relayListAppliedPubkey.current = undefined;
   }, [user?.pubkey]);
 
   // ─── A. Standing self-state subscription (transport / freshness) ──────
@@ -422,6 +447,54 @@ export function NostrSync() {
             blossomServerMetadata: { servers, updatedAt: event.created_at },
           };
           // Sync-driven (hydrating the user's own 10063 list), not a user edit
+          // — keep the publish baseline in lockstep so it isn't broadcast back.
+          if (pulledForPubkey.current === user.pubkey) {
+            lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));
+          }
+          return next;
+        });
+      } catch {
+        // Relay error — keep the local cache.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.pubkey, nostr, updateConfig]);
+
+  // ─── 1e. NIP-65 relay list (kind 10002 `r` tags) → config ─────────────
+  // The user's own relay list is a READ-ONLY mirror here: `relayMetadata` is
+  // folded into the general pool only when `useUserRelays` is on, and this
+  // client never publishes kind 10002 (AGENTS.md: never publish a user's lists
+  // without an explicit user action — there is no such action for this list).
+  // Apply only when the event is newer than what we hold and non-empty, so a
+  // transient empty/failed read never wipes a good local mirror. Exactly the
+  // shape of the 10063 block above; runs once per account.
+  useEffect(() => {
+    if (!user?.pubkey) return;
+    if (relayListAppliedPubkey.current === user.pubkey) return;
+    relayListAppliedPubkey.current = user.pubkey;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const events = await nostr.query(
+          [{ kinds: [KIND_RELAY_LIST], authors: [user.pubkey], limit: 1 }],
+          { signal: AbortSignal.timeout(6000) },
+        );
+        const event = events.sort((a, b) => b.created_at - a.created_at)[0];
+        if (!event || cancelled) return;
+        const relays = parseRelayList(event);
+        if (relays.length === 0) return;
+        updateConfig((current) => {
+          if (event.created_at <= current.relayMetadata.updatedAt) return current;
+          const next = {
+            ...current,
+            relayMetadata: { relays, updatedAt: event.created_at },
+          };
+          // Sync-driven (hydrating the user's own 10002 list), not a user edit
           // — keep the publish baseline in lockstep so it isn't broadcast back.
           if (pulledForPubkey.current === user.pubkey) {
             lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));

@@ -9,6 +9,19 @@ import type { ThemeConfig, ThemesConfig } from "@/themes";
 export type Theme = "light" | "dark" | "system" | "custom";
 
 /**
+ * The user's NIP-65 (kind 10002) relay list plus its sync timestamp, mirroring
+ * `BlossomServerMetadata`. Each relay carries the `read`/`write` markers from
+ * its `r` tag (a bare `r` tag is both). Synced FROM the user's kind-10002 event
+ * by NostrSync (read-only — this client never publishes kind 10002); merged
+ * into the general relay pool only when `useUserRelays` is on. Ported from
+ * Ditto's `RelayMetadata` / `getEffectiveRelays`.
+ */
+export interface RelayMetadata {
+  relays: { url: string; read: boolean; write: boolean }[];
+  updatedAt: number;
+}
+
+/**
  * Application configuration, persisted to localStorage by AppProvider.
  *
  * Note this holds no server list: the user's NIP-29 servers live in their kind
@@ -77,6 +90,31 @@ export interface AppConfig {
    * back to the app relays.
    */
   searchRelays: string[];
+  /**
+   * Whether the app relays (`appRelays`) are used in the general relay pool.
+   * On by default. Turning it off is a deliberate foot-gun: with no app
+   * relays, no joined servers, and no NIP-65 relays enabled, the pool is empty
+   * and account data (profile, lists, emoji packs) can't load or sync, and
+   * this client can't even read the kind-10002 that populates `relayMetadata`.
+   * The platform-pinned relays (`PLATFORM_RELAYS`) and joined NIP-29 servers
+   * are NOT gated by this, so an air-gapped deployment still works with it off.
+   */
+  useAppRelays: boolean;
+  /**
+   * Whether to include the user's own NIP-65 (kind 10002) relays in the
+   * general relay pool (reads via `reqRouter`, writes via `eventRouter`), on
+   * top of the app relays and joined servers. Off by default, mirroring
+   * Ditto's `useUserRelays`.
+   */
+  useUserRelays: boolean;
+  /**
+   * The user's NIP-65 relay list, synced FROM their kind-10002 event by
+   * NostrSync. Read-only mirror — this client never publishes kind 10002, so
+   * enabling `useUserRelays` only ever ADDS the relays the user already
+   * declared elsewhere. Empty until synced; an empty/failed read never clears
+   * it (same non-destructive rule as `blossomServerMetadata`).
+   */
+  relayMetadata: RelayMetadata;
   /**
    * Whether to include the app's default DM relays (`appRelays` ∪ the platform
    * `DM_RELAYS`) in the direct-message relay set. On by default. Independent of
@@ -248,6 +286,9 @@ export const SYNCED_CONFIG_KEYS = [
   "railLayout",
   "appRelays",
   "searchRelays",
+  "useAppRelays",
+  "useUserRelays",
+  "relayMetadata",
   "useAppDmRelays",
   "useOwnDmRelays",
   "dmRelays",
@@ -273,6 +314,9 @@ export const defaultConfig: AppConfig = {
   railOpenFolders: [],
   appRelays: [...APP_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
+  useAppRelays: true,
+  useUserRelays: false,
+  relayMetadata: { relays: [], updatedAt: 0 },
   useAppDmRelays: true,
   useOwnDmRelays: false,
   dmRelays: [],
@@ -324,4 +368,25 @@ export function effectiveDmRelays(config: AppConfig): string[] {
     for (const url of config.dmRelays) out.add(url);
   }
   return [...out];
+}
+
+/**
+ * The user's own NIP-65 read relays to fold into the general pool's REQ
+ * routing, or none when `useUserRelays` is off. Ported from Ditto's
+ * `getEffectiveRelays` (the `useUserRelays` half); the app relays are added
+ * separately and always, so this returns ONLY the user's personal read relays.
+ */
+export function userReadRelays(config: AppConfig): string[] {
+  if (!config.useUserRelays) return [];
+  return config.relayMetadata.relays.filter((r) => r.read).map((r) => r.url);
+}
+
+/**
+ * The user's own NIP-65 write relays to fold into the general pool's EVENT
+ * routing, or none when `useUserRelays` is off. Companion to
+ * `userReadRelays` — see there.
+ */
+export function userWriteRelays(config: AppConfig): string[] {
+  if (!config.useUserRelays) return [];
+  return config.relayMetadata.relays.filter((r) => r.write).map((r) => r.url);
 }

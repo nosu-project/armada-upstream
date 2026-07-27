@@ -6,6 +6,7 @@ import { NUser, useNostrLogin } from "@nostrify/react/login";
 import type { NostrSigner } from "@nostrify/types";
 
 import { EventStoreContext, type EventStoreContextType } from "@/contexts/EventStoreContext";
+import { userReadRelays, userWriteRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCachedNip29Servers } from "@/hooks/useCachedNip29Servers";
 import { appEventStore } from "@/lib/sqlite/eventStore";
@@ -130,24 +131,61 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // call `useUserGroupList`. The fold needs no relay and no signer, and it
   // re-reads on every snapshot write, so the pool follows adds AND removals.
   const cachedServers = useCachedNip29Servers(logins[0]?.pubkey);
-  const poolRelays = useMemo(() => {
+
+  // The base pool, shared by reads and writes: app relays (unless the user has
+  // switched them off) + platform-pinned relays + joined NIP-29 servers. The
+  // platform pins and servers are never gated, so an air-gapped deployment
+  // keeps working even with app relays off — but a user who empties everything
+  // is left with an empty pool, by their own choice.
+  const basePoolRelays = useMemo(() => {
     const urls = new Set<string>();
-    for (const url of config.appRelays) {
-      const normalized = normalizeRelayUrl(url);
-      if (normalized) urls.add(normalized);
+    if (config.useAppRelays) {
+      for (const url of config.appRelays) {
+        const normalized = normalizeRelayUrl(url);
+        if (normalized) urls.add(normalized);
+      }
     }
     for (const url of PLATFORM_RELAYS) urls.add(url);
     for (const url of cachedServers) {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
     }
-    return [...urls];
-  }, [config.appRelays, cachedServers]);
+    return urls;
+  }, [config.useAppRelays, config.appRelays, cachedServers]);
 
-  const poolRelaysRef = useRef(poolRelays);
+  // Read (REQ) and write (EVENT) routing sets. Both start from the base pool
+  // and, when `useUserRelays` is on, fold in the user's own NIP-65 read/write
+  // relays (Ditto's getEffectiveRelays, adapted: app relays are always
+  // included, so this only ever ADDS the user's declared relays). With the
+  // toggle off the two sets equal the base pool — identical to the previous
+  // single-set behavior, so the default path is unchanged.
+  const poolReadRelays = useMemo(() => {
+    const urls = new Set(basePoolRelays);
+    for (const url of userReadRelays(config)) {
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) urls.add(normalized);
+    }
+    return [...urls];
+  }, [basePoolRelays, config]);
+
+  const poolWriteRelays = useMemo(() => {
+    const urls = new Set(basePoolRelays);
+    for (const url of userWriteRelays(config)) {
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) urls.add(normalized);
+    }
+    return [...urls];
+  }, [basePoolRelays, config]);
+
+  const poolReadRelaysRef = useRef(poolReadRelays);
   useEffect(() => {
-    poolRelaysRef.current = poolRelays;
-  }, [poolRelays]);
+    poolReadRelaysRef.current = poolReadRelays;
+  }, [poolReadRelays]);
+
+  const poolWriteRelaysRef = useRef(poolWriteRelays);
+  useEffect(() => {
+    poolWriteRelaysRef.current = poolWriteRelays;
+  }, [poolWriteRelays]);
 
   // Search relays (NIP-50). `search` filters route here instead of fanning
   // out to every server. Falls back to the pool relays when none configured.
@@ -455,17 +493,17 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         if (filters.some((f) => "search" in f)) {
           const targets = searchRelaysRef.current.length > 0
             ? searchRelaysRef.current
-            : poolRelaysRef.current;
+            : poolReadRelaysRef.current;
           const routed = new Map(targets.map((url) => [url, filters]));
           logNostrReq([...routed.keys()], filters, "search");
           return routed;
         }
-        const routed = new Map(poolRelaysRef.current.map((url) => [url, filters]));
+        const routed = new Map(poolReadRelaysRef.current.map((url) => [url, filters]));
         logNostrReq([...routed.keys()], filters, "pool");
         return routed;
       },
       eventRouter(event: NostrEvent) {
-        const relays = [...poolRelaysRef.current];
+        const relays = [...poolWriteRelaysRef.current];
         logNostrEvent(relays, event);
         return relays;
       },
