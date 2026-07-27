@@ -261,6 +261,13 @@ function ReactionPill({
           aria-pressed={tally.mine}
           aria-label={`${tally.key}, ${tally.count} ${tally.count === 1 ? "reaction" : "reactions"}`}
           className={cn(
+            // `select-none` + `[-webkit-touch-callout:none]` + descendant
+            // `pointer-events-none` keep the button itself the pointer target: a
+            // long-press landing on the nested emoji glyph/image would otherwise
+            // trigger the browser's native text-selection / image-drag gesture,
+            // which fires `pointercancel` and clears the long-press timer before
+            // the popover opens.
+            "select-none [-webkit-touch-callout:none] [&_*]:pointer-events-none",
             "flex items-center gap-1.5 rounded-full border px-2.5 py-1 touch:px-3.5 touch:py-2.5 text-sm leading-none transition-colors",
             tally.mine
               ? "border-primary bg-primary/15 text-primary"
