@@ -71,8 +71,13 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
         muted
         playsInline
         aria-label={gif.title}
+        disablePictureInPicture
         className={cn(
-          'w-full h-full object-cover rounded-lg transition-opacity duration-200',
+          // No `controls`, so nothing chrome-like renders. `pointer-events-none`
+          // hands taps to the enclosing tile button and keeps a long-press off
+          // the WebView's native media context menu; the favourite star is a
+          // sibling above it and keeps its own hit area.
+          'pointer-events-none w-full h-full object-cover rounded-lg transition-opacity duration-200',
           loaded ? 'opacity-100' : 'opacity-0',
         )}
         onLoadedData={() => setLoaded(true)}

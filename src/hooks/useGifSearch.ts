@@ -43,8 +43,6 @@ export interface GifResult {
   title: string;
   /** URL for the full-size GIF. This is what gets shared into a message. */
   url: string;
-  /** URL for a smaller preview thumbnail */
-  previewUrl: string;
   /** Video renditions for the picker grid, cheapest first. */
   previewSources?: GifPreviewSource[];
   /** Width of the preview */
@@ -87,7 +85,6 @@ function mapGifverseResult(result: GifverseResult): GifResult {
     id: result.i,
     title: result.ti || result.de || '',
     url,
-    previewUrl: url,
     previewSources: gifPreviewSources(result.i, result.f),
     width: result.w || 220,
     height: result.h || 160,
