@@ -1,6 +1,7 @@
 import { Plus, RotateCcw, X } from "lucide-react";
 import { useState } from "react";
 
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
@@ -15,12 +16,24 @@ function serverHost(url: string): string {
   }
 }
 
-/** One Blossom server row: host prominent, full URL underneath. */
+/**
+ * One Blossom server row: an avatar (letter fallback), host prominent, full URL
+ * underneath — the same shape as RelayListEditor's RelayIdentity, minus the
+ * NIP-11 icon/badges that only relays have.
+ */
 function ServerIdentity({ url }: { url: string }) {
+  const host = serverHost(url);
   return (
-    <div className="min-w-0">
-      <div className="text-sm font-medium truncate leading-tight">{serverHost(url)}</div>
-      <div className="text-xs text-muted-foreground font-mono truncate leading-tight">{url}</div>
+    <div className="flex items-center gap-2.5 min-w-0">
+      <Avatar className="size-7 rounded-md shrink-0">
+        <AvatarFallback className="rounded-md bg-secondary text-secondary-foreground text-xs">
+          {host.charAt(0).toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+      <div className="min-w-0">
+        <div className="text-sm font-medium truncate leading-tight">{host}</div>
+        <div className="text-xs text-muted-foreground font-mono truncate leading-tight">{url}</div>
+      </div>
     </div>
   );
 }
@@ -80,7 +93,7 @@ export function BlossomServerListEditor({
           <div className="flex-1 min-w-0">
             <ServerIdentity url={url} />
           </div>
-          <span className="text-xs text-muted-foreground shrink-0 ml-1">App default</span>
+          <span className="text-xs text-muted-foreground shrink-0 ml-1">Default</span>
         </div>
       ))}
 

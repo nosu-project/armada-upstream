@@ -51,16 +51,20 @@ function RelayIdentity({ url }: { url: string }) {
 export interface RelayListEditorProps {
   /** Editable relay URLs. */
   relays: string[];
-  /** Persist a new relay list. */
-  onChange: (relays: string[]) => void;
+  /** Persist a new relay list. Omit (with `readOnly`) for a display-only list. */
+  onChange?: (relays: string[]) => void;
   /** Read-only, non-removable relays shown first (e.g. pinned platform relays). */
   pinned?: string[];
+  /** Trailing label on pinned rows. */
+  pinnedLabel?: string;
   /** Reset the editable list to defaults. */
   onReset?: () => void;
   /** Empty-state message when there are no editable relays. */
   emptyText?: string;
   /** Add-input placeholder. */
   placeholder?: string;
+  /** Render every relay as a non-removable row with no add/reset controls. */
+  readOnly?: boolean;
 }
 
 /**
@@ -73,9 +77,11 @@ export function RelayListEditor({
   relays,
   onChange,
   pinned = [],
+  pinnedLabel = "Default",
   onReset,
   emptyText = "No relays configured.",
   placeholder = "wss://relay.example.com",
+  readOnly = false,
 }: RelayListEditorProps) {
   const [newUrl, setNewUrl] = useState("");
 
@@ -89,7 +95,7 @@ export function RelayListEditor({
       toast({ title: "Already in the list", description: normalized });
       return;
     }
-    onChange([...relays, normalized]);
+    onChange?.([...relays, normalized]);
     setNewUrl("");
   };
 
@@ -97,8 +103,10 @@ export function RelayListEditor({
     <div className="space-y-1.5">
       {pinned.map((url) => (
         <div key={url} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
-          <RelayIdentity url={url} />
-          <span className="text-xs text-muted-foreground shrink-0 ml-1">Pinned</span>
+          <div className="flex-1 min-w-0">
+            <RelayIdentity url={url} />
+          </div>
+          <span className="text-xs text-muted-foreground shrink-0 ml-1">{pinnedLabel}</span>
         </div>
       ))}
 
@@ -107,15 +115,17 @@ export function RelayListEditor({
           <div className="flex-1 min-w-0">
             <RelayIdentity url={url} />
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Remove ${url}`}
-            className="size-7 text-muted-foreground hover:text-destructive shrink-0"
-            onClick={() => onChange(relays.filter((u) => u !== url))}
-          >
-            <X className="size-4" />
-          </Button>
+          {!readOnly && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Remove ${url}`}
+              className="size-7 text-muted-foreground hover:text-destructive shrink-0"
+              onClick={() => onChange?.(relays.filter((u) => u !== url))}
+            >
+              <X className="size-4" />
+            </Button>
+          )}
         </div>
       ))}
 
@@ -123,27 +133,29 @@ export function RelayListEditor({
         <p className="text-sm text-muted-foreground py-1">{emptyText}</p>
       )}
 
-      <form
-        className="flex gap-2 pt-1"
-        onSubmit={(e) => {
-          e.preventDefault();
-          handleAdd();
-        }}
-      >
-        <Input
-          value={newUrl}
-          onChange={(e) => setNewUrl(e.target.value)}
-          placeholder={placeholder}
-          aria-label="Add relay"
-          autoComplete="off"
-          className="text-base md:text-sm bg-background/40 border-transparent"
-        />
-        <Button type="submit" disabled={!newUrl.trim()} className="clip-corner-lg shrink-0">
-          <Plus className="size-4 mr-1.5" /> Add
-        </Button>
-      </form>
+      {!readOnly && (
+        <form
+          className="flex gap-2 pt-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleAdd();
+          }}
+        >
+          <Input
+            value={newUrl}
+            onChange={(e) => setNewUrl(e.target.value)}
+            placeholder={placeholder}
+            aria-label="Add relay"
+            autoComplete="off"
+            className="text-base md:text-sm bg-background/40 border-transparent"
+          />
+          <Button type="submit" disabled={!newUrl.trim()} className="clip-corner-lg shrink-0">
+            <Plus className="size-4 mr-1.5" /> Add
+          </Button>
+        </form>
+      )}
 
-      {onReset && (
+      {!readOnly && onReset && (
         <Button type="button" variant="ghost" size="sm" className="text-muted-foreground -ml-2" onClick={onReset}>
           <RotateCcw className="size-3.5 mr-1.5" /> Reset to defaults
         </Button>

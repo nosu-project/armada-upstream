@@ -399,14 +399,16 @@ export function SettingsPage() {
               <Switch checked={config.useUserRelays} onCheckedChange={setUseUserRelays} />
             </SettingsRow>
             {config.useUserRelays && (
-              <SettingsRow
-                label="Your relays"
-                description={
-                  userRelayUrls.length > 0
-                    ? userRelayUrls.join(", ")
-                    : "No NIP-65 relay list found yet — publish one from another client and it'll appear here."
-                }
-              />
+              <SettingsRow>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium leading-tight">Your relays</div>
+                  <RelayListEditor
+                    readOnly
+                    relays={userRelayUrls}
+                    emptyText="No NIP-65 relay list found yet — publish one from another client and it'll appear here."
+                  />
+                </div>
+              </SettingsRow>
             )}
           </>
         );
@@ -465,10 +467,12 @@ export function SettingsPage() {
               <Switch checked={config.dmTypingIndicators} onCheckedChange={setDmTypingIndicators} />
             </SettingsRow>
             {effective.length > 0 ? (
-              <SettingsRow
-                label="DMs currently use"
-                description={effective.join(", ")}
-              />
+              <SettingsRow>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium leading-tight">DMs currently use</div>
+                  <RelayListEditor readOnly relays={effective} />
+                </div>
+              </SettingsRow>
             ) : (
               <SettingsRow>
                 <p className="text-sm text-destructive">
