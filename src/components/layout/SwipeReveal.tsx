@@ -5,6 +5,9 @@ import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { cn } from "@/lib/utils";
 
+/** Settle/enter transition length (ms). Matches the `duration-200` classes. */
+const SETTLE_MS = 200;
+
 interface SwipeRevealProps {
   /**
    * The persistent parent view (server rail + channel/DM list) revealed
@@ -129,6 +132,29 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
     return () => cancelAnimationFrame(id);
   }, [snap]);
 
+  // Whether the chat pane is currently in motion: a live drag, the settle
+  // transition after one, or the mount slide-in. This gates `will-change`
+  // (see the pane's style below) — the hint is only meaningful while the
+  // element actually moves, and leaving it set pins a compositor layer.
+  // Promotion lands on the frame the drag is claimed (10px in) rather than at
+  // pointerdown, so the very first drag frame pays for the layer; tracking
+  // pointerdown instead would re-render on every tap of the chat pane.
+  const [moving, setMoving] = useState(() => enterAnim);
+  const firstMotion = useRef(true);
+  useEffect(() => {
+    // Skip the mount pass — `moving` is already seeded from `enterAnim`.
+    if (firstMotion.current) {
+      firstMotion.current = false;
+      return;
+    }
+    setMoving(true);
+  }, [open, openSwipe.dragging, closeSwipe.dragging]);
+  useEffect(() => {
+    if (!moving || openSwipe.dragging || closeSwipe.dragging) return;
+    const id = window.setTimeout(() => setMoving(false), SETTLE_MS);
+    return () => window.clearTimeout(id);
+  }, [moving, openSwipe.dragging, closeSwipe.dragging]);
+
   if (!swipeEnabled) {
     // Desktop: static side-by-side panes.
     return (
@@ -188,10 +214,14 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
       {/* Chat pane overlay. Slides right by the live drag (or rest) offset;
           springs to its rest position with a transition when not dragging. A
           fresh mount slides in from the right via a one-shot CSS keyframe.
-          `will-change`/`translateZ` promote it to its own compositor layer up
-          front so the slide runs on the compositor thread instead of stuttering
-          while the heavy chat tree mounts on the main thread; `contain` keeps
-          that mount from invalidating the rest of the page. */}
+          `translateZ` keeps the offset on the compositor, and `will-change`
+          promotes the pane to its own layer *while it moves* so the slide runs
+          on the compositor thread instead of repainting per frame. The hint is
+          dropped at rest: this pane is viewport-sized and mounted on every
+          mobile route for the whole session, so a permanent `will-change`
+          retains a full-screen layer indefinitely — the exact misuse the
+          property is documented against. `contain` keeps the chat tree's mount
+          from invalidating the rest of the page. */}
       <div
         {...openSwipe.handlers}
         className={cn(
@@ -211,7 +241,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
         style={{
           transform: `translate3d(${offset}px, 0, 0)`,
           touchAction: "pan-y",
-          willChange: "transform",
+          willChange: moving ? "transform" : undefined,
         }}
       >
         {children}

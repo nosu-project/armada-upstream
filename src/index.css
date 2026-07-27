@@ -499,7 +499,9 @@
     }
   }
   .animate-terminal-expand {
+    /* No `will-change`: the browser already promotes an element for the life of
+       an active transform/opacity animation, and the hint would otherwise
+       outlive this 0.16s one-shot for as long as the element stays mounted. */
     animation: terminal-expand 0.16s ease-out;
-    will-change: transform, opacity;
   }
 }
