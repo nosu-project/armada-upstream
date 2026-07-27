@@ -3,7 +3,7 @@ import { Search, Star, X, ImageOff } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useGifSearch, type GifResult } from '@/hooks/useGifSearch';
+import { useGifSearch, gifPreviewSources, type GifResult } from '@/hooks/useGifSearch';
 import { useFavoriteGifs } from '@/hooks/useFavoriteGifs';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
@@ -28,10 +28,13 @@ function thumbHeight(gif: GifResult): number {
 function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: GifResult; onClick: (gif: GifResult) => void; isFavorite?: boolean; onToggleFavorite?: (gif: GifResult) => void }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
-  const imgRef = useRef<HTMLImageElement>(null);
 
   // Calculate the height from the (clamped) aspect ratio to prevent layout shifts
   const displayHeight = thumbHeight(gif);
+
+  // Favorites persisted before `previewSources` existed only kept the id, so
+  // derive the renditions for those.
+  const sources = gif.previewSources ?? gifPreviewSources(gif.id);
 
   return (
     <button
@@ -58,19 +61,31 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
         </div>
       )}
 
-      {/* GIF image */}
-      <img
-        ref={imgRef}
-        src={gif.previewUrl}
-        alt={gif.title}
-        loading="lazy"
+      {/* The animation, as a muted looping video rather than the ~1 MB
+          original GIF — see `gifPreviewSources`. Sources are ordered cheapest
+          first and the browser plays the first one it supports; only the last
+          one failing means we've run out of renditions. */}
+      <video
+        autoPlay
+        loop
+        muted
+        playsInline
+        aria-label={gif.title}
         className={cn(
           'w-full h-full object-cover rounded-lg transition-opacity duration-200',
           loaded ? 'opacity-100' : 'opacity-0',
         )}
-        onLoad={() => setLoaded(true)}
-        onError={() => setError(true)}
-      />
+        onLoadedData={() => setLoaded(true)}
+      >
+        {sources.map((source, i) => (
+          <source
+            key={source.src}
+            src={source.src}
+            type={source.type}
+            onError={i === sources.length - 1 ? () => setError(true) : undefined}
+          />
+        ))}
+      </video>
 
       {/* Favorite toggle button */}
       {onToggleFavorite && (

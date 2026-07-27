@@ -32,17 +32,52 @@ interface GifverseResponse {
   };
 }
 
+export interface GifPreviewSource {
+  src: string;
+  /** `type` for the <source>, so the browser can skip formats it can't play. */
+  type: string;
+}
+
 export interface GifResult {
   id: string;
   title: string;
-  /** URL for the full-size GIF */
+  /** URL for the full-size GIF. This is what gets shared into a message. */
   url: string;
   /** URL for a smaller preview thumbnail */
   previewUrl: string;
+  /** Video renditions for the picker grid, cheapest first. */
+  previewSources?: GifPreviewSource[];
   /** Width of the preview */
   width: number;
   /** Height of the preview */
   height: number;
+}
+
+/** Video formats we'll play in the grid, cheapest first. */
+const PREVIEW_FORMATS: { format: string; type: string }[] = [
+  { format: 'webm', type: 'video/webm' },
+  { format: 'mp4', type: 'video/mp4' },
+];
+
+/**
+ * Video renditions of a GIF for the picker grid. GIFverse serves every format
+ * it lists in `f` from `/media/<id>/<format>` — the same animation as
+ * `original.gif` at a fraction of the size (a trending GIF runs ~1–1.8 MB as a
+ * GIF but ~100–350 KB as webm). The grid shows 30 at once, so sending the
+ * originals meant tens of megabytes and 30 CPU-decoded GIF animations per open.
+ *
+ * GIFverse also offers `av1`, which is smaller again (~25–70 KB), but it's
+ * deliberately skipped: on devices without AV1 hardware decode the browser
+ * falls back to software decode, and 30 concurrently-looping software-decoded
+ * streams costs more than the bytes save.
+ *
+ * `formats` is optional so favorites persisted before this existed (which only
+ * kept the id) can still resolve their previews.
+ */
+export function gifPreviewSources(id: string, formats?: string[]): GifPreviewSource[] {
+  return PREVIEW_FORMATS.filter(({ format }) => !formats || formats.includes(format)).map(
+    ({ format, type }) => ({ src: `${GIFVERSE_MEDIA_URL}/${id}/${format}`, type }),
+  );
 }
 
 function mapGifverseResult(result: GifverseResult): GifResult {
@@ -53,6 +88,7 @@ function mapGifverseResult(result: GifverseResult): GifResult {
     title: result.ti || result.de || '',
     url,
     previewUrl: url,
+    previewSources: gifPreviewSources(result.i, result.f),
     width: result.w || 220,
     height: result.h || 160,
   };
