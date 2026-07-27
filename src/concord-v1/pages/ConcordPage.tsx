@@ -487,10 +487,14 @@ export function ConcordPage() {
   // The community-name header menu (Discord-style): expands inline below the
   // header, pushing the channel list down with a height animation.
   const [communityMenuOpen, setCommunityMenuOpen] = useState(false);
-  /** Desktop: whether the member roster pane is shown. Defaults OFF on touch
-   * devices (a landscape phone crosses the 900px breakpoint but is too short to
-   * spare the roster width); openable from the header toggle. */
-  const [membersVisible, setMembersVisible] = useState(() => !isTouchDevice);
+  /** Desktop: whether the member roster pane is shown, persisted in app config
+   * (`memberListVisible`). Defaults OFF on touch devices (a landscape phone
+   * crosses the 900px breakpoint but is too short to spare the roster width);
+   * openable from the header toggle. Once the user hides or shows it, that
+   * choice is remembered across visits. */
+  const membersVisible = config.memberListVisible ?? !isTouchDevice;
+  const toggleMembersVisible = () =>
+    updateConfig((c) => ({ ...c, memberListVisible: !(c.memberListVisible ?? !isTouchDevice) }));
   /** Mobile: whether the member sheet is open. */
   const [membersOpen, setMembersOpen] = useState(false);
   // Mobile: landing on the community root (no channel in the URL) shows the
@@ -979,7 +983,7 @@ export function ConcordPage() {
                   )}
                   aria-label={membersVisible ? "Hide members" : "Show members"}
                   aria-pressed={membersVisible}
-                  onClick={() => setMembersVisible((v) => !v)}
+                  onClick={toggleMembersVisible}
                 >
                   <Users className="size-4" />
                 </Button>

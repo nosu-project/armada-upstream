@@ -9,20 +9,24 @@ import {
 } from "@/concord-v2/hooks/useChannel2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_ZAP, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { markReactionDeleted, type OpenedChat } from "@/concord-v2/lib/chat";
 import { channelKey } from "@/concord-v2/hooks/useChannel2";
+import { buildPollTags, parsePoll, tallyPollVotes, type PollTally, type PollVote } from "@/lib/polls";
 import { zapRumorTags, type ZapTally } from "@/lib/zaps";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
 import { stableZapsFor, toChatMsg } from "@/components/chat/transport";
-import type { ChatMsg, ChatTransport, MessageReactions, OnchainZapAnnouncement, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, ChatTransport, MessagePoll, MessageReactions, OnchainZapAnnouncement, PollDraft, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
 
 /** Shared empty tally array, so messages with no reactions keep a stable prop. */
 const EMPTY_TALLIES: ReactionTally[] = [];
 
 /** Shared empty reply array, so a thread with no replies keeps a stable reference. */
 const EMPTY_REPLIES: ChatMsg[] = [];
+
+/** Shared empty vote array, so a poll with no votes keeps a stable reference. */
+const EMPTY_VOTES: PollVote[] = [];
 
 /**
  * The thread-root rumor id a message belongs to, or undefined for a top-level
@@ -289,6 +293,69 @@ export function useTransport2(
     [send],
   );
 
+  // Poll tallies from the fold: each poll message is tallied against its own
+  // declared options + endsAt (the pure {@link tallyPollVotes}, shared with the
+  // NIP-29 path), so every member folds the same result.
+  const pollTalliesById = useMemo(() => {
+    const out = new Map<string, PollTally>();
+    for (const m of messages) {
+      if (m.kind !== KIND_POLL) continue;
+      const { options, endsAt } = parsePoll(m);
+      const votes = folded.pollVotes.get(m.id) ?? EMPTY_VOTES;
+      out.set(m.id, tallyPollVotes(votes, options, endsAt, user?.pubkey));
+    }
+    return out;
+  }, [messages, folded.pollVotes, user]);
+
+  // Seal a vote as a kind-1018 rumor `e`-tagging the poll (a side event, like a
+  // reaction — invisible in the timeline, folded into the poll's tally). The
+  // latest vote per pubkey wins, so re-voting just supersedes the prior one.
+  const sendPollVote = useCallback(
+    (pollId: string, optionIds: string[]) => {
+      void send({
+        content: "",
+        kind: KIND_POLL_VOTE,
+        target: pollId,
+        extraTags: optionIds.map((id) => ["response", id]),
+      }).catch(() => {});
+    },
+    [send],
+  );
+
+  const pollFor = useMemo(() => {
+    const voteCache = new Map<string, (optionIds: string[]) => void>();
+    const voteFor = (id: string) => {
+      let fn = voteCache.get(id);
+      if (!fn) voteCache.set(id, (fn = (optionIds) => sendPollVote(id, optionIds)));
+      return fn;
+    };
+    const objCache = new Map<string, { tally: PollTally; value: MessagePoll }>();
+    return (id: string): MessagePoll | undefined => {
+      const tally = pollTalliesById.get(id);
+      if (!tally) return undefined;
+      const hit = objCache.get(id);
+      if (hit && hit.tally === tally) return hit.value;
+      const value: MessagePoll = { tally, vote: voteFor(id) };
+      objCache.set(id, { tally, value });
+      return value;
+    };
+  }, [pollTalliesById, sendPollVote]);
+
+  // Seal a new poll as a kind-1068 timeline message. The option/type/endsAt tags
+  // are built by the shared {@link buildPollTags}; the channel binding is added
+  // by `send`. No `relay` routing tag (NIP-88) — votes ride the sealed plane.
+  const sendPoll = useCallback(
+    async (draft: PollDraft) => {
+      const question = draft.question.trim();
+      await send({
+        content: question,
+        kind: KIND_POLL,
+        extraTags: buildPollTags(question, draft.options, draft.pollType, draft.durationDays),
+      });
+    },
+    [send],
+  );
+
   // Concord edit: a kind-3302 rumor targeting the original message's rumor
   // id. The fold applies the latest author-matching edit (non-destructive —
   // the original keeps its id, so reactions, replies, and quotes stay intact).
@@ -335,10 +402,12 @@ export function useTransport2(
       zapsFor,
       sendZap,
       sendOnchainZap,
+      pollFor,
+      sendPoll,
       threadRepliesFor,
       sendThreadReply,
     }),
-    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, threadRepliesFor, sendThreadReply],
+    [topLevel, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, threadRepliesFor, sendThreadReply],
   );
 
   return { transport, reactionsFor, allMessages: messages };

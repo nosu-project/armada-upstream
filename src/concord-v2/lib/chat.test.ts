@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildV2CommentTags, foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
 import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
-import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { parsePoll, tallyPollVotes } from "@/lib/polls";
 import { MOCK_PREIMAGE as ZAP_PREIMAGE, paymentHashOf } from "@/test/bolt11Mock";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 
@@ -293,6 +294,64 @@ describe("chat plane (CORD-03)", () => {
     expect(zaps?.[0]).toMatchObject({ pubkey: bob.pubkey, sats: 21, comment: "gm ⚡" });
     // The zap rumor is not a timeline message.
     expect(folded.messages.map((m) => m.content)).toEqual(["zap me"]);
+  });
+
+  it("folds a poll as a timeline message and tallies its votes (latest per voter wins)", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+    const carol = signer();
+
+    const poll = chatRumor(alice, KIND_POLL, "Lunch?", 1000, [
+      ["option", "a1", "Tacos"],
+      ["option", "b2", "Sushi"],
+      ["polltype", "singlechoice"],
+    ]);
+    const bobVote = chatRumor(bob, KIND_POLL_VOTE, "", 1100, [["e", poll.id], ["response", "a1"]]);
+    // Carol changes her mind: her later vote supersedes the earlier one.
+    const carolFirst = chatRumor(carol, KIND_POLL_VOTE, "", 1200, [["e", poll.id], ["response", "a1"]]);
+    const carolFinal = chatRumor(carol, KIND_POLL_VOTE, "", 1300, [["e", poll.id], ["response", "b2"]]);
+
+    const wraps = await Promise.all([
+      wrapChat(poll, channel, alice),
+      wrapChat(bobVote, channel, bob),
+      wrapChat(carolFirst, channel, carol),
+      wrapChat(carolFinal, channel, carol),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+
+    // The poll is a visible timeline message; votes are not.
+    expect(folded.messages.map((m) => m.content)).toEqual(["Lunch?"]);
+
+    const pollMsg = folded.messages[0];
+    const { options, endsAt } = parsePoll(pollMsg);
+    const tally = tallyPollVotes(folded.pollVotes.get(poll.id) ?? [], options, endsAt, carol.pubkey);
+    expect(tally.counts.get("a1")).toBe(1); // Bob
+    expect(tally.counts.get("b2")).toBe(1); // Carol's final (her earlier a1 superseded)
+    expect(tally.totalVoters).toBe(2);
+    expect([...(tally.myVote ?? [])]).toEqual(["b2"]); // Carol's own latest choice
+  });
+
+  it("ignores poll votes cast after endsAt", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    const endsAt = 2; // unix seconds
+    const poll = chatRumor(alice, KIND_POLL, "Closed?", 1000, [
+      ["option", "a1", "Yes"],
+      ["option", "b2", "No"],
+      ["polltype", "singlechoice"],
+      ["endsAt", String(endsAt)],
+    ]);
+    // ms = 3000 → 3s > endsAt (2s): ignored.
+    const lateVote = chatRumor(bob, KIND_POLL_VOTE, "", 3000, [["e", poll.id], ["response", "a1"]]);
+
+    const wraps = await Promise.all([wrapChat(poll, channel, alice), wrapChat(lateVote, channel, bob)]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+    const { options } = parsePoll(folded.messages[0]);
+    const tally = tallyPollVotes(folded.pollVotes.get(poll.id) ?? [], options, endsAt, bob.pubkey);
+    expect(tally.totalVoters).toBe(0);
   });
 
   it("counts a payment once: a replayed proof never re-enters the tally", async () => {

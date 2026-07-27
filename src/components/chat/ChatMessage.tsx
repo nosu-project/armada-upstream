@@ -7,6 +7,7 @@ import { MessageActionSheet } from "@/components/chat/MessageActionSheet";
 import { MessageActionToolbar } from "@/components/chat/MessageActionToolbar";
 import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
 import { PollCard } from "@/components/chat/PollCard";
+import { PollView } from "@/components/chat/PollView";
 import { ReactionBar } from "@/components/chat/ReactionBar";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
@@ -57,12 +58,11 @@ import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
-import type { ChatMsg, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
+import type { ChatMsg, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ReactNode } from "react";
 
-/** NIP-88 poll kind. */
-const KIND_POLL = 1068;
+import { KIND_POLL } from "@/lib/polls";
 
 /** A `nostr:npub…`/`nostr:nprofile…`/bare-bech32 mention inside preview text. */
 const REPLY_MENTION_RE =
@@ -279,6 +279,13 @@ export interface ChatMessageProps {
    * and a poll kind would never appear in their timeline.
    */
   pollContext?: { relayUrl: string; groupId: string };
+  /**
+   * Resolved poll tally + vote callback for a poll (kind 1068) message, for
+   * transports that carry the tally themselves (Concord v2's sealed chat fold)
+   * rather than querying a relay. When present it renders the poll; NIP-29 uses
+   * {@link pollContext} instead.
+   */
+  poll?: MessagePoll;
   /** Resolved reaction tallies + toggle for this message. */
   reactions?: MessageReactions;
   /** Whether this surface supports zaps (shows the ⚡ button on others' messages). */
@@ -396,6 +403,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   canModerate,
   identityOverride,
   pollContext,
+  poll,
   reactions,
   zapEnabled,
   zaps,
@@ -664,14 +672,16 @@ const ChatMessageInner = memo(function ChatMessageInner({
       ) : event.kind === KIND_POLL ? (
         <>
           <ChatContent event={event} className="text-[15px]" highlight={highlight} />
-          {pollContext && (
+          {pollContext ? (
             <PollCard
               event={event}
               relayUrl={pollContext.relayUrl}
               groupId={pollContext.groupId}
               canVote={canWrite}
             />
-          )}
+          ) : poll ? (
+            <PollView event={event} tally={poll.tally} canVote={canWrite} onVote={poll.vote} />
+          ) : null}
         </>
       ) : invocation ? (
         // The same third-person action line `/me` uses. The arguments are left

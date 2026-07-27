@@ -124,7 +124,7 @@ export function GroupPage() {
   const groupId = rawGroupId ? decodeURIComponent(rawGroupId) : undefined;
 
   const { user } = useCurrentUser();
-  const { updateConfig } = useAppContext();
+  const { config, updateConfig } = useAppContext();
   const navigate = useNavigate();
   const { data: details, isLoading } = useGroup(relayUrl, groupId);
   // Community-level (NIP-43, kind 13534) roster. On Buzz relays a member's
@@ -172,12 +172,15 @@ export function GroupPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
-  /** Whether the desktop member roster is shown (toggled from the header).
-   * Defaults OFF on touch devices (phones/tablets — including a landscape phone
-   * that crosses the 900px sidebar breakpoint but is too short to spare the
-   * roster width); the user can still open it from the header toggle. On real
-   * desktop it stays on by default. */
-  const [membersVisible, setMembersVisible] = useState(() => !isTouchDevice);
+  /** Whether the desktop member roster is shown (toggled from the header),
+   * persisted in app config (`memberListVisible`). Defaults OFF on touch devices
+   * (phones/tablets — including a landscape phone that crosses the 900px sidebar
+   * breakpoint but is too short to spare the roster width); the user can still
+   * open it from the header toggle. On real desktop it stays on by default. Once
+   * the user hides or shows it, that choice is remembered across visits. */
+  const membersVisible = config.memberListVisible ?? !isTouchDevice;
+  const toggleMembersVisible = () =>
+    updateConfig((c) => ({ ...c, memberListVisible: !(c.memberListVisible ?? !isTouchDevice) }));
   /** Whether the header search bar is expanded, and its current query text. */
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -573,7 +576,7 @@ export function GroupPage() {
                   "size-8 hidden sidebar:inline-flex text-muted-foreground",
                   membersVisible && "text-foreground",
                 )}
-                onClick={() => setMembersVisible((v) => !v)}
+                onClick={toggleMembersVisible}
               >
                 <Users className="size-4" />
               </Button>

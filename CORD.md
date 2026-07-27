@@ -247,6 +247,101 @@ arrive, but no tally is posted).
 
 ---
 
+## Polls
+
+[NIP-88](https://github.com/nostr-protocol/nips/blob/master/88.md) polls,
+carried inside the sealed Chat Plane so who-asked, who-voted, and the running
+tally never leave the Community. A poll is an ordinary Channel message that
+happens to declare options; a vote is an `e`-referencing side event folded into
+the poll's tally, exactly like a reaction or a Zap. A client unaware of polls
+renders the poll as a plain message (its question is the `content`) and ignores
+the votes.
+
+### Events
+
+A poll is a kind `1068` rumor on the Chat Plane, sealed like any message. Its
+question is the `content`; each option is an `["option", id, label]` tag:
+
+```jsonc
+{
+  "kind": 1068,
+  "content": "Lunch?",
+  "tags": [
+    ["channel", "<channel_id>"],      // CORD-03 binding, like every chat rumor
+    ["epoch", "0"],
+    ["ms", "417"],
+    ["option", "a1", "Tacos"],
+    ["option", "b2", "Sushi"],
+    ["polltype", "singlechoice"],     // or "multiplechoice"
+    ["endsAt", "1735689600"],         // OPTIONAL: unix seconds; omit for no end
+    ["alt", "Poll: Lunch?"]
+  ]
+}
+```
+
+A vote is a kind `1018` rumor `e`-tagging the poll, naming the chosen option
+ids in `["response", id]` tags — a side event like a reaction, never shown as
+its own row:
+
+```jsonc
+{
+  "kind": 1018,
+  "content": "",
+  "tags": [
+    ["channel", "<channel_id>"],
+    ["epoch", "0"],
+    ["ms", "912"],
+    ["e", "<poll rumor id>"],
+    ["response", "a1"]                // one per chosen option
+  ]
+}
+```
+
+Note what NIP-88 relay polls carry that a sealed poll drops: the `["relay", …]`
+tag that tells voters where to publish. There is no relay to route votes to
+inside a Community — votes ride the same sealed stream as the poll — so the tag
+is meaningless here and omitted.
+
+### Tally
+
+Every member folds the same result from the votes it holds:
+
+- **Latest per voter wins.** A member's newest kind `1018` (by the CORD-03 `ms`
+  ordering time) supersedes their earlier ones, so re-voting just changes a
+  vote rather than adding one.
+- **Options are validated.** A `response` naming an id the poll never declared
+  is dropped.
+- **`endsAt` closes voting.** A vote cast after `endsAt` is ignored, so the
+  tally a client shows after the deadline is stable.
+- **Per-voter percentages.** Each option's share is `voters-for-it / distinct
+  voters`; a multiple-choice poll's shares can therefore sum past 100%.
+
+Like a reaction or Zap to an unseen message, a vote whose poll hasn't decoded
+yet is simply held keyed by its `e` target and folded once the poll arrives.
+
+### Privacy
+
+The poll, its options, and every vote exist only inside the sealed plane. Relays
+store the ciphertext and learn nothing; no public kind `1068`/`1018` is ever
+emitted. Authorship rests on each rumor's seal signature, the same trust every
+chat message already carries — a vote is authenticated as its signer's, and the
+`ms`/binding tags are checked exactly as on any chat rumor (CORD-03 §3).
+
+### Implementation
+
+In the Armada client:
+
+- `client/src/lib/polls.ts` — the transport-agnostic core shared with the NIP-29
+  relay path: `parsePoll`, `tallyPollVotes` (the fold rules above), `buildPollTags`,
+  and the `KIND_POLL`/`KIND_POLL_VOTE` constants.
+- `client/src/components/chat/PollView.tsx` — the presentational card (results
+  bars / votable options), fed a tally + a vote callback by either transport.
+- `client/src/concord-v2/lib/chat.ts` — folds votes into `pollVotes` per poll.
+- `client/src/concord-v2/hooks/useTransport2.ts` — `sendPoll` (seals the kind
+  1068), `sendPollVote` (seals the kind 1018), and `pollFor` (the per-poll tally).
+
+---
+
 ## In-Call Reactions and Raise-Hand
 
 Zoom/Signal-style raise-hand and emoji reactions during a Concord voice/video

@@ -77,6 +77,17 @@ export interface AppConfig {
    */
   railOpenFolders: string[];
   /**
+   * Whether the desktop member-list side panel is shown in community views.
+   * Tri-state: `undefined` means "use the per-device default" (shown on real
+   * desktop, hidden on touch, matching `useIsTouch()`); once the user hides or
+   * shows it, their explicit choice (`false`/`true`) is stored and respected on
+   * every return. Per-device UI state — deliberately NOT synced: the default is
+   * device-dependent, and which chrome panels you keep open is local navigation
+   * state (like `railOpenFolders`). The mobile members overlay is transient and
+   * not persisted.
+   */
+  memberListVisible?: boolean;
+  /**
    * App relays for non-NIP-29 traffic (kind 0 profiles, kind 10009 lists,
    * etc.) — Ditto's "app relays" concept. Seeded from VITE_APP_RELAYS
    * (default: relay.ditto.pub + relay.dreamith.to); user-editable.
