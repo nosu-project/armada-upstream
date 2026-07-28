@@ -660,7 +660,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     if (isMediaImetaKind) {
       const renderedUrls = new Set(
         result.flatMap((t) =>
-          t.type === "media-embed" || t.type === "image-embed" ? [t.url] : [],
+          t.type === "media-embed" || t.type === "image-embed" || t.type === "file-embed" ? [t.url] : [],
         ),
       );
       for (const [rawUrl, entry] of imetaByUrl) {
