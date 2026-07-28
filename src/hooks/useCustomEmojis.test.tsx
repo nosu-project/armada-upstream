@@ -39,6 +39,17 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 vi.mock("@/hooks/useEventStore", () => ({
   useEventStore: () => Promise.resolve({ query: h.storeQuery }),
 }));
+vi.mock("@/hooks/useAppContext", () => ({
+  useAppContext: () => ({
+    config: {
+      useAppRelays: true,
+      appRelays: ["wss://relay.example"],
+      useUserRelays: false,
+      relayMetadata: { relays: [], updatedAt: 0 },
+    },
+    updateConfig: () => {},
+  }),
+}));
 vi.mock("@/buzz/useBuzzEmojiPalette", () => ({
   useBuzzEmojiPalette: () => [],
 }));

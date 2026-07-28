@@ -7,6 +7,8 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { accountDataRelays } from "@/contexts/AppContext";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
@@ -44,13 +46,15 @@ export interface EmojiListRead {
   event: NostrEvent | null;
   /**
    * Whether the read reached an EOSE at all, rather than being aborted or
-   * timing out. This is a WEAK signal, and weaker than it looks: the pool runs
-   * with `eoseTimeout` (300ms globally, widened here), so the merged EOSE fires
-   * once the FIRST relay finishes plus the grace window — not once every routed
-   * relay has answered. So `conclusive` means "a round completed", NOT "the
-   * relay set proved there is no list". Never let it alone authorise blanking
-   * or recreating a list; pair it with the local store and whatever is already
-   * on screen.
+   * timing out. `NPool.req` only surfaces the merged EOSE once EVERY routed
+   * relay has EOSE'd — the grace window ABORTS the stream, it never emits a
+   * partial EOSE. So this is reliable ONLY because the read is scoped to the
+   * account-data relays (see `readEmojiList`); fanned out over every joined
+   * server it would almost never fire, since one cold/slow/AUTH-gated group
+   * relay withholds the merged EOSE forever. Even so it is not proof a list is
+   * absent (a scoped relay could simply not hold it); never let it alone
+   * authorise blanking or recreating a list — pair it with the local store,
+   * the durable palette, and whatever is already on screen.
    */
   conclusive: boolean;
 }
@@ -82,11 +86,23 @@ const EMOJI_LIST_READ_TIMEOUT_MS = 8000;
  * store is applied as a floor so a relay miss falls back to the last list we
  * actually observed, and events that arrived before an abort/timeout still
  * count (only `conclusive` is lost).
+ *
+ * `relays` scopes the REQ to the account-data relays (`accountDataRelays`)
+ * rather than the whole pool. This is load-bearing for `conclusive`: `NPool.req`
+ * only yields the merged EOSE once EVERY routed relay has EOSE'd, so fanning the
+ * read out to every joined NIP-29 server (as default pool routing does) means
+ * one cold/slow/AUTH-gated group relay withholds the EOSE and `conclusive`
+ * never turns true — which blocked the very first pack add ("Couldn't read your
+ * emoji list"). The list is account data this client publishes to the app
+ * relays anyway, so the scoped set is both where it lives and small enough for
+ * the all-relays EOSE to actually arrive. Empty set → fall back to default
+ * pool routing (the user has opted out of every account relay).
  */
 export async function readEmojiList(
   nostr: ReturnType<typeof useNostr>["nostr"],
   store: Awaited<ReturnType<typeof useEventStore>>,
   pubkey: string,
+  relays: string[],
   signal?: AbortSignal,
 ): Promise<EmojiListRead> {
   const filter = { kinds: [KIND_USER_EMOJIS], authors: [pubkey] };
@@ -99,6 +115,7 @@ export async function readEmojiList(
     for await (const msg of nostr.req([filter], {
       signal: readSignal,
       eoseTimeout: EMOJI_LIST_EOSE_GRACE_MS,
+      ...(relays.length ? { relays } : {}),
     })) {
       if (msg[0] === "EVENT") relayEvents.push(msg[2]);
       else if (msg[0] === "EOSE") {
@@ -130,6 +147,7 @@ export function emojiPackCoord(pubkey: string, identifier: string): string {
 export function useHasEmojiPack(coord: string | undefined): boolean {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const eventStore = useEventStore();
 
   const { data } = useQuery({
@@ -139,7 +157,7 @@ export function useHasEmojiPack(coord: string | undefined): boolean {
       const store = await eventStore;
       // Same store floor as the mutation: a missed read here would label an
       // already-added pack "Add", inviting the write that then rebuilds the list.
-      const { event: list } = await readEmojiList(nostr, store, user.pubkey, signal);
+      const { event: list } = await readEmojiList(nostr, store, user.pubkey, accountDataRelays(config), signal);
       if (!list) return [] as string[];
       return list.tags.filter((t) => t[0] === "a" && t[1]).map((t) => t[1]);
     },
@@ -171,6 +189,7 @@ export function useAddEmojiPack(): UseMutationResult<
 > {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
   const publish = useNostrPublish();
@@ -187,6 +206,7 @@ export function useAddEmojiPack(): UseMutationResult<
         nostr,
         store,
         user.pubkey,
+        accountDataRelays(config),
         AbortSignal.timeout(15_000),
       );
 
@@ -255,6 +275,7 @@ export function useAddEmojiPack(): UseMutationResult<
 export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: string }> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
   const publish = useNostrPublish();
@@ -270,6 +291,7 @@ export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: st
         nostr,
         store,
         user.pubkey,
+        accountDataRelays(config),
         AbortSignal.timeout(15_000),
       );
 
@@ -329,6 +351,7 @@ export interface MyEmojiPack {
 export function useMyEmojiPacks(): UseQueryResult<MyEmojiPack[]> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const eventStore = useEventStore();
 
   return useQuery({
@@ -339,7 +362,7 @@ export function useMyEmojiPacks(): UseQueryResult<MyEmojiPack[]> {
       if (!user) return [];
       const store = await eventStore;
 
-      const { event: list } = await readEmojiList(nostr, store, user.pubkey, signal);
+      const { event: list } = await readEmojiList(nostr, store, user.pubkey, accountDataRelays(config), signal);
       if (!list) return [];
 
       const refs = list.tags

@@ -1,6 +1,6 @@
 import { createContext } from "react";
 
-import { APP_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, DM_RELAYS, normalizeRelayUrl, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { RailLayoutNode } from "@/lib/railLayout";
@@ -428,4 +428,35 @@ export function userReadRelays(config: AppConfig): string[] {
 export function userWriteRelays(config: AppConfig): string[] {
   if (!config.useUserRelays) return [];
   return config.relayMetadata.relays.filter((r) => r.write).map((r) => r.url);
+}
+
+/**
+ * The relays a user's ACCOUNT-DATA singletons live on — app relays (unless the
+ * user switched them off), the platform pins, and the user's own NIP-65 read
+ * relays when `useUserRelays` is on. Deliberately EXCLUDES joined NIP-29 group
+ * relays: a personal replaceable list (kind 10030 emojis, etc.) is account data
+ * this client publishes to the app relays, not group-scoped traffic.
+ *
+ * Reads that need a reliable `EOSE` must scope to this set rather than the full
+ * pool. `NPool.req` only surfaces the merged EOSE once EVERY routed relay has
+ * EOSE'd; fanning a personal-list read out to every joined server means one
+ * cold/slow/AUTH-gated group relay withholds that EOSE, so "a relay confirmed
+ * the list's absence" can never be observed. Scoping to the handful of
+ * account-data relays keeps the all-relays EOSE achievable — and is where the
+ * list actually is.
+ */
+export function accountDataRelays(config: AppConfig): string[] {
+  const urls = new Set<string>();
+  if (config.useAppRelays) {
+    for (const url of config.appRelays) {
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) urls.add(normalized);
+    }
+  }
+  for (const url of PLATFORM_RELAYS) urls.add(url);
+  for (const url of userReadRelays(config)) {
+    const normalized = normalizeRelayUrl(url);
+    if (normalized) urls.add(normalized);
+  }
+  return [...urls];
 }

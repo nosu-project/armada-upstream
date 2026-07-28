@@ -47,6 +47,20 @@ vi.mock("@nostrify/react", () => ({
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: h.user }),
 }));
+// The kind-10030 read is scoped to the account-data relays so the merged EOSE
+// is reachable (see readEmojiList). A minimal config with one app relay is
+// enough for `accountDataRelays` to return a non-empty set.
+vi.mock("@/hooks/useAppContext", () => ({
+  useAppContext: () => ({
+    config: {
+      useAppRelays: true,
+      appRelays: ["wss://relay.example"],
+      useUserRelays: false,
+      relayMetadata: { relays: [], updatedAt: 0 },
+    },
+    updateConfig: () => {},
+  }),
+}));
 vi.mock("@/hooks/useNostrPublish", () => ({
   useNostrPublish: () => ({ mutateAsync: h.publish }),
 }));
@@ -201,6 +215,22 @@ describe("useAddEmojiPack (kind 10030 read-modify-write)", () => {
 
     expect(h.publish).toHaveBeenCalledTimes(1);
     expect(publishedTags()).toEqual([["a", COORD]]);
+  });
+
+  it("scopes the list read to the account-data relays (so the merged EOSE is reachable)", async () => {
+    // Fanning the read out to every joined server made the all-relays EOSE
+    // unreachable, so `conclusive` never turned true and the very first add
+    // failed with "Couldn't read your emoji list". The read must target the
+    // account relays instead.
+    h.req.mockImplementation(reqConclusive([]));
+
+    const result = renderAdd();
+    await act(async () => {
+      await result.current.mutateAsync({ pubkey: PACK_PK, identifier: "mypack" });
+    });
+
+    const opts = h.req.mock.calls[0][1] as { relays?: string[] };
+    expect(opts.relays).toEqual(["wss://relay.example"]);
   });
 
   it("REFUSES to create from an empty read when a durable palette exists (cold-reload wipe)", async () => {

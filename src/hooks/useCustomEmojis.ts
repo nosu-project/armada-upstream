@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { useBuzzEmojiPalette } from "@/buzz/useBuzzEmojiPalette";
+import { accountDataRelays } from "@/contexts/AppContext";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { emojiPackCoord, emojiPackName, readEmojiList } from "@/hooks/useEmojiPacks";
@@ -123,6 +125,7 @@ function paletteFrom(listEvent: NostrEvent, packEvents: NostrEvent[]): CustomEmo
 export function useCustomEmojis() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const eventStore = useEventStore();
 
   const query = useQuery({
@@ -138,7 +141,7 @@ export function useCustomEmojis() {
       const store = await eventStore;
       const floor = loadPalette(user.pubkey);
 
-      const { event: list } = await readEmojiList(nostr, store, user.pubkey, signal);
+      const { event: list } = await readEmojiList(nostr, store, user.pubkey, accountDataRelays(config), signal);
       if (!list) return floor; // list read came up short — keep what we had
 
       const packRefs = list.tags
