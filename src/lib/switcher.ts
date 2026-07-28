@@ -13,15 +13,20 @@
  */
 
 import { matchPath } from "react-router-dom";
+import { nip19 } from "nostr-tools";
 
 import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { channelsView } from "@/concord-v2/lib/community";
 import { rehydrateCommunity, type CommunityListEntry } from "@/concord-v2/lib/communityList";
+import { searchRumors } from "@/concord-v2/lib/rumorStore";
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import { readFolded } from "@/lib/foldedCache";
+import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 
 import type { QueryClient } from "@tanstack/react-query";
+import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
 import type { RelayInfoDocument } from "@/hooks/useRelayInfo";
 import type { Nip29Group } from "@/lib/nip29";
 
@@ -56,7 +61,12 @@ export interface SwitcherContext {
   queryClient: QueryClient;
   /** community_id → live list entry (from `useLiveCommunities2`). */
   communities: Map<string, CommunityListEntry>;
+  /** The shared app event store (NIP-29 timelines + kind-0 profiles). */
+  eventStore: EventStoreContextType;
 }
+
+/** The event store handle carried in {@link SwitcherContext} (see useEventStore). */
+type EventStoreContextType = Promise<ArmadaEventStore>;
 
 /**
  * One backend behind the switcher. Every method reads only local caches — no
@@ -242,4 +252,180 @@ export async function nextChannelRoute(
     return next.route;
   }
   return null;
+}
+
+// ── Message search ─────────────────────────────────────────────────────────────
+//
+// The palette's spaces + channels are a query-independent snapshot (cmdk fuzzy-
+// filters them client-side). Messages can't work that way — there are far too
+// many to preload — so message search is query-DRIVEN: the component runs this
+// against the local, already-decrypted stores as the user types. Every corpus is
+// on-device (Concord chat is E2E-encrypted; NIP-29 timelines and DM rumors are
+// persisted at rest), so this never hits the network or prompts the signer. The
+// channel routes come from the same {@link SwitcherEntries} the palette already
+// built, so a hit navigates straight to its channel/DM.
+
+/**
+ * A message that matched the palette's search, resolved to its channel/DM.
+ *
+ * Author + DM-partner identities are carried as PUBKEYS, not resolved names:
+ * the view renders them through the shared {@link DisplayName}/`useAuthor`
+ * components, so message rows get the same cached, emoji-aware, per-server
+ * nicknamed identity (and network fallback) as everywhere else — no bespoke
+ * profile lookup here.
+ */
+export interface MessageEntry {
+  /** Unique across the palette: `msg:<rumor/event id>`. */
+  key: string;
+  /** The matched message text (whitespace-collapsed for a one-line snippet). */
+  content: string;
+  /** Who said it (pubkey hex). The view resolves name + avatar via useAuthor. */
+  authorPubkey: string;
+  /** The channel/DM route to open. */
+  route: string;
+  /** `created_at` (seconds) — for the "when" label and newest-first ordering. */
+  createdAt: number;
+  /**
+   * Where the match lives. Channel hits carry a ready `#channel · Space` label;
+   * DM hits leave it unset and set {@link peerPubkey} so the view renders the
+   * partner's live name.
+   */
+  source?: string;
+  /** DM partner pubkey (hex), when the hit is a direct message. */
+  peerPubkey?: string;
+}
+
+/** NIP-29 timeline kinds whose content is searchable (chat + NIP-88 polls). */
+const NIP29_MESSAGE_KINDS = [KIND_GROUP_CHAT, 1068];
+/** Newest-first store scan cap per NIP-29 search (content isn't indexed). */
+const NIP29_SCAN_LIMIT = 2000;
+/** Per-corpus match cap before the merged newest-first slice to `limit`. */
+const PER_CORPUS_LIMIT = 40;
+
+/** Collapse whitespace/newlines into a single-line snippet. */
+function snippet(content: string): string {
+  return content.replace(/\s+/g, " ").trim();
+}
+
+/** Concord chat matches, mapped back to their channel via the loaded entries. */
+async function searchConcordMessages(
+  needle: string,
+  byId: Map<string, ChannelEntry>,
+  signal?: AbortSignal,
+): Promise<MessageEntry[]> {
+  const ids = [...byId.keys()];
+  if (ids.length === 0) return [];
+  const hits = await searchRumors(ids, { query: needle, limit: PER_CORPUS_LIMIT, signal });
+  const out: MessageEntry[] = [];
+  for (const h of hits) {
+    const ch = byId.get(h.channelIdHex);
+    if (!ch) continue;
+    out.push({
+      key: `msg:${h.rumorId}`,
+      content: snippet(h.content),
+      authorPubkey: h.author,
+      source: `${ch.name} · ${ch.spaceName}`,
+      route: ch.route,
+      createdAt: h.createdAt,
+    });
+  }
+  return out;
+}
+
+/** NIP-29 timeline matches: an indexed `#h` scan filtered by content in memory. */
+async function searchNip29Messages(
+  needle: string,
+  byId: Map<string, ChannelEntry>,
+  eventStore: EventStoreContextType,
+  signal?: AbortSignal,
+): Promise<MessageEntry[]> {
+  const ids = [...byId.keys()];
+  if (ids.length === 0) return [];
+  const store = await eventStore;
+  const events = await store.query(
+    [{ kinds: NIP29_MESSAGE_KINDS, "#h": ids, limit: NIP29_SCAN_LIMIT }],
+    { signal },
+  );
+  const out: MessageEntry[] = [];
+  for (const ev of events) {
+    if (!ev.content.toLowerCase().includes(needle)) continue;
+    const ch = byId.get(ev.tags.find((t) => t[0] === "h")?.[1] ?? "");
+    if (!ch) continue;
+    out.push({
+      key: `msg:${ev.id}`,
+      content: snippet(ev.content),
+      authorPubkey: ev.pubkey,
+      source: `${ch.name} · ${ch.spaceName}`,
+      route: ch.route,
+      createdAt: ev.created_at,
+    });
+    if (out.length >= PER_CORPUS_LIMIT) break;
+  }
+  return out;
+}
+
+/** DM matches; the author and partner are resolved to names by the view. */
+async function searchDmMessages(query: string, signal?: AbortSignal): Promise<MessageEntry[]> {
+  const hits = await searchDm17Rumors(query, { limit: PER_CORPUS_LIMIT, signal });
+  return hits.map((h) => ({
+    key: `msg:${h.rumorId}`,
+    content: snippet(h.content),
+    authorPubkey: h.author,
+    peerPubkey: h.peer,
+    route: `/dms/${nip19.npubEncode(h.peer)}`,
+    createdAt: h.createdAt,
+  }));
+}
+
+/**
+ * Which message corpora {@link searchSwitcherMessages} scans:
+ *   - `all`      — channel/community chat AND DMs (the default);
+ *   - `channels` — channel/community chat only (Concord + NIP-29);
+ *   - `dms`      — direct messages only.
+ * Narrowing runs FEWER corpora, so the whole `limit` goes to the wanted kind —
+ * picking DMs surfaces DM matches even when channel chatter would bury them.
+ */
+export type MessageScope = "all" | "channels" | "dms";
+
+/**
+ * Search the on-device message corpora — Concord chat, NIP-29 timelines and DM
+ * history — for `query`, newest-first, capped at `limit`. `channels` is the
+ * palette's already-loaded channel list: it both scopes the scan (only channels
+ * the app has loaded are searchable) and maps each hit back to a navigable
+ * route. `scope` narrows which corpora run. Author/partner names + avatars are
+ * left to the view (rendered via the shared `useAuthor`/{@link DisplayName}).
+ * Returns [] for a blank query.
+ */
+export async function searchSwitcherMessages(
+  query: string,
+  channels: ChannelEntry[],
+  ctx: SwitcherContext,
+  opts: { limit?: number; scope?: MessageScope; signal?: AbortSignal } = {},
+): Promise<MessageEntry[]> {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const limit = opts.limit ?? 30;
+  const scope = opts.scope ?? "all";
+  const wantChannels = scope !== "dms";
+  const wantDms = scope !== "channels";
+
+  // Split loaded channels by transport (route prefix) and index by channel id,
+  // so a matched message resolves to its channel's name + route.
+  const concordById = new Map<string, ChannelEntry>();
+  const nip29ById = new Map<string, ChannelEntry>();
+  for (const c of channels) {
+    if (c.route.startsWith("/c/")) concordById.set(c.id, c);
+    else if (c.route.startsWith("/s/")) nip29ById.set(c.id, c);
+  }
+
+  const groups = await Promise.all([
+    wantChannels ? searchConcordMessages(needle, concordById, opts.signal) : [],
+    wantChannels ? searchNip29Messages(needle, nip29ById, ctx.eventStore, opts.signal) : [],
+    wantDms ? searchDmMessages(query, opts.signal) : [],
+  ]);
+
+  return groups
+    .flat()
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, limit);
 }
