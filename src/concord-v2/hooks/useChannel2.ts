@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { citationFor, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
+import { citationFor, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import {
@@ -207,11 +207,17 @@ async function backfillStore(
 /** The moderation context resolved from the community's control fold. */
 export function useChatModeration2(community: CommunityV2 | undefined): ChatModeration {
   const { data: folded } = useControlFold2(community);
+  const { data: dissolved } = useDissolved2(community);
   return useMemo(
     () => ({
       banned: folded?.banned ?? new Set<string>(),
       canDelete: (deleter: string, author: string, citation?: AuthorityCitation) => {
         if (!folded || !community) return false;
+        // A dissolved community honors no new authority action (CORD-02 §9).
+        // The seal deliberately leaves SELF-deletes open — a member may always
+        // erase themselves — and those never reach here, short-circuiting on
+        // `deleters.has(msg.author)` in the fold.
+        if (dissolved) return false;
         // Authorization, resolved against the CURRENT roster. The citation is a
         // completeness floor and never a grant of rank, so a since-demoted actor
         // is refused here no matter what they cited (CORD-04 §5).
@@ -223,7 +229,7 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
         return citationSatisfied(folded, community.id, deleter, citation);
       },
     }),
-    [folded, community],
+    [folded, community, dissolved],
   );
 }
 

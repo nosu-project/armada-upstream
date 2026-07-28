@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   buildJoinRumor,
@@ -19,6 +19,7 @@ import {
 import { mergeOpened, sweepGuestbook } from "@/concord-v2/lib/planeSync";
 import { queryByStreams } from "@/concord-v2/lib/rumorStore";
 import type { OpenedEvent } from "@/concord-v2/lib/stream";
+import { citationSatisfied } from "@/concord-v2/lib/control";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -30,6 +31,7 @@ import type { CommunityV2 } from "@/concord-v2/lib/types";
 export function useGuestbook2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
   const { data: folded } = useControlFold2(community);
+  const { data: dissolved } = useDissolved2(community);
 
   const query = useQuery<OpenedEvent[]>({
     queryKey: ["concord2", "guestbook", community?.idHex ?? null, community?.rootEpoch.toString() ?? ""],
@@ -55,12 +57,20 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
     const snapshotAuthority = community.rootEpoch === 0n ? undefined : community.refounder;
     return coalesceGuestbook(opened, {
       nowMs: Date.now(),
-      canKick: (actor, target) =>
-        Boolean(folded && canActOnMember(folded.roster, actor, folded.ownerHex, target, Permissions.KICK)),
+      canKick: (actor, target, citation) =>
+        Boolean(
+          // A dissolved community honors no new authority action (CORD-02 §9).
+          !dissolved &&
+            folded &&
+            canActOnMember(folded.roster, actor, folded.ownerHex, target, Permissions.KICK) &&
+            // …and the CORD-04 §5 sync floor, so a kick from an admin whose
+            // demotion we haven't read yet parks instead of landing.
+            citationSatisfied(folded, community.id, actor, citation),
+        ),
       snapshotAuthority,
       banned: folded?.banned,
     });
-  }, [community, query.data, folded]);
+  }, [community, query.data, folded, dissolved]);
 
   return { ...query, coalesced };
 }
@@ -88,6 +98,7 @@ export function useGuestbookPublisher2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
+  const { data: dissolvedNow } = useDissolved2(community);
 
   return useMutation({
     mutationFn: async (
@@ -97,6 +108,12 @@ export function useGuestbookPublisher2(community: CommunityV2 | undefined) {
         | { type: "kick"; target: string; vac?: { eid: string; version: bigint; hash: string } },
     ) => {
       if (!user || !community) throw new Error("Not ready.");
+      // A dissolved community honors no new authority action (CORD-02 §9). A
+      // Leave stays open: it is self-signed housekeeping, not authority, and a
+      // member must always be able to walk away from a grave.
+      if (dissolvedNow && action.type === "kick") {
+        throw new Error("This community has been dissolved; it accepts no new moderation.");
+      }
       const group = currentGuestbookGroup(community);
       const ms = Date.now();
       const rumor =

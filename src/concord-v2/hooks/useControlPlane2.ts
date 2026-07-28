@@ -250,6 +250,9 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
  * BOTH the old and the new relays (the fold that announces a move lives on the
  * relays being moved away from).
  */
+/** Sentinel so the store-read try/catch can't swallow the gate's own refusal. */
+class DissolvedError extends Error {}
+
 export async function publishEdition2(
   nostr: ReturnType<typeof useNostr>["nostr"],
   community: CommunityV2,
@@ -257,6 +260,22 @@ export async function publishEdition2(
   rumor: Rumor,
   opts?: { relays?: string[] },
 ): Promise<void> {
+  // A dissolved community honors no new authority action (CORD-02 §9: the seal
+  // is one-way and nothing new is honored). Gated HERE rather than at each of
+  // the fifteen call sites — one place that cannot be forgotten when a new
+  // edition kind is added. Reads the local store only, so it costs no network,
+  // and fails OPEN on a store error: an unreadable cache must not block a
+  // legitimate publish (matching Vector's `get_community_dissolved(…)
+  // .unwrap_or(false)`).
+  try {
+    const grave = dissolvedGroupKey(community.id);
+    const cached = await queryByStreams([grave.pk]);
+    if (cached.some((o) => isDissolvedOpened(o, community.owner, community.id))) {
+      throw new DissolvedError();
+    }
+  } catch (e) {
+    if (e instanceof DissolvedError) throw new Error("This community has been dissolved; it accepts no changes.");
+  }
   const control = currentControlGroup(community);
   const wrap = await sealEdition(rumor, control, signer);
   const urls = opts?.relays ?? community.relays;

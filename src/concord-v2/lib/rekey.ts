@@ -18,6 +18,7 @@
 
 import { bytesToHex, epochKeyCommitment, random32, recipientLocator } from "@/concord-v2/lib/derive";
 import { KIND_REKEY, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
+import { citationFromTags, citationToTag, type AuthorityCitation } from "@/concord-v2/lib/edition";
 import { buildRumor, type OpenedEvent, type Rumor } from "@/concord-v2/lib/stream";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 
@@ -101,6 +102,12 @@ export function buildRekeyRumors(
   rotation: RekeyRotation,
   blobs: RekeyBlob[],
   ms: number,
+  /**
+   * The Grant the rotator acts under (CORD-04 §5 / CORD-06 §Authority). Rides
+   * on EVERY chunk, like the continuity fields, so a receiver that only has
+   * some chunks can still judge the authority. Absent when the owner rotates.
+   */
+  authority?: AuthorityCitation,
 ): Rumor[] {
   const chunks: RekeyBlob[][] = [];
   for (let i = 0; i < blobs.length; i += REKEY_BLOBS_PER_EVENT) {
@@ -119,6 +126,7 @@ export function buildRekeyRumors(
         ["prevepoch", rotation.prevEpoch.toString()],
         ["prevcommit", rotation.prevCommit],
         ["chunk", (i + 1).toString(), n.toString()],
+        ...(authority ? [citationToTag(authority)] : []),
       ],
       pubkey: rotatorPubkey,
       ms,
@@ -139,6 +147,8 @@ export interface ParsedRekey {
   /** ms of the rumor (ordering / correlation aid). */
   ms: number;
   wrapId: string;
+  /** The CORD-04 §5 citation the rotator acts under (absent when the owner acts). */
+  authority?: AuthorityCitation;
 }
 
 /** Parse an opened rekey stream event into its rotation fields. */
@@ -180,6 +190,7 @@ export function parseRekey(opened: OpenedEvent): ParsedRekey {
     blobs,
     ms: opened.ms,
     wrapId: opened.wrapId,
+    authority: citationFromTags(opened.tags),
   };
 }
 
@@ -199,6 +210,13 @@ export interface RekeyRotationSet {
   /** chunkIndex → chunk. */
   chunks: Map<number, ParsedRekey>;
   complete: boolean;
+  /**
+   * The rotation's authority citation, taken from its first chunk. Every chunk
+   * of one rotation carries identical authority fields (CORD-06 §2), so a
+   * disagreeing chunk is the caller's cue to distrust the set — mirrored on the
+   * continuity fields, which are already part of the correlation key.
+   */
+  authority?: AuthorityCitation;
 }
 
 export function groupRotations(parsed: ParsedRekey[]): RekeyRotationSet[] {
@@ -218,6 +236,7 @@ export function groupRotations(parsed: ParsedRekey[]): RekeyRotationSet[] {
           chunkCount: p.chunkCount,
           chunks: new Map(),
           complete: false,
+          authority: p.authority,
         }),
       );
     }

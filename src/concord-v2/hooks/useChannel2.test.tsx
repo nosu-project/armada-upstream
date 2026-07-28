@@ -56,6 +56,8 @@ vi.mock("@nostrify/react", () => ({
 }));
 vi.mock("@/concord-v2/hooks/useControlPlane2", () => ({
   useControlFold2: () => ({ data: undefined }),
+  useDissolved2: () => ({ data: false }),
+  citationFor: () => undefined,
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: undefined }),
