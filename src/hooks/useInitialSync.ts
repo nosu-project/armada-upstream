@@ -221,6 +221,25 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       if (!cancelled) setState((s) => ({ ...s, log: [...log] }));
     };
 
+    /**
+     * Remove a phase line entirely.
+     *
+     * A phase that found nothing has nothing to report: "mounting channel
+     * directory — 0 channels" is not progress, it's noise, and it was
+     * permanent noise for the common case. The NIP-29 group list is empty for
+     * every Concord-only account (their channels are counted by the Concord
+     * phases, under their own lines), which also zeroed the message catch-up
+     * that reads from it — two dead zeros on every login. Drop the line at the
+     * moment we learn the count instead; it stays visible, with its spinner,
+     * for as long as the fetch is genuinely in flight.
+     */
+    const drop = (id: string) => {
+      const i = log.findIndex((l) => l.id === id);
+      if (i === -1) return;
+      log.splice(i, 1);
+      if (!cancelled) setState((s) => ({ ...s, log: [...log] }));
+    };
+
     /** Update a phase line's status chip in place (live x/y progress). */
     const progress = (id: string, status: string) => {
       const line = log.find((l) => l.id === id);
@@ -302,14 +321,20 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       } catch {
         // Best-effort.
       }
-      resolve(gId, `${groups.length} ${groups.length === 1 ? "channel" : "channels"}`);
+      if (groups.length > 0) {
+        resolve(gId, `${groups.length} ${groups.length === 1 ? "channel" : "channels"}`);
+      } else {
+        drop(gId);
+      }
       if (cancelled) return;
 
       // ── 3. Warm the store with recent messages for joined channels ──────
-      const mId = begin("messages");
+      // Skipped outright with no NIP-29 channels to catch up on — there is
+      // nothing to sync and nothing worth showing.
       const channels = groups.slice(0, MAX_CATCHUP_CHANNELS);
-      let messageCount = 0;
       if (channels.length > 0) {
+        const mId = begin("messages");
+        let messageCount = 0;
         const since = Math.floor(Date.now() / 1000) - CATCHUP_WINDOW_SECONDS;
         await Promise.all(
           channels.map(async ({ id, relay }) => {
@@ -328,8 +353,8 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             }
           }),
         );
+        resolve(mId, `${messageCount} cached`);
       }
-      resolve(mId, `${messageCount} cached`);
       if (cancelled) return;
 
       // ── 4. Warm the store with recent Concord (V1) traffic ──────────────
@@ -388,7 +413,11 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         } catch {
           // Best-effort; never block login on Concord.
         }
-        resolve(cId, `${communityCount} ${communityCount === 1 ? "community" : "communities"}`);
+        if (communityCount > 0) {
+          resolve(cId, `${communityCount} ${communityCount === 1 ? "community" : "communities"}`);
+        } else {
+          drop(cId);
+        }
       }
       if (cancelled) return;
 
@@ -410,7 +439,11 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           // Best-effort; never block login on Concord.
           logSync("gate", `v2 list fetch FAILED: ${err instanceof Error ? err.message : String(err)}`);
         }
-        resolve(vId, `${v2Live.length} ${v2Live.length === 1 ? "community" : "communities"}`);
+        if (v2Live.length > 0) {
+          resolve(vId, `${v2Live.length} ${v2Live.length === 1 ? "community" : "communities"}`);
+        } else {
+          drop(vId);
+        }
       }
       if (cancelled) return;
 

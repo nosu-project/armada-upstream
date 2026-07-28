@@ -1,0 +1,310 @@
+import { Capacitor } from "@capacitor/core";
+import { BatteryCharging, Bell, Lock } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+
+import { WizardShell, WizardStepBody } from "@/components/onboarding/WizardShell";
+import { useSyncGateActive } from "@/components/SyncGate";
+import { Button } from "@/components/ui/button";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import {
+  enableNativeNotifications,
+  isNativeRuntime,
+  nativeNotificationIntent,
+} from "@/hooks/useNativeNotifications";
+import {
+  registerConsentPromptOpener,
+  resolveConsentPrompt,
+  setDecryptConsent,
+} from "@/lib/decryptConsent";
+import {
+  ArmadaNotification,
+  isIgnoringBatteryOptimizations,
+  requestIgnoreBatteryOptimizations,
+} from "@/lib/nativeNotifications";
+
+/**
+ * The post-login setup flow.
+ *
+ * Everything a user has to answer after signing in — the OS notification
+ * permission, the Android battery-optimization exemption, and the bulk-decrypt
+ * consent — used to arrive as three unrelated interruptions: two of them raw
+ * system dialogs fired from headless mounts with no explanation, one a toast,
+ * one a modal, all racing each other and the sync overlay. This replaces them
+ * with one queue of full-screen steps in the signup wizard's chrome: a progress
+ * bar, one question at a time, each with the context needed to answer it, and
+ * each skippable.
+ *
+ * Steps are enqueued only when they actually apply, so a web user with a local
+ * key sees nothing at all. The flow holds off entirely while the sync gate is
+ * up, then presents whatever is queued.
+ */
+
+/** Steps, in the order they're offered. */
+type StepId = "notifications" | "battery" | "decrypt";
+
+/**
+ * Set once the notification step has been shown. Unlike the old launch-time OS
+ * prompt (which re-fired every launch until the user answered at OS level), a
+ * declined full-screen step is not re-asked — the Settings toggle is the way
+ * back in.
+ */
+const NOTIF_PROMPT_KEY = "armada:notif-prompt-shown";
+
+/**
+ * Timestamp (ms) of the last battery-exemption nudge. Without the exemption,
+ * Doze tears the persistent relay websockets down and the OS refuses background
+ * foreground-service starts, so the boot/watchdog recovery paths can't bring
+ * the service back — this is the single most important lever for reliable
+ * background notifications. Unlike the notification ask this one re-nudges
+ * (it's recoverable and high-value), but no more than once a day.
+ */
+const BATTERY_NUDGE_KEY = "armada:battery-exemption-nudged-at";
+const NUDGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function read(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function write(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // best-effort
+  }
+}
+
+function batteryNudgeDue(): boolean {
+  return Date.now() - (Number(read(BATTERY_NUDGE_KEY)) || 0) >= NUDGE_INTERVAL_MS;
+}
+
+/** Whether the Android battery-optimization step should be offered right now. */
+async function batteryStepApplies(): Promise<boolean> {
+  if (Capacitor.getPlatform() !== "android") return false;
+  if (!batteryNudgeDue()) return false;
+  return !(await isIgnoringBatteryOptimizations());
+}
+
+export function LoginSetup() {
+  const { user } = useCurrentUser();
+  const syncing = useSyncGateActive();
+
+  const [queue, setQueue] = useState<StepId[]>([]);
+  const [completed, setCompleted] = useState(0);
+
+  const enqueue = useCallback((id: StepId) => {
+    setQueue((q) => (q.includes(id) ? q : [...q, id]));
+  }, []);
+
+  const advance = useCallback(() => {
+    setQueue((q) => q.slice(1));
+    setCompleted((c) => c + 1);
+  }, []);
+
+  // The decrypt step is demand-driven: the consent gate opens it the first time
+  // a surface needs a real (uncached) decrypt, which for most users is landing
+  // on /dms right after login — but it can also be much later, long after the
+  // other steps are done. Either way it joins the same queue.
+  useEffect(() => registerConsentPromptOpener(() => enqueue("decrypt")), [enqueue]);
+
+  // If this unmounts with a decrypt prompt still queued, the callers awaiting
+  // that decision would hang forever. Release them as "not now" (unpersisted,
+  // so they're asked again next time).
+  useEffect(() => {
+    return () => resolveConsentPrompt("declined");
+  }, []);
+
+  // Probe the native permission steps once the user is in and the sync overlay
+  // is gone.
+  useEffect(() => {
+    if (!user || syncing) return;
+    if (!isNativeRuntime()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { granted } = await ArmadaNotification.checkPermission();
+        if (cancelled) return;
+        if (!granted) {
+          if (nativeNotificationIntent() && !read(NOTIF_PROMPT_KEY)) enqueue("notifications");
+          return;
+        }
+        // Already granted — the exemption is the only thing that may be missing.
+        if (await batteryStepApplies()) {
+          if (!cancelled) enqueue("battery");
+        }
+      } catch {
+        // Permission probe failed — offer nothing rather than guess.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, syncing, enqueue]);
+
+  const step = queue[0];
+
+  // Record that a step was surfaced as it renders, so a user who force-quits
+  // mid-flow isn't asked the same thing on every launch.
+  useEffect(() => {
+    if (step === "notifications") write(NOTIF_PROMPT_KEY, "1");
+    if (step === "battery") write(BATTERY_NUDGE_KEY, String(Date.now()));
+  }, [step]);
+
+  if (!step || syncing) return null;
+
+  const total = completed + queue.length;
+
+  return (
+    <WizardShell index={completed} total={total} stepKey={step} zClassName="z-[260]">
+      {step === "notifications" && (
+        <NotificationsStep
+          onDone={async (granted) => {
+            // Granting is what makes the exemption matter, so chain straight
+            // into it rather than waiting for the next launch to notice.
+            if (granted && (await batteryStepApplies())) enqueue("battery");
+            advance();
+          }}
+        />
+      )}
+      {step === "battery" && <BatteryStep onDone={advance} />}
+      {step === "decrypt" && <DecryptStep onDone={advance} />}
+    </WizardShell>
+  );
+}
+
+/** Circular glyph frame matching the signup wizard's brand marks. */
+function StepGlyph({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex size-20 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
+      {children}
+    </div>
+  );
+}
+
+function NotificationsStep({ onDone }: { onDone: (granted: boolean) => void }) {
+  const [busy, setBusy] = useState(false);
+
+  const enable = async () => {
+    setBusy(true);
+    try {
+      onDone(await enableNativeNotifications());
+    } catch {
+      onDone(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <WizardStepBody
+      glyph={
+        <StepGlyph>
+          <Bell className="size-9" />
+        </StepGlyph>
+      }
+      title="stay in the loop"
+      description="Armada can notify you about direct messages, mentions and replies while the app is closed. Nothing leaves your device to a push service; your phone holds the connection itself."
+    >
+      <div className="w-full space-y-3">
+        <Button
+          size="lg"
+          className="h-12 w-full clip-corner-lg text-base font-medium"
+          onClick={enable}
+          disabled={busy}
+        >
+          Enable notifications
+        </Button>
+        <Button
+          variant="ghost"
+          className="w-full text-muted-foreground"
+          onClick={() => onDone(false)}
+          disabled={busy}
+        >
+          Not now
+        </Button>
+      </div>
+    </WizardStepBody>
+  );
+}
+
+function BatteryStep({ onDone }: { onDone: () => void }) {
+  const allow = async () => {
+    try {
+      await requestIgnoreBatteryOptimizations();
+    } catch {
+      // The OS dialog may be unavailable; the settings warning remains.
+    }
+    onDone();
+  };
+
+  return (
+    <WizardStepBody
+      glyph={
+        <StepGlyph>
+          <BatteryCharging className="size-9" />
+        </StepGlyph>
+      }
+      title="keep it connected"
+      description="Android's battery optimization suspends Armada's connection in the background, which silently stops notifications. Allowing background usage keeps them arriving."
+    >
+      <div className="w-full space-y-3">
+        <Button
+          size="lg"
+          className="h-12 w-full clip-corner-lg text-base font-medium"
+          onClick={allow}
+        >
+          Allow background usage
+        </Button>
+        <Button variant="ghost" className="w-full text-muted-foreground" onClick={onDone}>
+          Not now
+        </Button>
+      </div>
+    </WizardStepBody>
+  );
+}
+
+function DecryptStep({ onDone }: { onDone: () => void }) {
+  const choose = (value: "allowed" | "declined") => {
+    setDecryptConsent(value);
+    onDone();
+  };
+
+  return (
+    <WizardStepBody
+      glyph={
+        <StepGlyph>
+          <Lock className="size-9" />
+        </StepGlyph>
+      }
+      title="decrypt your messages"
+      description="Your messages are end-to-end encrypted. Armada needs your signer to unlock them."
+    >
+      <div className="w-full space-y-3">
+        <div className="clip-corner-lg bg-secondary/40 p-3 text-left">
+          <p className="text-xs text-muted-foreground">
+            Allow it once and Armada decrypts quietly from here on. Decline and messages stay
+            locked until you tap <strong>Decrypt</strong> on them.
+          </p>
+        </div>
+
+        <Button
+          size="lg"
+          className="h-12 w-full clip-corner-lg text-base font-medium"
+          onClick={() => choose("allowed")}
+        >
+          Decrypt my messages
+        </Button>
+        <Button
+          variant="ghost"
+          className="w-full text-muted-foreground"
+          onClick={() => choose("declined")}
+        >
+          Not now
+        </Button>
+      </div>
+    </WizardStepBody>
+  );
+}

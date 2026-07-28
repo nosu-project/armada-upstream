@@ -1,12 +1,13 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
-import { Eye, EyeOff } from "lucide-react";
+import { Check, Copy, Eye, EyeOff } from "lucide-react";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 
 import { ArmadaCrest, ArmadaCrestKeyframes, ArmadaIdentity, ArmadaKey } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
 import LoginDialog from "@/components/auth/LoginDialog";
 import { AddBody } from "@/components/dialogs/AddDialog";
+import { WizardShell } from "@/components/onboarding/WizardShell";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,9 +19,9 @@ import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { toast } from "@/hooks/useToast";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
-import { saveNsec } from "@/lib/credentialManager";
+import { writeClipboardText } from "@/lib/clipboard";
+import { exportNsec, saveToKeyring } from "@/lib/credentialManager";
 import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
-import { cn } from "@/lib/utils";
 
 /**
  * First-run onboarding — the landing page and the full-page account wizard.
@@ -33,7 +34,9 @@ import { cn } from "@/lib/utils";
  * one animated step at a time):
  *
  *   1. generate — a secret key is your identity; generate it.
- *   2. download — reveal/save the key (credential manager or file), log in.
+ *   2. download — reveal the key and copy or back it up. Continue is gated on
+ *      an explicit backup so a new user can't skip past saving their only
+ *      login; then log in.
  *   3. profile  — the same WYSIWYG {@link ProfileSettings} editor used in
  *      Settings, so a new user sets their name/avatar before entering any
  *      community. Skippable.
@@ -50,39 +53,22 @@ import { cn } from "@/lib/utils";
 const WIZARD_STEPS = ["generate", "download", "profile", "add"] as const;
 type WizardStep = (typeof WIZARD_STEPS)[number];
 
-/**
- * Full-screen wizard chrome: background takeover, thin progress bar on top,
- * and a centered, width-capped column that fades/slides in per step.
- */
-function WizardShell({ step, maxWidth = "max-w-sm", children }: {
+/** The shared wizard chrome, positioned within this wizard's step sequence. */
+function SignupShell({ step, maxWidth, children }: {
   step: WizardStep;
   /** Column width cap (a `max-w-*` class). Text-heavy steps go a size up. */
   maxWidth?: "max-w-sm" | "max-w-md" | "max-w-xl";
   children: ReactNode;
 }) {
-  const pct = ((WIZARD_STEPS.indexOf(step) + 1) / WIZARD_STEPS.length) * 100;
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background">
-      <div className="h-1 shrink-0 bg-muted">
-        <div
-          className="h-full bg-primary transition-all duration-500 ease-out"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        <div
-          key={step}
-          className={cn(
-            "mx-auto flex min-h-full w-full flex-col justify-center gap-8 px-6 py-12 safe-area-top safe-area-bottom",
-            "animate-in fade-in slide-in-from-right-4 duration-300",
-            maxWidth,
-          )}
-        >
-          {children}
-        </div>
-      </div>
-      <ArmadaCrestKeyframes />
-    </div>
+    <WizardShell
+      index={WIZARD_STEPS.indexOf(step)}
+      total={WIZARD_STEPS.length}
+      stepKey={step}
+      maxWidth={maxWidth}
+    >
+      {children}
+    </WizardShell>
   );
 }
 
@@ -99,11 +85,29 @@ export function WelcomePage() {
   const [step, setStep] = useState<WizardStep | null>(null);
   const [nsec, setNsec] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [copied, setCopied] = useState(false);
+  // True while the OS keyring sheet is up (Continue is saving the key).
+  const [saving, setSaving] = useState(false);
 
   const handleGenerate = () => {
     setNsec(nip19.nsecEncode(generateSecretKey()));
     setShowKey(false);
+    setCopied(false);
     setStep("download");
+  };
+
+  const copyKey = async () => {
+    try {
+      await writeClipboardText(nsec);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy to the clipboard. Please select and copy it manually.",
+        variant: "destructive",
+      });
+    }
   };
 
   // "Skip for now": leave the create/join step for DMs. Nothing to persist —
@@ -114,14 +118,59 @@ export function WelcomePage() {
     navigate("/dms");
   };
 
-  // Save the key via the best available method (credential manager on
-  // Chromium, file download elsewhere), then log in and move to profile setup.
-  const handleSaveKey = async () => {
+  // Continue IS the backup: save the key to the OS keyring / password manager
+  // (a real, biometric-gated, recoverable backup), then log in and move to
+  // profile setup. Onboarding must not advance without the key saved, so:
+  //   - saved       → proceed.
+  //   - cancelled   → the user dismissed the keyring sheet; stay put so their
+  //                   only login isn't lost, and point them at Copy / retry.
+  //   - unavailable → no keyring to save to (Firefox/Safari, or an Android with
+  //                   no credential provider): export the key file instead (a
+  //                   download on web, the share sheet on native), then proceed.
+  const handleContinue = async () => {
+    if (saving) return;
+    let pubkey: string;
+    let npub: string;
     try {
       const decoded = nip19.decode(nsec);
       if (decoded.type !== "nsec") throw new Error("Invalid nsec");
-      const pubkey = getPublicKey(decoded.data);
-      await saveNsec(nip19.npubEncode(pubkey), nsec);
+      pubkey = getPublicKey(decoded.data);
+      npub = nip19.npubEncode(pubkey);
+    } catch {
+      toast({
+        title: "Invalid key",
+        description: "That key is invalid. Please generate a new one.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await saveToKeyring(npub, nsec);
+      if (result === "cancelled") {
+        toast({
+          title: "Save your key first",
+          description: "Save it to your password manager — or Copy it — before continuing. It's your only login.",
+        });
+        return;
+      }
+      if (result === "unavailable") {
+        // No keyring here — save the key to the filesystem so it isn't lost.
+        const location = await exportNsec(nsec);
+        if (!location) {
+          toast({
+            title: "Couldn't save your key",
+            description: "Saving to the filesystem failed. Copy your key and store it safely, then continue.",
+            variant: "destructive",
+          });
+          return;
+        }
+        toast({
+          title: "Key saved",
+          description: `Saved to ${location}. Keep it somewhere safe — it's your only login.`,
+        });
+      }
       // Brand-new account: nothing to catch up on, so skip the post-login sync
       // gate. Otherwise its full-screen overlay paints over the profile/add
       // wizard steps (SyncGate is z-100, the wizard z-50) while a network-bound
@@ -129,12 +178,8 @@ export function WelcomePage() {
       suppressNextSyncGate(pubkey);
       login.nsec(nsec);
       setStep("profile");
-    } catch {
-      toast({
-        title: "Save failed",
-        description: "Could not save the key. Please copy it manually.",
-        variant: "destructive",
-      });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -179,7 +224,7 @@ export function WelcomePage() {
   // ── Wizard step 1: generate the key ─────────────────────────────────────
   if (!user && step === "generate") {
     return (
-      <WizardShell step="generate">
+      <SignupShell step="generate">
         <div className="flex flex-col items-center gap-8 text-center">
           <ArmadaIdentity size={110} />
           <div className="space-y-2.5">
@@ -206,14 +251,14 @@ export function WelcomePage() {
             Back
           </button>
         </div>
-      </WizardShell>
+      </SignupShell>
     );
   }
 
   // ── Wizard step 2: save the key ─────────────────────────────────────────
   if (!user && step === "download") {
     return (
-      <WizardShell step="download">
+      <SignupShell step="download">
         <div className="flex flex-col items-center gap-8 text-center">
           <ArmadaKey size={110} />
           <div className="space-y-2.5">
@@ -248,13 +293,29 @@ export function WelcomePage() {
             </Button>
           </div>
 
-          <Button
-            size="lg"
-            className="h-12 w-full clip-corner-lg text-base font-medium"
-            onClick={handleSaveKey}
-          >
-            Continue
-          </Button>
+          <div className="w-full space-y-3">
+            <Button
+              size="lg"
+              className="h-12 w-full clip-corner-lg text-base font-medium"
+              onClick={handleContinue}
+              disabled={saving}
+            >
+              {saving ? "Saving…" : "Save key & continue"}
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full text-muted-foreground"
+              onClick={copyKey}
+              disabled={saving}
+            >
+              {copied ? (
+                <Check className="size-4 text-success" />
+              ) : (
+                <Copy className="size-4" />
+              )}
+              {copied ? "Copied" : "Copy key"}
+            </Button>
+          </div>
 
           <div className="w-full clip-corner-lg bg-amber-500/10 p-3 text-left">
             <p className="mb-1 text-xs font-semibold text-amber-600 dark:text-amber-300">
@@ -266,14 +327,14 @@ export function WelcomePage() {
             </p>
           </div>
         </div>
-      </WizardShell>
+      </SignupShell>
     );
   }
 
   // ── Wizard step 3: profile setup ────────────────────────────────────────
   if (user && step === "profile") {
     return (
-      <WizardShell step="profile" maxWidth="max-w-xl">
+      <SignupShell step="profile" maxWidth="max-w-xl">
         <div className="space-y-1.5 text-center">
           <ArmadaIdentity size={84} className="mx-auto mb-4" />
           <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
@@ -293,14 +354,14 @@ export function WelcomePage() {
         >
           Skip for now
         </Button>
-      </WizardShell>
+      </SignupShell>
     );
   }
 
   // ── Wizard step 4: create/join ──────────────────────────────────────────
   if (user && step === "add") {
     return (
-      <WizardShell step="add" maxWidth="max-w-md">
+      <SignupShell step="add" maxWidth="max-w-md">
         {/* Inline Add wizard: create an encrypted community, or paste an
             invite link / server URL. On success it navigates itself (or the
             added server triggers the redirect above). */}
@@ -313,7 +374,7 @@ export function WelcomePage() {
         >
           Skip for now
         </Button>
-      </WizardShell>
+      </SignupShell>
     );
   }
 

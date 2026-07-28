@@ -2,7 +2,7 @@ import { Capacitor } from "@capacitor/core";
 import { useNostrLogin } from "@nostrify/react/login";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -58,6 +58,56 @@ function saveIntent(on: boolean): void {
   }
 }
 
+/** Whether the user still intends background notifications to be on. */
+export function nativeNotificationIntent(): boolean {
+  return loadIntent();
+}
+
+// ── Shared `enabled` state ───────────────────────────────────────────────────
+// `useNativeNotifications` is mounted more than once (the headless
+// NativeNotifications mount, plus NotificationSettings while that page is
+// open). When `enabled` was per-instance useState, each instance ran its own
+// auto-enable effect — which is how a user could be asked for the OS
+// notification permission twice — and a grant in one instance never reached the
+// headless mount that actually configures the service. One module-level store,
+// shared by every instance, fixes both.
+
+let enabledState = false;
+const enabledListeners = new Set<() => void>();
+
+function setEnabledShared(next: boolean): void {
+  if (enabledState === next) return;
+  enabledState = next;
+  for (const l of enabledListeners) l();
+}
+
+function subscribeEnabled(listener: () => void): () => void {
+  enabledListeners.add(listener);
+  return () => {
+    enabledListeners.delete(listener);
+  };
+}
+
+/**
+ * Request the OS notification permission and, on grant, turn background
+ * notifications on for every mounted instance.
+ *
+ * Exported so the post-login setup flow can drive the OS prompt from an
+ * explicit "Enable notifications" tap — this hook no longer fires it on launch.
+ * Returns whether permission was granted.
+ */
+export async function enableNativeNotifications(): Promise<boolean> {
+  if (!isNativeRuntime()) return false;
+  const { granted } = await ArmadaNotification.requestPermission();
+  if (!granted) return false;
+  saveIntent(true);
+  setEnabledShared(true);
+  return true;
+}
+
+/** Module-level guard so the launch permission check runs once per app, not per hook instance. */
+let autoChecked = false;
+
 function loadPrefs(): PushPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -106,9 +156,9 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const { data: followData } = useFollowList();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
 
-  // Start dormant; the auto-enable effect below flips this on at launch (after
-  // requesting the OS permission if it hasn't been granted yet).
-  const [enabled, setEnabled] = useState<boolean>(false);
+  // Start dormant; the launch check below flips this on when the OS permission
+  // is already granted. Shared across every hook instance (see setEnabledShared).
+  const enabled = useSyncExternalStore(subscribeEnabled, () => enabledState, () => false);
   const [busy, setBusy] = useState(false);
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPrefs);
 
@@ -390,33 +440,23 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, signerCfg, gitSubs]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
-  // off, start the background service. Android lets us request the OS
-  // notification permission on launch without a user gesture (unlike the web,
-  // which gates requestPermission() behind a click), so we surface the system
-  // permission dialog directly here rather than via an in-app modal:
-  //   - already granted          → enable silently.
-  //   - still "default" (unasked) → fire the native OS prompt; enable on grant.
-  //   - denied                    → checkPermission stays false, request is a
-  //                                 no-op; the Settings toggle remains.
-  // The intent persists across launches, so a user who dismisses the OS prompt
-  // is re-asked next launch (until granted/denied), and once granted it sticks.
-  const autoTried = useRef(false);
+  // off AND the OS permission is already granted, start the background service
+  // silently. This no longer *requests* the permission — an unprompted OS
+  // dialog thrown at a user who has just logged in is the worst place to ask,
+  // and it raced the other post-login prompts. The ask now lives in the
+  // post-login setup flow (LoginSetup), which explains what it's for first and
+  // calls enableNativeNotifications() from a real tap; the Settings toggle is
+  // the other way in.
   useEffect(() => {
-    if (!supported || enabled || busy || autoTried.current) return;
+    if (!supported || enabled || busy || autoChecked) return;
     if (!loadIntent()) return;
-    autoTried.current = true;
+    autoChecked = true;
     (async () => {
       try {
         const { granted } = await ArmadaNotification.checkPermission();
-        if (granted) {
-          setEnabled(true);
-          return;
-        }
-        // Not granted yet — surface the system permission dialog on launch.
-        const res = await ArmadaNotification.requestPermission();
-        if (res.granted) setEnabled(true);
+        if (granted) setEnabledShared(true);
       } catch {
-        // Permission check/request failed — leave dormant.
+        // Permission check failed — leave dormant.
       }
     })();
   }, [supported, enabled, busy]);
@@ -502,10 +542,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     if (!supported) return;
     setBusy(true);
     try {
-      const { granted } = await ArmadaNotification.requestPermission();
-      if (!granted) return;
-      saveIntent(true);
-      setEnabled(true);
+      await enableNativeNotifications();
     } finally {
       setBusy(false);
     }
@@ -516,7 +553,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     setBusy(true);
     try {
       saveIntent(false);
-      setEnabled(false);
+      setEnabledShared(false);
       await ArmadaNotification.configure({ enabled: false });
     } finally {
       setBusy(false);

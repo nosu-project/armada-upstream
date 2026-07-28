@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
@@ -29,8 +29,42 @@ export function SyncGate() {
   return <SyncOverlay pubkey={freshPubkey} onDone={acknowledge} />;
 }
 
+// ── "Is the gate up?" ────────────────────────────────────────────────────────
+// The post-login setup flow must not start stacking its steps while the sync
+// overlay is still running, so it subscribes here rather than mounting a second
+// useFreshLogin (whose baseline/acknowledge state is per-instance and would
+// never clear).
+
+let gateActive = false;
+const gateListeners = new Set<() => void>();
+
+function setGateActive(next: boolean): void {
+  if (gateActive === next) return;
+  gateActive = next;
+  for (const l of gateListeners) l();
+}
+
+/** Whether the full-screen post-login sync overlay is currently showing. */
+export function useSyncGateActive(): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      gateListeners.add(listener);
+      return () => {
+        gateListeners.delete(listener);
+      };
+    },
+    () => gateActive,
+    () => false,
+  );
+}
+
 function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void }) {
   const { log, done } = useInitialSync(pubkey);
+
+  useEffect(() => {
+    setGateActive(true);
+    return () => setGateActive(false);
+  }, []);
 
   // When the sync finishes, hold a brief beat so the final line lands, then
   // clear the fresh-login flag so the overlay unmounts and the (now-primed)

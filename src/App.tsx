@@ -9,7 +9,6 @@ import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-
 import { ensureAndroidBackListener } from "@/hooks/useAndroidBack";
 import { AppProvider } from "@/components/AppProvider";
 import { ControlPlaneSync } from "@/components/ControlPlaneSync";
-import { DecryptConsentDialog } from "@/components/DecryptConsentDialog";
 import { DeepLinkWarmup } from "@/components/DeepLinkWarmup";
 import { DesktopBadge } from "@/components/DesktopBadge";
 import { MeshProvider } from "@/components/MeshProvider";
@@ -17,6 +16,7 @@ import { NativeNotifications } from "@/components/NativeNotifications";
 import { NativeReadDismiss, NativeReadMarkerSync } from "@/components/NativeReadMarkerSync";
 import NostrProvider from "@/components/NostrProvider";
 import { NostrSync } from "@/components/NostrSync";
+import { LoginSetup } from "@/components/onboarding/LoginSetup";
 import { PlausibleProvider } from "@/components/PlausibleProvider";
 import { PublishOutbox } from "@/components/PublishOutbox";
 import { ReadStateProvider } from "@/components/ReadStateProvider";
@@ -76,7 +76,7 @@ export function App() {
                     <WebPushNotifications />
                     <ControlPlaneSync />
                     <ScreenSharePicker />
-                    <DecryptConsentDialog />
+                    <LoginSetup />
                     <MeshProvider>
                       <AppRouter />
                     </MeshProvider>
