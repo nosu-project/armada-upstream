@@ -103,8 +103,13 @@ function readBotRecents(key: string): string[] {
 // into that margin.
 const MAX_CHARS = 5000;
 
-/** MIME types accepted via paste/drag-and-drop (matches the file picker). */
-const ACCEPTED_PASTE_RE = /^(image|video|audio)\//;
+/**
+ * Ceiling on a generic (non-media) attachment. Images/video are compressed
+ * before upload, but a document is uploaded as-is, and a client-encrypted
+ * attachment holds its full plaintext in memory on both encrypt and decrypt —
+ * so cap the raw size to keep a huge file from OOMing a phone tab.
+ */
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
 /** Replace or append a file extension. */
 function replaceExtension(filename: string, ext: string): string {
@@ -700,7 +705,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // them to size and blur-up its placeholder before the image resolves.
         const dim = tags.find((t) => t[0] === "dim")?.[1];
         const blurhash = tags.find((t) => t[0] === "blurhash")?.[1];
-        return { url, mime, isImage: mime.startsWith("image/"), encryption, dim, blurhash };
+        const name = tags.find((t) => t[0] === "name")?.[1];
+        return { url, mime, name, isImage: mime.startsWith("image/"), encryption, dim, blurhash };
       }),
     [uploadedFileGroups],
   );
@@ -806,6 +812,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     try {
       const isImage = file.type.startsWith("image/");
       const isVideo = file.type.startsWith("video/");
+      const isAudio = file.type.startsWith("audio/");
+      const isMedia = isImage || isVideo || isAudio;
+
+      if (!isMedia && file.size > MAX_FILE_BYTES) {
+        toast({
+          title: "File too large",
+          description: `Attachments are limited to ${Math.round(MAX_FILE_BYTES / (1024 * 1024))} MB.`,
+          variant: "destructive",
+        });
+        return;
+      }
 
       let uploadableFile = file;
       let resizedDim: string | undefined;
@@ -901,6 +918,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // NIP-94 defines both; clients differ on which they read.
         tags.push(["image", posterUrl], ["thumb", posterUrl]);
       }
+      if (!isMedia) {
+        // Generic files render as a download card, which needs the original
+        // filename and (plaintext) size — the NIP-94 `size` the server returns
+        // describes the ciphertext for encrypted uploads, so send our own.
+        if (file.name && !hasTag("name")) tags.push(["name", file.name]);
+        const sizeTag = tags.find((t) => t[0] === "size");
+        if (sizeTag) sizeTag[1] = String(file.size);
+        else tags.push(["size", String(file.size)]);
+      }
 
       if (abort.signal.aborted) return;
 
@@ -922,12 +948,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const items = e.clipboardData?.items;
     if (!items) return;
 
-    // Upload every pasted file (images, video, audio). Non-file items (plain
-    // text, HTML) fall through to the textarea's default paste handling.
+    // Upload every pasted file (media or generic documents). Non-file items
+    // (plain text, HTML) fall through to the textarea's default paste handling.
     const files = Array.from(items)
       .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
-      .filter((f): f is File => f !== null && ACCEPTED_PASTE_RE.test(f.type));
+      .filter((f): f is File => f !== null);
 
     if (files.length === 0) return;
     e.preventDefault();
@@ -961,7 +987,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, []);
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
-    const files = Array.from(e.dataTransfer.files ?? []).filter((f) => ACCEPTED_PASTE_RE.test(f.type));
+    const files = Array.from(e.dataTransfer.files ?? []);
     dragDepth.current = 0;
     setIsDragging(false);
     if (files.length === 0) return;
@@ -1595,8 +1621,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               ) : (
                 <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
                   <Paperclip className="size-5" />
-                  <span className="text-[10px] truncate max-w-full">
-                    {att.mime.split("/")[1] || "file"}
+                  <span className="text-[10px] truncate max-w-full px-0.5">
+                    {att.name || att.mime.split("/")[1] || "file"}
                   </span>
                 </div>
               )}
@@ -1698,7 +1724,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*,video/*,audio/*"
+              accept="*/*"
               multiple
               className="hidden"
               onChange={(e) => {

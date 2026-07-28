@@ -131,6 +131,8 @@ describe("chat plane (CORD-03)", () => {
     const folded = foldTimeline(await openChatBatch(wraps, channel));
     expect(folded.messages.length).toBe(1);
     expect(folded.messages[0].content).toBe("fixed"); // Mallory's edit ignored
+    // The edit stamps an ["edited", <unix>] tag so the UI shows "(edited)".
+    expect(folded.messages[0].tags).toContainEqual(["edited", "2"]);
   });
 
   it("honors moderation: banned authors dropped, authorized in-batch deletes applied", async () => {
