@@ -32,9 +32,22 @@ const NATIVE_INTENT_KEY = "armada:native-notif-intent";
 /** Shared per-type prefs with the web-push path. */
 const PREFS_KEY = "armada:push-prefs";
 
-/** True only inside the Capacitor native runtime (the APK), not web/PWA. */
+/** True only inside the Capacitor native runtime (the APK or the iOS app), not web/PWA. */
 export function isNativeRuntime(): boolean {
   return Capacitor.isNativePlatform();
+}
+
+/**
+ * True only where the `ArmadaNotification` background service actually exists.
+ *
+ * That plugin is Android-only (ArmadaNotificationPlugin.java): the persistent
+ * relay service, the native SQLite mirror and the drain bridge all live there.
+ * The iOS app is also `isNativeRuntime()`, but every one of those calls rejects
+ * with `UNIMPLEMENTED` — so callers that need the service must ask for this,
+ * not for "native", or iOS ends up offering notification UI that can't work.
+ */
+export function hasNativeNotificationService(): boolean {
+  return Capacitor.getPlatform() === "android";
 }
 
 function loadIntent(): boolean {
@@ -97,7 +110,7 @@ function subscribeEnabled(listener: () => void): () => void {
  * Returns whether permission was granted.
  */
 export async function enableNativeNotifications(): Promise<boolean> {
-  if (!isNativeRuntime()) return false;
+  if (!hasNativeNotificationService()) return false;
   const { granted } = await ArmadaNotification.requestPermission();
   if (!granted) return false;
   saveIntent(true);
@@ -145,10 +158,12 @@ export interface UseNativeNotificationsReturn {
  * prefs, and re-configures it whenever any of those change.
  *
  * On web/PWA this hook is inert (`supported === false`); the web-push path
- * (usePushNotifications) handles those.
+ * (usePushNotifications) handles those. It is also inert on iOS, which has no
+ * equivalent service yet (and no Web Push in WKWebView) — see
+ * {@link hasNativeNotificationService}.
  */
 export function useNativeNotifications(): UseNativeNotificationsReturn {
-  const supported = isNativeRuntime();
+  const supported = hasNativeNotificationService();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { data: groupList } = useUserGroupList();

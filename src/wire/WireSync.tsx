@@ -22,7 +22,7 @@ import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { hasNativeNotificationService } from "@/hooks/useNativeNotifications";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { onFoldedWrite, readFolded } from "@/lib/foldedCache";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
@@ -572,7 +572,7 @@ export function WireSync() {
 
   // ── APK bridge: the persistent service is a funnel into the same ingest ──
   useEffect(() => {
-    if (!isNativeRuntime()) return;
+    if (!hasNativeNotificationService()) return;
     let cancelled = false;
 
     const ingest = (raw: string[], live: boolean): Promise<void> => {

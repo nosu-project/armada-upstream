@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   enableNativeNotifications,
-  isNativeRuntime,
+  hasNativeNotificationService,
   nativeNotificationIntent,
 } from "@/hooks/useNativeNotifications";
 import {
@@ -121,7 +121,7 @@ export function LoginSetup() {
   // is gone.
   useEffect(() => {
     if (!user || syncing) return;
-    if (!isNativeRuntime()) return;
+    if (!hasNativeNotificationService()) return;
     let cancelled = false;
     (async () => {
       try {

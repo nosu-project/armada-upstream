@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { hasNativeNotificationService } from "@/hooks/useNativeNotifications";
 import { setActiveRooms as setWebActiveRooms } from "@/lib/activeRooms";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 
@@ -49,7 +49,7 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
   useEffect(() => {
     return () => {
       setWebActiveRooms([]);
-      if (isNativeRuntime()) {
+      if (hasNativeNotificationService()) {
         ArmadaNotification.setActiveRooms({ roomKeys: [] }).catch(() => undefined);
       }
     };
@@ -62,7 +62,7 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
       // In-process (web/desktop foreground notifier) — cheap, always.
       setWebActiveRooms(next);
       // Native background service — only where it exists.
-      if (isNativeRuntime()) {
+      if (hasNativeNotificationService()) {
         ArmadaNotification.setActiveRooms({ roomKeys: next }).catch((err) => {
           console.warn("[active-room] setActiveRooms failed:", err);
         });

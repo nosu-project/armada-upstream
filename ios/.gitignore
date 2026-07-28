@@ -1,0 +1,21 @@
+App/build
+App/Pods
+App/output
+App/App/public
+DerivedData
+xcuserdata
+.swiftpm
+.DS_Store
+
+# iOS signing material — never commit. Injected via CI/CD variables.
+*.mobileprovision
+*.p12
+*.cer
+ExportOptions.plist
+
+# Cordova plugins for Capacitor
+capacitor-cordova-ios-plugins
+
+# Generated Config files
+App/App/capacitor.config.json
+App/App/config.xml

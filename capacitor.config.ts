@@ -15,6 +15,16 @@ const config: CapacitorConfig = {
     // Match the app's dark theme background (index.html theme-color #100b15).
     backgroundColor: '#100b15',
   },
+  ios: {
+    // Match the app's dark theme background (index.html theme-color #100b15),
+    // so the gap behind the WebView during launch/rubber-band scrolling is the
+    // app color rather than white.
+    backgroundColor: '#100b15',
+    // The WebView owns its own insets: the app pads with
+    // env(safe-area-inset-*) (see index.css), so UIKit must not additionally
+    // inset the scroll view or the top chrome gets double padding.
+    contentInset: 'never',
+  },
   plugins: {
     // Edge-to-edge + safe-area insets. This plugin makes env(safe-area-inset-*)
     // report correct values on modern Chromium (>=140) and falls back to
