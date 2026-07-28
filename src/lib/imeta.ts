@@ -17,6 +17,8 @@ export interface ImetaEntry {
   blurhash?: string;
   /** Original filename from the `name` field (used to infer a MIME when `m` is absent). */
   name?: string;
+  /** Declared byte size from the NIP-94 `size` field (sender-reported; display only). */
+  size?: string;
   /**
    * Client-side blob encryption metadata, as sent by Vector/0xChat for
    * Blossom attachments: the blob at `url` is AES-GCM ciphertext, decryptable
@@ -62,6 +64,7 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
         dim: entry.dim,
         blurhash: entry.blurhash,
         name: entry.name,
+        size: entry.size,
         encryption: enc,
       });
     }
@@ -96,6 +99,7 @@ export function parseFileMessageTags(url: string, tags: string[][]): ImetaEntry 
     dim: flat.dim,
     blurhash: flat.blurhash,
     name: flat.name,
+    size: flat.size,
     encryption: parseImetaEncryption(flat),
   };
 }

@@ -7,6 +7,7 @@ import { AudioMessage } from "@/components/chat/AudioMessage";
 import { CashuToken } from "@/components/chat/CashuToken";
 import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
+import { FileAttachment } from "@/components/chat/FileAttachment";
 import { InviteEmbed } from "@/components/chat/InviteEmbed";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
@@ -101,6 +102,7 @@ type ContentToken =
   | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string }
   | { type: "image-gallery"; urls: ImageRef[] }
   | { type: "media-embed"; url: string; encryption?: ImetaEncryption; mime?: string }
+  | { type: "file-embed"; url: string; encryption?: ImetaEncryption; mime?: string; name?: string; size?: number }
   | { type: "link-embed"; url: string }
   | { type: "invite-embed"; url: string }
   | { type: "inline-link"; url: string }
@@ -497,6 +499,31 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             continue;
           }
 
+          // A URL that carries an imeta entry but isn't image/audio/video is a
+          // generic file attachment (PDF, zip, doc): render a download-only
+          // card. Gated on `inlineImeta` so ordinary pasted links stay link
+          // cards; webxdc is excluded (it has its own inline handling).
+          if (inlineImeta && !inlineImeta.webxdc && imetaMime !== "application/x-webxdc") {
+            if (out.length > 0) {
+              const prev = out[out.length - 1];
+              if (prev.type === "text") {
+                prev.value = prev.value.replace(/\s+$/, "");
+              }
+            }
+            out.push({
+              type: "file-embed",
+              url,
+              encryption: inlineImeta.encryption,
+              mime: imetaMime ?? inlineImeta.mime,
+              name: inlineImeta.name,
+              size: inlineImeta.size ? Number(inlineImeta.size) : undefined,
+            });
+            lastIndex = index + fullMatch.length;
+            const leadingWs = segment.substring(lastIndex).match(/^\s+/);
+            if (leadingWs) lastIndex += leadingWs[0].length;
+            continue;
+          }
+
           // A URL gets a preview card when nothing meaningful follows it on
           // the same line; mid-sentence URLs stay plain links.
           const afterUrl = segment.substring(index + fullMatch.length);
@@ -646,6 +673,19 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
         } else if (mime?.startsWith("audio/") || mime?.startsWith("video/")) {
           result.push({ type: "media-embed", url, encryption: entry.encryption, mime });
           renderedUrls.add(url);
+        } else if (!entry.webxdc && mime !== "application/x-webxdc") {
+          // Any other imeta attachment (PDF, zip, arbitrary document) is a
+          // generic file — render a download-only card. webxdc is excluded
+          // (handled inline as its own attachment type).
+          result.push({
+            type: "file-embed",
+            url,
+            encryption: entry.encryption,
+            mime: mime ?? entry.mime,
+            name: entry.name,
+            size: entry.size ? Number(entry.size) : undefined,
+          });
+          renderedUrls.add(url);
         }
       }
     }
@@ -660,6 +700,7 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     for (let i = 0; i < result.length; i++) {
       const token = result[i];
       const isBlock = token.type === "image-embed" || token.type === "media-embed"
+        || token.type === "file-embed"
         || token.type === "nevent-embed"
         || (token.type === "naddr-embed" && (!token.url || token.addr.kind === 30030))
         || token.type === "lightning-invoice"
@@ -996,6 +1037,19 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
             blurhash={imeta?.blurhash}
             mime={mediaMime}
             encryption={encryption}
+          />
+        );
+      }
+      case "file-embed": {
+        if (inQuote) return inlineLink(key, token.url);
+        return (
+          <FileAttachment
+            key={key}
+            url={token.url}
+            mime={token.mime}
+            name={token.name}
+            size={token.size}
+            encryption={token.encryption}
           />
         );
       }
