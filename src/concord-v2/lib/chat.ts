@@ -403,7 +403,11 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
       if (e.author !== msg.author) continue;
       if (!best || e.ms > best.ms) best = e;
     }
-    if (best) byId.set(id, { ...msg, content: best.content });
+    if (best) {
+      const tags = msg.tags.filter(([name]) => name !== "edited");
+      tags.push(["edited", String(Math.floor(best.ms / 1000))]);
+      byId.set(id, { ...msg, content: best.content, tags });
+    }
   }
 
   // In-batch deletes: self-delete, or an authorized moderator delete.
