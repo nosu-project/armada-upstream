@@ -255,4 +255,74 @@ describe("concord-v2 rumor store", () => {
     expect(mentions.map((r) => r.content)).toEqual(["hey @me"]);
     expect(mentions[0].channelIdHex).toBe(idHex);
   });
+
+  // ── Cross-plane splice ────────────────────────────────────────────────────
+  //
+  // The chat decode path proves a rumor's `channel` tag matches the key that
+  // decrypted its wrap (`checkChannelBinding`). The PLANE openers do not — they
+  // bind nothing but the stream address and filter no kinds. Since both write
+  // into this one store, and chat reads are `{ kinds, #channel }`, a plane
+  // rumor carrying a `channel` tag would be served into that channel's timeline.
+
+  it("refuses a plane rumor carrying a channel tag (cross-plane splice)", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const mallory = signer();
+
+    // A legitimate message, so the channel isn't trivially empty.
+    writeRumors(
+      await openChatBatch([await wrapChat(chatRumor(idHex, alice, KIND_MESSAGE, "real", 1000), channel, alice)], channel),
+    );
+    await eventually(() => queryChannelRumors(idHex, { limit: 100 }), (r) => r.length === 1);
+
+    // Mallory holds a COMMUNITY-wide plane key (control/guestbook/rekey) but no
+    // key for this channel. She wraps a chat-kind rumor on her plane, tagged
+    // with the victim channel's id.
+    const plane = channelGroupKey(new Uint8Array(32).fill(9), new Uint8Array(32).fill(9), 0);
+    const spliced = buildRumor({
+      kind: KIND_MESSAGE,
+      content: "spliced",
+      tags: channelBindingTags(idHex, 0n),
+      pubkey: mallory.pubkey,
+      ms: 9000,
+    });
+    const wrap = wrapSeal(await sealRumor(spliced, KIND_SEAL_PLAINTEXT, plane, mallory), plane);
+    await writeOpened([openWrap(wrap, plane)]);
+
+    const got = await eventually(() => queryChannelRumors(idHex, { limit: 100 }), (r) => r.length > 1);
+    expect(got.map((r) => r.content)).toEqual(["real"]);
+  });
+
+  it("refuses a rumor forging the synthetic `stream` provenance tag", async () => {
+    const alice = signer();
+    const mallory = signer();
+    const victimPlane = channelGroupKey(new Uint8Array(32).fill(10), new Uint8Array(32).fill(10), 0);
+    const malloryPlane = channelGroupKey(new Uint8Array(32).fill(11), new Uint8Array(32).fill(11), 0);
+
+    // A rumor's own tags are spread BEFORE the synthetic ones, so a forged
+    // `stream` both lands in the index and wins the read-back lookup — writing
+    // into a plane whose key the author does not hold.
+    const forged = buildRumor({
+      kind: 3308,
+      content: "{}",
+      tags: [["vsk", "0"], ["eid", "ab".repeat(32)], ["ev", "1"], ["stream", victimPlane.pk]],
+      pubkey: mallory.pubkey,
+      ms: null,
+    });
+    const wrap = wrapSeal(await sealRumor(forged, KIND_SEAL_PLAINTEXT, malloryPlane, mallory), malloryPlane);
+    await writeOpened([openWrap(wrap, malloryPlane)]);
+
+    // And one honest edition on the victim's plane, so the query isn't vacuous.
+    const honest = buildRumor({
+      kind: 3308,
+      content: "{}",
+      tags: [["vsk", "0"], ["eid", "ba".repeat(32)], ["ev", "1"]],
+      pubkey: alice.pubkey,
+      ms: null,
+    });
+    await writeOpened([openWrap(wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, victimPlane, alice), victimPlane), victimPlane)]);
+
+    const got = await eventually(() => queryByStreams([victimPlane.pk]), (r) => r.length > 1);
+    expect(got.map((e) => e.rumorId)).toEqual([honest.id]);
+  });
 });

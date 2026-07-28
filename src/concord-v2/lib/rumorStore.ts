@@ -49,6 +49,9 @@ const TAG_SEAL = "seal";
 const TAG_WRAP = "wrap";
 const TAG_SEALKIND = "sealkind";
 
+/** The chat plane's channel binding (CORD-03 §3) — the tag chat reads index. */
+const TAG_CHANNEL = "channel";
+
 /** Multi-letter tags chat/plane queries need indexed (beyond single-letter). */
 const QUERYABLE_TAGS = new Set(["channel", TAG_STREAM, "e", "q", "p", "k"]);
 
@@ -347,18 +350,49 @@ export async function queryByStreams(
 }
 
 /**
- * Persist opened stream events (any plane). Kind-5 deletes trigger the store's
- * self-only NIP-09 removal of their targets. Best-effort: failures are
- * swallowed. Resolves once the batched write commits, so callers that need to
- * act on the durable result (e.g. ring the bus) can await it; most fire and
- * forget.
+ * True if the rumor carries a tag name the store synthesizes for itself. The
+ * rumor's own tags are spread FIRST in {@link openedToStored}, so a forged
+ * `stream` would both land in the index and win `storedToOpened`'s `find` —
+ * letting any keyholder on any plane publish a rumor that reads back as
+ * belonging to a stream address they hold no key for. No legitimate rumor on
+ * any plane sets these names.
  */
-export function writeOpened(opened: OpenedEvent[]): Promise<void> {
+function forgesProvenance(opened: OpenedEvent): boolean {
+  return opened.tags.some((t) => PROVENANCE.has(t[0]));
+}
+
+/** Store a batch verbatim. Best-effort: failures are swallowed. */
+function writeStored(opened: OpenedEvent[]): Promise<void> {
   if (opened.length === 0) return Promise.resolve();
   const s = rumorStore();
   return Promise.all(opened.map((o) => s.event(openedToStored(o))))
     .then(() => undefined)
     .catch(() => undefined);
+}
+
+/**
+ * Persist opened stream events (any plane EXCEPT chat — see {@link writeRumors}).
+ * Kind-5 deletes trigger the store's self-only NIP-09 removal of their targets.
+ * Best-effort: failures are swallowed. Resolves once the batched write commits,
+ * so callers that need to act on the durable result (e.g. ring the bus) can
+ * await it; most fire and forget.
+ *
+ * Rejects any rumor carrying a `channel` tag. Only chat/typing/voice rumors
+ * bind a channel, and only `checkChannelBinding` — which the chat decode path
+ * runs before this store ever sees them — proves that binding matches the key
+ * that decrypted the wrap. The plane openers (`openPlaneWraps`) enforce no such
+ * binding and apply no kind filter, so without this a holder of a community's
+ * control / guestbook / rekey key could wrap a chat-kind rumor tagged with ANY
+ * channel id, and it would be indexed under `#channel` and served by
+ * {@link queryChannelRumors} into that channel's timeline — including a private
+ * channel, or a channel in another community, whose stream key they do not
+ * hold. Reject rather than strip, so stored tags stay byte-identical to the
+ * rumor's.
+ */
+export function writeOpened(opened: OpenedEvent[]): Promise<void> {
+  return writeStored(
+    opened.filter((o) => !forgesProvenance(o) && !o.tags.some((t) => t[0] === TAG_CHANNEL)),
+  );
 }
 
 /**
@@ -373,9 +407,13 @@ export function writeOpened(opened: OpenedEvent[]): Promise<void> {
  * the just-written rows.
  */
 export function writeRumors(opened: OpenedChat[]): void {
-  if (opened.length === 0) return;
-  const channels = new Set(opened.map((o) => o.channelIdHex).filter(Boolean));
-  void writeOpened(opened).then(() => {
+  // The `channel` binding rides through: the chat decode path already proved it
+  // equals the coordinate whose key opened the wrap (`checkChannelBinding`).
+  // Forged provenance still can't.
+  const safe = opened.filter((o) => !forgesProvenance(o));
+  if (safe.length === 0) return;
+  const channels = new Set(safe.map((o) => o.channelIdHex).filter(Boolean));
+  void writeStored(safe).then(() => {
     if (channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
   });
 }

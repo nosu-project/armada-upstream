@@ -2002,10 +2002,15 @@ public class NotificationRelayService extends Service {
             // the wrap (a spliced/foreign payload).
             String author = rumor.optString("pubkey");
             if (author.isEmpty() || !author.equals(seal.optString("pubkey"))) return null;
+            // Absent binding fails CLOSED, matching the WebView's
+            // checkChannelBinding: every chat rumor it will accept carries both
+            // tags, so requiring them here can only drop what it drops too —
+            // and keeps the notification from naming a channel the payload
+            // never committed to.
             String ch = tagValue(rumor, "channel");
             String ep = tagValue(rumor, "epoch");
-            if (ch != null && !st.channelId.equals(ch)) return null;
-            if (ep != null && !st.epoch.isEmpty() && !st.epoch.equals(ep)) return null;
+            if (ch == null || !st.channelId.equals(ch)) return null;
+            if (ep == null || (!st.epoch.isEmpty() && !st.epoch.equals(ep))) return null;
             return rumor;
         } catch (Exception e) {
             return null;
