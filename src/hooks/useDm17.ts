@@ -81,7 +81,7 @@ import {
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { SendStatus } from "@/hooks/useGroupMessages";
-import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
 
 /** Minimum interval between inbox relay scans (wire-bus invalidations stay local). */
 const SYNC_MIN_INTERVAL_MS = 30_000;
@@ -381,6 +381,44 @@ export async function syncDm17Inbox(ctx: SyncCtx, opts?: { force?: boolean; inte
 }
 
 /**
+ * Read gift wraps from every inbox relay INDEPENDENTLY and merge them (deduped
+ * by id — the same wrap lands on several of the user's relays).
+ *
+ * NOT `group(relays).query(...)`: the pooled group query aborts the WHOLE
+ * fan-out `eoseTimeout` ms (300 in this app) after the FIRST relay EOSEs
+ * (NPool.query forces the pool's eoseTimeout). A warm no-auth DM relay
+ * (e.g. relay.primal.net) EOSEs almost instantly, guillotining any auth-gated
+ * DM relay in the same set before it can finish its NIP-42
+ * challenge→sign→re-REQ round-trip — so those relays' wraps are silently
+ * dropped. That starves the APK (cold/reconnecting sockets need the handshake
+ * every wake) far more than a long-lived desktop client whose gated sockets are
+ * already authenticated and answer within 300ms.
+ *
+ * A per-relay `NRelay1.query` has no cross-relay timer: on `auth-required` it
+ * waits for the AUTH handshake and re-sends the REQ, bounded only by `signal`
+ * (NRelay1.receive → retrySubAfterAuth). So each relay gets the full budget and
+ * a fast relay can never starve a slow one.
+ */
+async function queryWrapsPerRelay(
+  ctx: SyncCtx,
+  filter: NostrFilter,
+  signal: AbortSignal,
+): Promise<NostrEvent[]> {
+  const byId = new Map<string, NostrEvent>();
+  await Promise.all(
+    ctx.relays.map(async (url) => {
+      try {
+        const evs = await ctx.nostr.relay(url).query([filter], { signal });
+        for (const e of evs) byId.set(e.id, e);
+      } catch {
+        // Best-effort per relay: one dead or slow relay never sinks the pass.
+      }
+    }),
+  );
+  return [...byId.values()];
+}
+
+/**
  * One inbox pass. Resolves true only when the relay query completed and its
  * wraps were consumed — a throw, or a consent deferral, resolves false so
  * callers never mistake a failed pass for "synced".
@@ -400,9 +438,7 @@ async function runInboxSync(
     };
     if (since !== undefined) filter.since = since;
 
-    const wraps = await ctx.nostr
-      .group(ctx.relays)
-      .query([filter], { signal: AbortSignal.timeout(8000) });
+    const wraps = await queryWrapsPerRelay(ctx, filter, AbortSignal.timeout(8000));
     const seen = seenSetFor(ctx.self);
     const fresh = wraps.filter((w) => !seen.has(w.id));
 
@@ -446,11 +482,11 @@ async function pageOlderDmWraps(
   until: number,
   interactive: boolean,
 ): Promise<{ oldest?: number; exhausted: boolean }> {
-  const wraps = await ctx.nostr
-    .group(ctx.relays)
-    .query([{ kinds: [1059], "#p": [ctx.self], until, limit: INBOX_PAGE }], {
-      signal: AbortSignal.timeout(8000),
-    });
+  const wraps = await queryWrapsPerRelay(
+    ctx,
+    { kinds: [1059], "#p": [ctx.self], until, limit: INBOX_PAGE },
+    AbortSignal.timeout(8000),
+  );
   if (wraps.length === 0) return { exhausted: true };
   const oldest = Math.min(...wraps.map((w) => w.created_at)) - 1;
   await loadSeenWraps(ctx.self);

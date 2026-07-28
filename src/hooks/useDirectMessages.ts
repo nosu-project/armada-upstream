@@ -21,7 +21,7 @@ import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /** NIP-04 encrypted direct message kind. */
 export const KIND_DM = 4;
@@ -400,6 +400,34 @@ async function queryRelaysDmPage(
   });
 
   return { events: [...byId.values()], cursors: nextCursors };
+}
+
+/**
+ * Query every relay individually for a fixed filter set and merge events by id.
+ *
+ * Same reason as {@link queryRelaysDmPage} but with no cursor bookkeeping (used
+ * for thread history and older-page pulls): a pooled `group(relays).query`
+ * aborts the WHOLE fan-out `eoseTimeout` ms (300 in this app) after the FIRST
+ * relay EOSEs (NPool.query forces the pool's eoseTimeout), which guillotines an
+ * auth-gated relay before it can finish its NIP-42 challenge→sign→re-REQ — so
+ * its messages are silently dropped, worst on a cold/reconnecting mobile
+ * socket. Per-relay `NRelay1.query` has no cross-relay timer: each relay gets
+ * the full `signal` budget. Best-effort per relay: a failure contributes nothing.
+ */
+async function queryRelaysMerged(
+  nostr: NostrPool,
+  relays: string[],
+  filters: NostrFilter[],
+  signal: AbortSignal,
+): Promise<NostrEvent[]> {
+  const byId = new Map<string, NostrEvent>();
+  const results = await Promise.allSettled(
+    relays.map((url) => nostr.relay(url).query(filters, { signal })),
+  );
+  for (const r of results) {
+    if (r.status === "fulfilled") for (const e of r.value) byId.set(e.id, e);
+  }
+  return [...byId.values()];
 }
 
 /**
@@ -834,12 +862,14 @@ export function useDirectMessages(peer: string | undefined) {
           // kind-4 set): sent = `authors:[self] #p:[peer]`, received =
           // `authors:[peer] #p:[self]`. The `authors` constraint keeps the query
           // to this one conversation and never pulls a stranger's DMs.
-          const events = await nostr.group(relays).query(
+          const events = await queryRelaysMerged(
+            nostr,
+            relays,
             [
               { kinds: [KIND_DM], authors: [self!], "#p": [peer!], limit: 1000 },
               { kinds: [KIND_DM], authors: [peer!], "#p": [self!], limit: 1000 },
             ],
-            { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+            AbortSignal.any([signal, AbortSignal.timeout(8000)]),
           );
           const inThread = events.filter((e) => dmCounterparty(e, self!) === peer);
           if (signal.aborted || inThread.length === 0) return;
@@ -938,12 +968,14 @@ export function useDirectMessages(peer: string | undefined) {
     loadingRef.current = true;
     setIsLoadingOlder(true);
     try {
-      const events = await nostr.group(relays).query(
+      const events = await queryRelaysMerged(
+        nostr,
+        relays,
         [
           { kinds: [KIND_DM], authors: [self], "#p": [peer], until, limit: 500 },
           { kinds: [KIND_DM], authors: [peer], "#p": [self], until, limit: 500 },
         ],
-        { signal: AbortSignal.timeout(8000) },
+        AbortSignal.timeout(8000),
       );
 
       if (events.length === 0) {
