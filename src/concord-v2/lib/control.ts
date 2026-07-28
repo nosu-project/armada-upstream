@@ -708,6 +708,50 @@ export function hasForeignLiveLinks(folded: FoldedControl, viewer: string, exclu
  * republishes its bundle) is the lesser harm against an attack that otherwise
  * continues indefinitely.
  */
+/**
+ * Whether an actor's `vac` satisfies the CORD-04 §5 sync floor against a folded
+ * control plane — the read-side half of an authority action taken OUTSIDE the
+ * roster fold (a moderation delete, a kick).
+ *
+ * COMPLETENESS, NOT AUTHORIZATION. It answers "have I synced enough of this
+ * actor's Grant to judge them", never "may they act" — the caller still resolves
+ * rank against the CURRENT roster, so citing an old-but-once-valid Grant
+ * grandfathers nobody and a since-demoted actor is refused regardless.
+ *
+ * Deliberately mirrors Vector's `authority_citation_satisfied` case for case;
+ * the two clients diverging here means one honors a moderation action the other
+ * silently ignores, which is invisible to both sides.
+ *
+ * NOT usable inside the roster fold itself: on a bootstrap there are no folded
+ * heads yet, so gating editions on them refuses every non-owner edition and the
+ * roster can never fold at all. The in-fold path indexes grants from the same
+ * pass instead (see `citationOk` in {@link foldControlState}).
+ */
+export function citationSatisfied(
+  folded: Pick<FoldedControl, "heads" | "ownerHex">,
+  communityId: Uint8Array,
+  actorHex: string,
+  citation: AuthorityCitation | undefined,
+): boolean {
+  // The owner is proven by the community_id itself — no Grant exists to cite.
+  if (actorHex === folded.ownerHex) return true;
+  if (!citation) return false;
+  // It must name the actor's OWN Grant coordinate: citing a foreign edition we
+  // happen to hold cannot borrow completeness.
+  const eid = bytesToHex(grantLocator(communityId, hex32(actorHex)));
+  if (bytesToHex(citation.entityId) !== eid) return false;
+  const head = folded.heads.get(eid);
+  if (!head) return false;
+  // Synced PAST it: the roster check already reflects the later head.
+  if (head.version > citation.version) return true;
+  // Synced to exactly it: the cited hash must be the edition that won our fold,
+  // else they cited a non-canonical fork of their own Grant.
+  if (head.version === citation.version) return bytesToHex(head.hash) === bytesToHex(citation.editionHash);
+  // BEHIND it — we cannot confirm the authority, so the action parks and
+  // self-heals when the Grant arrives. Fail closed.
+  return false;
+}
+
 export function banShouldRotate(
   folded: FoldedControl | undefined,
   viewer: string,

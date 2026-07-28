@@ -157,6 +157,83 @@ describe("chat plane (CORD-03)", () => {
     expect(folded.messages.length).toBe(0);
   });
 
+  it("carries a moderation delete's citation through the fold, and parks an uncited one", async () => {
+    // CORD-04 §5: a delete of someone else's message is an authority action and
+    // cites the Grant it acts under. The fold used to collapse deletes to a bare
+    // author set, which threw the citation away before anything could check it —
+    // so a moderator whose demotion this client had not synced was honored.
+    const channel = makeChannel();
+    const alice = signer();
+    const mod = signer();
+    const eid = "ab".repeat(32);
+    const hash = "cd".repeat(32);
+
+    const msg = chatRumor(alice, KIND_MESSAGE, "rule-breaking", 1000);
+    const cited = chatRumor(mod, KIND_DELETE, "", 2000, [["e", msg.id], ["vac", eid, "3", hash]]);
+    const wraps = await Promise.all([wrapChat(msg, channel, alice), wrapChat(cited, channel, mod)]);
+    const opened = await openChatBatch(wraps, channel);
+
+    // The citation reaches the authority check intact.
+    let seen: { eid?: string; version?: string } = {};
+    const folded = foldTimeline(opened, {
+      banned: new Set<string>(),
+      canDelete: (_d, _a, citation) => {
+        seen = citation
+          ? { eid: bytesToHex(citation.entityId), version: citation.version.toString() }
+          : {};
+        return Boolean(citation);
+      },
+    });
+    expect(seen.eid, "the fold must hand the parsed vac to the authority check").toBe(eid);
+    expect(seen.version).toBe("3");
+    expect(folded.messages.length).toBe(0);
+
+    // An UNCITED delete from the same moderator parks: the checker sees no
+    // citation, so it refuses, and the message survives.
+    const uncited = chatRumor(mod, KIND_DELETE, "", 2000, [["e", msg.id]]);
+    const wraps2 = await Promise.all([wrapChat(msg, channel, alice), wrapChat(uncited, channel, mod)]);
+    const parked = foldTimeline(await openChatBatch(wraps2, channel), {
+      banned: new Set<string>(),
+      canDelete: (_d, _a, citation) => Boolean(citation),
+    });
+    expect(parked.messages.length, "an uncited moderation delete must not be honored").toBe(1);
+  });
+
+  it("prefers a cited delete when the same actor also published an uncited one", async () => {
+    // Otherwise a duplicate — a relay echo, or a client that retried before the
+    // fold gained citations — masks the delete that actually carries authority.
+    const channel = makeChannel();
+    const alice = signer();
+    const mod = signer();
+    const msg = chatRumor(alice, KIND_MESSAGE, "target", 1000);
+    const uncited = chatRumor(mod, KIND_DELETE, "", 2000, [["e", msg.id]]);
+    const cited = chatRumor(mod, KIND_DELETE, "", 2100, [["e", msg.id], ["vac", "ab".repeat(32), "1", "cd".repeat(32)]]);
+
+    const wraps = await Promise.all([
+      wrapChat(msg, channel, alice),
+      wrapChat(uncited, channel, mod),
+      wrapChat(cited, channel, mod),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel), {
+      banned: new Set<string>(),
+      canDelete: (_d, _a, citation) => Boolean(citation),
+    });
+    expect(folded.messages.length, "the cited duplicate must win").toBe(0);
+  });
+
+  it("still honors a self-delete, which is not an authority action", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const msg = chatRumor(alice, KIND_MESSAGE, "mine", 1000);
+    const del = chatRumor(alice, KIND_DELETE, "", 2000, [["e", msg.id]]);
+    const wraps = await Promise.all([wrapChat(msg, channel, alice), wrapChat(del, channel, alice)]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel), {
+      banned: new Set<string>(),
+      canDelete: () => false, // no moderation authority at all
+    });
+    expect(folded.messages.length, "authors always delete their own").toBe(0);
+  });
+
   it("tallies reactions per target with custom-emoji URLs", async () => {
     const channel = makeChannel();
     const alice = signer();

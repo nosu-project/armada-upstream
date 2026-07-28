@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
+import { citationFor, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import {
@@ -25,6 +25,8 @@ import {
   peekPendingWraps,
   ackPendingWraps,
 } from "@/concord-v2/lib/rumorStore";
+import { citationToTag, type AuthorityCitation } from "@/concord-v2/lib/edition";
+import { citationSatisfied } from "@/concord-v2/lib/control";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
@@ -208,13 +210,20 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
   return useMemo(
     () => ({
       banned: folded?.banned ?? new Set<string>(),
-      canDelete: (deleter: string, author: string) =>
-        Boolean(
-          folded &&
-            canActOnMember(folded.roster, deleter, folded.ownerHex, author, Permissions.MANAGE_MESSAGES),
-        ),
+      canDelete: (deleter: string, author: string, citation?: AuthorityCitation) => {
+        if (!folded || !community) return false;
+        // Authorization, resolved against the CURRENT roster. The citation is a
+        // completeness floor and never a grant of rank, so a since-demoted actor
+        // is refused here no matter what they cited (CORD-04 §5).
+        if (!canActOnMember(folded.roster, deleter, folded.ownerHex, author, Permissions.MANAGE_MESSAGES)) {
+          return false;
+        }
+        // …then the sync floor: have we read enough of their Grant to trust the
+        // verdict above? A stale roster would otherwise honor a demoted mod.
+        return citationSatisfied(folded, community.id, deleter, citation);
+      },
     }),
-    [folded],
+    [folded, community],
   );
 }
 
@@ -818,6 +827,9 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
 export function useMessageActions2(community: CommunityV2 | undefined, channel: ChannelV2 | undefined) {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
+  // The fold supplies this actor's own Grant head, which a moderation delete
+  // cites (CORD-04 §5).
+  const { data: folded } = useControlFold2(community);
   const channelIdHex = channel?.idHex ?? null;
   const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
   const { mutateAsync: send } = useSendMessage2(community, channel);
@@ -863,15 +875,28 @@ export function useMessageActions2(community: CommunityV2 | undefined, channel: 
   const deleteMessage = useCallback(
     (id: string) => {
       if (!user || !community || !channel) return;
+      // A delete of someone ELSE's message is an authority action, so it cites
+      // the Grant it acts under (CORD-04 §5) — without it a peer whose roster is
+      // one sweep stale cannot tell a moderator from a demoted one, and refuses
+      // the delete. A self-delete is not an authority action and never cites.
+      const target = (queryClient.getQueryData<OpenedChat[]>(channelKey(channelIdHex)) ?? [])
+        .find((m) => m.rumorId === id);
+      const moderating = Boolean(target && target.author !== user.pubkey);
+      const citation = moderating ? citationFor(community, folded, user.pubkey) : undefined;
       queryClient.setQueryData<string[]>(deletedKey(channelIdHex), (old = []) =>
         old.includes(id) ? old : [...old, id],
       );
-      void send({ content: "", kind: KIND_DELETE, target: id }).catch(() => {
+      void send({
+        content: "",
+        kind: KIND_DELETE,
+        target: id,
+        extraTags: citation ? [citationToTag(citation)] : undefined,
+      }).catch(() => {
         // Couldn't publish the delete — unhide so the user knows.
         queryClient.setQueryData<string[]>(deletedKey(channelIdHex), (old = []) => old.filter((d) => d !== id));
       });
     },
-    [user, community, channel, channelIdHex, queryClient, send],
+    [user, community, channel, channelIdHex, queryClient, send, folded],
   );
 
   return { retry, discard, deleteMessage };

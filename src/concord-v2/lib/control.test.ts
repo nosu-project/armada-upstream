@@ -13,6 +13,7 @@ import {
   banShouldRotate,
   hasForeignLiveLinks,
   isCommunityPublic,
+  citationSatisfied,
   isDissolved,
   openControlWraps,
   sealDissolved,
@@ -1310,6 +1311,66 @@ describe("control plane fold (CORD-04)", () => {
       owner.pubkey,
     );
     expect(folded.bannedAt.has(owner.pubkey)).toBe(false);
+  });
+});
+
+describe("citationSatisfied (CORD-04 §5 sync floor)", () => {
+  // Mirrors Vector's `authority_citation_satisfied` case for case. The two
+  // clients diverging here means one honors a moderation action the other
+  // silently ignores, invisibly to both.
+  const owner = "0".repeat(64);
+  const mod = "1".repeat(64);
+  const cid = new Uint8Array(32).fill(7);
+  const eid = grantLocator(cid, hex32(mod));
+  const hash = new Uint8Array(32).fill(0xaa);
+
+  const foldWith = (heads: Array<[string, { version: bigint; hash: Uint8Array }]>) =>
+    ({ ownerHex: owner, heads: new Map(heads) }) as unknown as Parameters<typeof citationSatisfied>[0];
+
+  const cite = (version: bigint, h = hash, entity = eid) => ({ entityId: entity, version, editionHash: h });
+
+  it("the owner cites nothing and is always satisfied", () => {
+    expect(citationSatisfied(foldWith([]), cid, owner, undefined)).toBe(true);
+  });
+
+  it("a non-owner citing nothing is refused", () => {
+    expect(citationSatisfied(foldWith([[bytesToHex(eid), { version: 5n, hash }]]), cid, mod, undefined)).toBe(false);
+  });
+
+  it("passes when synced PAST the cited version", () => {
+    // Whether they are STILL authorized is the caller's roster check, which
+    // already reflects the later head.
+    const f = foldWith([[bytesToHex(eid), { version: 9n, hash: new Uint8Array(32).fill(0xbb) }]]);
+    expect(citationSatisfied(f, cid, mod, cite(3n))).toBe(true);
+  });
+
+  it("at the exact cited version, the hash must be the one that won our fold", () => {
+    const f = foldWith([[bytesToHex(eid), { version: 3n, hash }]]);
+    expect(citationSatisfied(f, cid, mod, cite(3n))).toBe(true);
+    expect(
+      citationSatisfied(f, cid, mod, cite(3n, new Uint8Array(32).fill(0xee))),
+      "a non-canonical fork of their own Grant",
+    ).toBe(false);
+  });
+
+  it("PARKS when our head is behind the cited version", () => {
+    // Fail closed: we cannot confirm the authority yet. Self-heals on sync.
+    const f = foldWith([[bytesToHex(eid), { version: 2n, hash }]]);
+    expect(citationSatisfied(f, cid, mod, cite(3n))).toBe(false);
+  });
+
+  it("refuses a citation naming someone ELSE's Grant", () => {
+    // Completeness can't be borrowed from a foreign edition we happen to hold.
+    const foreign = grantLocator(cid, hex32("2".repeat(64)));
+    const f = foldWith([
+      [bytesToHex(eid), { version: 5n, hash }],
+      [bytesToHex(foreign), { version: 5n, hash }],
+    ]);
+    expect(citationSatisfied(f, cid, mod, cite(5n, hash, foreign))).toBe(false);
+  });
+
+  it("refuses when the actor's Grant is absent entirely", () => {
+    expect(citationSatisfied(foldWith([]), cid, mod, cite(1n))).toBe(false);
   });
 });
 
