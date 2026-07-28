@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.42.2] - 2026-07-28
+
+Onboarding is redesigned as guided setup wizards. Calendar events appear as inline cards in chat, GIF previews load as video, and Concord communities surface in the quick switcher. Several fixes improve DM delivery on relays that require authentication, mention jump scrolling, and Concord community integrity.
+
+### Added
+- Calendar events render as inline cards in the chat timeline
+- A bridge indicator on messages relayed from other platforms
+- Concord communities and channels appear in the quick switcher
+- A warning for community admins when an action is attempted without sufficient permission
+
+### Changed
+- Onboarding and post-login prompts are redesigned as step-by-step setup wizards
+- GIF picker previews load as video instead of full-size images
+- GIF picker thumbnails are inert until selected
+- The member list show/hide preference is saved across sessions
+
+### Fixed
+- DM messages are fetched per relay so relays that require authentication are no longer skipped
+- Mention jumps scroll to the correct message again
+- The reaction button stays as the touch target during long-press
+- Retrying a community key rotation resumes the existing rotation instead of forking the community
+- Several Concord community control and integrity fixes
+- Direct invites are scoped to the correct recipient
+
 ## [0.42.1] - 2026-07-27
 
 Unknown-sender direct messages are now held in a separate request tier — visible but quiet, with no avatar loaded until you reply. Community discover cards show when you're already a member. The relay settings section gains descriptions and new toggles for which relay pools the app uses. Creating a community shows which relays it will live on before you submit. The first emoji pack you add no longer fails.
