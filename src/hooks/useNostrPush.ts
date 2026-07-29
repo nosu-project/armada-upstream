@@ -40,9 +40,10 @@ import {
  * (`sw.js`).
  *
  * This hook mirrors the native Android background service's watch set
- * (`useNativeNotifications`): the same groups, mentions-only levels,
- * friends-only DMs, and Concord V1/V2 channels — turned into content-blind
- * subscriptions by `buildPushSubscriptions`, then registered with the server.
+ * (`useNativeNotifications`): the same groups, mentions-only levels, addressed
+ * NIP-17 wraps, friends-only legacy DMs, and Concord V1/V2 channels — turned
+ * into content-blind subscriptions by `buildPushSubscriptions`, then registered
+ * with the server.
  * It self-gates: `supported` is false unless a nostr-push server is configured
  * for this build and the signer can NIP-44.
  *

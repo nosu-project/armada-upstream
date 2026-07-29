@@ -36,8 +36,9 @@ import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
  * gateway): it needs only the Notifications API + permission, so it works in
  * browsers where Web Push is unavailable (Brave with Google push disabled),
  * which otherwise get nothing while the app is open in the background. It fires
- * whether the tab is focused or backgrounded, except for the conversation
- * currently on screen (see the active-room gate).
+ * whether the tab is focused or backgrounded, except for the conversation the
+ * user is currently looking at in a focused Armada window (see the active-room
+ * gate).
  *
  * Gating (all must pass to notify):
  *   - the master foreground intent is on;
@@ -227,7 +228,8 @@ export function useForegroundNotifications(): void {
         // already read past this message, don't notify.
         if (readKey && (c.readState[readKey] ?? 0) >= cand.createdAt) continue;
 
-        // On-screen suppression: the room the user is looking at (tab visible).
+        // On-screen suppression: only while the Armada window is focused and
+        // the user is actually looking at this room.
         if (isRoomActive(roomKey)) continue;
 
         // Dedupe against what we've already surfaced for this room.

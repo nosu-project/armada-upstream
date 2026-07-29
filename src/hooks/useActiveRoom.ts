@@ -23,12 +23,13 @@ import { ArmadaNotification } from "@/lib/nativeNotifications";
  * The service holds the keys only on its live instance, so killing the app or
  * the service immediately resumes notifications — no persistence, no TTL.
  *
- * Re-publishes on `visibilitychange` so backgrounding the app (document
- * hidden) clears the active set and foregrounding restores it. Native-only for
- * the background SERVICE; on web/desktop it also mirrors the keys into the
- * in-process active-room registry ({@link setWebActiveRooms}) so the page's
- * foreground notifier (`useForegroundNotifications`) suppresses notifications
- * for the conversation on screen the same way.
+ * Re-publishes on visibility and window-focus changes so backgrounding the app
+ * or moving to another window clears the active set, while foregrounding
+ * restores it. Native-only for the background SERVICE; on web/desktop it also
+ * mirrors the keys into the in-process active-room registry
+ * ({@link setWebActiveRooms}) so the page's foreground notifier
+ * (`useForegroundNotifications`) suppresses notifications only while the user
+ * is actually looking at the conversation.
  *
  * @param roomKeys stable conversation identifiers the WebView is currently
  *                 showing. When empty/undefined, the active set is cleared.
@@ -57,8 +58,8 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
 
   useEffect(() => {
     const publish = () => {
-      const hidden = document.visibilityState === "hidden";
-      const next = hidden ? [] : sig.split("\u0001").filter((k) => k.length > 0);
+      const active = document.visibilityState === "visible" && document.hasFocus();
+      const next = active ? sig.split("\u0001").filter((k) => k.length > 0) : [];
       // In-process (web/desktop foreground notifier) — cheap, always.
       setWebActiveRooms(next);
       // Native background service — only where it exists.
@@ -71,8 +72,12 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
 
     publish();
     document.addEventListener("visibilitychange", publish);
+    window.addEventListener("focus", publish);
+    window.addEventListener("blur", publish);
     return () => {
       document.removeEventListener("visibilitychange", publish);
+      window.removeEventListener("focus", publish);
+      window.removeEventListener("blur", publish);
     };
   }, [sig]);
 }

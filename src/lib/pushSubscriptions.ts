@@ -11,7 +11,8 @@
  * Design goals mirroring native:
  *   - NIP-29 groups by `#h`; "all messages" vs "mentions-only" split so a
  *     mentions-only group only wakes on messages that `#p`-tag the user.
- *   - friends-only DMs (kind 4) scoped to the follow set.
+ *   - NIP-17 DMs (kind 1059) addressed to the user, plus friends-only legacy
+ *     kind-4 DMs scoped to the follow set.
  *   - Concord V1 (`#z`) and V2 (kind-1059 stream authors), merged by relay set
  *     to keep the subscription count under the server's per-user quota.
  *   - deterministic subscription ids and sorted tag/author arrays, so an
@@ -157,9 +158,29 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
     });
   }
 
-  // Direct messages — NIP-04, friends-only (scoped to the follow set).
+  // Direct messages — modern NIP-17 plus legacy NIP-04.
   const dmRelays = uniqSorted(input.dmRelays);
   const dmFollows = uniqSorted(input.dmFollows);
+
+  // NIP-17 wrap authors are single-use ephemeral keys, so sender/follow
+  // filtering is impossible until the client decrypts the wrap. Watch every
+  // gift wrap addressed to the user, matching the wire and native notification
+  // service. This is also what lets message requests wake web push.
+  if (prefs.directMessages && dmRelays.length > 0) {
+    specs.push({
+      id: "armada-dm17",
+      relays: dmRelays,
+      filter: { kinds: [KIND_GIFT_WRAP], "#p": [pubkey] },
+      notification: {
+        title: "New message",
+        body: "New direct message",
+        data: { scope: "dm", relays: dmRelays, url: "/dms" },
+      },
+    });
+  }
+
+  // Legacy NIP-04 remains friends-only because its public author is available
+  // to the content-blind push server and unknown senders would be a spam path.
   if (prefs.directMessages && dmFollows.length > 0 && dmRelays.length > 0) {
     specs.push({
       id: "armada-dm",

@@ -111,7 +111,21 @@ describe("buildPushSubscriptions", () => {
     expect(specs.has("armada-groups-mention")).toBe(false);
   });
 
-  it("scopes NIP-04 DMs to the follow set (friends-only)", () => {
+  it("watches every addressed NIP-17 wrap, including unknown senders", () => {
+    const specs = byId(
+      buildPushSubscriptions(baseInput({ dmRelays: ["wss://two", "wss://one"] })),
+    );
+    const dm = specs.get("armada-dm17")!;
+    expect(dm.relays).toEqual(["wss://one", "wss://two"]);
+    expect(dm.filter).toEqual({ kinds: [1059], "#p": [ME] });
+    expect(dm.notification.data).toEqual({
+      scope: "dm",
+      relays: ["wss://one", "wss://two"],
+      url: "/dms",
+    });
+  });
+
+  it("also scopes legacy NIP-04 DMs to the follow set (friends-only)", () => {
     const withFollows = byId(
       buildPushSubscriptions(
         baseInput({ dmRelays: ["wss://dm"], dmFollows: ["bob", "amy"] }),
@@ -120,9 +134,11 @@ describe("buildPushSubscriptions", () => {
     const dm = withFollows.get("armada-dm")!;
     expect(dm.filter).toEqual({ kinds: [4], "#p": [ME], authors: ["amy", "bob"] });
 
-    // No follows ⇒ no DM subscription (mirrors native's friends-only scoping).
+    // No follows omits only the legacy subscription; modern NIP-17 DMs are
+    // still watched because their wrap authors are ephemeral.
     const noFollows = byId(buildPushSubscriptions(baseInput({ dmRelays: ["wss://dm"] })));
     expect(noFollows.has("armada-dm")).toBe(false);
+    expect(noFollows.has("armada-dm17")).toBe(true);
   });
 
   it("respects the directMessages pref", () => {

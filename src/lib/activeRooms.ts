@@ -16,10 +16,10 @@
  *   - Concord V2:   `c2:<channelIdHex>`
  *   - DM:           `dm:<peerPubkey>`
  *
- * The set is cleared whenever the document is backgrounded (the notifier keys
- * off `document.visibilityState` too, but keeping the set empty while hidden
- * means a message for the last-open room still notifies when the tab is in the
- * background). It is the responsibility of `useActiveRoom` to keep it current.
+ * The set is cleared whenever the document is backgrounded or its window loses
+ * focus. The notifier also checks both signals directly, but keeping the set
+ * empty while the user is elsewhere means the last-open room still notifies.
+ * It is the responsibility of `useActiveRoom` to keep it current.
  */
 
 let active = new Set<string>();
@@ -40,10 +40,13 @@ export function setActiveRooms(keys: Iterable<string>): void {
   }
 }
 
-/** Whether the given room key is currently on screen (and the tab is visible). */
+/** Whether the room is on screen in the visible, focused Armada window. */
 export function isRoomActive(key: string | undefined): boolean {
   if (!key) return false;
-  if (typeof document !== "undefined" && document.visibilityState === "hidden") return false;
+  if (typeof document !== "undefined") {
+    if (document.visibilityState !== "visible") return false;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+  }
   return active.has(key);
 }
 
