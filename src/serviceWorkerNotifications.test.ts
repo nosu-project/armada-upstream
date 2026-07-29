@@ -39,7 +39,7 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
     }),
   }));
   const self = {
-    location: { origin: "https://chat.dill.moe" },
+    location: { origin: "https://armada.buzz" },
     registration: { showNotification },
     clients: {
       matchAll: vi.fn(async () => clients),
@@ -100,7 +100,7 @@ describe("Web Push suppression", () => {
   it("suppresses generic DM push while a specific DM thread is focused", async () => {
     const worker = loadWorker({
       clients: [{
-        url: "https://chat.dill.moe/armada/dms/npub1peer",
+        url: "https://armada.buzz/dms/npub1peer",
         visibilityState: "visible",
         focused: true,
       }],
@@ -112,7 +112,7 @@ describe("Web Push suppression", () => {
   it("queries the page when client.url still has the pre-navigation DM-list route", async () => {
     const worker = loadWorker({
       clients: [{
-        url: "https://chat.dill.moe/armada/dms",
+        url: "https://armada.buzz/dms",
         visibilityState: "visible",
         focused: true,
         activeDm: true,
@@ -125,7 +125,7 @@ describe("Web Push suppression", () => {
   it("still displays a DM push when Armada is focused outside a DM thread", async () => {
     const worker = loadWorker({
       clients: [{
-        url: "https://chat.dill.moe/settings",
+        url: "https://armada.buzz/settings",
         visibilityState: "visible",
         focused: true,
       }],
@@ -137,7 +137,7 @@ describe("Web Push suppression", () => {
   it("lets a live decrypted notifier replace the generic DM push", async () => {
     const worker = loadWorker({
       clients: [{
-        url: "https://chat.dill.moe/settings",
+        url: "https://armada.buzz/settings",
         visibilityState: "hidden",
         focused: false,
         ownsNotifications: true,
@@ -152,7 +152,7 @@ describe("Web Push suppression", () => {
     async (scope) => {
       const worker = loadWorker({
         clients: [{
-          url: "https://chat.dill.moe/armada/c/community/channel",
+          url: "https://armada.buzz/c/community/channel",
           visibilityState: "visible",
           focused: true,
           ownsNotifications: true,
