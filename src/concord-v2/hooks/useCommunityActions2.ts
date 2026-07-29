@@ -45,6 +45,7 @@ import {
   type PrivateChannelKey,
 } from "@/concord-v2/lib/types";
 import { withChannelCategory } from "@/concord-v2/lib/channelCategory";
+import { channelPosition, compareChannelOrder, reorderPositions, withChannelPosition } from "@/concord-v2/lib/channelOrder";
 import { controlGroups, foldControlState, openControlWraps } from "@/concord-v2/lib/control";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 
@@ -966,6 +967,86 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
   });
 
   /**
+   * The channels the sidebar shows, in the order it shows them — the shared
+   * input for every reorder, so a move computed here and a move computed by
+   * the drag both index into the same list.
+   */
+  const orderedForMove = useCallback(
+    () =>
+      [...(folded?.channels.values() ?? [])]
+        .filter((c) => !c.deleted)
+        .map((c) => ({
+          idHex: c.channelIdHex,
+          name: c.name,
+          position: channelPosition(c.metadata),
+        }))
+        .sort(compareChannelOrder),
+    [folded],
+  );
+
+  /**
+   * Publish the position changes a move implies. One version-chained Channel
+   * edition per channel whose position actually changes — two for an ordinary
+   * swap; the first reorder in a never-ordered community stamps every channel,
+   * since an arrangement isn't expressible until each carries a position.
+   * Editions are independent entities, so a partial failure leaves a coherent
+   * (if partly-applied) order that the next move repairs.
+   */
+  const publishPositions = useCallback(
+    async (moves: Array<{ idHex: string; position: number }>) => {
+      if (!user || !community) throw new Error("Not ready.");
+      for (const { idHex, position } of moves) {
+        const def = folded?.channels.get(idHex);
+        if (!def) continue;
+        const head = folded?.heads.get(idHex);
+        await publishEdition2(
+          nostr,
+          community,
+          user.signer,
+          buildChannelEdition(
+            hex32(idHex),
+            // Round-trip everything a reorder doesn't touch (CORD-02 §6).
+            withChannelPosition(def.metadata, position),
+            {
+              actorPubkey: user.pubkey,
+              version: head ? head.version + 1n : 1n,
+              prevHash: head?.hash,
+              authority: citationFor(community, folded, user.pubkey),
+            },
+          ),
+        );
+      }
+      invalidateControl2(queryClient, community.idHex);
+    },
+    [user, community, folded, nostr, queryClient],
+  );
+
+  /** Move a channel one slot up or down the sidebar (the settings buttons). */
+  const moveChannel = useMutation<void, Error, { channelIdHex: string; direction: -1 | 1 }>({
+    mutationFn: async ({ channelIdHex, direction }) => {
+      const ordered = orderedForMove();
+      const from = ordered.findIndex((c) => c.idHex === channelIdHex);
+      if (from === -1) throw new Error("Channel not found in the control fold yet; try again shortly.");
+      const to = from + direction;
+      if (to < 0 || to >= ordered.length) return;
+      await publishPositions(reorderPositions(ordered, from, to));
+    },
+  });
+
+  /**
+   * Move a channel to an ABSOLUTE slot — what a drag lands on, where the drop
+   * index is read off the pointer rather than accumulated one step at a time.
+   */
+  const reorderChannel = useMutation<void, Error, { channelIdHex: string; toIndex: number }>({
+    mutationFn: async ({ channelIdHex, toIndex }) => {
+      const ordered = orderedForMove();
+      const from = ordered.findIndex((c) => c.idHex === channelIdHex);
+      if (from === -1) throw new Error("Channel not found in the control fold yet; try again shortly.");
+      await publishPositions(reorderPositions(ordered, from, Math.max(0, Math.min(toIndex, ordered.length - 1))));
+    },
+  });
+
+  /**
    * File a channel into a category (or out of one with `undefined`).
    *
    * A category is only ever the set of channels naming it, so there is nothing
@@ -1113,6 +1194,9 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     renameChannel: renameChannel.mutateAsync,
     setChannelCategory: setChannelCategory.mutateAsync,
     isFiling: setChannelCategory.isPending,
+    moveChannel: moveChannel.mutateAsync,
+    isMovingChannel: moveChannel.isPending,
+    reorderChannel: reorderChannel.mutateAsync,
     isRenaming: renameChannel.isPending,
     privatiseChannel: privatiseChannel.mutateAsync,
     publiciseChannel: publiciseChannel.mutateAsync,

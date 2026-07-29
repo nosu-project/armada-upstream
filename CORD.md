@@ -557,6 +557,39 @@ sections).
 
 ---
 
+## Channel Ordering
+
+CORD-03 gives a Channel no ordering field, so sidebar order is the client's to
+decide, and plain alphabetical ignores what a community wants (#announcements
+above #random). A Channel MAY carry:
+
+```jsonc
+{ "name": "announcements", "private": false,
+  "custom": { "armada.order": { "position": 0 } } }
+```
+
+Position sits on the entity rather than in one ordered list, mirroring CORD-04
+Roles: two moderators reordering at once then collide on individual channels
+instead of clobbering the whole arrangement, and each move is an ordinary
+version-chained Channel edition requiring `MANAGE_CHANNELS`.
+
+Order is **position, then name**. An unpositioned channel sorts after every
+positioned one, so a community that never orders anything keeps alphabetical
+behavior and a newly created channel lands at the end. A neighbour swap
+republishes exactly the two channels that moved; the FIRST reorder in a
+never-ordered community necessarily stamps them all, since an arrangement
+isn't expressible until every channel carries a position.
+
+Position is advisory display data: a client that ignores it loses the
+arrangement, never a channel.
+
+Implementation: `client/src/concord-v2/lib/channelOrder.ts`,
+`useCommunityManagement2.moveChannel` (the settings buttons) and
+`.reorderChannel` (an absolute slot, what a drag lands on), `channelsView`
+(the single sort site).
+
+---
+
 ## Channel Categories
 
 Sidebar grouping for Channels. CORD-03 has no notion of it, so a Channel MAY
@@ -600,17 +633,15 @@ so `Voice` and `voice` render as one heading rather than two.
 ### Order
 
 Categories are ordered by their first Channel, and Channels keep their order
-within a category — so a community that orders its Channels orders its
-categories by the same act, with no second arrangement to maintain and no way
-for the two to contradict each other. Uncategorized Channels render first,
-ungrouped: a community that files nothing sees the flat list it had before.
+within a category — so a community that orders its Channels (see Channel
+Ordering) orders its categories by the same act, with no second arrangement to
+maintain and no way for the two to contradict each other. Uncategorized Channels
+render first, ungrouped: a community that files nothing sees the flat list it
+had before.
 
-The client has no Channel ordering of its own yet: `channelsView` sorts
-alphabetically by name, so today a category sits where its alphabetically first
-member puts it — a category holding `#aaa` heads the list however its heading is
-spelled, and renaming or adding one Channel can move a whole heading. Category
-order becomes controllable when Channel order does; nothing here changes when
-it lands.
+A category's position is therefore not a thing that can be set: it is read off
+its first member. Dragging a heading is not offered for that reason — to move a
+category, move the Channel that leads it.
 
 ### Visibility
 

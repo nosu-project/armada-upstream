@@ -105,13 +105,13 @@ export interface ChannelCategory<T> {
  *
  * Input order does all the work: within a category the channels keep it, and
  * the categories themselves appear in order of their first channel. So a
- * community that orders its channels gets its categories ordered by the same
- * act, with no second arrangement to maintain and no way for the two to
- * contradict each other.
+ * community that orders its channels (`armada.order`) gets its categories
+ * ordered by the same act, with no second arrangement to maintain and no way
+ * for the two to contradict each other.
  *
- * There is no channel ordering yet — `channelsView` sorts by name — so today a
- * category sits where its ALPHABETICALLY first member puts it, which is not
- * something a community can choose. Nothing here changes when ordering lands.
+ * A category's position is therefore not settable — it is READ OFF its first
+ * member. Moving a category means moving the channel that leads it, which is
+ * why the drag offers no heading-sized target.
  *
  * Uncategorized channels lead, unindented — a community that never files
  * anything sees exactly the flat list it had before.

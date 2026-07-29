@@ -1,5 +1,7 @@
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   Check,
   Folder,
   Hash,
@@ -739,7 +741,7 @@ function ChannelsSection({
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
 }) {
   const channels = useChannels2(community);
-  const { renameChannel, isRenaming, setChannelCategory, isFiling, deleteChannel, createChannel, isAddingChannel } =
+  const { renameChannel, isRenaming, setChannelCategory, isFiling, deleteChannel, createChannel, isAddingChannel, moveChannel, isMovingChannel } =
     useCommunityManagement2(community);
 
   // Existing category names, in sidebar order, offered when filing a channel
@@ -784,14 +786,23 @@ function ChannelsSection({
         )}
       </div>
       <div className="space-y-1 rounded-lg bg-secondary/40 p-1">
-        {channels.map((ch) => (
+        {channels.map((ch, index) => (
           <ChannelRow
             key={ch.idHex}
             channel={ch}
             canManage={canManage}
-            disabled={isRenaming || isFiling}
+            disabled={isRenaming || isFiling || isMovingChannel}
             categories={categories}
             onRename={(name) => renameChannel({ channelIdHex: ch.idHex, name })}
+            onMove={canManage ? async (direction) => {
+              try {
+                await moveChannel({ channelIdHex: ch.idHex, direction });
+              } catch (e) {
+                toast({ title: "Couldn't reorder", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+              }
+            } : undefined}
+            canMoveUp={index > 0}
+            canMoveDown={index < channels.length - 1}
             accessRoles={channelRoles?.get(ch.idHex) ?? []}
             onPrivatise={onPrivatiseChannel ? () => onPrivatiseChannel(ch.idHex) : undefined}
             onRotateKey={onRotateChannelKey ? () => onRotateChannelKey(ch.idHex) : undefined}
@@ -862,6 +873,9 @@ function ChannelRow({
   onRename,
   onSetCategory,
   onDelete,
+  onMove,
+  canMoveUp,
+  canMoveDown,
   accessRoles,
   onPrivatise,
   onRotateKey,
@@ -874,6 +888,10 @@ function ChannelRow({
   onRename: (name: string) => Promise<void>;
   onSetCategory: (name: string | undefined) => Promise<void>;
   onDelete?: () => void;
+  /** Move one slot up/down the sidebar; absent at the ends of the list. */
+  onMove?: (direction: -1 | 1) => Promise<void>;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
   /** The Roles scoped to this channel — who may read it (CORD-03/04 §2). */
   accessRoles?: Array<{ id: string; name: string }>;
   /** Convert a public channel to private (CORD-03 §2). */
@@ -976,6 +994,32 @@ function ChannelRow({
               <span className="ml-1.5 text-xs text-muted-foreground">{channel.category}</span>
             )}
           </span>
+          {onMove && (
+            <>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-7 shrink-0 text-muted-foreground disabled:opacity-30"
+                aria-label={`Move ${channel.name} up`}
+                disabled={!canMoveUp || disabled}
+                onClick={() => void onMove(-1)}
+              >
+                <ArrowUp className="size-3.5" />
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-7 shrink-0 text-muted-foreground disabled:opacity-30"
+                aria-label={`Move ${channel.name} down`}
+                disabled={!canMoveDown || disabled}
+                onClick={() => void onMove(1)}
+              >
+                <ArrowDown className="size-3.5" />
+              </Button>
+            </>
+          )}
           {showAccessButton && (
             <Button
               type="button"

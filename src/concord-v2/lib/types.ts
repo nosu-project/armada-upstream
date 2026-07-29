@@ -293,6 +293,8 @@ export interface ChannelV2 {
   isPrivate: boolean;
   /** Sidebar grouping (channelCategory.ts); undefined renders ungrouped. */
   category?: string;
+  /** Sidebar position (channelOrder.ts); undefined sorts last, by name. */
+  position?: number;
   /** The current epoch's call coordinates — every Channel is callable (CORD-07 §1). */
   voice: VoiceKeys;
   /**

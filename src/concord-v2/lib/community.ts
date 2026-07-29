@@ -14,6 +14,7 @@ import {
   voiceMediaKey,
 } from "@/concord-v2/lib/derive";
 import { channelCategory } from "@/concord-v2/lib/channelCategory";
+import { channelPosition, compareChannelOrder } from "@/concord-v2/lib/channelOrder";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import { capRelays, type ChannelV2, type CommunityV2, type VoiceKeys } from "@/concord-v2/lib/types";
@@ -115,6 +116,7 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
         name: def.name,
         isPrivate: false,
         category: channelCategory(def.metadata),
+        position: channelPosition(def.metadata),
         voice: voiceKeys(community.root, id, community.rootEpoch),
         // Writes go to the root stream; private-era streams stay readable.
         streams: [...rootStreams, ...channelStreams],
@@ -130,6 +132,7 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
       name: def.name,
       isPrivate: true,
       category: channelCategory(def.metadata),
+      position: channelPosition(def.metadata),
       voice: voiceKeys(held.key, id, held.epoch),
       // Writes go to the current channel key; public-era history stays readable.
       streams: [...channelStreams, ...rootStreams],
@@ -160,7 +163,8 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
     });
   }
 
-  out.sort((a, b) => a.name.localeCompare(b.name));
+  // Position first, then name: one order on every client (channelOrder.ts).
+  out.sort(compareChannelOrder);
   return out;
 }
 
