@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.43.0] - 2026-07-29
+
+Non-media file attachments in chat appear as download cards. On-device messages are now searchable from the quick switcher. Edited Concord messages show an (edited) label. An iOS build is available for sideloading. Several Concord fixes enforce dissolved-community lockout and close gaps in moderation authority validation.
+
+### Added
+- Non-media file attachments in chat appear as download cards
+- On-device messages are searchable in the quick switcher
+- Edited messages in Concord communities are marked (edited)
+- An iOS build is now available
+
+### Fixed
+- Dissolved communities can no longer receive writes or subscriptions
+- Community moderation actions require a verified authority citation, closing a delegation gap
+- File attachment card is not shown twice when its URL also appears inline in the message
+
 ## [0.42.2] - 2026-07-28
 
 Onboarding is redesigned as guided setup wizards. Calendar events appear as inline cards in chat, GIF previews load as video, and Concord communities surface in the quick switcher. Several fixes improve DM delivery on relays that require authentication, mention jump scrolling, and Concord community integrity.
