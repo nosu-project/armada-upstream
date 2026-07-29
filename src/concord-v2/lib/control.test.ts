@@ -340,6 +340,60 @@ describe("control plane fold (CORD-04)", () => {
     expect(badgeOf(folded.roster, wannabe.pubkey)).toBeUndefined();
   });
 
+  it("honors an edition citing a grant version we have SYNCED PAST (CORD-04 §5)", async () => {
+    // "until it has synced AT LEAST that Grant" — a later head satisfies the
+    // floor. Requiring the exact version instead would break on rotation:
+    // compaction re-wraps only each entity's HEAD, so a superseded grant
+    // version does not cross into the new epoch, and every edition still citing
+    // one would fall out of the fold. That is a community losing its name, or
+    // its admins, for having rotated.
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const alice = signer();
+
+    const adm = adminRole(bytesToHex(random32()));
+    const mrole = moderatorRole(bytesToHex(random32()));
+    const grantV1 = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const [g1] = openControlWraps([grantV1], [control]);
+    // The admin acts while their grant is at v1, and cites v1.
+    const citeV1 = { entityId: g1.entityId, version: 1n, editionHash: g1.selfHash };
+    // The owner then re-issues the admin's grant at v2, superseding v1.
+    const grantV2 = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 2n, prevHash: g1.selfHash }),
+      control,
+      owner,
+    );
+
+    // Fold WITHOUT v1 present, exactly as a post-compaction epoch would look.
+    const folded = foldControlState(
+      openControlWraps(
+        [
+          await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+          grantV2,
+          await sealEdition(buildRoleEdition(mrole, { actorPubkey: admin.pubkey, version: 1n, authority: citeV1 }), control, admin),
+          await sealEdition(
+            buildGrantEdition(communityId, { member: alice.pubkey, roleIds: [mrole.roleId] }, { actorPubkey: admin.pubkey, version: 1n, authority: citeV1 }),
+            control,
+            admin,
+          ),
+        ],
+        [control],
+      ),
+      communityId,
+      owner.pubkey,
+    );
+
+    expect(
+      folded.roster.roles.some((r) => r.roleId === mrole.roleId),
+      "a role citing a superseded grant version still folds",
+    ).toBe(true);
+    expect(badgeOf(folded.roster, alice.pubkey), "and so does the grant it made").toBe("moderator");
+  });
+
   it("drops an UNCITED role or grant from a non-owner (CORD-04 §5)", async () => {
     // Roles and Grants are authority actions like any other, so the delegation
     // chain itself carries the sync floor. Without it a client whose roster is

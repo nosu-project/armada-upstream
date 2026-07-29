@@ -460,30 +460,12 @@ function authorizeDelegation(
   // honors a promotion (or a demotion) issued by an admin already stripped of
   // MANAGE_ROLES.
   //
-  // NOT circular, though it looks it. The index is built from CANDIDATES, not
-  // from settled heads, because a citation asks "have I synced this Grant?" —
-  // data availability — and never "was it honored?". Whether the actor still
-  // outranks anyone is the separate rank walk below, resolved against the
-  // roster as it settles. So the index needs no fixpoint of its own.
-  const grantEditionIndex = new Map<string, Map<string, Set<string>>>();
-  for (const [eid, cands] of grantCandidates) {
-    const byVer = new Map<string, Set<string>>();
-    for (const c of cands) {
-      const v = c.parsed.version.toString();
-      let set = byVer.get(v);
-      if (!set) byVer.set(v, (set = new Set()));
-      set.add(bytesToHex(c.parsed.selfHash));
-    }
-    grantEditionIndex.set(eid, byVer);
-  }
-  const citedOk = (p: ParsedEdition): boolean => {
-    if (p.author === ownerHex) return true; // supreme: the community_id proves them
-    const vac = p.authority;
-    if (!vac) return false;
-    const own = bytesToHex(grantLocator(communityId, hex32(p.author)));
-    if (bytesToHex(vac.entityId) !== own) return false;
-    return grantEditionIndex.get(own)?.get(vac.version.toString())?.has(bytesToHex(vac.editionHash)) ?? false;
-  };
+  // Resolved against the heads settled by THIS pass, not a pre-built candidate
+  // index. Owner-rooted grants settle first (the owner cites nothing), which
+  // unlocks the admins' citations on a later round, so the fixpoint bootstraps
+  // itself and no circularity arises.
+  const citedOk = (p: ParsedEdition): boolean =>
+    citationSatisfied({ heads, ownerHex }, communityId, p.author, p.authority);
 
   let changed = true;
   // While false, a grant handing out a role that still has unsettled candidates
@@ -862,31 +844,18 @@ function foldOnce(
   // it the fold ignored `p.authority` entirely and honored any gated action
   // whose author currently resolves as authorized.
   //
-  // Index every grant edition the fold saw as eid → version → {selfHash}. The
-  // owner needs no citation (supreme); a citation resolves iff some seen grant
-  // edition at the cited eid+version has the cited hash.
-  const grantEditionIndex = new Map<string, Map<string, Set<string>>>();
-  for (const [eid, cands] of grantCandidates) {
-    const byVer = new Map<string, Set<string>>();
-    for (const c of cands) {
-      const v = c.parsed.version.toString();
-      let s = byVer.get(v);
-      if (!s) byVer.set(v, (s = new Set()));
-      s.add(bytesToHex(c.parsed.selfHash));
-    }
-    grantEditionIndex.set(eid, byVer);
-  }
-  const citationOk = (p: ParsedEdition): boolean => {
-    if (p.author === ownerHex) return true; // supreme: no citation required
-    const vac = p.authority;
-    if (!vac) return false; // a non-owner action MUST cite its grant
-    // The citation must name the actor's OWN grant coordinate.
-    const expectedEid = bytesToHex(grantLocator(communityId, hex32(p.author)));
-    if (bytesToHex(vac.entityId) !== expectedEid) return false;
-    // The cited (version, hash) must match a grant edition we actually hold.
-    const hashes = grantEditionIndex.get(expectedEid)?.get(vac.version.toString());
-    return hashes !== undefined && hashes.has(bytesToHex(vac.editionHash));
-  };
+  // Resolved against the Grant heads `authorizeDelegation` just settled, via the
+  // same `citationSatisfied` the delete, kick and rekey gates use — one rule in
+  // one place, mirroring Vector's `authority_citation_satisfied`.
+  //
+  // "Synced AT LEAST that Grant" (CORD-04 §5) means a LATER head passes. An
+  // exact-version index would have dropped an edition whose cited version has
+  // since been superseded — and compaction re-wraps only each entity's head, so
+  // after a Refounding the superseded versions are gone and every edition citing
+  // one would fall out of the fold. That loses a community's name, or its
+  // admins, on rotation.
+  const citationOk = (p: ParsedEdition): boolean =>
+    citationSatisfied({ heads, ownerHex }, communityId, p.author, p.authority);
 
   // 3. Metadata (vsk 0): must be the community's own entity + an authorized actor.
   let metadata: CommunityMetadata | undefined;
