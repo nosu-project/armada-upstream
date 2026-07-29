@@ -43,6 +43,7 @@ import { useBotManifests } from "@/hooks/useBotManifests";
 import { useCommandRequests } from "@/hooks/useCommandBus";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useGroup } from "@/hooks/useGroup";
+import { useGlobalImagePaste } from "@/hooks/useGlobalImagePaste";
 import { useInsertText } from "@/hooks/useInsertText";
 import { useMentionInsertions } from "@/hooks/useMentionBus";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -971,6 +972,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
   }, [handleFileUpload]);
 
+  const handleGlobalImagePaste = useCallback((files: File[]) => {
+    // Discord-style global paste: once an image is attached, hand keyboard
+    // ownership to the composer so the user can immediately type or press Enter.
+    textareaRef.current?.focus();
+    void (async () => {
+      for (const file of files) await handleFileUpload(file);
+    })();
+  }, [handleFileUpload]);
+  const claimPasteOwnership = useGlobalImagePaste(handleGlobalImagePaste);
+
   // Drag-and-drop upload onto the composer. `dragDepth` tracks nested
   // enter/leave events so the overlay doesn't flicker over child elements.
   const [isDragging, setIsDragging] = useState(false);
@@ -1560,6 +1571,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     <div
       ref={(node) => { composerBoundsRef.current = node; }}
       className="relative shrink-0 pb-[var(--safe-area-pad-bottom,0px)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]"
+      onFocusCapture={claimPasteOwnership}
+      onPointerDownCapture={claimPasteOwnership}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -1742,6 +1755,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   Array.from(files).forEach((file) => handleFileUpload(file));
                 }
                 e.target.value = "";
+                // The native picker focuses its hidden input/button on return.
+                // Restore the send box so Enter sends without another click.
+                requestAnimationFrame(() => textareaRef.current?.focus());
               }}
             />
 
