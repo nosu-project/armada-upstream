@@ -891,12 +891,14 @@ function Conversation({
 
   const handleMute = useCallback(async () => {
     setMuteConfirmOpen(false);
+    // Start the optimistic mute before leaving so the sidebar drops this peer
+    // in the same interaction, then close the thread without waiting on relay
+    // or signer round-trips.
+    const pendingMute = muteUser.mutateAsync(peer);
+    onBack();
     try {
-      await muteUser.mutateAsync(peer);
+      await pendingMute;
       toast({ title: "Muted", description: `You won't see messages from ${name}.` });
-      // Leave the (now-hidden) thread — the conversation list filters out
-      // muted peers, so returning to it drops this conversation.
-      onBack();
     } catch (e) {
       toast({
         title: "Couldn't mute",

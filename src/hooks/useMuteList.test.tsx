@@ -87,6 +87,64 @@ beforeEach(() => {
 });
 
 describe("useMuteUser (kind 10000 read-modify-write)", () => {
+  it("hides the peer optimistically before relay and signer work finishes", async () => {
+    let resolveQuery!: (events: NostrEvent[]) => void;
+    h.query.mockImplementation(
+      () => new Promise<NostrEvent[]>((resolve) => { resolveQuery = resolve; }),
+    );
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const queryKey = ["mute-list", SELF, "wss://app.example/"];
+    client.setQueryData(queryKey, [EXISTING_PUBLIC]);
+    const testWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useMuteUser(), { wrapper: testWrapper });
+    let pending: Promise<void> | undefined;
+    await act(async () => {
+      pending = result.current.mutateAsync(TARGET);
+      await vi.waitFor(() => expect(h.query).toHaveBeenCalledTimes(1));
+    });
+
+    expect(client.getQueryData(queryKey)).toEqual([EXISTING_PUBLIC, TARGET]);
+
+    resolveQuery([
+      muteEvent({ tags: [["p", EXISTING_PUBLIC]], privateTags: [] }),
+    ]);
+    await act(async () => {
+      await pending!;
+    });
+
+    expect(client.getQueryData(queryKey)).toEqual([EXISTING_PUBLIC, TARGET]);
+    expect(h.writeFolded).toHaveBeenCalledWith(
+      `mute-pubkeys:${SELF}`,
+      [EXISTING_PUBLIC, TARGET],
+    );
+  });
+
+  it("restores the previous visible list when muting fails", async () => {
+    h.query.mockRejectedValue(new Error("relay unavailable"));
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const queryKey = ["mute-list", SELF, "wss://app.example/"];
+    client.setQueryData(queryKey, [EXISTING_PUBLIC]);
+    const testWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useMuteUser(), { wrapper: testWrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync(TARGET)).rejects.toThrow("relay unavailable");
+    });
+
+    expect(client.getQueryData(queryKey)).toEqual([EXISTING_PUBLIC]);
+  });
+
   it("REFUSES to mute on an empty read when a cached mute list exists (the wipe)", async () => {
     h.query.mockResolvedValue([]);
     h.readFolded.mockResolvedValue([EXISTING_PRIVATE]); // this device knows a list existed

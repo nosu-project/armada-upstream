@@ -226,8 +226,22 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
   const queryClient = useQueryClient();
   const publish = useNostrPublish();
   const relayKey = config.appRelays.join(",");
+  const queryKey = ["mute-list", user?.pubkey, relayKey] as const;
 
   return useMutation({
+    onMutate: async (pubkey: string) => {
+      if (!user) return;
+
+      // Stop an in-flight read from replacing the optimistic mute with the
+      // relay's pre-publish list, then hide the peer before any network or
+      // signer round-trips begin.
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<string[]>(queryKey);
+      queryClient.setQueryData<string[]>(queryKey, (current = []) =>
+        current.includes(pubkey) ? current : [...current, pubkey],
+      );
+      return { previous };
+    },
     mutationFn: async (pubkey: string) => {
       if (!user) throw new Error("You must be logged in to mute someone.");
       if (!user.signer.nip44) {
@@ -275,17 +289,23 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
         prev: prev ?? undefined,
       });
 
-      // Reflect the mute immediately: update the cached list and the folded
-      // seed so the conversation list filters it out without waiting for a
-      // refetch.
-      const queryKey = ["mute-list", user.pubkey, relayKey];
-      const current = queryClient.getQueryData<string[]>(queryKey) ?? [];
-      if (!current.includes(pubkey)) {
-        const next = [...current, pubkey];
-        queryClient.setQueryData(queryKey, next);
-        void writeFolded(muteFoldKey(user.pubkey), next);
+      // Replace the optimistic entry with the complete list we just published
+      // and persist it for the next cold start. Do not immediately refetch: a
+      // relay may still echo the superseded replaceable event and undo the
+      // successful mute in the UI.
+      const mutedPubkeys = new Set<string>();
+      collectMutedPubkeys([...publicTags, ...privateTags], mutedPubkeys);
+      const next = [...mutedPubkeys];
+      queryClient.setQueryData(queryKey, next);
+      void writeFolded(muteFoldKey(user.pubkey), next);
+    },
+    onError: (_error, _pubkey, context) => {
+      if (!user) return;
+      if (context?.previous === undefined) {
+        queryClient.removeQueries({ queryKey, exact: true });
+      } else {
+        queryClient.setQueryData(queryKey, context.previous);
       }
-      void queryClient.invalidateQueries({ queryKey: ["mute-list"] });
     },
   });
 }
