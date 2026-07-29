@@ -18,7 +18,7 @@
 
 import { bytesToHex, epochKeyCommitment, random32, recipientLocator } from "@/concord-v2/lib/derive";
 import { KIND_REKEY, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
-import { citationFromTags, citationToTag, type AuthorityCitation } from "@/concord-v2/lib/edition";
+import { citationFromTags, citationToTag, isTagDecimal, type AuthorityCitation } from "@/concord-v2/lib/edition";
 import { buildRumor, type OpenedEvent, type Rumor } from "@/concord-v2/lib/stream";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 
@@ -162,12 +162,15 @@ export function parseRekey(opened: OpenedEvent): ParsedRekey {
   const prevCommit = get("prevcommit")?.[1];
   const chunk = get("chunk");
   if (!scope || !/^[0-9a-f]{64}$/i.test(scope)) throw new Error("bad scope tag");
-  if (!newEpoch || !/^\d+$/.test(newEpoch)) throw new Error("bad newepoch tag");
-  if (!prevEpoch || !/^\d+$/.test(prevEpoch)) throw new Error("bad prevepoch tag");
+  if (!isTagDecimal(newEpoch)) throw new Error("bad newepoch tag");
+  if (!isTagDecimal(prevEpoch)) throw new Error("bad prevepoch tag");
   if (!prevCommit || !/^[0-9a-f]{64}$/i.test(prevCommit)) throw new Error("bad prevcommit tag");
+  // Spec-shaped decimals, not `Number()` — that would take "1e2", "0x2" and
+  // " 2 " as chunk coordinates a stricter peer refuses.
+  if (chunk && (!isTagDecimal(chunk[1]) || !isTagDecimal(chunk[2]))) throw new Error("bad chunk tag");
   const chunkIndex = chunk ? Number(chunk[1]) : 1;
   const chunkCount = chunk ? Number(chunk[2]) : 1;
-  if (!Number.isInteger(chunkIndex) || !Number.isInteger(chunkCount) || chunkIndex < 1 || chunkCount < 1 || chunkIndex > chunkCount) {
+  if (chunkIndex < 1 || chunkCount < 1 || chunkIndex > chunkCount) {
     throw new Error("bad chunk tag");
   }
   let blobs: RekeyBlob[];

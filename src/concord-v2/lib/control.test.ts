@@ -20,6 +20,7 @@ import {
   sealEdition,
 } from "@/concord-v2/lib/control";
 import { bytesToHex, communityIdOf, controlGroupKey, dissolvedGroupKey, grantLocator, hex32, random32, type GroupKey } from "@/concord-v2/lib/derive";
+import { isTagDecimal } from "@/concord-v2/lib/edition";
 import { buildRumor, openWrap, rewrapSeal, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { adminRole, badgeOf, hasPermission, isAdmin, moderatorRole, Permissions, type Role } from "@/concord-v2/lib/roles";
@@ -1384,6 +1385,24 @@ describe("control plane fold (CORD-04)", () => {
       owner.pubkey,
     );
     expect(folded.bannedAt.has(owner.pubkey)).toBe(false);
+  });
+});
+
+describe("tag numbers are spec-shaped decimals (CORD-01 §5)", () => {
+  // "its decimal form with no leading zeros". BigInt()/Number() accept several
+  // shapes that aren't, and a stricter peer drops what we'd honor — a
+  // divergence neither side can see, since a declined parse is never logged.
+  it("accepts a plain decimal and a bare zero", () => {
+    expect(isTagDecimal("4")).toBe(true);
+    expect(isTagDecimal("0")).toBe(true);
+    expect(isTagDecimal("1099511627776")).toBe(true);
+  });
+
+  it("refuses leading zeros, signs, and every non-decimal shape", () => {
+    for (const bad of ["04", "007", "00", "+4", "-4", "0x4", "1e2", " 4", "4 ", "", "4.0", "٤"]) {
+      expect(isTagDecimal(bad), `${JSON.stringify(bad)} is not decimal form`).toBe(false);
+    }
+    expect(isTagDecimal(undefined)).toBe(false);
   });
 });
 
