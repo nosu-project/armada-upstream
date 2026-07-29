@@ -141,6 +141,7 @@ jobs:
           # voice falls back to the public instance via platform.ts. NEVER pin
           # ws://localhost here — it's meaningless on a phone.
           VITE_PLATFORM_RELAYS: ""
+          VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
           # Analytics is OFF in the published sovereign APK by default: baking
           # armada.buzz telemetry into every self-hoster's install would betray
           # "your keys, your fleet". Left configurable so an operator building

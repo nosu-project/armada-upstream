@@ -57,6 +57,12 @@ describe("useFrequentReactions", () => {
     expect(result.current[0]).toMatchObject({ key: ":cat:", url: "https://e/cat.png" });
   });
 
+  it("keeps the emoji-mart id for composer picker favorites", () => {
+    act(() => recordReaction(SELF, "🔥", undefined, "fire"));
+    expect(getFrequentReactions(SELF)[0]).toMatchObject({ key: "🔥", pickerId: "fire" });
+    expect(JSON.parse(localStorage.getItem("emoji-mart.frequently") ?? "{}")).toEqual({ fire: 1 });
+  });
+
   it("re-renders subscribers when a reaction is recorded", () => {
     const { result } = renderHook(() => useFrequentReactions(SELF, 3));
     expect(result.current[0].key).toBe("👍");
@@ -111,6 +117,15 @@ describe("useFrequentReactions — cross-device merge", () => {
     expect(getFrequentReactions(SELF).find((e) => e.key === ":cat:")?.url).toBe(
       "https://e/cat.png",
     );
+  });
+
+  it("hydrates composer emoji favorites into emoji-mart's picker store", () => {
+    act(() =>
+      hydrateFrequentReactions(SELF, [
+        { key: "🚀", pickerId: "rocket", count: 7, usedAt: 500 },
+      ]),
+    );
+    expect(JSON.parse(localStorage.getItem("emoji-mart.frequently") ?? "{}")).toEqual({ rocket: 7 });
   });
 
   it("does not report a hydrate as a local change", () => {

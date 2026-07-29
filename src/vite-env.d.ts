@@ -2,6 +2,8 @@
 
 interface ImportMetaEnv {
   readonly VITE_APP_NAME?: string;
+  /** KLIPY GIF API key, injected at build time. */
+  readonly VITE_KLIPY_API_KEY?: string;
   readonly VITE_PLATFORM_RELAYS?: string;
   readonly VITE_PIN_PLATFORM_RELAYS?: string;
   readonly VITE_APP_RELAYS?: string;

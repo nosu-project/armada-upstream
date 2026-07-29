@@ -6,6 +6,8 @@ export interface FrequentReaction {
   key: string;
   /** Custom emoji image URL when the key is a `:shortcode:`. */
   url?: string;
+  /** emoji-mart id when this was selected from the composer emoji picker. */
+  pickerId?: string;
   /** How many times the user has reacted with this key. */
   count: number;
   /** Unix seconds of the most recent use, as a tie-breaker. */
@@ -62,6 +64,19 @@ function save(pubkey: string, entries: FrequentReaction[]): void {
   cache.set(pubkey, entries);
   try {
     localStorage.setItem(`${STORAGE_PREFIX}${pubkey}`, JSON.stringify(entries));
+    // emoji-mart owns the visible "Frequently used" category. Seed its store
+    // from the account-scoped table so a remote encrypted-settings hydrate is
+    // reflected the next time the lazy picker module opens.
+    const rawPicker = JSON.parse(localStorage.getItem("emoji-mart.frequently") ?? "{}") as Record<string, unknown>;
+    const pickerCounts: Record<string, number> = {};
+    for (const [id, count] of Object.entries(rawPicker)) {
+      if (typeof count === "number" && Number.isFinite(count)) pickerCounts[id] = count;
+    }
+    for (const entry of entries) {
+      if (!entry.pickerId) continue;
+      pickerCounts[entry.pickerId] = Math.max(pickerCounts[entry.pickerId] ?? 0, entry.count);
+    }
+    localStorage.setItem("emoji-mart.frequently", JSON.stringify(pickerCounts));
   } catch {
     // localStorage full/unavailable — the in-memory table still stands.
   }
@@ -82,14 +97,21 @@ function byScore(a: FrequentReaction, b: FrequentReaction): number {
  * Record that the user reacted with `key`. Call this only when ADDING a
  * reaction — retracting one shouldn't promote it up the row.
  */
-export function recordReaction(pubkey: string | undefined, key: string, url?: string): void {
+export function recordReaction(
+  pubkey: string | undefined,
+  key: string,
+  url?: string,
+  pickerId?: string,
+): void {
   if (!pubkey || !key) return;
   const now = Math.floor(Date.now() / 1000);
   const prev = load(pubkey);
   const existing = prev.find((e) => e.key === key);
   const next = existing
-    ? prev.map((e) => (e.key === key ? { ...e, url: url ?? e.url, count: e.count + 1, usedAt: now } : e))
-    : [...prev, { key, url, count: 1, usedAt: now }];
+    ? prev.map((e) => (e.key === key
+      ? { ...e, url: url ?? e.url, pickerId: pickerId ?? e.pickerId, count: e.count + 1, usedAt: now }
+      : e))
+    : [...prev, { key, url, pickerId, count: 1, usedAt: now }];
   next.sort(byScore);
   save(pubkey, next.slice(0, MAX_STORED));
   for (const listener of dirtyListeners) listener(pubkey);
@@ -133,8 +155,9 @@ export function hydrateFrequentReactions(pubkey: string, remote: FrequentReactio
     const count = Math.max(mine.count, entry.count);
     const usedAt = Math.max(mine.usedAt, entry.usedAt);
     const url = mine.url ?? entry.url;
-    if (count === mine.count && usedAt === mine.usedAt && url === mine.url) continue;
-    merged.set(entry.key, { ...mine, url, count, usedAt });
+    const pickerId = mine.pickerId ?? entry.pickerId;
+    if (count === mine.count && usedAt === mine.usedAt && url === mine.url && pickerId === mine.pickerId) continue;
+    merged.set(entry.key, { ...mine, url, pickerId, count, usedAt });
     changed = true;
   }
   // A no-op merge must not write: `save` notifies every consumer, and this

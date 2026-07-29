@@ -3,6 +3,8 @@ import { Picker } from "emoji-mart";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { recordReaction } from "@/hooks/useFrequentReactions";
 import { syncEmojiMartCategories } from "@/lib/emojiMartCategories";
 
 import type { CustomEmoji } from "@/hooks/useCustomEmojis";
@@ -55,6 +57,7 @@ interface EmojiMartEmoji {
  */
 export function EmojiPicker({ onSelect, customEmojis }: EmojiPickerProps) {
   const isMobile = useIsMobile();
+  const { user } = useCurrentUser();
   const containerRef = useRef<HTMLDivElement>(null);
   const pickerRef = useRef<InstanceType<typeof Picker> | null>(null);
   const onSelectRef = useRef(onSelect);
@@ -64,18 +67,20 @@ export function EmojiPicker({ onSelect, customEmojis }: EmojiPickerProps) {
 
   const handleSelect = useCallback((emoji: EmojiMartEmoji) => {
     if (emoji.src) {
+      recordReaction(user?.pubkey, `:${emoji.id}:`, emoji.src, emoji.id);
       onSelectRef.current({
         type: "custom",
         shortcode: emoji.id,
         url: emoji.src,
       });
     } else if (emoji.native) {
+      recordReaction(user?.pubkey, emoji.native, undefined, emoji.id);
       onSelectRef.current({
         type: "native",
         emoji: emoji.native,
       });
     }
-  }, []);
+  }, [user?.pubkey]);
 
   // Build emoji-mart custom categories from the NIP-30 emoji list — ONE
   // CATEGORY PER SOURCE PACK, so the picker's sticky heading and nav answer

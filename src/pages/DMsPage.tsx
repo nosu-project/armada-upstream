@@ -75,6 +75,7 @@ import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLevels";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useAcceptedDms } from "@/hooks/useAcceptedDms";
+import { useClosedDms } from "@/hooks/useClosedDms";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useSharedCommunities } from "@/hooks/useSharedCommunities";
 import { useToast } from "@/hooks/useToast";
@@ -167,6 +168,7 @@ function ConversationRow({
   sharedCommunity,
   onClick,
   onTogglePin,
+  onClose,
   onBlock,
 }: {
   peer: string;
@@ -190,6 +192,7 @@ function ConversationRow({
   sharedCommunity?: string;
   onClick: () => void;
   onTogglePin: () => void;
+  onClose?: () => void;
   onBlock?: () => void;
 }) {
   const author = useAuthor(peer);
@@ -306,17 +309,22 @@ function ConversationRow({
             <UserX className="mr-2 size-4" /> Block
           </ContextMenuItem>
         ) : (
-          <ContextMenuItem onSelect={onTogglePin}>
-            {pinned ? (
-              <>
-                <PinOff className="mr-2 size-4" /> Unpin
-              </>
-            ) : (
-              <>
-                <Pin className="mr-2 size-4" /> Pin
-              </>
-            )}
-          </ContextMenuItem>
+          <>
+            <ContextMenuItem onSelect={onTogglePin}>
+              {pinned ? (
+                <>
+                  <PinOff className="mr-2 size-4" /> Unpin
+                </>
+              ) : (
+                <>
+                  <Pin className="mr-2 size-4" /> Pin
+                </>
+              )}
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={onClose}>
+              <X className="mr-2 size-4" /> Close DM
+            </ContextMenuItem>
+          </>
         )}
       </ContextMenuContent>
     </ContextMenu>
@@ -1701,6 +1709,7 @@ function ConversationList({
   onMarkAllRead,
   onCompose,
   openPeer,
+  closePeer,
   loadMore,
   hasMore,
   isLoadingMore,
@@ -1720,6 +1729,7 @@ function ConversationList({
   onMarkAllRead: () => void;
   onCompose: () => void;
   openPeer: (pubkey: string) => void;
+  closePeer: (pubkey: string, latest: NostrEvent | undefined) => void;
   loadMore: () => Promise<number>;
   hasMore: boolean;
   isLoadingMore: boolean;
@@ -1852,6 +1862,7 @@ function ConversationList({
       voiceRelay={voiceRelay ?? undefined}
       onClick={() => openPeer(c.peer)}
       onTogglePin={() => togglePin(c.peer)}
+      onClose={() => closePeer(c.peer, c.latest)}
       onBlock={() => void blockPeer(c.peer)}
     />
   );
@@ -2136,6 +2147,7 @@ export function DMsPage() {
   useAdoptDmInbox();
   const { isKnown, isLoading: followsLoading } = useKnownDmPeers();
   const { accept } = useAcceptedDms();
+  const { close: closeDm, reopen: reopenDm, reopenForNewMessages, isClosed: isDmClosed } = useClosedDms();
   const [composing, setComposing] = useState(false);
   const [listView, setListView] = useState<DmListView>("inbox");
 
@@ -2229,6 +2241,18 @@ export function DMsPage() {
     return [known, requests];
   }, [conversations, dm17Conversations, activePeer, isKnown]);
 
+  // A closed row is only a dismissal of the current latest message. As soon as
+  // either participant sends another message, it becomes visible immediately;
+  // then remove the obsolete marker from synced settings.
+  useEffect(() => {
+    reopenForNewMessages(rows);
+  }, [rows, reopenForNewMessages]);
+
+  const visibleRows = useMemo(
+    () => rows.filter((row) => !isDmClosed(row.peer, row.latest)),
+    [rows, isDmClosed],
+  );
+
   // Open a request's thread and the list follows it into the request view —
   // covers both clicking through and landing on `/dms/<stranger>` cold. It only
   // ever switches INTO requests: a peer that graduates to the inbox mid-thread
@@ -2250,7 +2274,7 @@ export function DMsPage() {
     return (snapshot ?? []).map((r) => ({
       peer: r.peer,
       latest: {
-        id: `dmlist-snapshot:${r.peer}`,
+        id: r.eventId ?? "",
         pubkey: r.author,
         created_at: r.createdAt,
         kind: 4,
@@ -2266,18 +2290,23 @@ export function DMsPage() {
     }));
   }, [user?.pubkey]);
 
+  const visibleRestoredRows = useMemo(
+    () => restoredRows.filter((row) => !isDmClosed(row.peer, row.latest)),
+    [restoredRows, isDmClosed],
+  );
+
   // Skeletons are for a genuine cold start only: with a snapshot we show the
   // restored list instead, which is real content in the right order.
-  const showSkeletons = isLoading && restoredRows.length === 0;
+  const showSkeletons = isLoading && visibleRestoredRows.length === 0;
   const displayRows = useMemo(() => {
-    if (!isLoading || restoredRows.length === 0) return rows;
+    if (!isLoading || visibleRestoredRows.length === 0) return visibleRows;
     // Keep the open thread's row present even if it predates the snapshot.
-    if (!activePeer || restoredRows.some((r) => r.peer === activePeer)) return restoredRows;
+    if (!activePeer || visibleRestoredRows.some((r) => r.peer === activePeer)) return visibleRestoredRows;
     return [
       { peer: activePeer, latest: undefined as unknown as NostrEvent, mine: false },
-      ...restoredRows,
+      ...visibleRestoredRows,
     ];
-  }, [isLoading, restoredRows, rows, activePeer]);
+  }, [isLoading, visibleRestoredRows, visibleRows, activePeer]);
 
   // Persist the settled list for the next launch, debounced so a burst of live
   // messages coalesces. Gated on `!isLoading`, so a partial view is never
@@ -2291,10 +2320,11 @@ export function DMsPage() {
     const timer = setTimeout(() => {
       writeDmListSnapshot(
         self,
-        rows
+        visibleRows
           .filter((c) => c.latest)
           .map((c) => ({
             peer: c.peer,
+            eventId: c.latest.id,
             createdAt: c.latest.created_at,
             author: c.latest.pubkey,
             preview: c.plaintext ?? previews[c.peer],
@@ -2307,7 +2337,7 @@ export function DMsPage() {
       );
     }, 800);
     return () => clearTimeout(timer);
-  }, [isLoading, rows, previews, user?.pubkey]);
+  }, [isLoading, visibleRows, previews, user?.pubkey]);
 
   const openPeer = useCallback(
     (pubkey: string) => {
@@ -2329,10 +2359,22 @@ export function DMsPage() {
   // until the first message lands and `mine` flips.
   const openNewRecipient = useCallback(
     (pubkey: string) => {
+      reopenDm(pubkey);
       accept(pubkey);
       openPeer(pubkey);
     },
-    [accept, openPeer],
+    [reopenDm, accept, openPeer],
+  );
+
+  const closePeer = useCallback(
+    (pubkey: string, latest: NostrEvent | undefined) => {
+      closeDm(pubkey, latest);
+      if (activePeer === pubkey) {
+        setRenderedPeer(undefined);
+        navigate("/dms");
+      }
+    },
+    [closeDm, activePeer, navigate],
   );
 
   // "Mark all as read": stamp every conversation whose latest message is from
@@ -2404,6 +2446,7 @@ export function DMsPage() {
             onMarkAllRead={markAllDmsRead}
             onCompose={startComposing}
             openPeer={openPeer}
+            closePeer={closePeer}
             loadMore={loadMore}
             hasMore={hasMore}
             isLoadingMore={isLoadingMore}

@@ -36,6 +36,8 @@ const MAX_ROWS = 100;
 /** One conversation row, flattened to what the list needs to render it. */
 export interface DmListSnapshotRow {
   peer: string;
+  /** Id of the latest message, used to distinguish two messages in one second. */
+  eventId?: string;
   /** Timestamp of the latest message — the list's sort key. */
   createdAt: number;
   /** Author of the latest message; drives the unread state. */
@@ -70,6 +72,7 @@ function isRow(value: unknown): value is DmListSnapshotRow {
   const r = value as Record<string, unknown>;
   return (
     typeof r.peer === "string" &&
+    (r.eventId === undefined || typeof r.eventId === "string") &&
     typeof r.createdAt === "number" &&
     typeof r.author === "string" &&
     typeof r.mine === "boolean" &&

@@ -8,6 +8,12 @@ import type { ThemeConfig, ThemesConfig } from "@/themes";
 
 export type Theme = "light" | "dark" | "system" | "custom";
 
+/** The newest message that existed when a DM was closed from the sidebar. */
+export interface ClosedDmMarker {
+  eventId?: string;
+  createdAt: number;
+}
+
 /**
  * The user's NIP-65 (kind 10002) relay list plus its sync timestamp, mirroring
  * `BlossomServerMetadata`. Each relay carries the `read`/`write` markers from
@@ -242,6 +248,12 @@ export interface AppConfig {
    */
   pinnedDms: string[];
   /**
+   * DMs dismissed from the sidebar, keyed by peer pubkey. The marker identifies
+   * the newest message present when the row was closed; any later/different
+   * newest message makes the row visible again. Synced privately across devices.
+   */
+  closedDms: Record<string, ClosedDmMarker>;
+  /**
    * DM peers that have been let through the request tier, as hex pubkeys. A
    * conversation with someone the user neither follows nor has written to
    * lands in "Requests" instead of the main list.
@@ -335,6 +347,7 @@ export const SYNCED_CONFIG_KEYS = [
   "dmProtocol",
   "dmTypingIndicators",
   "pinnedDms",
+  "closedDms",
   "acceptedDms",
   "showDmRequests",
   "defaultZapAmount",
@@ -366,6 +379,7 @@ export const defaultConfig: AppConfig = {
   dmProtocol: {},
   dmTypingIndicators: true,
   pinnedDms: [],
+  closedDms: {},
   acceptedDms: [],
   showDmRequests: true,
   meshIncognito: true,

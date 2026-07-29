@@ -555,8 +555,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
-  const pickerToggleRef = useRef<HTMLButtonElement>(null);
+  const pickerToggleGroupRef = useRef<HTMLDivElement>(null);
   const { insertAtCursor, insertEmoji } = useInsertText(textareaRef, content, setContent);
+
+  const togglePickerTab = useCallback((tab: "emoji" | "gif") => {
+    if (pickerOpen && pickerTab === tab) {
+      setPickerOpen(false);
+      return;
+    }
+    setPickerTab(tab);
+    setPickerOpen(true);
+  }, [pickerOpen, pickerTab]);
 
   // Let other components (e.g. the member list) request a mention insertion.
   useMentionInsertions((text) => {
@@ -618,7 +627,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Node;
       if (pickerRef.current?.contains(target)) return;
-      if (pickerToggleRef.current?.contains(target)) return;
+      if (pickerToggleGroupRef.current?.contains(target)) return;
       setPickerOpen(false);
     };
     document.addEventListener("pointerdown", handlePointerDown);
@@ -1908,26 +1917,49 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 />
               </div>
 
-              {/* Emoji / GIF / sticker picker toggle */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    ref={pickerToggleRef}
-                    onClick={() => setPickerOpen((v) => !v)}
-                    aria-label="Emoji / GIF / Stickers"
-                    className={cn(
-                      "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9 touch:size-11",
-                      pickerOpen
-                        ? "text-primary bg-primary/10"
-                        : "text-muted-foreground hover:text-foreground hover:bg-secondary",
-                    )}
-                  >
-                    <Smile className="size-5" />
-                  </button>
-                </TooltipTrigger>
-                {!pickerOpen && <TooltipContent>Emoji / GIF</TooltipContent>}
-              </Tooltip>
+              {/* Dedicated emoji/sticker and GIF picker toggles. */}
+              <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => togglePickerTab("emoji")}
+                      aria-label="Emoji / Stickers"
+                      className={cn(
+                        "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9 touch:size-11",
+                        pickerOpen && pickerTab !== "gif"
+                          ? "text-primary bg-primary/10"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary",
+                      )}
+                    >
+                      <Smile className="size-5" />
+                    </button>
+                  </TooltipTrigger>
+                  {(!pickerOpen || pickerTab === "gif") && <TooltipContent>Emoji</TooltipContent>}
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => togglePickerTab("gif")}
+                      aria-label="GIFs"
+                      className={cn(
+                        "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9 touch:size-11",
+                        pickerOpen && pickerTab === "gif"
+                          ? "text-primary bg-primary/10"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary",
+                      )}
+                    >
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <rect x="1.5" y="2.5" width="17" height="15" rx="3" stroke="currentColor" strokeWidth="1.5" />
+                        <text x="10" y="10.5" textAnchor="middle" dominantBaseline="central" fontSize="7" fontWeight="700" fontFamily="system-ui,sans-serif" fill="currentColor" letterSpacing="0.4">GIF</text>
+                      </svg>
+                    </button>
+                  </TooltipTrigger>
+                  {(!pickerOpen || pickerTab !== "gif") && <TooltipContent>GIFs</TooltipContent>}
+                </Tooltip>
+              </div>
 
               {/* Mic when empty, send when there's something to send (Signal-style).
                   Available in group mode AND delegated-send mode (Concord/DMs) —
@@ -2082,37 +2114,21 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           )}
         >
           <div className="overflow-hidden min-h-0">
-          <div className="flex gap-1 px-3 pt-2">
-            <button
-              type="button"
-              onClick={() => setPickerTab("emoji")}
-              className={cn(
-                "flex items-center justify-center gap-1.5 px-4 py-1.5 touch:py-2.5 rounded-full text-sm font-medium transition-colors",
-                pickerTab === "emoji"
-                  ? "bg-primary/15 text-primary"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted",
-              )}
-            >
-              <Smile className="size-3.5" />
-              Emoji
-            </button>
-            <button
-              type="button"
-              onClick={() => setPickerTab("gif")}
-              className={cn(
-                "flex items-center justify-center gap-1.5 px-4 py-1.5 touch:py-2.5 rounded-full text-sm font-medium transition-colors",
-                pickerTab === "gif"
-                  ? "bg-primary/15 text-primary"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted",
-              )}
-            >
-              <svg width="14" height="14" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <rect x="1" y="1" width="16" height="16" rx="3" stroke="currentColor" strokeWidth="1.5" fill="none" />
-                <text x="9" y="9" textAnchor="middle" dominantBaseline="central" fontSize="7" fontWeight="700" fontFamily="system-ui,sans-serif" fill="currentColor" letterSpacing="0.5">GIF</text>
-              </svg>
-              GIF
-            </button>
-            {customEmojis.length > 0 && (
+          {pickerTab !== "gif" && customEmojis.length > 0 && (
+            <div className="flex gap-1 px-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setPickerTab("emoji")}
+                className={cn(
+                  "flex items-center justify-center gap-1.5 px-4 py-1.5 touch:py-2.5 rounded-full text-sm font-medium transition-colors",
+                  pickerTab === "emoji"
+                    ? "bg-primary/15 text-primary"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted",
+                )}
+              >
+                <Smile className="size-3.5" />
+                Emoji
+              </button>
               <button
                 type="button"
                 onClick={() => setPickerTab("stickers")}
@@ -2126,8 +2142,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 <Sticker className="size-3.5" />
                 Stickers
               </button>
-            )}
-          </div>
+            </div>
+          )}
 
           {pickerTab === "emoji" ? (
             <Suspense

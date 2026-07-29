@@ -3,7 +3,7 @@ import { Search, Star, X, ImageOff } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useGifSearch, gifPreviewSources, type GifResult } from '@/hooks/useGifSearch';
+import { useGifSearch, registerKlipyShare, type GifResult } from '@/hooks/useGifSearch';
 import { useFavoriteGifs } from '@/hooks/useFavoriteGifs';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
@@ -32,9 +32,7 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
   // Calculate the height from the (clamped) aspect ratio to prevent layout shifts
   const displayHeight = thumbHeight(gif);
 
-  // Favorites persisted before `previewSources` existed only kept the id, so
-  // derive the renditions for those.
-  const sources = gif.previewSources ?? gifPreviewSources(gif.id);
+  const sources = gif.previewSources ?? [];
 
   return (
     <button
@@ -61,36 +59,47 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
         </div>
       )}
 
-      {/* The animation, as a muted looping video rather than the ~1 MB
-          original GIF — see `gifPreviewSources`. Sources are ordered cheapest
-          first and the browser plays the first one it supports; only the last
-          one failing means we've run out of renditions. */}
-      <video
-        autoPlay
-        loop
-        muted
-        playsInline
-        aria-label={gif.title}
-        disablePictureInPicture
-        className={cn(
-          // No `controls`, so nothing chrome-like renders. `pointer-events-none`
-          // hands taps to the enclosing tile button and keeps a long-press off
-          // the WebView's native media context menu; the favourite star is a
-          // sibling above it and keeps its own hit area.
-          'pointer-events-none w-full h-full object-cover rounded-lg transition-opacity duration-200',
-          loaded ? 'opacity-100' : 'opacity-0',
-        )}
-        onLoadedData={() => setLoaded(true)}
-      >
-        {sources.map((source, i) => (
-          <source
-            key={source.src}
-            src={source.src}
-            type={source.type}
-            onError={i === sources.length - 1 ? () => setError(true) : undefined}
-          />
-        ))}
-      </video>
+      {/* Prefer KLIPY's lightweight muted MP4 renditions for the grid. A
+          persisted favorite without preview metadata falls back to its GIF. */}
+      {sources.length > 0 ? (
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          aria-label={gif.title}
+          disablePictureInPicture
+          className={cn(
+            // No `controls`, so nothing chrome-like renders. `pointer-events-none`
+            // hands taps to the enclosing tile button and keeps a long-press off
+            // the WebView's native media context menu; the favourite star is a
+            // sibling above it and keeps its own hit area.
+            'pointer-events-none w-full h-full object-cover rounded-lg transition-opacity duration-200',
+            loaded ? 'opacity-100' : 'opacity-0',
+          )}
+          onLoadedData={() => setLoaded(true)}
+        >
+          {sources.map((source, i) => (
+            <source
+              key={source.src}
+              src={source.src}
+              type={source.type}
+              onError={i === sources.length - 1 ? () => setError(true) : undefined}
+            />
+          ))}
+        </video>
+      ) : (
+        <img
+          src={gif.url}
+          alt={gif.title}
+          className={cn(
+            'pointer-events-none w-full h-full object-cover rounded-lg transition-opacity duration-200',
+            loaded ? 'opacity-100' : 'opacity-0',
+          )}
+          onLoad={() => setLoaded(true)}
+          onError={() => setError(true)}
+        />
+      )}
 
       {/* Favorite toggle button */}
       {onToggleFavorite && (
@@ -186,6 +195,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
   }, [activeTab]);
 
   const handleSelect = useCallback((gif: GifResult) => {
+    void registerKlipyShare(gif.id);
     onSelect(gif);
   }, [onSelect]);
 
@@ -240,7 +250,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
                 ref={inputRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search GIFs..."
+                placeholder="Search KLIPY"
                 className="pl-8 pr-20 h-9 text-base md:text-sm bg-muted/50 border-0 rounded-lg"
               />
               {query ? (
@@ -253,7 +263,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
                 </button>
               ) : (
                 <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/50 pointer-events-none select-none">
-                  Powered by GIFverse
+                  Powered by KLIPY
                 </span>
               )}
             </div>

@@ -62,7 +62,7 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
   push, or a maintainer's PR). Third-party PRs run with empty secrets. There is
   no `GITHUB_TOKEN`. Required secrets: `ANDROID_KEYSTORE_BASE64`,
   `KEYSTORE_PASSWORD`, `KEY_PASSWORD`, `ZAPSTORE_BUNKER_URL`,
-  `ZAPSTORE_CLIENT_KEY`, and for web deploy `DEPLOY_SSH_KEY_BASE64`
+  `ZAPSTORE_CLIENT_KEY`, `KLIPY_API_KEY`, and for web deploy `DEPLOY_SSH_KEY_BASE64`
   (+ optional `DEPLOY_SSH_CONFIG_BASE64`, `DEPLOY_TARGET`, `VITE_PLATFORM_RELAYS`).
   Optional: `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (base64 of the Play Console
   service-account JSON for `buzz.armada.app`; unprovisioned skips the Play

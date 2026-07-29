@@ -12,6 +12,7 @@ name: Deploy web
 #   DEPLOY_SSH_KEY_BASE64     base64 (one line) of the deploy user's private key
 #   DEPLOY_SSH_CONFIG_BASE64  (optional) base64 of an ssh_config -> ~/.ssh/config
 #   DEPLOY_TARGET             (optional) rsync destination; defaults to "web"
+#   KLIPY_API_KEY             KLIPY production API key used by GIF search
 #   VITE_PLATFORM_RELAYS      wss://armada.buzz — pins the platform relay in the
 #                             HOSTED build only (tag builds keep it empty)
 #   VITE_PLAUSIBLE_DOMAIN     (optional) Plausible site domain (e.g. armada.buzz)
@@ -33,6 +34,7 @@ jobs:
       # Vite inlines VITE_* at build time. Pull the hosted relay pin from the
       # provisioned secret; empty is a safe default (unpinned build).
       VITE_PLATFORM_RELAYS: ${{ secrets.VITE_PLATFORM_RELAYS }}
+      VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
       # Privacy-friendly analytics, hosted build only. Empty (secret not
       # provisioned) leaves the tracker uninitialized — no telemetry.
       VITE_PLAUSIBLE_DOMAIN: ${{ secrets.VITE_PLAUSIBLE_DOMAIN }}

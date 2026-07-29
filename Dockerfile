@@ -5,6 +5,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --silent
 COPY . .
 ARG VITE_APP_NAME=Armada
+ARG VITE_KLIPY_API_KEY=
 # Platform relays are empty by default: a standalone web build bakes in no
 # servers and the user adds their own. The armada-relay compose stack overrides
 # this ARG when it builds the client for a self-hosted deployment.
@@ -17,6 +18,7 @@ ARG VITE_DEFAULT_ECHO_CANCELLATION=true
 ARG VITE_DEFAULT_AUTO_GAIN_CONTROL=true
 ARG VITE_SANDBOX_DOMAIN=iframe.diy
 ENV VITE_APP_NAME=$VITE_APP_NAME
+ENV VITE_KLIPY_API_KEY=$VITE_KLIPY_API_KEY
 ENV VITE_PLATFORM_RELAYS=$VITE_PLATFORM_RELAYS
 ENV VITE_APP_RELAYS=$VITE_APP_RELAYS
 ENV VITE_SEARCH_RELAYS=$VITE_SEARCH_RELAYS

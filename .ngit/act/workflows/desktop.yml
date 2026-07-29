@@ -44,6 +44,7 @@ jobs:
       - name: Build standalone web bundle
         env:
           VITE_PLATFORM_RELAYS: ""
+          VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
           # OFF in the published sovereign desktop build by default (see the
           # Android release workflow). Configurable for own-branded builds via
           # the provisioned secret; empty = tracker never initialized.

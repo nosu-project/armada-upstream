@@ -12,6 +12,7 @@ const SELF = "self-pubkey";
 function rows(n: number): DmListSnapshotRow[] {
   return Array.from({ length: n }, (_, i) => ({
     peer: `peer-${i}`,
+    eventId: `event-${i}`,
     createdAt: 1_000 - i, // newest first, matching render order
     author: i % 2 === 0 ? SELF : `peer-${i}`,
     preview: `message ${i}`,

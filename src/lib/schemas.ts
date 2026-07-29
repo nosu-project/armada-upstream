@@ -61,8 +61,14 @@ export const RailLayoutNodeSchema: z.ZodType<RailLayoutNode> = z.union([
 export const FrequentReactionSchema = z.object({
   key: z.string(),
   url: z.string().optional(),
+  pickerId: z.string().optional(),
   count: z.number(),
   usedAt: z.number(),
+});
+
+const ClosedDmMarkerSchema = z.object({
+  eventId: z.string().optional(),
+  createdAt: z.number(),
 });
 
 /**
@@ -93,6 +99,7 @@ export const AppConfigSchema = z.object({
   notifLevels: z.record(z.string(), z.enum(["all", "mentions", "nothing"])).catch({}),
   dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).catch({}),
   pinnedDms: z.array(z.string()).catch([]),
+  closedDms: z.record(z.string(), ClosedDmMarkerSchema).catch({}),
   acceptedDms: z.array(z.string()).catch([]),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
@@ -146,6 +153,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).optional(),
   /** Pinned DM peers (hex pubkeys) in pin order — see AppConfig. */
   pinnedDms: z.array(z.string()).optional(),
+  /** DMs dismissed from the sidebar until a newer message arrives. */
+  closedDms: z.record(z.string(), ClosedDmMarkerSchema).optional(),
   /** DM peers accepted out of the request tier (hex pubkeys) — see AppConfig. */
   acceptedDms: z.array(z.string()).optional(),
   /** Whether unknown-sender DMs are surfaced in the request tier — see AppConfig. */
