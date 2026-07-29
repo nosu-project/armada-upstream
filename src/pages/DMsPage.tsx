@@ -641,7 +641,14 @@ function Conversation({
   // render an untagged `/cmd args` invocation as an action line — a DM sends
   // invocations untagged (the recipient IS the bot), so there's no tag to key
   // off. Non-bot peers yield an empty set and nothing is ever promoted.
-  const botRoster = useMemo(() => [peer], [peer]);
+  // A normal DM already resolved this peer's profile for the header. Only fan
+  // out to the public bot-manifest indexers when that profile explicitly marks
+  // the peer as a bot; otherwise opening every DM needlessly connects to all
+  // discovery relays (and surfaces their transient WebSocket failures).
+  const botRoster = useMemo(
+    () => (author.data?.metadata?.bot === true ? [peer] : []),
+    [author.data?.metadata?.bot, peer],
+  );
   const { entries: botCommandEntries } = useBotManifests(botRoster);
   const knownCommands = useMemo(
     () => new Set(botCommandEntries.map((e) => e.command.name)),
@@ -753,18 +760,21 @@ function Conversation({
 
   // Voice: derive the shared DM room id and find a LiveKit-capable relay to
   // host the call. DMs are stored on general app relays (which usually don't
-  // run LiveKit); the Armada platform relays do, and both peers share that
-  // pinned list — so prefer them, falling back to the DM relays.
+  // run LiveKit); explicit/platform/fallback voice relays are tried before the
+  // general DM set so unsupported cross-origin endpoints aren't probed first.
   const roomId = user ? deriveDmRoomId(user.pubkey, peer) : undefined;
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
   const voiceCandidates = useMemo(
     () => {
-      // The user's Settings -> Voice server (when set) wins, then the pinned/DM
-      // relays, then the platform's default LiveKit-capable relay so 1:1 voice
-      // works even when none of the user's own relays host the NIP-29 LiveKit
-      // extension. Deduped.
+      // The user's Settings -> Voice server (when set) wins, then configured
+      // LiveKit-capable relays, with general DM relays as a last resort.
       const preferred = preferredDmVoiceRelay();
-      const ordered = [...(preferred ? [preferred] : []), ...PLATFORM_RELAYS, ...dmRelays, ...DM_VOICE_RELAYS];
+      const ordered = [
+        ...(preferred ? [preferred] : []),
+        ...PLATFORM_RELAYS,
+        ...DM_VOICE_RELAYS,
+        ...dmRelays,
+      ];
       return ordered.filter((r, i) => ordered.indexOf(r) === i);
     },
     [dmRelays],
@@ -1809,12 +1819,15 @@ function ConversationList({
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
   const voiceCandidates = useMemo(
     () => {
-      // The user's Settings -> Voice server (when set) wins, then the pinned/DM
-      // relays, then the platform's default LiveKit-capable relay so 1:1 voice
-      // works even when none of the user's own relays host the NIP-29 LiveKit
-      // extension. Deduped.
+      // Match the conversation header's capability order: known voice relays
+      // first, general-purpose DM relays only as a fallback.
       const preferred = preferredDmVoiceRelay();
-      const ordered = [...(preferred ? [preferred] : []), ...PLATFORM_RELAYS, ...dmRelays, ...DM_VOICE_RELAYS];
+      const ordered = [
+        ...(preferred ? [preferred] : []),
+        ...PLATFORM_RELAYS,
+        ...DM_VOICE_RELAYS,
+        ...dmRelays,
+      ];
       return ordered.filter((r, i) => ordered.indexOf(r) === i);
     },
     [dmRelays],

@@ -2188,6 +2188,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               onSelect={(emoji) => {
                 registerAttachment(emoji.url, "image/webp");
                 setPickerOpen(false);
+                requestAnimationFrame(() => textareaRef.current?.focus());
               }}
             />
           ) : (
@@ -2195,6 +2196,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               onSelect={(gif) => {
                 registerAttachment(gif.url, "image/gif", `${gif.width}x${gif.height}`);
                 setPickerOpen(false);
+                // Restore focus after the picker closes so Enter sends the
+                // attached GIF without another click in the message field.
+                requestAnimationFrame(() => textareaRef.current?.focus());
               }}
             />
           )}

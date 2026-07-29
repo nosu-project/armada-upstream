@@ -11,6 +11,7 @@ import {
   mergeDmEvents,
   mergeDmThread,
   nextDirectionCursor,
+  shouldShowDmThreadLoading,
   type DecryptedDM,
   type RelayCursors,
 } from "@/hooks/useDirectMessages";
@@ -149,6 +150,23 @@ describe("mergeDmThread (thread merge floor)", () => {
     const row = mergeDmThread(decryptedRow, placeholderWithStatus).find((m) => m.id === "9")!;
     expect(row.content).toBe("m9");
     expect(row.status).toBe("failed");
+  });
+});
+
+describe("DM thread loading gate", () => {
+  it("settles a fresh cached empty thread when no initial pull is running", () => {
+    // Reopening this cache entry within staleTime skips the queryFn. The old
+    // sticky done-bit reset on mount and could therefore never become true.
+    expect(shouldShowDmThreadLoading(false, 0, false)).toBe(false);
+  });
+
+  it("keeps a cold empty thread loading only while its first pull is running", () => {
+    expect(shouldShowDmThreadLoading(false, 0, true)).toBe(true);
+    expect(shouldShowDmThreadLoading(false, 0, false)).toBe(false);
+  });
+
+  it("paints local messages even while a superseded empty pull winds down", () => {
+    expect(shouldShowDmThreadLoading(false, 1, true)).toBe(false);
   });
 });
 

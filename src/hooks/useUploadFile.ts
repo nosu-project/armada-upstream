@@ -1,5 +1,4 @@
 import { BlossomUploader } from "@nostrify/nostrify/uploaders";
-import { N64 } from "@nostrify/nostrify/utils";
 import { useMutation } from "@tanstack/react-query";
 
 import { getEffectiveBlossomServers } from "@/lib/blossom";
@@ -120,30 +119,25 @@ async function mirrorToServers(
   servers: string[],
   signer: NostrSigner,
 ): Promise<void> {
-  const now = Date.now();
-
-  const event = await signer.signEvent({
-    kind: 24242,
-    content: "Mirror blob",
-    created_at: Math.floor(now / 1000),
-    tags: [
-      ["t", "mirror"],
-      ["expiration", Math.floor((now + 60_000) / 1000).toString()],
-    ],
-  });
-
-  const authorization = `Nostr ${N64.encodeEvent(event)}`;
-
   await Promise.allSettled(
-    servers.map((server) =>
-      fetch(new URL("/mirror", server), {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": authorization,
-        },
-        body: JSON.stringify({ url: sourceUrl }),
-      })
-    ),
+    servers.map((server) => {
+      // Use Nostrify's BUD-04/BUD-11 implementation so the authorization has
+      // the required upload verb, blob hash, and event URL encoding. The old
+      // hand-built `t=mirror` event was rejected with HTTP 403 by conforming
+      // servers even though the original upload had succeeded.
+      const uploader = new BlossomUploader({
+        servers: [server],
+        signer,
+        fetch: (input, init) =>
+          globalThis.fetch(input, {
+            ...init,
+            signal: AbortSignal.any([
+              init?.signal ?? AbortSignal.timeout(30_000),
+              AbortSignal.timeout(30_000),
+            ]),
+          }),
+      });
+      return uploader.mirror(sourceUrl);
+    }),
   );
 }
