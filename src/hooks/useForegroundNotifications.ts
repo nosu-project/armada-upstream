@@ -183,6 +183,10 @@ export function useForegroundNotifications(): void {
 
       for (const cand of candidates) {
         if (cand.createdAt <= sessionFloor.current) continue;
+        // Ingest normally removes self-authored events, but keep the final
+        // presentation boundary safe when identity hydration races a live
+        // event or another candidate source is added.
+        if (cand.author && cand.author === user.pubkey) continue;
 
         // Resolve the fields ingest left for the hook (relay-dependent routing,
         // V1 community routing) and the conversation's notification level.
@@ -271,6 +275,10 @@ export function useForegroundNotifications(): void {
           }
 
           try {
+            // Profile resolution can outlive a focus or route change. Re-check
+            // at presentation time so a notification queued in the background
+            // is not shown after the user has focused that conversation.
+            if (cand.author === user.pubkey || isRoomActive(roomKey)) return;
             const n = new Notification(title, {
               body,
               icon: "/favicon.png",

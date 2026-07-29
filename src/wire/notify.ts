@@ -1,3 +1,5 @@
+import { KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
+
 /**
  * Foreground-notification feed.
  *
@@ -78,6 +80,29 @@ export interface NotifyCandidate {
 }
 
 export type NotifySink = (candidates: NotifyCandidate[]) => void;
+
+/**
+ * Convert freshly decrypted NIP-17 messages into the same foreground feed as
+ * legacy DMs. Self-copies and non-message rumors stay silent.
+ */
+export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCandidate[] {
+  return opened.flatMap((dm) => {
+    if (dm.author === self || (dm.kind !== KIND_DM_CHAT && dm.kind !== KIND_DM_FILE)) return [];
+    return [{
+      plane: "dm" as const,
+      author: dm.author,
+      createdAt: dm.createdAt,
+      mention: true,
+      kind: dm.kind,
+      body: dm.kind === KIND_DM_FILE ? "Sent a file" : dm.content,
+      roomKey: `dm:${dm.peer}`,
+      readKey: `dm:${dm.peer}`,
+      path: `/dms/${dm.peer}`,
+      peer: dm.peer,
+      eventId: dm.rumorId,
+    }];
+  });
+}
 
 let sink: NotifySink | undefined;
 

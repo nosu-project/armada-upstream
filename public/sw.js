@@ -62,6 +62,46 @@ self.addEventListener("activate", (event) => {
 //    here without bundled crypto, so they keep the generic wake-up.
 
 const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
+const PUSH_STATE_CACHE = "armada-push-state-v1";
+const PUSH_STATE_PREFIX = "/.armada-push-state/";
+
+/** Whether this encrypted DM push is redundant or is our own local self-copy. */
+async function suppressDmPush(data) {
+  if (data.scope !== "dm") return false;
+
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    if (data.event_id) {
+      const ownUrl = new URL(
+        `${PUSH_STATE_PREFIX}own/${encodeURIComponent(data.event_id)}`,
+        self.location.origin,
+      ).href;
+      if (await cache.match(ownUrl)) return true;
+    }
+
+    // An encrypted wrap hides its peer, so while any specific DM thread is in
+    // the focused Armada window the page owns notification decisions. Its
+    // decrypted foreground feed suppresses the open peer and still notifies for
+    // a different peer.
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    return windows.some((client) => {
+      try {
+        const url = new URL(client.url);
+        const parts = url.pathname.split("/").filter(Boolean);
+        const dms = parts.lastIndexOf("dms");
+        return url.origin === self.location.origin
+          && client.visibilityState === "visible"
+          && client.focused
+          && dms >= 0
+          && parts.length > dms + 1;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
 
 self.addEventListener("push", (event) => {
   if (!event.data) return;
@@ -84,6 +124,8 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
+      if (await suppressDmPush(data)) return;
+
       // 1. Guaranteed visible notification, immediately.
       await self.registration.showNotification(title, {
         ...base,

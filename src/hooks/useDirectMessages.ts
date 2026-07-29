@@ -20,6 +20,7 @@ import { setDecryptConsent } from "@/lib/decryptConsent";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
+import { markOwnWebPushEvent } from "@/lib/webPushState";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -1036,6 +1037,10 @@ export function useDirectMessages(peer: string | undefined) {
   const publish = useCallback(
     async (event: NostrEvent) => {
       try {
+        // The content-blind push server also observes our own relay echo. Mark
+        // it before publish so this browser never presents an outgoing legacy
+        // DM as a new incoming message.
+        await markOwnWebPushEvent(event.id);
         // Write to the union of our DM relays and the peer's published inbox
         // relays (kind 10050), so the message reaches the recipient even when
         // they don't read our relays.

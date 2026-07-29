@@ -41,6 +41,7 @@ import { APP_RELAYS } from "@/lib/platform";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
+import { markOwnWebPushEvent } from "@/lib/webPushState";
 import {
   buildDmRumor,
   DM_RUMOR_KINDS,
@@ -79,6 +80,7 @@ import {
   writeDm17SeenWrapIds,
 } from "@/lib/nip17/dm17Store";
 import { useWireScopes } from "@/wire/useWireScopes";
+import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
 
 import type { SendStatus } from "@/hooks/useGroupMessages";
 import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
@@ -273,6 +275,7 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
     if (i + DECRYPT_WAVE < wraps.length) await new Promise((r) => setTimeout(r, 0));
   }
   await writeDm17Rumors(opened);
+  feedNotifyCandidates(dm17NotifyCandidates(opened, ctx.self));
   persistSeenWraps(ctx.self);
   return true;
 }
@@ -824,6 +827,10 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       // relay it's recognized as already seen instead of firing a spurious
       // "New direct message".
       const selfCopy = wrapSelf ?? wrapPeer; // peer === self ⇒ the peer copy IS the self copy
+      // Mark before either relay publish. The content-blind push server cannot
+      // distinguish an incoming wrap from our NIP-17 self-copy, but the service
+      // worker can suppress this exact event id without seeing plaintext.
+      await markOwnWebPushEvent(selfCopy.id);
       await eventStore.then((s) => s.event(selfCopy)).catch(() => undefined);
 
       // The self copy is fire-and-forget: it exists for OTHER devices/sessions,
