@@ -10,6 +10,8 @@ interface WindowClientStub {
   url: string;
   visibilityState: string;
   focused: boolean;
+  activeDm?: boolean;
+  postMessage?(message: unknown, transfer: Transferable[]): void;
 }
 
 interface PushEventStub {
@@ -25,11 +27,18 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
       options.ownEventId && request.includes(`/own/${options.ownEventId}`) ? {} : undefined
     )),
   };
+  const clients = (options.clients ?? []).map((client) => ({
+    ...client,
+    postMessage: client.postMessage ?? ((_message: unknown, transfer: Transferable[]) => {
+      const port = transfer[0] as MessagePort | undefined;
+      port?.postMessage({ active: client.activeDm === true });
+    }),
+  }));
   const self = {
     location: { origin: "https://chat.dill.moe" },
     registration: { showNotification },
     clients: {
-      matchAll: vi.fn(async () => options.clients ?? []),
+      matchAll: vi.fn(async () => clients),
       claim: vi.fn(async () => undefined),
       openWindow: vi.fn(async () => undefined),
     },
@@ -43,7 +52,15 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
     keys: vi.fn(async () => []),
   };
 
-  runInNewContext(workerSource, { self, caches, URL, console, setTimeout, clearTimeout });
+  runInNewContext(workerSource, {
+    self,
+    caches,
+    URL,
+    MessageChannel,
+    console,
+    setTimeout,
+    clearTimeout,
+  });
 
   async function push(data: Record<string, unknown>): Promise<void> {
     let pending: Promise<unknown> | undefined;
@@ -73,6 +90,19 @@ describe("DM Web Push suppression", () => {
         url: "https://chat.dill.moe/armada/dms/npub1peer",
         visibilityState: "visible",
         focused: true,
+      }],
+    });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
+    expect(worker.showNotification).not.toHaveBeenCalled();
+  });
+
+  it("queries the page when client.url still has the pre-navigation DM-list route", async () => {
+    const worker = loadWorker({
+      clients: [{
+        url: "https://chat.dill.moe/armada/dms",
+        visibilityState: "visible",
+        focused: true,
+        activeDm: true,
       }],
     });
     await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });

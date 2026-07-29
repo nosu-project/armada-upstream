@@ -80,4 +80,23 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
       window.removeEventListener("blur", publish);
     };
   }, [sig]);
+
+  // WindowClient.url is the document's creation URL, so a service worker
+  // cannot reliably infer the current React Router route after pushState.
+  // Answer its push-time query with the live room registry instead.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    const answerActiveDmQuery = (event: MessageEvent) => {
+      if (event.data?.type !== "armada-active-dm-query") return;
+      const port = event.ports[0];
+      if (!port) return;
+      const focused = document.visibilityState === "visible" && document.hasFocus();
+      const hasActiveDm = sig.split("\u0001").some((key) => key.startsWith("dm:"));
+      port.postMessage({ active: focused && hasActiveDm });
+    };
+
+    navigator.serviceWorker.addEventListener("message", answerActiveDmQuery);
+    return () => navigator.serviceWorker.removeEventListener("message", answerActiveDmQuery);
+  }, [sig]);
 }

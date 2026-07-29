@@ -65,6 +65,32 @@ const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
 const PUSH_STATE_CACHE = "armada-push-state-v1";
 const PUSH_STATE_PREFIX = "/.armada-push-state/";
 
+/** Ask a live page whether it is focused with a specific DM thread open. */
+function clientHasActiveDm(client) {
+  if (typeof MessageChannel === "undefined" || typeof client.postMessage !== "function") {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    let settled = false;
+    const finish = (active) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      channel.port1.close();
+      resolve(active);
+    };
+    const timer = setTimeout(() => finish(false), 250);
+    channel.port1.onmessage = (event) => finish(event.data?.active === true);
+    try {
+      client.postMessage({ type: "armada-active-dm-query" }, [channel.port2]);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
 /** Whether this encrypted DM push is redundant or is our own local self-copy. */
 async function suppressDmPush(data) {
   if (data.scope !== "dm") return false;
@@ -80,10 +106,14 @@ async function suppressDmPush(data) {
     }
 
     // An encrypted wrap hides its peer, so while any specific DM thread is in
-    // the focused Armada window the page owns notification decisions. Its
-    // decrypted foreground feed suppresses the open peer and still notifies for
-    // a different peer.
+    // the focused Armada window the page owns notification decisions. Ask the
+    // page for its live React Router state: WindowClient.url is only the
+    // document's creation URL and can still say `/dms` after pushState opened a
+    // peer. The URL check remains as a fallback for directly-loaded threads or
+    // browsers that cannot transfer a MessagePort.
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const liveStates = await Promise.all(windows.map((client) => clientHasActiveDm(client)));
+    if (liveStates.some(Boolean)) return true;
     return windows.some((client) => {
       try {
         const url = new URL(client.url);
