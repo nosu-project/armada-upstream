@@ -18,6 +18,7 @@ import type { AuthorityCitation } from "@/concord-v2/lib/edition";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
 import { queryByStreams, writeOpened } from "@/concord-v2/lib/rumorStore";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { openWrap, type OpenedEvent, type Rumor, type StreamSigner } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { logSync } from "@/lib/syncLog";
@@ -206,30 +207,87 @@ export function useChannels2(community: CommunityV2 | undefined, active = true):
  * `active` gates the network poll: the rail doesn't need each community's
  * dissolution status up-front, so it's only checked once you open the community.
  */
+/** Persisted-forever marker for a community we have seen a valid tombstone for. */
+const dissolvedKey = (idHex: string) => `concord2-dissolved:${idHex}`;
+
+/**
+ * Session memo of known-dissolved communities (idHex → tombstone ms), so a
+ * remount answers SYNCHRONOUSLY instead of leaving a window where the community
+ * reads as alive while IndexedDB is consulted.
+ */
+const dissolvedMemo = new Map<string, number>();
+
+/**
+ * Record a community as dissolved, permanently. Dissolution is terminal and
+ * one-way (CORD-02 §9), so this is write-once and never cleared.
+ */
+async function rememberDissolved(idHex: string, atMs: number): Promise<void> {
+  if (dissolvedMemo.get(idHex) === atMs) return;
+  dissolvedMemo.set(idHex, atMs);
+  await writeFolded(dissolvedKey(idHex), atMs);
+}
+
+/** Test seam: forget the session memo, leaving only the persisted verdict. */
+export function _forgetDissolvedMemoForTests(): void {
+  dissolvedMemo.clear();
+}
+
+/**
+ * The tombstone ms for a community we have EVER seen dissolved, or undefined.
+ * Local only — no network, no re-derivation. Used by the wire to drop a dead
+ * community's subscriptions and by the send path to refuse a write.
+ */
+export async function dissolvedAt(idHex: string): Promise<number | undefined> {
+  const memo = dissolvedMemo.get(idHex);
+  if (memo !== undefined) return memo;
+  const stored = await readFolded<number>(dissolvedKey(idHex));
+  if (typeof stored === "number") {
+    dissolvedMemo.set(idHex, stored);
+    return stored;
+  }
+  return undefined;
+}
+
+/**
+ * The tombstone's own ms, or `null` while the community lives.
+ *
+ * STICKY. Death is one-way (CORD-02 §9), so once a valid tombstone has been
+ * seen it is persisted and answered from local state forever — a relay outage,
+ * an evicted store, or a failed round MUST NOT resurrect a dead community.
+ * Before this was persistent, the network branch's `.catch(() => [])` meant one
+ * bad round answered "alive", which unfroze the composer.
+ *
+ * A timestamp rather than a boolean: both planes replay from history, so a
+ * caller judging a past action needs to know whether it predates the grave
+ * (honored) or follows it (refused). Truthiness still reads as "dissolved".
+ */
 export function useDissolved2(community: CommunityV2 | undefined, active = true) {
   const { nostr } = useNostr();
+  const idHex = community?.idHex ?? null;
 
-  // The tombstone's OWN ms, not a boolean. Both planes replay from history, so
-  // a caller judging a past action needs to know whether it predates the grave
-  // (honored) or follows it (refused) — "death wins every race" is an ordering
-  // rule (CORD-02 §9). `null` means alive. Truthiness still reads as "dissolved"
-  // for the callers that only need the boolean.
   return useQuery<number | null>({
-    queryKey: ["concord2", "dissolved", community?.idHex ?? null],
+    queryKey: ["concord2", "dissolved", idHex],
     enabled: Boolean(community) && active,
     staleTime: 30_000,
-    // A dissolution is a rare, terminal event; once stored it's cached forever
-    // (the network branch below short-circuits). A slow, foreground-only poll
-    // is plenty to notice it.
+    // Synchronous for a community already known dead this session, so the
+    // composer is never briefly live on a remount.
+    initialData: idHex && dissolvedMemo.has(idHex) ? dissolvedMemo.get(idHex)! : undefined,
+    // A dissolution is rare and terminal; once known this never touches the
+    // network again. A slow, foreground-only poll is plenty to notice one.
     refetchInterval: active ? 5 * 60_000 : false,
     refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
+      // Known dead → done. Never re-derived, so nothing can undo it.
+      const known = await dissolvedAt(community!.idHex);
+      if (known !== undefined) return known;
+
       const group = dissolvedGroupKey(community!.id);
-      // A dissolution tombstone is terminal and immutable — if we've already
-      // stored one, we're done without touching the network.
       const cached = await queryByStreams([group.pk]);
       const cachedGrave = cached.find((o) => isDissolvedOpened(o, community!.owner, community!.id));
-      if (cachedGrave) return cachedGrave.ms;
+      if (cachedGrave) {
+        await rememberDissolved(community!.idHex, cachedGrave.ms);
+        return cachedGrave.ms;
+      }
 
       const results = await Promise.all(
         community!.relays.map((url) =>
@@ -243,7 +301,10 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
       );
       const opened = openPlaneWraps(results.flat(), [group]);
       if (opened.length > 0) writeOpened(opened);
-      return opened.find((o) => isDissolvedOpened(o, community!.owner, community!.id))?.ms ?? null;
+      const grave = opened.find((o) => isDissolvedOpened(o, community!.owner, community!.id));
+      if (!grave) return null;
+      await rememberDissolved(community!.idHex, grave.ms);
+      return grave.ms;
     },
   });
 }

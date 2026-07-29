@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { citationFor, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
+import { citationFor, dissolvedAt, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import {
@@ -751,6 +751,13 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
     }) => {
       if (!user) throw new Error("Sign in to send a message.");
       if (!community || !channel) throw new Error("No channel selected.");
+      // Death is one-way (CORD-02 §9). Gated at the PUBLISH, not just in the
+      // UI: `canWrite` is derived from a query that is undefined on its first
+      // tick, so a composer can be live for a moment before the verdict lands.
+      // This read is local and sticky — once dissolved, never writable again.
+      if ((await dissolvedAt(community.idHex)) !== undefined) {
+        throw new Error("This community has been dissolved; it accepts no new messages.");
+      }
 
       // A threaded reply is a NIP-22 comment (kind 1111), not a kind-9 message.
       const effectiveKind = replyTo ? KIND_COMMENT : kind;

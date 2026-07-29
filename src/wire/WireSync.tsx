@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { buildConcordSubs, buildConcordControlSubs } from "@/concord-v1/lib/concordNotifications";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
+import { controlFoldKey, dissolvedAt } from "@/concord-v2/hooks/useControlPlane2";
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView } from "@/concord-v2/lib/community";
 import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
@@ -164,6 +164,10 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
         if (!community || community.relays.length === 0) continue;
+        // A dissolved community is a grave: no subscriptions, so nothing new is
+        // received, processed or ingested for it (CORD-02 §9). Local + sticky,
+        // so a relay outage can't quietly resurrect the feed.
+        if ((await dissolvedAt(community.idHex)) !== undefined) continue;
         const keys: GroupKey[] = [];
         const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
         for (const channel of channelsView(community, folded)) {
