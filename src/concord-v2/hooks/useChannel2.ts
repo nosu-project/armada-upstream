@@ -230,7 +230,7 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
           return false;
         }
         // …then the sync floor: have we read enough of their Grant to trust the
-        // verdict above? Pre-flag-day deletes bypass it (CITATION_REQUIRED_FROM_MS).
+        // verdict above? Uncited means we have not, so the delete parks.
         return citationSatisfied(folded, community.id, deleter, action?.citation);
       },
     }),
