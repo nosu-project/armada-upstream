@@ -278,6 +278,14 @@ export interface AppConfig {
    */
   showDmRequests: boolean;
   /**
+   * Whether Discover shows the unfiltered public firehose instead of the
+   * curated author allow-list (the team follow pack, plus your own follows when
+   * logged in). OFF by default. Turning it on surfaces communities, emoji packs
+   * and themes from anyone on the relays, including unvetted and potentially
+   * objectionable content. Synced across devices.
+   */
+  discoverAllContent: boolean;
+  /**
    * Bluetooth-mesh incognito mode. When on (the default), this device announces
    * a derived `anon<peerid>` nickname over the mesh rather than the user's
    * Armada display name — matching bitchat's anonymous-by-default behavior.
@@ -350,6 +358,7 @@ export const SYNCED_CONFIG_KEYS = [
   "closedDms",
   "acceptedDms",
   "showDmRequests",
+  "discoverAllContent",
   "defaultZapAmount",
   "defaultZapMethod",
   "zapsEnabled",
@@ -382,6 +391,7 @@ export const defaultConfig: AppConfig = {
   closedDms: {},
   acceptedDms: [],
   showDmRequests: true,
+  discoverAllContent: false,
   meshIncognito: true,
   meshEnabled: false,
   defaultZapAmount: 100,

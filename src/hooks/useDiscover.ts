@@ -40,7 +40,7 @@ const TIMEOUT_MS = 6000;
  * The "team soapbox" follow pack (kind 39089). Its members are the seed
  * authorship of every Discover feed: a logged-out visitor sees only their
  * content, and a logged-in user sees it merged with their own follows. Discover
- * is deliberately gated — it is never the unfiltered public firehose.
+ * is deliberately gated: it is never the unfiltered public firehose by default.
  */
 const TEAM_FOLLOW_PACK =
   "naddr1qvzqqqyckypzpyexz3t34l966ngh5xg7u2q788hthdqmj0av3lv8s2tz9t43zt6dqqxxkdrsx4mnqm3jxfeh2ess5pyrw";
@@ -84,14 +84,18 @@ async function fetchDiscover(
   relays: string[],
   kind: number,
   query: string,
-  authors: string[],
+  authors: string[] | undefined,
   signal: AbortSignal,
 ): Promise<NostrEvent[]> {
-  const filters: NostrFilter[] = [{ kinds: [kind], authors, limit: FETCH_LIMIT }];
+  // `authors === undefined` means the allow-list is bypassed (the unfiltered
+  // firehose). An empty array would be sent as-is, which callers guard against.
+  const base: NostrFilter = { kinds: [kind], limit: FETCH_LIMIT };
+  if (authors) base.authors = authors;
+  const filters: NostrFilter[] = [base];
   // Add a NIP-50 search filter alongside the recent one so search-capable
   // relays surface deeper matches; relays that ignore `search` still answer the
   // plain filter, and the caller filters client-side either way.
-  if (query) filters.push({ kinds: [kind], authors, search: query, limit: FETCH_LIMIT });
+  if (query) filters.push({ ...base, search: query });
 
   const events = await nostr
     .group(relays)
@@ -122,17 +126,29 @@ function useDiscoverRelays(): string[] {
  * Fail-closed: if the pack can't be read and the viewer has no follows, the
  * list is empty and the feeds show nothing rather than the public firehose (an
  * empty `authors` filter is treated by some relays as "no filter", so callers
- * must NOT query when this is empty — see the `enabled` gates below).
+ * must NOT query when this is empty; see the `enabled` gates below).
+ *
+ * The `discoverAllContent` setting escape-hatches out of all of this: when on,
+ * `unrestricted` is true, callers drop the `authors` filter entirely, and the
+ * feeds show the unfiltered firehose (behind an explicit in-settings warning).
  */
-export function useDiscoverAuthors(): { authors: string[]; isLoading: boolean } {
+export function useDiscoverAuthors(): {
+  authors: string[];
+  unrestricted: boolean;
+  isLoading: boolean;
+} {
   const { nostr } = useNostr();
+  const { config } = useAppContext();
   const relays = useDiscoverRelays();
   const { user } = useCurrentUser();
   const followList = useFollowList();
 
+  const unrestricted = config.discoverAllContent;
+
   const pack = useQuery<string[]>({
     queryKey: ["discover", "follow-pack", TEAM_FOLLOW_PACK, relays],
-    enabled: relays.length > 0 && TEAM_PACK_COORD !== null,
+    // Skip the pack fetch entirely when the allow-list is bypassed.
+    enabled: relays.length > 0 && TEAM_PACK_COORD !== null && !unrestricted,
     staleTime: 60 * 60 * 1000,
     queryFn: async ({ signal }) => {
       const coord = TEAM_PACK_COORD!;
@@ -156,7 +172,9 @@ export function useDiscoverAuthors(): { authors: string[]; isLoading: boolean } 
 
   return {
     authors,
-    isLoading: pack.isLoading || (!!user && followList.isLoading),
+    unrestricted,
+    // Nothing to wait for when the allow-list is bypassed.
+    isLoading: unrestricted ? false : pack.isLoading || (!!user && followList.isLoading),
   };
 }
 
@@ -169,19 +187,23 @@ export function useDiscoverAuthors(): { authors: string[]; isLoading: boolean } 
 export function useDiscoverCommunities(query: string) {
   const { nostr } = useNostr();
   const relays = useDiscoverRelays();
-  const { authors, isLoading: authorsLoading } = useDiscoverAuthors();
+  const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
   const debounced = useDebounce(query, 300);
 
+  const authorFilter = unrestricted ? undefined : authors;
+
   const result = useQuery<DiscoveredInvite[]>({
-    queryKey: ["discover", "communities", relays, authors, debounced.trim()],
-    enabled: relays.length > 0 && !authorsLoading && authors.length > 0,
+    queryKey: ["discover", "communities", relays, authorFilter ?? "all", debounced.trim()],
+    enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
       const q = debounced.trim();
       const search = q ? `${q} ${SHARE_MARKER}` : SHARE_MARKER;
+      const filter: NostrFilter = { kinds: [1], search, limit: FETCH_LIMIT };
+      if (authorFilter) filter.authors = authorFilter;
       const events = await nostr.group(relays).query(
-        [{ kinds: [1], authors, search, limit: FETCH_LIMIT }],
+        [filter],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
       );
       // Newest note wins for a given link.
@@ -204,17 +226,19 @@ export function useDiscoverCommunities(query: string) {
 export function useDiscoverEmojiPacks(query: string) {
   const { nostr } = useNostr();
   const relays = useDiscoverRelays();
-  const { authors, isLoading: authorsLoading } = useDiscoverAuthors();
+  const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
   const debounced = useDebounce(query, 300);
 
+  const authorFilter = unrestricted ? undefined : authors;
+
   const result = useQuery<NostrEvent[]>({
-    queryKey: ["discover", "emoji-packs", relays, authors, debounced.trim()],
-    enabled: relays.length > 0 && !authorsLoading && authors.length > 0,
+    queryKey: ["discover", "emoji-packs", relays, authorFilter ?? "all", debounced.trim()],
+    enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
       const q = debounced.trim();
-      const events = await fetchDiscover(nostr, relays, KIND_EMOJI_SET, q, authors, signal);
+      const events = await fetchDiscover(nostr, relays, KIND_EMOJI_SET, q, authorFilter, signal);
       // Only packs that actually carry emojis are worth showing.
       const usable = events.filter((e) => emojiPackEntries(e).length > 0);
       if (!q) return usable;
@@ -233,17 +257,19 @@ export function useDiscoverEmojiPacks(query: string) {
 export function useDiscoverThemes(query: string) {
   const { nostr } = useNostr();
   const relays = useDiscoverRelays();
-  const { authors, isLoading: authorsLoading } = useDiscoverAuthors();
+  const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
   const debounced = useDebounce(query, 300);
 
+  const authorFilter = unrestricted ? undefined : authors;
+
   const result = useQuery<NostrEvent[]>({
-    queryKey: ["discover", "themes", relays, authors, debounced.trim()],
-    enabled: relays.length > 0 && !authorsLoading && authors.length > 0,
+    queryKey: ["discover", "themes", relays, authorFilter ?? "all", debounced.trim()],
+    enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
       const q = debounced.trim();
-      const events = await fetchDiscover(nostr, relays, THEME_DEFINITION_KIND, q, authors, signal);
+      const events = await fetchDiscover(nostr, relays, THEME_DEFINITION_KIND, q, authorFilter, signal);
       // Drop anything we can't render as a 3-color theme.
       const usable = events.filter((e) => parseDittoTheme(e) !== null);
       if (!q) return usable;

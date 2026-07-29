@@ -101,6 +101,7 @@ export const AppConfigSchema = z.object({
   pinnedDms: z.array(z.string()).catch([]),
   closedDms: z.record(z.string(), ClosedDmMarkerSchema).catch({}),
   acceptedDms: z.array(z.string()).catch([]),
+  discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
 });
@@ -159,6 +160,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   acceptedDms: z.array(z.string()).optional(),
   /** Whether unknown-sender DMs are surfaced in the request tier — see AppConfig. */
   showDmRequests: z.boolean().optional(),
+  /** Whether Discover shows the unfiltered firehose vs the allow-list (see AppConfig). */
+  discoverAllContent: z.boolean().optional(),
   /**
    * The user's quick-reaction frequency table. Merged per key on the way in
    * (highest count / most recent use wins) rather than replaced, so two

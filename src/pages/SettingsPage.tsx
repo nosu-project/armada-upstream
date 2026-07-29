@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Bell,
   ChevronDown,
+  Compass,
   ChevronRight,
   Download,
   FileText,
@@ -79,6 +80,7 @@ type SectionId =
   | "search-relays"
   | "dms"
   | "media"
+  | "discover"
   | "emojis"
   | "wallet"
   | "advanced"
@@ -229,6 +231,16 @@ export function SettingsPage() {
   };
 
   /**
+   * Toggle whether Discover bypasses the curated author allow-list and shows
+   * the unfiltered public firehose. Off by default; on is a foot-gun (see the
+   * warning rendered alongside). Local config only (synced across devices);
+   * publishes nothing.
+   */
+  const setDiscoverAllContent = (value: boolean) => {
+    updateConfig((current) => ({ ...current, discoverAllContent: value }));
+  };
+
+  /**
    * Persist the user's own DM relays. kind-10050 is the user's canonical,
    * discoverable inbox and holds ONLY their personal relays — never the app
    * defaults. So publish exactly the edited list (a direct edit to their own
@@ -290,6 +302,7 @@ export function SettingsPage() {
       { id: "search-relays", title: "Search relays", icon: Search },
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
       { id: "media", title: "Media servers", icon: Image },
+      { id: "discover", title: "Discover", icon: Compass },
     ];
     if (user) {
       appItems.push({ id: "emojis", title: "Emoji packs", icon: Smile });
@@ -519,6 +532,32 @@ export function SettingsPage() {
                 emptyText="No media servers of your own — uploads use the app defaults."
               />
             </SettingsRow>
+          </>
+        );
+      case "discover":
+        return (
+          <>
+            <SettingsRow
+              label="Show all content"
+              description="Discover normally shows only communities, emoji packs, and themes from a curated set of authors: the Armada follow pack, plus people you follow. Turn this on to browse everything published to your relays instead."
+            >
+              <Switch
+                checked={config.discoverAllContent}
+                onCheckedChange={setDiscoverAllContent}
+              />
+            </SettingsRow>
+            {config.discoverAllContent && (
+              <SettingsRow>
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="size-4 text-destructive shrink-0 mt-0.5" />
+                  <p className="text-sm text-destructive leading-snug">
+                    Discover is now unfiltered. Content comes from anyone on your
+                    relays and is not vetted or moderated, so you may encounter
+                    spam or objectionable material.
+                  </p>
+                </div>
+              </SettingsRow>
+            )}
           </>
         );
       case "voice":
