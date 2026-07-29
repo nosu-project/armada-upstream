@@ -18,6 +18,7 @@ import {
   hydrateFrequentReactions,
   subscribeFrequentReactions,
 } from "@/hooks/useFrequentReactions";
+import { useFavoriteGifsSync } from "@/hooks/useFavoriteGifsSync";
 import { useTheme } from "@/hooks/useTheme";
 import { useReadState } from "@/hooks/useReadState";
 import { parseBlossomServerList } from "@/lib/blossom";
@@ -29,6 +30,7 @@ import {
   queryKeysForSelfEvent,
   SELF_SYNC_DTAGS,
   SELF_SYNC_REPLACEABLE_KINDS,
+  T_ARMADA_GIF_FAVORITES,
 } from "@/lib/selfSyncKinds";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
 
@@ -102,7 +104,7 @@ function syncedSubset(config: AppConfig): Partial<EncryptedSettings> {
  * Two layers:
  *
  * A. Transport / freshness (the standing subscription). A single long-lived REQ
- *    `{ authors:[me], kinds:[…] }` (plus a `#d`-scoped filter for the two
+ *    `{ authors:[me], kinds:[…] }` (plus scoped filters for Armada's
  *    addressable kind-30078 documents) streams every new version of the user's
  *    own lists: follow, mute, NIP-29 servers/channels (10009), Concord V1/V2
  *    vaults, DM/Blossom relay lists, and Armada's NIP-78 settings. Events land
@@ -136,6 +138,7 @@ export function NostrSync() {
   const { hydrate: hydrateReadState } = useReadState();
   const { applyCustomTheme } = useTheme();
   const queryClient = useQueryClient();
+  useFavoriteGifsSync();
 
   const dittoCheckedPubkey = useRef<string | undefined>(undefined);
   const blossomAppliedPubkey = useRef<string | undefined>(undefined);
@@ -209,7 +212,8 @@ export function NostrSync() {
 
     const onEvent = (event: NostrEvent) => {
       const dTag = event.kind === KIND_APP_SPECIFIC ? dTagOf(event) : undefined;
-      const keys = queryKeysForSelfEvent(event.kind, dTag);
+      const topicTag = event.tags.find((tag) => tag[0] === "t")?.[1];
+      const keys = queryKeysForSelfEvent(event.kind, dTag, topicTag);
       if (keys.length === 0) return; // cached, but no query watches it (e.g. 10063)
 
       const seenKey = dTag !== undefined ? `${event.kind}:${dTag}` : String(event.kind);
@@ -223,6 +227,7 @@ export function NostrSync() {
     const filters: NostrFilter[] = [
       { authors: [pubkey], kinds: SELF_SYNC_REPLACEABLE_KINDS, since },
       { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#d": SELF_SYNC_DTAGS, since },
+      { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#t": [T_ARMADA_GIF_FAVORITES], since },
     ];
 
     void (async () => {

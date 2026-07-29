@@ -13,8 +13,8 @@
  * The sync discipline (matching the wire's, but for self-state rather than
  * conversation timelines):
  *
- *   1. A standing REQ `{ authors:[me], kinds:[…] }` (plus a `#d`-scoped filter
- *      for the two addressable kind-30078 documents) streams every new version.
+ *   1. A standing REQ `{ authors:[me], kinds:[…] }` (plus scoped filters for
+ *      Armada's addressable kind-30078 documents) streams every new version.
  *   2. Each event lands in the `armada-events` IndexedDB cache first — the
  *      NostrBatcher mirrors everything that flows out of `.req()`.
  *   3. Then the matching TanStack query key(s) are invalidated so the owning
@@ -46,13 +46,15 @@ export const KIND_USER_EMOJIS = 10030;
 export const KIND_COMMUNITY_LIST_V2 = 13302;
 /** Concord V2 invite list — the creator's minted-link bookkeeping (CORD-05, 13303). */
 export const KIND_INVITE_LIST_V2 = 13303;
-/** NIP-78 application-specific data (30078) — Concord V1 vault + Armada settings. */
+/** NIP-78 application-specific data (30078) — vault, settings, and private app data. */
 export const KIND_APP_SPECIFIC = 30078;
 
 /** `d` tag identifying Armada's own encrypted settings document. */
 export const D_ARMADA_METADATA = "armada/metadata";
 /** `d` tag identifying the Concord V1 membership list document. */
 export const D_ARMADA_CONCORD = "armada/concord";
+/** Tag shared by per-installation encrypted GIF-favorite shards. */
+export const T_ARMADA_GIF_FAVORITES = "armada-gif-favorites";
 
 /**
  * The bare replaceable kinds (10000–19999 band + kind 3) synced with a simple
@@ -82,7 +84,11 @@ export const SELF_SYNC_DTAGS: string[] = [D_ARMADA_METADATA, D_ARMADA_CONCORD];
  * blindly). For kind 30078 the `d` tag selects between the Concord V1 vault and
  * the Armada settings document.
  */
-export function queryKeysForSelfEvent(kind: number, dTag: string | undefined): readonly (readonly string[])[] {
+export function queryKeysForSelfEvent(
+  kind: number,
+  dTag: string | undefined,
+  topicTag?: string,
+): readonly (readonly string[])[] {
   switch (kind) {
     case KIND_FOLLOW_LIST:
       return [["follow-list"]];
@@ -107,6 +113,7 @@ export function queryKeysForSelfEvent(kind: number, dTag: string | undefined): r
     case KIND_APP_SPECIFIC:
       if (dTag === D_ARMADA_METADATA) return [["encrypted-settings"]];
       if (dTag === D_ARMADA_CONCORD) return [["concord", "list"]];
+      if (topicTag === T_ARMADA_GIF_FAVORITES) return [["favorite-gifs-sync"]];
       return [];
     default:
       return [];
