@@ -438,6 +438,7 @@ function versionGroups<T extends { parsed: ParsedEdition }>(candidates: T[]): T[
 function authorizeDelegation(
   roleCandidates: Map<string, Array<{ role: Role; author: string; parsed: ParsedEdition }>>,
   grantCandidates: Map<string, Array<{ grant: MemberGrant; author: string; parsed: ParsedEdition }>>,
+  communityId: Uint8Array,
   ownerHex: string,
   heads: Map<string, EntityHead>,
   headEditions: Map<string, ParsedEdition>,
@@ -453,6 +454,37 @@ function authorizeDelegation(
   for (const [eid, cands] of grantCandidates) {
     if (cands.length > 0) grantEidOfMember.set(cands[0].grant.member, eid);
   }
+  // The CORD-04 §5 sync floor, for the delegation chain itself. A Role or Grant
+  // edition is an authority action like any other, so a non-owner must name the
+  // Grant it acts under — otherwise a client whose roster is one sweep stale
+  // honors a promotion (or a demotion) issued by an admin already stripped of
+  // MANAGE_ROLES.
+  //
+  // NOT circular, though it looks it. The index is built from CANDIDATES, not
+  // from settled heads, because a citation asks "have I synced this Grant?" —
+  // data availability — and never "was it honored?". Whether the actor still
+  // outranks anyone is the separate rank walk below, resolved against the
+  // roster as it settles. So the index needs no fixpoint of its own.
+  const grantEditionIndex = new Map<string, Map<string, Set<string>>>();
+  for (const [eid, cands] of grantCandidates) {
+    const byVer = new Map<string, Set<string>>();
+    for (const c of cands) {
+      const v = c.parsed.version.toString();
+      let set = byVer.get(v);
+      if (!set) byVer.set(v, (set = new Set()));
+      set.add(bytesToHex(c.parsed.selfHash));
+    }
+    grantEditionIndex.set(eid, byVer);
+  }
+  const citedOk = (p: ParsedEdition): boolean => {
+    if (p.author === ownerHex) return true; // supreme: the community_id proves them
+    const vac = p.authority;
+    if (!vac) return false;
+    const own = bytesToHex(grantLocator(communityId, hex32(p.author)));
+    if (bytesToHex(vac.entityId) !== own) return false;
+    return grantEditionIndex.get(own)?.get(vac.version.toString())?.has(bytesToHex(vac.editionHash)) ?? false;
+  };
+
   let changed = true;
   // While false, a grant handing out a role that still has unsettled candidates
   // WAITS (that role may yet reach the roster and set the standing rank). Once
@@ -516,7 +548,7 @@ function authorizeDelegation(
         for (const { role, author, parsed } of [...group].sort(authorityFirst)) {
           const mintOk = author === ownerHex || canActOnPosition(roster, author, ownerHex, role.position, Permissions.MANAGE_ROLES);
           const replaceOk = author === ownerHex || standing === undefined || outranks(roster, author, ownerHex, standing);
-          if (!mintOk || !replaceOk) continue;
+          if (!mintOk || !replaceOk || !citedOk(parsed)) continue;
           admissible.add(parsed);
           standing = role.position;
           break; // one winner per version — a fork sibling can't sidestep it
@@ -567,7 +599,7 @@ function authorizeDelegation(
               hasPermission(roster, author, Permissions.MANAGE_ROLES) &&
               positions.every((pos) => outranks(roster, author, ownerHex, pos)) &&
               (standing === undefined || outranks(roster, author, ownerHex, standing)));
-          if (!ok) continue;
+          if (!ok || !citedOk(parsed)) continue;
           admissible.add(parsed);
           standing = positions.length ? Math.min(...positions) : undefined;
           break; // one winner per version
@@ -819,7 +851,7 @@ function foldOnce(
       );
     if (parsed.length > 0) grantCandidates.set(eid, parsed);
   }
-  const roster = authorizeDelegation(roleCandidates, grantCandidates, ownerHex, heads, headEditions);
+  const roster = authorizeDelegation(roleCandidates, grantCandidates, communityId, ownerHex, heads, headEditions);
 
   // The `vac` authority-citation check (CORD-04 §5). A non-owner authority
   // action MUST cite the exact Grant it acts under, pinned by (eid, version,
