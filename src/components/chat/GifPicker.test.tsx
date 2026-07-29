@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GifPicker } from "@/components/chat/GifPicker";
 
 vi.mock("@/hooks/useGifSearch", () => ({
-  registerKlipyShare: vi.fn(),
+  registerGifShare: vi.fn(),
   useGifSearch: () => ({
     query: "",
     setQuery: vi.fn(),

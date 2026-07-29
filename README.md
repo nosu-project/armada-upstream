@@ -57,13 +57,15 @@ the box; other hostnames need HTTPS.
 
 ### Configuration (build-time env)
 
-- `VITE_KLIPY_API_KEY` — KLIPY API key used by GIF search. GitHub Pages maps
-  the repository secret `KLIPY_API_KEY` to this variable during its production
-  build. For local development, set it in `.env.local`. Like every key used by
-  a browser-only API integration, it is embedded in the compiled client bundle;
-  the repository secret keeps it out of source/history, not out of browser
-  developer tools. Configure any available platform restrictions in KLIPY's
-  partner panel.
+- `VITE_KLIPY_API_KEY` — **optional.** GIF search uses the keyless GIFverse
+  provider by default. Set this to switch GIF search to KLIPY instead; leave it
+  empty (the default) to keep GIFverse. KLIPY additionally sends a per-install
+  `customer_id` on every request and injects sponsored results, which is why it
+  is opt-in. Set it in CI as the repository secret `KLIPY_API_KEY`, or in
+  `.env.local` for local development. Like every key used by a browser-only API
+  integration, it is embedded in the compiled client bundle; keeping it in a
+  secret keeps it out of source/history, not out of browser developer tools.
+  Configure any available platform restrictions in KLIPY's partner panel.
 - `VITE_PLATFORM_RELAYS` — comma-separated pinned relay URLs. **Empty by
   default** (and in the shipped APK/desktop builds): a fresh client starts with
   no baked-in servers and the user adds their own. Never pin `ws://localhost`

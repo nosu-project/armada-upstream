@@ -3,7 +3,7 @@ import { Search, Star, X, ImageOff } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useGifSearch, registerKlipyShare, type GifResult } from '@/hooks/useGifSearch';
+import { useGifSearch, registerGifShare, type GifResult } from '@/hooks/useGifSearch';
 import { useFavoriteGifs } from '@/hooks/useFavoriteGifs';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
@@ -195,7 +195,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
   }, [activeTab]);
 
   const handleSelect = useCallback((gif: GifResult) => {
-    void registerKlipyShare(gif.id);
+    void registerGifShare(gif.id);
     onSelect(gif);
   }, [onSelect]);
 
