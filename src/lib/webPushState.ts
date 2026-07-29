@@ -1,7 +1,7 @@
 /**
  * Cross-context state shared by the page and `public/sw.js` through Cache
- * Storage. It contains no plaintext or keys: only event ids for NIP-17
- * self-copies created on this device.
+ * Storage. It contains no plaintext or keys: only event ids created on this
+ * device that may be echoed back through Web Push.
  */
 
 const CACHE_NAME = "armada-push-state-v1";
@@ -22,7 +22,7 @@ async function openStateCache(): Promise<Cache | undefined> {
   }
 }
 
-/** Record a just-created NIP-17 self-copy before it is published. */
+/** Record a just-created event before it is published. */
 export async function markOwnWebPushEvent(eventId: string): Promise<void> {
   if (!eventId) return;
   const cache = await openStateCache();

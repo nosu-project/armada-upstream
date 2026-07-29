@@ -33,6 +33,7 @@ import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
 import { beginSyncTask, type SyncTaskHandle } from "@/lib/syncActivity";
 import { logSync, sinceMs } from "@/lib/syncLog";
+import { markOwnWebPushEvent } from "@/lib/webPushState";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -825,6 +826,10 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       }
       logSync("send", `sealed ${rumor.id.slice(0, 8)} in ${sinceMs(sealStarted)} — wrapping + broadcasting to ${community.relays.length} relay(s)`);
       const wrap = wrapSeal(seal, channel.current.group);
+
+      // The wrap is authored by the channel stream key rather than the user,
+      // so identify this exact relay event as local before its push can arrive.
+      await markOwnWebPushEvent(wrap.id);
 
       const sealed: OpenedChat = { ...opened, seal, wrapId: wrap.id, streamPk: wrap.pubkey };
       queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [sealed]));

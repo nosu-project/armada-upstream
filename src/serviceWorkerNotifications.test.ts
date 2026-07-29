@@ -11,6 +11,7 @@ interface WindowClientStub {
   visibilityState: string;
   focused: boolean;
   activeDm?: boolean;
+  ownsDmNotifications?: boolean;
   postMessage?(message: unknown, transfer: Transferable[]): void;
 }
 
@@ -29,9 +30,12 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
   };
   const clients = (options.clients ?? []).map((client) => ({
     ...client,
-    postMessage: client.postMessage ?? ((_message: unknown, transfer: Transferable[]) => {
+    postMessage: client.postMessage ?? ((message: unknown, transfer: Transferable[]) => {
       const port = transfer[0] as MessagePort | undefined;
-      port?.postMessage({ active: client.activeDm === true });
+      const type = (message as { type?: string })?.type;
+      port?.postMessage(type === "armada-dm-notification-owner-query"
+        ? { owns: client.ownsDmNotifications === true }
+        : { active: client.activeDm === true });
     }),
   }));
   const self = {
@@ -77,12 +81,21 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
   return { push, showNotification };
 }
 
-describe("DM Web Push suppression", () => {
+describe("Web Push suppression", () => {
   it("suppresses an outgoing event marked by this device", async () => {
     const worker = loadWorker({ ownEventId: "own-wrap" });
     await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dms" });
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
+
+  it.each(["group", "group-mention", "c1", "c2"])(
+    "suppresses a locally-authored %s community event",
+    async (scope) => {
+      const worker = loadWorker({ ownEventId: "own-community-event" });
+      await worker.push({ scope, event_id: "own-community-event", url: "/s/relay/community" });
+      expect(worker.showNotification).not.toHaveBeenCalled();
+    },
+  );
 
   it("suppresses generic DM push while a specific DM thread is focused", async () => {
     const worker = loadWorker({
@@ -117,6 +130,25 @@ describe("DM Web Push suppression", () => {
         focused: true,
       }],
     });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a live decrypted notifier replace the generic DM push", async () => {
+    const worker = loadWorker({
+      clients: [{
+        url: "https://chat.dill.moe/settings",
+        visibilityState: "hidden",
+        focused: false,
+        ownsDmNotifications: true,
+      }],
+    });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
+    expect(worker.showNotification).not.toHaveBeenCalled();
+  });
+
+  it("keeps the generic DM fallback when no live page can decrypt it", async () => {
+    const worker = loadWorker();
     await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
   });

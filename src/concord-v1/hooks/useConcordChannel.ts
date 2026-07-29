@@ -13,6 +13,7 @@ import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
 import { channelWire, type ChannelWire } from "@/concord-v1/lib/wire";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { concordSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
+import { markOwnWebPushEvent } from "@/lib/webPushState";
 import { useWireScopes } from "@/wire/useWireScopes";
 import {
   type OpenedMessage,
@@ -744,6 +745,11 @@ export function useSendConcordMessage(community: Community | undefined, channel:
       });
       const innerId = opened.messageId;
 
+      // Concord's outer has a pseudonymous author, so the service worker can't
+      // compare it with the signed-in pubkey. Mark the exact relay event before
+      // broadcast so its push echo is recognized as local.
+      await markOwnWebPushEvent(outer.id);
+
       // Optimistically render real messages immediately. Unlike NIP-29, we do
       // NOT show a "pending" spinner: the broadcast is fire-and-forget and
       // near-instant, so the message is treated as sent the moment it's signed.
@@ -813,6 +819,7 @@ export function useRetryConcordMessage(community: Community | undefined, channel
             kind: msg.kind,
             reference,
           });
+          await markOwnWebPushEvent(outer.id);
           const results = await Promise.allSettled(
             community.relays.map((url) =>
               nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }),
@@ -889,6 +896,7 @@ export function useRetryConcordMessage(community: Community | undefined, channel
             kind: KIND_COMMUNITY_DELETE,
             reference: id,
           });
+          await markOwnWebPushEvent(outer.id);
           const results = await Promise.allSettled(
             community.relays.map((url) =>
               nostr.relay(url).event(outer, { signal: AbortSignal.timeout(8000) }),

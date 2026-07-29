@@ -91,20 +91,53 @@ function clientHasActiveDm(client) {
   });
 }
 
-/** Whether this encrypted DM push is redundant or is our own local self-copy. */
-async function suppressDmPush(data) {
+/** Whether this push references an event created by this browser install. */
+async function isOwnPush(data) {
+  if (!data.event_id) return false;
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    const ownUrl = new URL(
+      `${PUSH_STATE_PREFIX}own/${encodeURIComponent(data.event_id)}`,
+      self.location.origin,
+    ).href;
+    return Boolean(await cache.match(ownUrl));
+  } catch {
+    return false;
+  }
+}
+
+/** Ask a live page whether its decrypted foreground notifier owns DM alerts. */
+function clientOwnsDmNotification(client) {
+  if (typeof MessageChannel === "undefined" || typeof client.postMessage !== "function") {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    let settled = false;
+    const finish = (owns) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      channel.port1.close();
+      resolve(owns);
+    };
+    const timer = setTimeout(() => finish(false), 250);
+    channel.port1.onmessage = (event) => finish(event.data?.owns === true);
+    try {
+      client.postMessage({ type: "armada-dm-notification-owner-query" }, [channel.port2]);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+/** Whether this push is locally authored or redundant with a focused DM. */
+async function suppressPush(data) {
+  if (await isOwnPush(data)) return true;
   if (data.scope !== "dm") return false;
 
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    if (data.event_id) {
-      const ownUrl = new URL(
-        `${PUSH_STATE_PREFIX}own/${encodeURIComponent(data.event_id)}`,
-        self.location.origin,
-      ).href;
-      if (await cache.match(ownUrl)) return true;
-    }
-
     // An encrypted wrap hides its peer, so while any specific DM thread is in
     // the focused Armada window the page owns notification decisions. Ask the
     // page for its live React Router state: WindowClient.url is only the
@@ -114,7 +147,7 @@ async function suppressDmPush(data) {
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const liveStates = await Promise.all(windows.map((client) => clientHasActiveDm(client)));
     if (liveStates.some(Boolean)) return true;
-    return windows.some((client) => {
+    if (windows.some((client) => {
       try {
         const url = new URL(client.url);
         const parts = url.pathname.split("/").filter(Boolean);
@@ -127,7 +160,13 @@ async function suppressDmPush(data) {
       } catch {
         return false;
       }
-    });
+    })) return true;
+
+    // A live page with the foreground notifier enabled can decrypt the DM and
+    // show its real contents. Hand presentation to it instead of first showing
+    // a generic "New direct message" notification that becomes a duplicate.
+    const owners = await Promise.all(windows.map((client) => clientOwnsDmNotification(client)));
+    return owners.some(Boolean);
   } catch {
     return false;
   }
@@ -154,7 +193,7 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
-      if (await suppressDmPush(data)) return;
+      if (await suppressPush(data)) return;
 
       // 1. Guaranteed visible notification, immediately.
       await self.registration.showNotification(title, {

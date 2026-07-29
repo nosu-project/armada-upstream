@@ -299,6 +299,24 @@ export function useForegroundNotifications(): void {
       }
     });
 
-    return unregister;
+    // The service worker cannot decrypt NIP-17, so it asks whether a live page
+    // can own presentation. Answer only while this decrypted notifier is truly
+    // able and allowed to show the resulting message; otherwise the worker
+    // retains its generic closed-app fallback.
+    const answerDmNotificationOwnerQuery = (event: MessageEvent) => {
+      if (event.data?.type !== "armada-dm-notification-owner-query") return;
+      const port = event.ports[0];
+      if (!port) return;
+      const owns = foregroundNotifyIntent()
+        && notificationsApiAvailable()
+        && Notification.permission === "granted";
+      port.postMessage({ owns });
+    };
+    navigator.serviceWorker?.addEventListener("message", answerDmNotificationOwnerQuery);
+
+    return () => {
+      unregister();
+      navigator.serviceWorker?.removeEventListener("message", answerDmNotificationOwnerQuery);
+    };
   }, [user]);
 }

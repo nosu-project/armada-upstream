@@ -4,6 +4,7 @@ import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import { APP_NAME } from "@/lib/platform";
 import { PublishQueuedError, isPublishQueuedError, queueSignedEvent, removeQueuedPublish } from "@/lib/publishOutbox";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
+import { markOwnWebPushEvent } from "@/lib/webPushState";
 import { useCurrentUser } from "./useCurrentUser";
 import { useEventStore } from "./useEventStore";
 
@@ -81,6 +82,11 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         );
       }
 
+      // The relay's content-blind push gateway may echo this event back before
+      // the page sees it through the normal ingest path. Record it first so the
+      // service worker can identify the resulting push as locally authored.
+      await markOwnWebPushEvent(event.id);
+
       // Store the signed event locally before any network work. This makes
       // offline-created profiles/settings visible immediately and gives the
       // retry worker a durable copy if the app closes before relays recover.
@@ -129,6 +135,7 @@ export function useRepublish(): UseMutationResult<
 
   return useMutation({
     mutationFn: async ({ event, relay }) => {
+      await markOwnWebPushEvent(event.id);
       const timeout = publishTimeoutMs(user?.method);
       if (relay) {
         await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(timeout) });
