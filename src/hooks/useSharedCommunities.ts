@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
-import type { FoldedControl } from "@/concord-v2/lib/control";
+import { citationSatisfied, type FoldedControl } from "@/concord-v2/lib/control";
 import {
   coalesceGuestbook,
   completeMemberlist,
@@ -99,10 +99,11 @@ export function useSharedCommunities(
         const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
         const coalesced = coalesceGuestbook(events, {
           nowMs: Date.now(),
-          canKick: (actor, target) =>
+          canKick: (actor, target, citation) =>
             Boolean(
               folded &&
-                canActOnMember(folded.roster, actor, folded.ownerHex, target, Permissions.KICK),
+                canActOnMember(folded.roster, actor, folded.ownerHex, target, Permissions.KICK) &&
+                citationSatisfied(folded, community.id, actor, citation),
             ),
           // A snapshot is honored only from the npub whose Refounding minted
           // this epoch; at genesis there is none. Mirrors useGuestbook2.

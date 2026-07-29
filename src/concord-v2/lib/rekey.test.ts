@@ -20,6 +20,8 @@ import {
   encodeWrappedKey,
   findBlob,
   groupRotations,
+  REKEY_BLOBS_PER_EVENT,
+  type ParsedRekey,
   lowerKeyWins,
   mintOrReuseRotationKey,
   myLocator,
@@ -68,6 +70,68 @@ describe("rekey events (CORD-06 §1–2)", () => {
     expect(parsed.newEpoch).toBe(1n);
     expect(parsed.prevCommit).toBe(prevCommit);
     expect(parsed.blobs.length).toBe(1);
+  });
+
+  it("carries the rotator's authority citation across every chunk, and correlates it onto the set", async () => {
+    // CORD-06 §Authority: a rotation cites the Grant it acts under, so a client
+    // whose roster is one sweep stale never honors a just-demoted admin's
+    // Refounding — and that one turns the WHOLE community's keys. The citation
+    // rides every chunk (like the continuity fields), so a receiver holding only
+    // some chunks can still judge the authority.
+    const rotator = signer();
+    const priorRoot = random32();
+    const cid = random32();
+    const address = baseRekeyGroupKey(priorRoot, cid, 1);
+    const prevCommit = bytesToHex(epochKeyCommitment(0n, priorRoot));
+    const vac = { entityId: random32(), version: 4n, editionHash: random32() };
+
+    // Enough blobs to force more than one chunk.
+    const blobs: RekeyBlob[] = Array.from({ length: REKEY_BLOBS_PER_EVENT + 1 }, () => ({
+      locator: bytesToHex(random32()),
+      wrapped: "AAAA",
+    }));
+    const rumors = buildRekeyRumors(
+      rotator.pubkey,
+      { scope: { kind: "root" }, newEpoch: 1n, prevEpoch: 0n, prevCommit },
+      blobs,
+      Date.now(),
+      vac,
+    );
+    expect(rumors.length, "the fixture must actually span chunks").toBeGreaterThan(1);
+
+    const parsed: ParsedRekey[] = [];
+    for (const r of rumors) {
+      const wrap = wrapSeal(await sealRumor(r, KIND_SEAL_ENCRYPTED, address, rotator), address);
+      parsed.push(parseRekey(openWrap(wrap, address)));
+    }
+    for (const p of parsed) {
+      expect(bytesToHex(p.authority!.entityId), "every chunk carries it").toBe(bytesToHex(vac.entityId));
+      expect(p.authority!.version).toBe(4n);
+    }
+
+    const [set] = groupRotations(parsed);
+    expect(set.complete).toBe(true);
+    expect(bytesToHex(set.authority!.editionHash), "and it reaches the adoption gate").toBe(
+      bytesToHex(vac.editionHash),
+    );
+  });
+
+  it("leaves the citation absent when the owner rotates", async () => {
+    // The owner is proven by the community_id itself — there is no Grant to cite.
+    const rotator = signer();
+    const priorRoot = random32();
+    const cid = random32();
+    const address = baseRekeyGroupKey(priorRoot, cid, 1);
+    const prevCommit = bytesToHex(epochKeyCommitment(0n, priorRoot));
+    const rumors = buildRekeyRumors(
+      rotator.pubkey,
+      { scope: { kind: "root" }, newEpoch: 1n, prevEpoch: 0n, prevCommit },
+      [{ locator: bytesToHex(random32()), wrapped: "AAAA" }],
+      Date.now(),
+      undefined,
+    );
+    const wrap = wrapSeal(await sealRumor(rumors[0], KIND_SEAL_ENCRYPTED, address, rotator), address);
+    expect(parseRekey(openWrap(wrap, address)).authority).toBeUndefined();
   });
 
   it("chunks at 120 blobs and completes only with every chunk", () => {

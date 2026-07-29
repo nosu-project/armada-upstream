@@ -19,6 +19,7 @@ import { reactionContentKey } from "@/hooks/useReactions";
 import type { RsvpVote } from "@/lib/calendar";
 import type { PollVote } from "@/lib/polls";
 import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
+import { citationFromTags, type AuthorityCitation } from "@/concord-v2/lib/edition";
 import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 
@@ -164,8 +165,16 @@ export function eTargetOf(ev: { tags: string[][] }): string | undefined {
 export interface ChatModeration {
   /** Banned author pubkeys — every event from them is dropped (CORD-04 §4). */
   banned: Set<string>;
-  /** Whether `deleter` may delete a message by `author` (MANAGE_MESSAGES). */
-  canDelete: (deleter: string, author: string) => boolean;
+  /**
+   * Whether `deleter` may delete a message by `author` (MANAGE_MESSAGES).
+   *
+   * `citation` is the delete rumor's `vac` (CORD-04 §5) — the Grant the deleter
+   * claims their rank under. A non-owner moderation delete without a resolvable
+   * one PARKS: the permission check alone would honor an actor whose demotion
+   * this client has not synced yet. A self-delete is not an authority action and
+   * never carries one.
+   */
+  canDelete: (deleter: string, author: string, action?: { citation?: AuthorityCitation; ms: number }) => boolean;
 }
 
 /** A tallied reaction: reactors (pubkey→rumorId) plus the NIP-30 custom-emoji URL (if any). */
@@ -237,7 +246,12 @@ export function markReactionDeleted(rumorId: string): void {
  */
 export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration): FoldedTimeline {
   const byId = new Map<string, OpenedChat>();
-  const deletes = new Map<string, Set<string>>();
+  // target rumor id → (deleter → their citation + the delete's own ms). Both
+  // have to survive the fold: collapsing to a bare author set is what made the
+  // authority check permission-only, and the ms is what lets the check tell a
+  // pre-flag-day delete (honored uncited) from a fresh one, and a delete that
+  // predates a tombstone from one published after it.
+  const deletes = new Map<string, Map<string, { citation?: AuthorityCitation; ms: number }>>();
   // ALL edits per target (author validity is judged against the message in the
   // apply phase — otherwise a non-author's later "edit" would suppress the
   // author's legitimate one).
@@ -267,8 +281,11 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
         if (t[0] !== "e" || !t[1]) continue;
         const target = t[1];
         let authors = deletes.get(target);
-        if (!authors) deletes.set(target, (authors = new Set()));
-        authors.add(ev.author);
+        if (!authors) deletes.set(target, (authors = new Map()));
+        // Prefer a cited delete when the same actor published both — an uncited
+        // duplicate must never mask the one that carries authority.
+        const cite = citationFromTags(ev.tags);
+        if (cite || !authors.has(ev.author)) authors.set(ev.author, { citation: cite, ms: ev.ms });
         // Track deleted reaction rumor ids across fold invocations so a
         // relay-echoed reaction (re-added to the store in a later write
         // batch) stays removed. The `k` tag identifies the target kind.
@@ -416,7 +433,7 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
     if (!deleters) continue;
     const deleted =
       deleters.has(msg.author) ||
-      (moderation && [...deleters].some((d) => moderation.canDelete(d, msg.author)));
+      (moderation && [...deleters].some(([d, act]) => moderation.canDelete(d, msg.author, act)));
     if (deleted) byId.delete(id);
   }
 
@@ -428,7 +445,7 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
     if (!deleters) continue;
     const deleted =
       deleters.has(ev.author) ||
-      (moderation && [...deleters].some((d) => moderation.canDelete(d, ev.author)));
+      (moderation && [...deleters].some(([d, act]) => moderation.canDelete(d, ev.author, act)));
     if (deleted) calendarById.delete(id);
   }
 

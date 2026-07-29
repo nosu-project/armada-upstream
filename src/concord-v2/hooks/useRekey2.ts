@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
+import { citationFor, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toJoinMaterial } from "@/concord-v2/lib/communityList";
 import { controlGroups, currentControlGroup, foldControlState, openControlEditions } from "@/concord-v2/lib/control";
@@ -36,6 +36,7 @@ import {
   type ParsedRekey,
   type RekeyBlob,
 } from "@/concord-v2/lib/rekey";
+import { citationSatisfied } from "@/concord-v2/lib/control";
 import { hasPermission, Permissions } from "@/concord-v2/lib/roles";
 import { queryByStreams, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { openWrap, rewrapSeal, sealRumor, wrapSeal, type OpenedEvent } from "@/concord-v2/lib/stream";
@@ -245,6 +246,10 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
           set.scopeIdHex === "0".repeat(64) &&
           !folded.banned.has(set.rotator) &&
           (set.rotator === folded.ownerHex || hasPermission(folded.roster, set.rotator, Permissions.BAN)) &&
+          // CORD-04 §5 / CORD-06 §Authority: a rotation cites the Grant it acts
+          // under, so a lagging client never honors a just-demoted admin's
+          // Refounding — the whole community's keys turn on this one.
+          citationSatisfied(folded, community.id, set.rotator, set.authority) &&
           checkContinuity(set, community.rootEpoch, community.root).ok,
       );
       if (rotations.length === 0) return;
@@ -578,6 +583,7 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
             (set.rotator === folded.ownerHex ||
               hasPermission(folded.roster, set.rotator, Permissions.BAN) ||
               hasPermission(folded.roster, set.rotator, Permissions.MANAGE_CHANNELS)) &&
+            citationSatisfied(folded, community.id, set.rotator, set.authority) &&
             checkContinuity(set, ch.epoch, ch.key).ok,
         );
         if (rotations.length === 0) continue;
@@ -762,6 +768,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
         { scope: { kind: "root" }, newEpoch, prevEpoch: community.rootEpoch, prevCommit },
         blobs,
         Date.now(),
+        citationFor(community, folded, user.pubkey),
       );
       for (const rumor of rumors) {
         const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, user.signer), address);
@@ -862,6 +869,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
           },
           chBlobs,
           Date.now(),
+          citationFor(community, folded, user.pubkey),
         );
         for (const rumor of chRumors) {
           const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chAddress, user.signer), chAddress);

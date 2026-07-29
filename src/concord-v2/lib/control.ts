@@ -438,6 +438,7 @@ function versionGroups<T extends { parsed: ParsedEdition }>(candidates: T[]): T[
 function authorizeDelegation(
   roleCandidates: Map<string, Array<{ role: Role; author: string; parsed: ParsedEdition }>>,
   grantCandidates: Map<string, Array<{ grant: MemberGrant; author: string; parsed: ParsedEdition }>>,
+  communityId: Uint8Array,
   ownerHex: string,
   heads: Map<string, EntityHead>,
   headEditions: Map<string, ParsedEdition>,
@@ -453,6 +454,19 @@ function authorizeDelegation(
   for (const [eid, cands] of grantCandidates) {
     if (cands.length > 0) grantEidOfMember.set(cands[0].grant.member, eid);
   }
+  // The CORD-04 §5 sync floor, for the delegation chain itself. A Role or Grant
+  // edition is an authority action like any other, so a non-owner must name the
+  // Grant it acts under — otherwise a client whose roster is one sweep stale
+  // honors a promotion (or a demotion) issued by an admin already stripped of
+  // MANAGE_ROLES.
+  //
+  // Resolved against the heads settled by THIS pass, not a pre-built candidate
+  // index. Owner-rooted grants settle first (the owner cites nothing), which
+  // unlocks the admins' citations on a later round, so the fixpoint bootstraps
+  // itself and no circularity arises.
+  const citedOk = (p: ParsedEdition): boolean =>
+    citationSatisfied({ heads, ownerHex }, communityId, p.author, p.authority);
+
   let changed = true;
   // While false, a grant handing out a role that still has unsettled candidates
   // WAITS (that role may yet reach the roster and set the standing rank). Once
@@ -516,7 +530,7 @@ function authorizeDelegation(
         for (const { role, author, parsed } of [...group].sort(authorityFirst)) {
           const mintOk = author === ownerHex || canActOnPosition(roster, author, ownerHex, role.position, Permissions.MANAGE_ROLES);
           const replaceOk = author === ownerHex || standing === undefined || outranks(roster, author, ownerHex, standing);
-          if (!mintOk || !replaceOk) continue;
+          if (!mintOk || !replaceOk || !citedOk(parsed)) continue;
           admissible.add(parsed);
           standing = role.position;
           break; // one winner per version — a fork sibling can't sidestep it
@@ -567,7 +581,7 @@ function authorizeDelegation(
               hasPermission(roster, author, Permissions.MANAGE_ROLES) &&
               positions.every((pos) => outranks(roster, author, ownerHex, pos)) &&
               (standing === undefined || outranks(roster, author, ownerHex, standing)));
-          if (!ok) continue;
+          if (!ok || !citedOk(parsed)) continue;
           admissible.add(parsed);
           standing = positions.length ? Math.min(...positions) : undefined;
           break; // one winner per version
@@ -708,6 +722,50 @@ export function hasForeignLiveLinks(folded: FoldedControl, viewer: string, exclu
  * republishes its bundle) is the lesser harm against an attack that otherwise
  * continues indefinitely.
  */
+/**
+ * Whether an actor's `vac` satisfies the CORD-04 §5 sync floor against a folded
+ * control plane — the read-side half of an authority action taken OUTSIDE the
+ * roster fold (a moderation delete, a kick).
+ *
+ * COMPLETENESS, NOT AUTHORIZATION. It answers "have I synced enough of this
+ * actor's Grant to judge them", never "may they act" — the caller still resolves
+ * rank against the CURRENT roster, so citing an old-but-once-valid Grant
+ * grandfathers nobody and a since-demoted actor is refused regardless.
+ *
+ * Deliberately mirrors Vector's `authority_citation_satisfied` case for case;
+ * the two clients diverging here means one honors a moderation action the other
+ * silently ignores, which is invisible to both sides.
+ *
+ * NOT usable inside the roster fold itself: on a bootstrap there are no folded
+ * heads yet, so gating editions on them refuses every non-owner edition and the
+ * roster can never fold at all. The in-fold path indexes grants from the same
+ * pass instead (see `citationOk` in {@link foldControlState}).
+ */
+export function citationSatisfied(
+  folded: Pick<FoldedControl, "heads" | "ownerHex">,
+  communityId: Uint8Array,
+  actorHex: string,
+  citation: AuthorityCitation | undefined,
+): boolean {
+  // The owner is proven by the community_id itself — no Grant exists to cite.
+  if (actorHex === folded.ownerHex) return true;
+  if (!citation) return false;
+  // It must name the actor's OWN Grant coordinate: citing a foreign edition we
+  // happen to hold cannot borrow completeness.
+  const eid = bytesToHex(grantLocator(communityId, hex32(actorHex)));
+  if (bytesToHex(citation.entityId) !== eid) return false;
+  const head = folded.heads.get(eid);
+  if (!head) return false;
+  // Synced PAST it: the roster check already reflects the later head.
+  if (head.version > citation.version) return true;
+  // Synced to exactly it: the cited hash must be the edition that won our fold,
+  // else they cited a non-canonical fork of their own Grant.
+  if (head.version === citation.version) return bytesToHex(head.hash) === bytesToHex(citation.editionHash);
+  // BEHIND it — we cannot confirm the authority, so the action parks and
+  // self-heals when the Grant arrives. Fail closed.
+  return false;
+}
+
 export function banShouldRotate(
   folded: FoldedControl | undefined,
   viewer: string,
@@ -775,7 +833,7 @@ function foldOnce(
       );
     if (parsed.length > 0) grantCandidates.set(eid, parsed);
   }
-  const roster = authorizeDelegation(roleCandidates, grantCandidates, ownerHex, heads, headEditions);
+  const roster = authorizeDelegation(roleCandidates, grantCandidates, communityId, ownerHex, heads, headEditions);
 
   // The `vac` authority-citation check (CORD-04 §5). A non-owner authority
   // action MUST cite the exact Grant it acts under, pinned by (eid, version,
@@ -786,31 +844,18 @@ function foldOnce(
   // it the fold ignored `p.authority` entirely and honored any gated action
   // whose author currently resolves as authorized.
   //
-  // Index every grant edition the fold saw as eid → version → {selfHash}. The
-  // owner needs no citation (supreme); a citation resolves iff some seen grant
-  // edition at the cited eid+version has the cited hash.
-  const grantEditionIndex = new Map<string, Map<string, Set<string>>>();
-  for (const [eid, cands] of grantCandidates) {
-    const byVer = new Map<string, Set<string>>();
-    for (const c of cands) {
-      const v = c.parsed.version.toString();
-      let s = byVer.get(v);
-      if (!s) byVer.set(v, (s = new Set()));
-      s.add(bytesToHex(c.parsed.selfHash));
-    }
-    grantEditionIndex.set(eid, byVer);
-  }
-  const citationOk = (p: ParsedEdition): boolean => {
-    if (p.author === ownerHex) return true; // supreme: no citation required
-    const vac = p.authority;
-    if (!vac) return false; // a non-owner action MUST cite its grant
-    // The citation must name the actor's OWN grant coordinate.
-    const expectedEid = bytesToHex(grantLocator(communityId, hex32(p.author)));
-    if (bytesToHex(vac.entityId) !== expectedEid) return false;
-    // The cited (version, hash) must match a grant edition we actually hold.
-    const hashes = grantEditionIndex.get(expectedEid)?.get(vac.version.toString());
-    return hashes !== undefined && hashes.has(bytesToHex(vac.editionHash));
-  };
+  // Resolved against the Grant heads `authorizeDelegation` just settled, via the
+  // same `citationSatisfied` the delete, kick and rekey gates use — one rule in
+  // one place, mirroring Vector's `authority_citation_satisfied`.
+  //
+  // "Synced AT LEAST that Grant" (CORD-04 §5) means a LATER head passes. An
+  // exact-version index would have dropped an edition whose cited version has
+  // since been superseded — and compaction re-wraps only each entity's head, so
+  // after a Refounding the superseded versions are gone and every edition citing
+  // one would fall out of the fold. That loses a community's name, or its
+  // admins, on rotation.
+  const citationOk = (p: ParsedEdition): boolean =>
+    citationSatisfied({ heads, ownerHex }, communityId, p.author, p.authority);
 
   // 3. Metadata (vsk 0): must be the community's own entity + an authorized actor.
   let metadata: CommunityMetadata | undefined;

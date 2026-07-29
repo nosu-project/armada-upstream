@@ -27,7 +27,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
 
@@ -45,17 +45,23 @@ import {
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
-import { useChannelTimeline2 } from "./useChannel2";
+import { useChannelTimeline2, useChatModeration2 } from "./useChannel2";
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
-const h = vi.hoisted(() => ({ pool: undefined as unknown }));
+const h = vi.hoisted(() => ({
+  pool: undefined as unknown,
+  folded: undefined as unknown,
+  dissolved: null as number | null,
+}));
 
 vi.mock("@nostrify/react", () => ({
   useNostr: () => ({ nostr: h.pool }),
 }));
 vi.mock("@/concord-v2/hooks/useControlPlane2", () => ({
-  useControlFold2: () => ({ data: undefined }),
+  useControlFold2: () => ({ data: h.folded }),
+  useDissolved2: () => ({ data: h.dissolved }),
+  citationFor: () => undefined,
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: undefined }),
@@ -476,5 +482,41 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
     const flashFrame = frames.find((f) => !f.loading && f.count === 0);
     expect(flashFrame).toBeUndefined();
     expect(result.current.folded.messages.map((m) => m.content)).toContain("b-msg");
+  });
+});
+
+
+describe("useChatModeration2 — the tombstone seal (CORD-02 §9)", () => {
+  const owner = "0".repeat(64);
+  const member = "2".repeat(64);
+  const community = { idHex: "cc".repeat(32), id: new Uint8Array(32).fill(0xcc), owner } as unknown as CommunityV2;
+  const GRAVE = 5_000_000;
+
+  beforeEach(() => {
+    h.dissolved = null;
+    // The owner moderating: authorized, and cites nothing by construction, so
+    // the tombstone is the only variable under test.
+    h.folded = { roster: { roles: [], grants: [] }, ownerHex: owner, banned: new Set<string>(), heads: new Map() };
+  });
+
+  it("honors a moderation delete while the community lives", () => {
+    const { result } = renderHook(() => useChatModeration2(community));
+    expect(result.current.canDelete(owner, member, { ms: GRAVE + 1 })).toBe(true);
+  });
+
+  it("refuses one published AFTER the tombstone", () => {
+    h.dissolved = GRAVE;
+    const { result } = renderHook(() => useChatModeration2(community));
+    expect(result.current.canDelete(owner, member, { ms: GRAVE + 1 })).toBe(false);
+  });
+
+  it("still honors one published BEFORE the tombstone", () => {
+    // The fold replays history, so a global "is dissolved" test would
+    // retroactively un-hide every moderation delete the community ever honored
+    // the instant it was dissolved. Death wins every RACE — it does not reach
+    // backwards.
+    h.dissolved = GRAVE;
+    const { result } = renderHook(() => useChatModeration2(community));
+    expect(result.current.canDelete(owner, member, { ms: GRAVE - 1 })).toBe(true);
   });
 });

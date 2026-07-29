@@ -25,10 +25,11 @@ import type { ReactNode } from "react";
 
 import { bytesToHex, controlGroupKey } from "@/concord-v2/lib/derive";
 import { KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
+import { sealDissolved } from "@/concord-v2/lib/control";
 import { buildRumor, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
-import { useControlEvents2, useControlFold2 } from "./useControlPlane2";
+import { _forgetDissolvedMemoForTests, dissolvedAt, useControlEvents2, useControlFold2, useDissolved2 } from "./useControlPlane2";
 
 import {
   _configureAuthWaitForTests,
@@ -275,5 +276,71 @@ describe("useControlFold2 — a short sweep still folds", () => {
     expect(h.compute!(), "a member must still see the community").toBeDefined();
 
     _configureSweepPagingForTests({ pageLimit: 500, maxEvents: 15_000 });
+  });
+});
+
+
+describe("useDissolved2 — death is one-way (CORD-02 §9)", () => {
+  it("stays dissolved when every relay later fails", async () => {
+    // The reported unlock: the verdict was re-derived each round, and the
+    // network branch swallows relay errors — so ONE bad round answered "alive"
+    // and the composer came back on a community the owner had torn down.
+    const owner = signer();
+    const community = communityOf(70, owner.pubkey);
+    const tombstone = await sealDissolved(community.id, owner.pubkey, owner);
+
+    const live = new FakeRelay();
+    live.events = [tombstone];
+    h.pool = { relay: () => live };
+
+    const first = makeWrapper();
+    const a = renderHook(() => useDissolved2(community), { wrapper: first.wrapper });
+    await waitFor(() => expect(a.result.current.data).toBeTruthy());
+
+    // Every relay now fails. A fresh QueryClient means no cached answer to
+    // lean on — only the persisted verdict can carry it.
+    const dead = { query: async () => { throw new Error("relay down"); } } as unknown as FakeRelay;
+    h.pool = { relay: () => dead };
+
+    const second = makeWrapper();
+    const b = renderHook(() => useDissolved2(community), { wrapper: second.wrapper });
+    await waitFor(() => expect(b.result.current.data).toBeTruthy());
+    expect(b.result.current.data, "a dead community must never read as alive again").toBeTruthy();
+  });
+
+  it("survives a restart — the verdict is persisted, not just memoized", async () => {
+    // The session memo alone would carry the case above. Across a reload only
+    // the persisted marker can, and that is the case where the relays are also
+    // most likely to be cold.
+    const owner = signer();
+    const community = communityOf(74, owner.pubkey);
+    const live = new FakeRelay();
+    live.events = [await sealDissolved(community.id, owner.pubkey, owner)];
+    h.pool = { relay: () => live };
+
+    const first = makeWrapper();
+    const a = renderHook(() => useDissolved2(community), { wrapper: first.wrapper });
+    await waitFor(() => expect(a.result.current.data).toBeTruthy());
+
+    // Restart: session memory gone, every relay down.
+    _forgetDissolvedMemoForTests();
+    h.pool = { relay: () => ({ query: async () => { throw new Error("relay down"); } }) };
+
+    expect(await dissolvedAt(community.idHex), "the persisted verdict stands alone").toBeTypeOf("number");
+  });
+
+  it("exposes the verdict to the send and wire gates without a network round", async () => {
+    const owner = signer();
+    const community = communityOf(72, owner.pubkey);
+    expect(await dissolvedAt(community.idHex), "alive until proven otherwise").toBeUndefined();
+
+    const relay = new FakeRelay();
+    relay.events = [await sealDissolved(community.id, owner.pubkey, owner)];
+    h.pool = { relay: () => relay };
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useDissolved2(community), { wrapper });
+    await waitFor(() => expect(result.current.data).toBeTruthy());
+
+    expect(await dissolvedAt(community.idHex), "local, sticky, no network").toBeTypeOf("number");
   });
 });
