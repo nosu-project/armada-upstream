@@ -106,8 +106,8 @@ async function isOwnPush(data) {
   }
 }
 
-/** Ask a live page whether its decrypted foreground notifier owns DM alerts. */
-function clientOwnsDmNotification(client) {
+/** Ask a live page whether its foreground notifier owns open-app alerts. */
+function clientOwnsNotification(client) {
   if (typeof MessageChannel === "undefined" || typeof client.postMessage !== "function") {
     return Promise.resolve(false);
   }
@@ -125,47 +125,54 @@ function clientOwnsDmNotification(client) {
     const timer = setTimeout(() => finish(false), 250);
     channel.port1.onmessage = (event) => finish(event.data?.owns === true);
     try {
-      client.postMessage({ type: "armada-dm-notification-owner-query" }, [channel.port2]);
+      client.postMessage({ type: "armada-notification-owner-query" }, [channel.port2]);
     } catch {
       finish(false);
     }
   });
 }
 
-/** Whether this push is locally authored or redundant with a focused DM. */
+/** Whether this push is locally authored or owned by a live page. */
 async function suppressPush(data) {
   if (await isOwnPush(data)) return true;
-  if (data.scope !== "dm") return false;
+  if (!data.scope || !["dm", "group", "group-mention", "c1", "c2"].includes(data.scope)) {
+    return false;
+  }
 
   try {
-    // An encrypted wrap hides its peer, so while any specific DM thread is in
-    // the focused Armada window the page owns notification decisions. Ask the
-    // page for its live React Router state: WindowClient.url is only the
-    // document's creation URL and can still say `/dms` after pushState opened a
-    // peer. The URL check remains as a fallback for directly-loaded threads or
-    // browsers that cannot transfer a MessagePort.
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    const liveStates = await Promise.all(windows.map((client) => clientHasActiveDm(client)));
-    if (liveStates.some(Boolean)) return true;
-    if (windows.some((client) => {
-      try {
-        const url = new URL(client.url);
-        const parts = url.pathname.split("/").filter(Boolean);
-        const dms = parts.lastIndexOf("dms");
-        return url.origin === self.location.origin
-          && client.visibilityState === "visible"
-          && client.focused
-          && dms >= 0
-          && parts.length > dms + 1;
-      } catch {
-        return false;
-      }
-    })) return true;
 
-    // A live page with the foreground notifier enabled can decrypt the DM and
-    // show its real contents. Hand presentation to it instead of first showing
-    // a generic "New direct message" notification that becomes a duplicate.
-    const owners = await Promise.all(windows.map((client) => clientOwnsDmNotification(client)));
+    if (data.scope === "dm") {
+      // An encrypted wrap hides its peer, so while any specific DM thread is in
+      // the focused Armada window the page owns notification decisions. Ask the
+      // page for its live React Router state: WindowClient.url is only the
+      // document's creation URL and can still say `/dms` after pushState opened a
+      // peer. The URL check remains as a fallback for directly-loaded threads or
+      // browsers that cannot transfer a MessagePort.
+      const liveStates = await Promise.all(windows.map((client) => clientHasActiveDm(client)));
+      if (liveStates.some(Boolean)) return true;
+      if (windows.some((client) => {
+        try {
+          const url = new URL(client.url);
+          const parts = url.pathname.split("/").filter(Boolean);
+          const dms = parts.lastIndexOf("dms");
+          return url.origin === self.location.origin
+            && client.visibilityState === "visible"
+            && client.focused
+            && dms >= 0
+            && parts.length > dms + 1;
+        } catch {
+          return false;
+        }
+      })) return true;
+    }
+
+    // A live page receives and resolves every watched plane through the wire.
+    // Let its foreground notifier make the room-aware decision: it suppresses
+    // the exact focused channel, but still shows an OS notification for another
+    // channel or while Armada is hidden/unfocused. The worker remains the
+    // fallback when no capable page is open.
+    const owners = await Promise.all(windows.map((client) => clientOwnsNotification(client)));
     return owners.some(Boolean);
   } catch {
     return false;

@@ -11,7 +11,7 @@ interface WindowClientStub {
   visibilityState: string;
   focused: boolean;
   activeDm?: boolean;
-  ownsDmNotifications?: boolean;
+  ownsNotifications?: boolean;
   postMessage?(message: unknown, transfer: Transferable[]): void;
 }
 
@@ -33,8 +33,8 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
     postMessage: client.postMessage ?? ((message: unknown, transfer: Transferable[]) => {
       const port = transfer[0] as MessagePort | undefined;
       const type = (message as { type?: string })?.type;
-      port?.postMessage(type === "armada-dm-notification-owner-query"
-        ? { owns: client.ownsDmNotifications === true }
+      port?.postMessage(type === "armada-notification-owner-query"
+        ? { owns: client.ownsNotifications === true }
         : { active: client.activeDm === true });
     }),
   }));
@@ -140,12 +140,37 @@ describe("Web Push suppression", () => {
         url: "https://chat.dill.moe/settings",
         visibilityState: "hidden",
         focused: false,
-        ownsDmNotifications: true,
+        ownsNotifications: true,
       }],
     });
     await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
+
+  it.each(["group", "group-mention", "c1", "c2"])(
+    "hands an open-app %s push to the room-aware foreground notifier",
+    async (scope) => {
+      const worker = loadWorker({
+        clients: [{
+          url: "https://chat.dill.moe/armada/c/community/channel",
+          visibilityState: "visible",
+          focused: true,
+          ownsNotifications: true,
+        }],
+      });
+      await worker.push({ scope, event_id: "incoming-community-event" });
+      expect(worker.showNotification).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["group", "group-mention", "c1", "c2"])(
+    "keeps the service-worker %s fallback when no page owns presentation",
+    async (scope) => {
+      const worker = loadWorker();
+      await worker.push({ scope, event_id: "incoming-community-event" });
+      expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("keeps the generic DM fallback when no live page can decrypt it", async () => {
     const worker = loadWorker();

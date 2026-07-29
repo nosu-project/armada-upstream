@@ -299,12 +299,16 @@ export function useForegroundNotifications(): void {
       }
     });
 
-    // The service worker cannot decrypt NIP-17, so it asks whether a live page
-    // can own presentation. Answer only while this decrypted notifier is truly
-    // able and allowed to show the resulting message; otherwise the worker
-    // retains its generic closed-app fallback.
-    const answerDmNotificationOwnerQuery = (event: MessageEvent) => {
-      if (event.data?.type !== "armada-dm-notification-owner-query") return;
+    // The service worker cannot make the page's exact room-aware decision for
+    // encrypted community streams or DMs. Let it hand open-app presentation to
+    // this notifier, which suppresses only the focused room and still alerts for
+    // other rooms or while Armada is hidden/unfocused. Keep answering the old
+    // DM-only query during service-worker/page version transitions.
+    const answerNotificationOwnerQuery = (event: MessageEvent) => {
+      if (
+        event.data?.type !== "armada-notification-owner-query"
+        && event.data?.type !== "armada-dm-notification-owner-query"
+      ) return;
       const port = event.ports[0];
       if (!port) return;
       const owns = foregroundNotifyIntent()
@@ -312,11 +316,11 @@ export function useForegroundNotifications(): void {
         && Notification.permission === "granted";
       port.postMessage({ owns });
     };
-    navigator.serviceWorker?.addEventListener("message", answerDmNotificationOwnerQuery);
+    navigator.serviceWorker?.addEventListener("message", answerNotificationOwnerQuery);
 
     return () => {
       unregister();
-      navigator.serviceWorker?.removeEventListener("message", answerDmNotificationOwnerQuery);
+      navigator.serviceWorker?.removeEventListener("message", answerNotificationOwnerQuery);
     };
   }, [user]);
 }
