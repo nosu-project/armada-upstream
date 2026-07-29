@@ -171,7 +171,7 @@ export function coalesceGuestbook(
      * the kick's `vac`. A kick is an authority action, so a client whose roster
      * is one sweep stale must not honor one from an already-demoted admin.
      */
-    canKick: (actorHex: string, targetHex: string, citation?: AuthorityCitation) => boolean;
+    canKick: (actorHex: string, targetHex: string, citation: AuthorityCitation | undefined, atMs: number) => boolean;
     snapshotAuthority?: string;
     /** Banned npubs (the Banlist fold) — their entries are dropped entirely. */
     banned?: Set<string>;
@@ -215,7 +215,7 @@ export function coalesceGuestbook(
 
     if (ev.kind === KIND_KICK) {
       const target = ev.tags.find((t) => t[0] === "p")?.[1];
-      if (!target || !opts.canKick(ev.author, target, citationFromTags(ev.tags))) continue;
+      if (!target || !opts.canKick(ev.author, target, citationFromTags(ev.tags), ev.ms)) continue;
       apply({ pubkey: target, state: "kick", ms: ev.ms, rumorId: ev.rumorId, fromSnapshot: false });
       continue;
     }

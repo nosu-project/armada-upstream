@@ -209,7 +209,12 @@ export function useChannels2(community: CommunityV2 | undefined, active = true):
 export function useDissolved2(community: CommunityV2 | undefined, active = true) {
   const { nostr } = useNostr();
 
-  return useQuery<boolean>({
+  // The tombstone's OWN ms, not a boolean. Both planes replay from history, so
+  // a caller judging a past action needs to know whether it predates the grave
+  // (honored) or follows it (refused) — "death wins every race" is an ordering
+  // rule (CORD-02 §9). `null` means alive. Truthiness still reads as "dissolved"
+  // for the callers that only need the boolean.
+  return useQuery<number | null>({
     queryKey: ["concord2", "dissolved", community?.idHex ?? null],
     enabled: Boolean(community) && active,
     staleTime: 30_000,
@@ -223,7 +228,8 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
       // A dissolution tombstone is terminal and immutable — if we've already
       // stored one, we're done without touching the network.
       const cached = await queryByStreams([group.pk]);
-      if (cached.some((o) => isDissolvedOpened(o, community!.owner, community!.id))) return true;
+      const cachedGrave = cached.find((o) => isDissolvedOpened(o, community!.owner, community!.id));
+      if (cachedGrave) return cachedGrave.ms;
 
       const results = await Promise.all(
         community!.relays.map((url) =>
@@ -237,7 +243,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
       );
       const opened = openPlaneWraps(results.flat(), [group]);
       if (opened.length > 0) writeOpened(opened);
-      return opened.some((o) => isDissolvedOpened(o, community!.owner, community!.id));
+      return opened.find((o) => isDissolvedOpened(o, community!.owner, community!.id))?.ms ?? null;
     },
   });
 }

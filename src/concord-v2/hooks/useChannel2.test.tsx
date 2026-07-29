@@ -52,7 +52,7 @@ import { useChannelTimeline2, useChatModeration2 } from "./useChannel2";
 const h = vi.hoisted(() => ({
   pool: undefined as unknown,
   folded: undefined as unknown,
-  dissolved: false,
+  dissolved: null as number | null,
 }));
 
 vi.mock("@nostrify/react", () => ({
@@ -488,29 +488,35 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
 
 describe("useChatModeration2 — the tombstone seal (CORD-02 §9)", () => {
   const owner = "0".repeat(64);
-  const mod = "1".repeat(64);
   const member = "2".repeat(64);
   const community = { idHex: "cc".repeat(32), id: new Uint8Array(32).fill(0xcc), owner } as unknown as CommunityV2;
+  const GRAVE = 5_000_000;
 
   beforeEach(() => {
-    h.dissolved = false;
+    h.dissolved = null;
     // The owner moderating: authorized, and cites nothing by construction, so
-    // the ONLY variable under test is the tombstone.
+    // the tombstone is the only variable under test.
     h.folded = { roster: { roles: [], grants: [] }, ownerHex: owner, banned: new Set<string>(), heads: new Map() };
   });
 
-  it("honors an owner's moderation delete while the community lives", () => {
+  it("honors a moderation delete while the community lives", () => {
     const { result } = renderHook(() => useChatModeration2(community));
-    expect(result.current.canDelete(owner, member)).toBe(true);
+    expect(result.current.canDelete(owner, member, { ms: GRAVE + 1 })).toBe(true);
   });
 
-  it("refuses it once dissolved — a dead community honors no new authority action", () => {
-    // Deliberately matching Vector: the §9 carve-out is the member's own
-    // delete, which never reaches this check (the fold short-circuits on
-    // `deleters.has(msg.author)`), NOT a moderator's hide.
-    h.dissolved = true;
+  it("refuses one published AFTER the tombstone", () => {
+    h.dissolved = GRAVE;
     const { result } = renderHook(() => useChatModeration2(community));
-    expect(result.current.canDelete(owner, member)).toBe(false);
-    expect(result.current.canDelete(mod, member), "and nobody else either").toBe(false);
+    expect(result.current.canDelete(owner, member, { ms: GRAVE + 1 })).toBe(false);
+  });
+
+  it("still honors one published BEFORE the tombstone", () => {
+    // The fold replays history, so a global "is dissolved" test would
+    // retroactively un-hide every moderation delete the community ever honored
+    // the instant it was dissolved. Death wins every RACE — it does not reach
+    // backwards.
+    h.dissolved = GRAVE;
+    const { result } = renderHook(() => useChatModeration2(community));
+    expect(result.current.canDelete(owner, member, { ms: GRAVE - 1 })).toBe(true);
   });
 });

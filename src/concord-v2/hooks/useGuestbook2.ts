@@ -31,7 +31,7 @@ import type { CommunityV2 } from "@/concord-v2/lib/types";
 export function useGuestbook2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
   const { data: folded } = useControlFold2(community);
-  const { data: dissolved } = useDissolved2(community);
+  const { data: dissolvedAtMs } = useDissolved2(community);
 
   const query = useQuery<OpenedEvent[]>({
     queryKey: ["concord2", "guestbook", community?.idHex ?? null, community?.rootEpoch.toString() ?? ""],
@@ -57,10 +57,13 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
     const snapshotAuthority = community.rootEpoch === 0n ? undefined : community.refounder;
     return coalesceGuestbook(opened, {
       nowMs: Date.now(),
-      canKick: (actor, target, citation) =>
+      canKick: (actor, target, citation, atMs) =>
         Boolean(
-          // A dissolved community honors no new authority action (CORD-02 §9).
-          !dissolved &&
+          // Death wins every race (CORD-02 §9) — an ORDERING rule, since the
+          // coalesce replays history: only a kick published AFTER the tombstone
+          // is refused, or every kick the community ever honored would un-kick
+          // the moment it was dissolved.
+          !(dissolvedAtMs != null && atMs > dissolvedAtMs) &&
             folded &&
             canActOnMember(folded.roster, actor, folded.ownerHex, target, Permissions.KICK) &&
             // …and the CORD-04 §5 sync floor, so a kick from an admin whose
@@ -70,7 +73,7 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
       snapshotAuthority,
       banned: folded?.banned,
     });
-  }, [community, query.data, folded, dissolved]);
+  }, [community, query.data, folded, dissolvedAtMs]);
 
   return { ...query, coalesced };
 }
@@ -111,7 +114,7 @@ export function useGuestbookPublisher2(community: CommunityV2 | undefined) {
       // A dissolved community honors no new authority action (CORD-02 §9). A
       // Leave stays open: it is self-signed housekeeping, not authority, and a
       // member must always be able to walk away from a grave.
-      if (dissolvedNow && action.type === "kick") {
+      if (dissolvedNow != null && action.type === "kick") {
         throw new Error("This community has been dissolved; it accepts no new moderation.");
       }
       const group = currentGuestbookGroup(community);

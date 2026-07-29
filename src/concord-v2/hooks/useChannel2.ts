@@ -207,17 +207,22 @@ async function backfillStore(
 /** The moderation context resolved from the community's control fold. */
 export function useChatModeration2(community: CommunityV2 | undefined): ChatModeration {
   const { data: folded } = useControlFold2(community);
-  const { data: dissolved } = useDissolved2(community);
+  const { data: dissolvedAtMs } = useDissolved2(community);
   return useMemo(
     () => ({
       banned: folded?.banned ?? new Set<string>(),
-      canDelete: (deleter: string, author: string, citation?: AuthorityCitation) => {
+      canDelete: (deleter: string, author: string, action?: { citation?: AuthorityCitation; ms: number }) => {
         if (!folded || !community) return false;
-        // A dissolved community honors no new authority action (CORD-02 §9).
-        // The seal deliberately leaves SELF-deletes open — a member may always
-        // erase themselves — and those never reach here, short-circuiting on
-        // `deleters.has(msg.author)` in the fold.
-        if (dissolved) return false;
+        // Death wins every race (CORD-02 §9), but it is an ORDERING rule, not a
+        // switch: the fold replays history, so a global "is dissolved" test
+        // would retroactively un-hide every moderation delete this community
+        // ever honored, including ones published years before the tombstone.
+        // Only actions published AFTER the tombstone are refused. The seal
+        // leaves SELF-deletes open regardless; they short-circuit in the fold
+        // before reaching here.
+        if (dissolvedAtMs !== null && dissolvedAtMs !== undefined && action && action.ms > dissolvedAtMs) {
+          return false;
+        }
         // Authorization, resolved against the CURRENT roster. The citation is a
         // completeness floor and never a grant of rank, so a since-demoted actor
         // is refused here no matter what they cited (CORD-04 §5).
@@ -225,11 +230,11 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
           return false;
         }
         // …then the sync floor: have we read enough of their Grant to trust the
-        // verdict above? A stale roster would otherwise honor a demoted mod.
-        return citationSatisfied(folded, community.id, deleter, citation);
+        // verdict above? Pre-flag-day deletes bypass it (CITATION_REQUIRED_FROM_MS).
+        return citationSatisfied(folded, community.id, deleter, action?.citation);
       },
     }),
-    [folded, community, dissolved],
+    [folded, community, dissolvedAtMs],
   );
 }
 

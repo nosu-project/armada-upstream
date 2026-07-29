@@ -177,11 +177,11 @@ describe("chat plane (CORD-03)", () => {
     let seen: { eid?: string; version?: string } = {};
     const folded = foldTimeline(opened, {
       banned: new Set<string>(),
-      canDelete: (_d, _a, citation) => {
-        seen = citation
-          ? { eid: bytesToHex(citation.entityId), version: citation.version.toString() }
+      canDelete: (_d, _a, action) => {
+        seen = action?.citation
+          ? { eid: bytesToHex(action.citation.entityId), version: action.citation.version.toString() }
           : {};
-        return Boolean(citation);
+        return Boolean(action?.citation);
       },
     });
     expect(seen.eid, "the fold must hand the parsed vac to the authority check").toBe(eid);
@@ -194,7 +194,7 @@ describe("chat plane (CORD-03)", () => {
     const wraps2 = await Promise.all([wrapChat(msg, channel, alice), wrapChat(uncited, channel, mod)]);
     const parked = foldTimeline(await openChatBatch(wraps2, channel), {
       banned: new Set<string>(),
-      canDelete: (_d, _a, citation) => Boolean(citation),
+      canDelete: (_d, _a, action) => Boolean(action?.citation),
     });
     expect(parked.messages.length, "an uncited moderation delete must not be honored").toBe(1);
   });
@@ -216,7 +216,7 @@ describe("chat plane (CORD-03)", () => {
     ]);
     const folded = foldTimeline(await openChatBatch(wraps, channel), {
       banned: new Set<string>(),
-      canDelete: (_d, _a, citation) => Boolean(citation),
+      canDelete: (_d, _a, action) => Boolean(action?.citation),
     });
     expect(folded.messages.length, "the cited duplicate must win").toBe(0);
   });
