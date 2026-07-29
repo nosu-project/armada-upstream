@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildPushSubscriptions, type PushSubscriptionInput } from "@/lib/pushSubscriptions";
+import {
+  buildPushSubscriptions,
+  scopePushSubscriptionId,
+  type PushSubscriptionInput,
+} from "@/lib/pushSubscriptions";
 import { DEFAULT_PUSH_PREFS } from "@/hooks/usePushNotifications";
 
 const ME = "me".padEnd(64, "0");
@@ -193,5 +197,32 @@ describe("buildPushSubscriptions", () => {
       baseInput({ relayUrls: ["wss://r1", "wss://r2"], groupIds: ["g1", "g2"] }),
     );
     expect(JSON.stringify(a)).toEqual(JSON.stringify(b));
+  });
+});
+
+describe("scopePushSubscriptionId", () => {
+  it("is deterministic and stays within the server's 64-character limit", () => {
+    const id = scopePushSubscriptionId("armada-groups", ME, "armada.buzz");
+    expect(id).toBe(scopePushSubscriptionId("armada-groups", ME, "armada.buzz"));
+    expect(id).toMatch(/^armada-groups-[0-9a-f]{32}$/);
+    expect(id.length).toBeLessThanOrEqual(64);
+  });
+
+  it("does not collide across users or web origins", () => {
+    const first = scopePushSubscriptionId("armada-groups", ME, "armada.buzz");
+    const otherUser = scopePushSubscriptionId(
+      "armada-groups",
+      "other".padEnd(64, "0"),
+      "armada.buzz",
+    );
+    const otherDomain = scopePushSubscriptionId("armada-groups", ME, "chat.example.com");
+
+    expect(new Set([first, otherUser, otherDomain])).toHaveLength(3);
+  });
+
+  it("truncates long logical ids before appending the scope digest", () => {
+    const id = scopePushSubscriptionId("x".repeat(100), ME, "armada.buzz");
+    expect(id).toHaveLength(64);
+    expect(id).toMatch(/^x{31}-[0-9a-f]{32}$/);
   });
 });

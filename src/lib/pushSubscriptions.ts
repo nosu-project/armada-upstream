@@ -78,6 +78,27 @@ export interface PushSubscriptionInput {
   concordV2: Concord2Sub[];
 }
 
+/**
+ * Convert an app-local subscription id into the globally unique id expected by
+ * nostr-push. The server indexes subscriptions by `subscription_id` alone, so
+ * a shared id such as `armada-groups` would otherwise be claimed by whichever
+ * user registers it first. Include both owner and domain because the same
+ * Nostr identity may use Armada from more than one web origin.
+ *
+ * Keep the readable logical id for server logs and append a 128-bit digest;
+ * nostr-push caps subscription ids at 64 characters.
+ */
+export function scopePushSubscriptionId(
+  logicalId: string,
+  pubkey: string,
+  domain: string,
+): string {
+  const scope = `${domain.toLowerCase()}\0${pubkey.toLowerCase()}`;
+  const tag = bytesToHex(sha256(new TextEncoder().encode(scope))).slice(0, 32);
+  const prefix = logicalId.slice(0, 64 - tag.length - 1);
+  return `${prefix}-${tag}`;
+}
+
 /** Short deterministic tag from a relay set (for concord subscription ids). */
 function relaySetTag(relays: string[]): string {
   const key = [...relays].sort().join(",");

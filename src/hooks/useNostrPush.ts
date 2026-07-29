@@ -18,7 +18,10 @@ import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
 import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
-import { buildPushSubscriptions } from "@/lib/pushSubscriptions";
+import {
+  buildPushSubscriptions,
+  scopePushSubscriptionId,
+} from "@/lib/pushSubscriptions";
 import {
   NOSTR_PUSH_PUBKEY,
   NOSTR_PUSH_RELAYS,
@@ -313,7 +316,15 @@ export function useNostrPush(): UsePushNotificationsReturn {
       auth_key: json.keys?.auth ?? "",
     };
 
-    for (const spec of specs) {
+    // nostr-push indexes subscription_id globally, not by owner or domain.
+    // Scope Armada's readable logical ids so one user/origin cannot occupy the
+    // id another user/origin needs.
+    const scopedSpecs = specs.map((spec) => ({
+      ...spec,
+      id: scopePushSubscriptionId(spec.id, user.pubkey, domain),
+    }));
+
+    for (const spec of scopedSpecs) {
       await client.registerSubscription({
         subscription_id: spec.id,
         domain,
@@ -325,7 +336,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     }
 
     // Prune server records we no longer want (left group, muted, logged-out DM).
-    const currentIds = new Set(specs.map((s) => s.id));
+    const currentIds = new Set(scopedSpecs.map((s) => s.id));
     for (const id of loadRegisteredIds()) {
       if (!currentIds.has(id)) {
         await client.deleteSubscription(id, domain).catch(() => {});
@@ -360,7 +371,10 @@ export function useNostrPush(): UsePushNotificationsReturn {
   // something to watch, keep the server's subscriptions current. Guarded by a
   // signature so an unrelated re-render doesn't re-PUT. Transient failures retry
   // with backoff.
-  const syncSig = useMemo(() => JSON.stringify(specs), [specs]);
+  const syncSig = useMemo(
+    () => JSON.stringify({ domain: pushDomain(), pubkey: user?.pubkey, specs }),
+    [user?.pubkey, specs],
+  );
   const lastSynced = useRef<string | null>(null);
   const retry = useRef(0);
   const [nonce, setNonce] = useState(0);
