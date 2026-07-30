@@ -4,6 +4,29 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.44.0] - 2026-07-29
+
+Webxdc games can now be launched from the composer and played directly in Concord communities. GIF search defaults to GIFverse, with KLIPY available as an opt-in provider; favorite GIFs sync across devices. Discover feeds filter to curated content by default, with a setting to show everything. Several fixes improve DM push notification reliability across focus and mute edge cases.
+
+### Added
+- Webxdc game picker in the composer for launching games directly in Concord communities
+- Webxdc apps run in Concord v2 channels
+- Favorite GIFs sync across devices
+- Images can be pasted from the clipboard anywhere in the composer
+- KLIPY as an opt-in alternative GIF provider
+- A setting to show all Discover content, bypassing the curated allow-list
+
+### Changed
+- GIF search defaults to GIFverse; KLIPY is available as an opt-in alternative
+- Discover feeds are filtered to a curated author allow-list by default
+
+### Fixed
+- DM push notifications now deliver when the app is not in focus; duplicates and self-sent notifications are suppressed
+- Focused community notifications are suppressed
+- Muted DM conversations hide immediately
+- DM loading and chat attachment handling hardened
+- Encrypted .xdc attachments are decrypted before unzipping
+
 ## [0.43.0] - 2026-07-29
 
 Non-media file attachments in chat appear as download cards. On-device messages are now searchable from the quick switcher. Edited Concord messages show an (edited) label. An iOS build is available for sideloading. Several Concord fixes enforce dissolved-community lockout and close gaps in moderation authority validation.

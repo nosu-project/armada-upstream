@@ -13,6 +13,7 @@ vi.mock("@/hooks/useGifSearch", () => ({
     isLoading: false,
     isError: false,
     isSearching: false,
+    providerName: "KLIPY",
   }),
 }));
 
