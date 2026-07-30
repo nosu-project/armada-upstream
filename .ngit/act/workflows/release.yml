@@ -306,69 +306,66 @@ jobs:
       # ruby + fastlane are baked into the runner image (incl. multi_json,
       # which representable in fastlane's Play client requires without
       # declaring — see .ngit/ci-image/Dockerfile).
-      #
-      # DISABLED: Google Play publish is temporarily commented out.
-      #
-      # - name: Publish to Google Play
-      #   env:
-      #     GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-      #     VERSION_NAME: ${{ steps.version.outputs.name }}
-      #     VERSION_CODE: ${{ steps.version.outputs.code }}
-      #     ARTIFACT_DIR: ${{ steps.artifacts.outputs.dir }}
-      #   run: |
-      #     set -eu
-      #
-      #     # No key provisioned (or non-maintainer trigger): skip the publish.
-      #     if [ -z "${GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:-}" ]; then
-      #       echo "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON not set; skipping Google Play publish."
-      #       exit 0
-      #     fi
-      #
-      #     aab_path="$ARTIFACT_DIR/Armada-v$VERSION_NAME.aab"
-      #     test -f "$aab_path"
-      #
-      #     # Build the fastlane supply metadata layout for the changelog. supply
-      #     # maps changelogs/<versionCode>.txt to the Play Console "What's new in
-      #     # this version" field. versionCode matches what was stamped into
-      #     # build.gradle above (derived from the tag).
-      #     summary="$(node scripts/extract-release-notes.mjs "$GITHUB_REF_NAME" --summary)"
-      #     changelog_dir="android/fastlane/metadata/android/en-US/changelogs"
-      #     mkdir -p "$changelog_dir"
-      #     printf '%s\n' "$summary" > "$changelog_dir/$VERSION_CODE.txt"
-      #     echo "--- $changelog_dir/$VERSION_CODE.txt ---"
-      #     cat "$changelog_dir/$VERSION_CODE.txt"
-      #     echo "-------------------------------------------"
-      #     # Warn (don't fail) over the documented 500-character limit so it's
-      #     # spotted before the Play Console rejects the upload.
-      #     summary_len=$(wc -c < "$changelog_dir/$VERSION_CODE.txt")
-      #     if [ "$summary_len" -gt 501 ]; then
-      #       echo "WARNING: changelog is $summary_len bytes; convention is <=500."
-      #     fi
-      #
-      #     # Decode the base64 service-account JSON to a temp file for fastlane.
-      #     umask 077
-      #     json_key="$RUNNER_TEMP/play-service-account.json"
-      #     printf '%s' "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" | base64 -d > "$json_key"
-      #
-      #     # Upload the AAB to the production track with the changelog. The other
-      #     # metadata (title, description, images, screenshots) is managed in the
-      #     # Play Console and left untouched. release_status=draft: while the app
-      #     # itself is still a draft in Play Console (never published), the API
-      #     # refuses to create "completed" releases — the upload lands as a draft
-      #     # release for a human to review and roll out. Switch to "completed"
-      #     # (or drop the flag) once the app is live to auto-publish.
-      #     fastlane supply \
-      #       --aab "$aab_path" \
-      #       --package_name buzz.armada.app \
-      #       --track production \
-      #       --release_status draft \
-      #       --json_key "$json_key" \
-      #       --metadata_path android/fastlane/metadata/android \
-      #       --skip_upload_metadata \
-      #       --skip_upload_images \
-      #       --skip_upload_screenshots \
-      #       --skip_upload_apk
-      #
-      # - name: Remove Google Play service account key
-      #   if: ${{ always() }}
-      #   run: rm -f "$RUNNER_TEMP/play-service-account.json"
+      - name: Publish to Google Play
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          ARTIFACT_DIR: ${{ steps.artifacts.outputs.dir }}
+        run: |
+          set -eu
+
+          # No key provisioned (or non-maintainer trigger): skip the publish.
+          if [ -z "${GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:-}" ]; then
+            echo "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON not set; skipping Google Play publish."
+            exit 0
+          fi
+
+          aab_path="$ARTIFACT_DIR/Armada-v$VERSION_NAME.aab"
+          test -f "$aab_path"
+
+          # Build the fastlane supply metadata layout for the changelog. supply
+          # maps changelogs/<versionCode>.txt to the Play Console "What's new in
+          # this version" field. versionCode matches what was stamped into
+          # build.gradle above (derived from the tag).
+          summary="$(node scripts/extract-release-notes.mjs "$GITHUB_REF_NAME" --summary)"
+          changelog_dir="android/fastlane/metadata/android/en-US/changelogs"
+          mkdir -p "$changelog_dir"
+          printf '%s\n' "$summary" > "$changelog_dir/$VERSION_CODE.txt"
+          echo "--- $changelog_dir/$VERSION_CODE.txt ---"
+          cat "$changelog_dir/$VERSION_CODE.txt"
+          echo "-------------------------------------------"
+          # Warn (don't fail) over the documented 500-character limit so it's
+          # spotted before the Play Console rejects the upload.
+          summary_len=$(wc -c < "$changelog_dir/$VERSION_CODE.txt")
+          if [ "$summary_len" -gt 501 ]; then
+            echo "WARNING: changelog is $summary_len bytes; convention is <=500."
+          fi
+
+          # Decode the base64 service-account JSON to a temp file for fastlane.
+          umask 077
+          json_key="$RUNNER_TEMP/play-service-account.json"
+          printf '%s' "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" | base64 -d > "$json_key"
+
+          # Upload the AAB to the production track with the changelog. The other
+          # metadata (title, description, images, screenshots) is managed in the
+          # Play Console and left untouched. release_status=draft: while the app
+          # itself is still a draft in Play Console (never published), the API
+          # refuses to create "completed" releases — the upload lands as a draft
+          # release for a human to review and roll out. Switch to "completed"
+          # (or drop the flag) once the app is live to auto-publish.
+          fastlane supply \
+            --aab "$aab_path" \
+            --package_name buzz.armada.app \
+            --track production \
+            --release_status draft \
+            --json_key "$json_key" \
+            --metadata_path android/fastlane/metadata/android \
+            --skip_upload_metadata \
+            --skip_upload_images \
+            --skip_upload_screenshots \
+            --skip_upload_apk
+
+      - name: Remove Google Play service account key
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/play-service-account.json"
