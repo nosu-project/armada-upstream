@@ -349,16 +349,15 @@ jobs:
 
           # Upload the AAB to the production track with the changelog. The other
           # metadata (title, description, images, screenshots) is managed in the
-          # Play Console and left untouched. release_status=draft: while the app
-          # itself is still a draft in Play Console (never published), the API
-          # refuses to create "completed" releases — the upload lands as a draft
-          # release for a human to review and roll out. Switch to "completed"
-          # (or drop the flag) once the app is live to auto-publish.
+          # Play Console and left untouched. No --release_status: supply defaults
+          # to "completed", so the upload rolls out on the production track (this
+          # matches ditto's working publish-google-play job). It previously
+          # passed "draft" because the app had never been published and the API
+          # refuses "completed" releases for a draft app; the app is live now.
           fastlane supply \
             --aab "$aab_path" \
             --package_name buzz.armada.app \
             --track production \
-            --release_status draft \
             --json_key "$json_key" \
             --metadata_path android/fastlane/metadata/android \
             --skip_upload_metadata \
