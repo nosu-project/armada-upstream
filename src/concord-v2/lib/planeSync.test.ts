@@ -36,7 +36,8 @@ import {
   noteStreamAuthSent,
   registerStreamKeys,
 } from "@/concord-v2/lib/streamAuth";
-import { buildRumor, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { buildRumor, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
 // ── Fake relay ───────────────────────────────────────────────────────────────
@@ -130,7 +131,7 @@ async function wrapAt(
   s: ReturnType<typeof signer>,
   eid: string,
   createdAt: number,
-): Promise<{ wrap: NostrEvent; rumor: Rumor }> {
+): Promise<{ wrap: NostrEvent; rumor: NostrRumor }> {
   const rumor = buildRumor({
     kind: 3308,
     content: "{}",

@@ -61,9 +61,9 @@ import {
   sealDmRumor,
   wrapDmSeal,
   type Dm17Signer,
-  type DmRumor,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   DM17_SEEN_CAP,
   drainLiveDmWraps,
@@ -806,7 +806,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
    * best-effort (the rumor is already in the local store).
    */
   const publishRumor = useCallback(
-    async (rumor: DmRumor, opts?: { firstContact?: boolean }) => {
+    async (rumor: NostrRumor, opts?: { firstContact?: boolean }) => {
       if (!user?.signer.nip44 || !self || !peer) throw new Error("NIP-17 not available");
       const signer = user.signer as unknown as Dm17Signer;
 
@@ -852,7 +852,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
 
   /** Optimistically render a rumor, then seal/wrap/publish in the background. */
   const dispatchRumor = useCallback(
-    (rumor: DmRumor, opened: OpenedDm, opts?: { firstContact?: boolean }) => {
+    (rumor: NostrRumor, opened: OpenedDm, opts?: { firstContact?: boolean }) => {
       setPending((old) => new Map(old).set(rumor.id, { opened, status: "pending" }));
       void (async () => {
         try {
@@ -873,7 +873,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   );
 
   const openedOf = useCallback(
-    (rumor: DmRumor): OpenedDm => ({
+    (rumor: NostrRumor): OpenedDm => ({
       rumorId: rumor.id,
       author: rumor.pubkey,
       kind: rumor.kind,
@@ -1024,7 +1024,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const entry = pending.get(id);
       if (!entry || entry.status !== "failed") return;
       const o = entry.opened;
-      const rumor: DmRumor = {
+      const rumor: NostrRumor = {
         id: o.rumorId,
         kind: o.kind,
         content: o.content,

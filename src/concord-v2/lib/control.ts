@@ -58,7 +58,8 @@ import {
   type MemberGrant,
   type Role,
 } from "@/concord-v2/lib/roles";
-import { buildRumor, openWrap, sealRumor, wrapSeal, type OpenedEvent, type Rumor, type StreamSigner } from "@/concord-v2/lib/stream";
+import { buildRumor, openWrap, sealRumor, wrapSeal, type OpenedEvent, type StreamSigner } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   utf8Len,
   DESCRIPTION_MAX_BYTES,
@@ -87,7 +88,7 @@ export function currentControlGroup(community: CommunityV2): GroupKey {
 // ── Sealing / opening ────────────────────────────────────────────────────────
 
 /** Sign (plaintext seal) + wrap one edition rumor for the control stream. */
-export async function sealEdition(rumor: Rumor, control: GroupKey, signer: StreamSigner): Promise<NostrEvent> {
+export async function sealEdition(rumor: NostrRumor, control: GroupKey, signer: StreamSigner): Promise<NostrEvent> {
   const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, signer);
   return wrapSeal(seal, control);
 }
@@ -161,7 +162,7 @@ interface BuildCommon {
 }
 
 /** Community metadata (vsk 0); eid = the community_id. Gated by MANAGE_METADATA. */
-export function buildMetadataEdition(communityId: Uint8Array, metadata: CommunityMetadata, o: BuildCommon): Rumor {
+export function buildMetadataEdition(communityId: Uint8Array, metadata: CommunityMetadata, o: BuildCommon): NostrRumor {
   if (utf8Len(metadata.name) > NAME_MAX_BYTES) throw new Error(`community name exceeds ${NAME_MAX_BYTES} bytes`);
   if (metadata.description !== undefined && utf8Len(metadata.description) > DESCRIPTION_MAX_BYTES) {
     throw new Error(`description exceeds ${DESCRIPTION_MAX_BYTES} bytes`);
@@ -170,25 +171,25 @@ export function buildMetadataEdition(communityId: Uint8Array, metadata: Communit
 }
 
 /** Role (vsk 1); eid = the role_id. Gated by MANAGE_ROLES. */
-export function buildRoleEdition(role: Role, o: BuildCommon): Rumor {
+export function buildRoleEdition(role: Role, o: BuildCommon): NostrRumor {
   if (utf8Len(role.name) > NAME_MAX_BYTES) throw new Error(`role name exceeds ${NAME_MAX_BYTES} bytes`);
   return buildEditionRumor({ vsk: VSK_ROLE, entityId: hex32(role.roleId), content: roleToJSON(role), ...o });
 }
 
 /** Channel metadata (vsk 2); eid = the channel_id. Gated by MANAGE_CHANNELS. */
-export function buildChannelEdition(channelId: Uint8Array, metadata: ChannelMetadata, o: BuildCommon): Rumor {
+export function buildChannelEdition(channelId: Uint8Array, metadata: ChannelMetadata, o: BuildCommon): NostrRumor {
   if (utf8Len(metadata.name) > NAME_MAX_BYTES) throw new Error(`channel name exceeds ${NAME_MAX_BYTES} bytes`);
   return buildEditionRumor({ vsk: VSK_CHANNEL, entityId: channelId, content: JSON.stringify(metadata), ...o });
 }
 
 /** Grant (vsk 3); eid = grant_locator(cid, member). Empty role_ids = a revoke. */
-export function buildGrantEdition(communityId: Uint8Array, grant: MemberGrant, o: BuildCommon): Rumor {
+export function buildGrantEdition(communityId: Uint8Array, grant: MemberGrant, o: BuildCommon): NostrRumor {
   const entityId = grantLocator(communityId, hex32(grant.member));
   return buildEditionRumor({ vsk: VSK_GRANT, entityId, content: grantToJSON(grant), ...o });
 }
 
 /** Banlist (vsk 4); eid = banlist_locator(cid). The whole list, replaced entire. */
-export function buildBanlistEdition(communityId: Uint8Array, banned: string[], o: BuildCommon): Rumor {
+export function buildBanlistEdition(communityId: Uint8Array, banned: string[], o: BuildCommon): NostrRumor {
   return buildEditionRumor({
     vsk: VSK_BANLIST,
     entityId: banlistLocator(communityId),
@@ -198,7 +199,7 @@ export function buildBanlistEdition(communityId: Uint8Array, banned: string[], o
 }
 
 /** Invite Registry (vsk 8); eid = invite_links_locator(cid, creator). Locators only. */
-export function buildRegistryEdition(communityId: Uint8Array, creatorHex: string, linkSigners: string[], o: BuildCommon): Rumor {
+export function buildRegistryEdition(communityId: Uint8Array, creatorHex: string, linkSigners: string[], o: BuildCommon): NostrRumor {
   return buildEditionRumor({
     vsk: VSK_INVITE_REGISTRY,
     entityId: inviteLinksLocator(communityId, hex32(creatorHex)),
@@ -1023,7 +1024,7 @@ export function buildDissolvedRumor(
   ownerPubkey: string,
   communityId: Uint8Array,
   createdAtSecs?: number,
-): Rumor {
+): NostrRumor {
   return buildRumor({
     kind: 3308,
     content: "",

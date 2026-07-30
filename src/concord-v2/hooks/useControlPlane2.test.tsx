@@ -26,7 +26,8 @@ import type { ReactNode } from "react";
 import { bytesToHex, controlGroupKey } from "@/concord-v2/lib/derive";
 import { KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { sealDissolved } from "@/concord-v2/lib/control";
-import { buildRumor, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { buildRumor, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
 import { _forgetDissolvedMemoForTests, dissolvedAt, useControlEvents2, useControlFold2, useDissolved2 } from "./useControlPlane2";
@@ -121,7 +122,7 @@ async function editionWrapAt(
   s: ReturnType<typeof signer>,
   eid: string,
   createdAt: number,
-): Promise<{ wrap: NostrEvent; rumor: Rumor }> {
+): Promise<{ wrap: NostrEvent; rumor: NostrRumor }> {
   const rumor = buildRumor({
     kind: 3308,
     content: "{}",

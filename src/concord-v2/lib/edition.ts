@@ -19,7 +19,8 @@ import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { bytesToHex } from "@/concord-v2/lib/derive";
 import { KIND_CONTROL, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
-import { buildRumor, type OpenedEvent, type Rumor } from "@/concord-v2/lib/stream";
+import { buildRumor, type OpenedEvent } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import { editionHash, type Edition } from "@/concord-v2/lib/version";
 
 const TAG_SUBKIND = "vsk";
@@ -72,7 +73,7 @@ export function buildEditionRumor(opts: {
   actorPubkey: string;
   createdAtSecs?: number;
   authority?: AuthorityCitation;
-}): Rumor {
+}): NostrRumor {
   const tags: string[][] = [
     [TAG_SUBKIND, opts.vsk],
     [TAG_ENTITY, bytesToHex(opts.entityId)],

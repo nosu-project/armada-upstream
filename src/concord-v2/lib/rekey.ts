@@ -19,7 +19,8 @@
 import { bytesToHex, epochKeyCommitment, random32, recipientLocator } from "@/concord-v2/lib/derive";
 import { KIND_REKEY, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import { citationFromTags, citationToTag, isTagDecimal, type AuthorityCitation } from "@/concord-v2/lib/edition";
-import { buildRumor, type OpenedEvent, type Rumor } from "@/concord-v2/lib/stream";
+import { buildRumor, type OpenedEvent } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 
 /** Per-recipient blobs per rekey event (CORD-06 §1). */
@@ -108,7 +109,7 @@ export function buildRekeyRumors(
    * some chunks can still judge the authority. Absent when the owner rotates.
    */
   authority?: AuthorityCitation,
-): Rumor[] {
+): NostrRumor[] {
   const chunks: RekeyBlob[][] = [];
   for (let i = 0; i < blobs.length; i += REKEY_BLOBS_PER_EVENT) {
     chunks.push(blobs.slice(i, i + REKEY_BLOBS_PER_EVENT));

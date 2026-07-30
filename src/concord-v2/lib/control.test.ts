@@ -21,7 +21,8 @@ import {
 } from "@/concord-v2/lib/control";
 import { bytesToHex, communityIdOf, controlGroupKey, dissolvedGroupKey, grantLocator, hex32, random32, type GroupKey } from "@/concord-v2/lib/derive";
 import { isTagDecimal } from "@/concord-v2/lib/edition";
-import { buildRumor, openWrap, rewrapSeal, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { buildRumor, openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { adminRole, badgeOf, hasPermission, isAdmin, moderatorRole, Permissions, type Role } from "@/concord-v2/lib/roles";
 import {
@@ -65,8 +66,8 @@ async function makeCommunity() {
  */
 async function grindFork(
   control: GroupKey,
-  real: { build: (createdAtSecs: number) => Rumor; by: ReturnType<typeof signer> },
-  forged: { build: (createdAtSecs: number) => Rumor; by: ReturnType<typeof signer> },
+  real: { build: (createdAtSecs: number) => NostrRumor; by: ReturnType<typeof signer> },
+  forged: { build: (createdAtSecs: number) => NostrRumor; by: ReturnType<typeof signer> },
 ): Promise<{ realWrap: NostrEvent; forgedWrap: NostrEvent }> {
   let t = 1_800_000_000;
   for (;;) {

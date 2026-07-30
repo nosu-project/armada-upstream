@@ -17,7 +17,8 @@ import type { NostrEvent } from "nostr-tools/pure";
 import { guestbookGroupKey, type GroupKey } from "@/concord-v2/lib/derive";
 import { citationFromTags, type AuthorityCitation } from "@/concord-v2/lib/edition";
 import { KIND_JOIN_LEAVE, KIND_KICK, KIND_SEAL_ENCRYPTED, KIND_SNAPSHOT } from "@/concord-v2/lib/kinds";
-import { buildRumor, openWrap, sealRumor, wrapSeal, type OpenedEvent, type Rumor, type StreamSigner } from "@/concord-v2/lib/stream";
+import { buildRumor, openWrap, sealRumor, wrapSeal, type OpenedEvent, type StreamSigner } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
 /** Entries dated further than this ahead of the local clock are dropped outright. */
@@ -40,14 +41,14 @@ export function currentGuestbookGroup(community: CommunityV2): GroupKey {
 // ── Builders ─────────────────────────────────────────────────────────────────
 
 /** A self-signed Join, optionally attributing the invite link used (CORD-05 §1). */
-export function buildJoinRumor(pubkey: string, ms: number, attribution?: { creator: string; label?: string }): Rumor {
+export function buildJoinRumor(pubkey: string, ms: number, attribution?: { creator: string; label?: string }): NostrRumor {
   const tags: string[][] = [];
   if (attribution) tags.push(["invite", attribution.creator, attribution.label ?? ""]);
   return buildRumor({ kind: KIND_JOIN_LEAVE, content: "join", tags, pubkey, ms });
 }
 
 /** A self-signed Leave. */
-export function buildLeaveRumor(pubkey: string, ms: number): Rumor {
+export function buildLeaveRumor(pubkey: string, ms: number): NostrRumor {
   return buildRumor({ kind: KIND_JOIN_LEAVE, content: "leave", tags: [], pubkey, ms });
 }
 
@@ -61,7 +62,7 @@ export function buildKickRumor(
   targetHex: string,
   ms: number,
   vac?: { eid: string; version: bigint; hash: string },
-): Rumor {
+): NostrRumor {
   const tags: string[][] = [["p", targetHex]];
   if (vac) tags.push(["vac", vac.eid, vac.version.toString(), vac.hash]);
   return buildRumor({ kind: KIND_KICK, content: "", tags, pubkey: adminPubkey, ms });
@@ -72,7 +73,7 @@ export function buildKickRumor(
  * members only, chunked at {@link SNAPSHOT_CHUNK}, all chunks sharing one
  * snapshot id and one timestamp (CORD-02 §5).
  */
-export function buildSnapshotRumors(refounderPubkey: string, members: string[], snapshotIdHex: string, ms: number): Rumor[] {
+export function buildSnapshotRumors(refounderPubkey: string, members: string[], snapshotIdHex: string, ms: number): NostrRumor[] {
   const chunks: string[][] = [];
   for (let i = 0; i < members.length; i += SNAPSHOT_CHUNK) chunks.push(members.slice(i, i + SNAPSHOT_CHUNK));
   if (chunks.length === 0) chunks.push([]);
@@ -89,7 +90,7 @@ export function buildSnapshotRumors(refounderPubkey: string, members: string[], 
 }
 
 /** Sign (encrypted seal) + wrap one guestbook rumor. */
-export async function sealGuestbook(rumor: Rumor, guestbook: GroupKey, signer: StreamSigner): Promise<NostrEvent> {
+export async function sealGuestbook(rumor: NostrRumor, guestbook: GroupKey, signer: StreamSigner): Promise<NostrEvent> {
   const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, guestbook, signer);
   return wrapSeal(seal, guestbook);
 }

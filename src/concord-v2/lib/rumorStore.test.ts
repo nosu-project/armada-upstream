@@ -6,7 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
 import { openChatBatch, type OpenedChat } from "@/concord-v2/lib/chat";
 import { KIND_DELETE, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
-import { buildRumor, channelBindingTags, openWrap, rewrapSeal, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { buildRumor, channelBindingTags, openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import {
   ackPendingWraps,
@@ -45,7 +46,7 @@ function signer(sk = generateSecretKey()) {
   return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
 }
 
-async function wrapChat(rumor: Rumor, channel: ChannelV2, s: ReturnType<typeof signer>): Promise<NostrEvent> {
+async function wrapChat(rumor: NostrRumor, channel: ChannelV2, s: ReturnType<typeof signer>): Promise<NostrEvent> {
   return wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, s), channel.current.group);
 }
 
@@ -56,7 +57,7 @@ function chatRumor(
   content: string,
   ms: number,
   extra: string[][] = [],
-): Rumor {
+): NostrRumor {
   return buildRumor({
     kind,
     content,

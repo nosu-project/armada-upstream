@@ -28,11 +28,7 @@ import {
   KIND_WRAP,
   KIND_WRAP_EPHEMERAL,
 } from "@/concord-v2/lib/kinds";
-
-/** An unsigned rumor: a NostrEvent shape with an id but no signature. */
-export interface Rumor extends UnsignedEvent {
-  id: string;
-}
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export class StreamError extends Error {
   constructor(
@@ -83,7 +79,7 @@ export function buildRumor(opts: {
   pubkey: string;
   ms?: number | null;
   createdAtSecs?: number;
-}): Rumor {
+}): NostrRumor {
   const tags = [...(opts.tags ?? [])];
   let createdAt: number;
   if (opts.ms === null || opts.ms === undefined) {
@@ -121,7 +117,7 @@ export interface StreamSigner {
  * author actually signs — one signer round-trip per send.
  */
 export async function sealRumor(
-  rumor: Rumor,
+  rumor: NostrRumor,
   sealKind: typeof KIND_SEAL_ENCRYPTED | typeof KIND_SEAL_PLAINTEXT,
   stream: GroupKey,
   signer: StreamSigner,
@@ -242,10 +238,10 @@ export function openWrap(wrap: NostrEvent, stream: GroupKey): OpenedEvent {
     throw new StreamError("bad-seal-signature", "seal signature invalid");
   }
 
-  let rumor: Rumor;
+  let rumor: NostrRumor;
   try {
     const json = seal.kind === KIND_SEAL_ENCRYPTED ? nip44Decrypt(seal.content, stream.convKey) : seal.content;
-    rumor = JSON.parse(json) as Rumor;
+    rumor = JSON.parse(json) as NostrRumor;
   } catch (e) {
     throw new StreamError(
       seal.kind === KIND_SEAL_ENCRYPTED ? "decrypt" : "parse",

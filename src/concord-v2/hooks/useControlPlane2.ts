@@ -19,7 +19,8 @@ import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
 import { queryByStreams, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
-import { openWrap, type OpenedEvent, type Rumor, type StreamSigner } from "@/concord-v2/lib/stream";
+import { openWrap, type OpenedEvent, type StreamSigner } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { logSync } from "@/lib/syncLog";
 import { onWireScopes } from "@/wire/bus";
@@ -324,7 +325,7 @@ export async function publishEdition2(
   nostr: ReturnType<typeof useNostr>["nostr"],
   community: CommunityV2,
   signer: StreamSigner,
-  rumor: Rumor,
+  rumor: NostrRumor,
   opts?: { relays?: string[] },
 ): Promise<void> {
   // A dissolved community honors no new authority action (CORD-02 §9: the seal

@@ -41,6 +41,8 @@ import { getConversationKey, encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getEventHash } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent, UnsignedEvent } from "nostr-tools/pure";
 
+import type { NostrRumor } from "@/lib/nostrRumor";
+
 // ── Kinds ────────────────────────────────────────────────────────────────────
 
 /** NIP-17 chat message rumor. */
@@ -152,11 +154,6 @@ export interface Dm17Signer {
 
 // ── Rumors ───────────────────────────────────────────────────────────────────
 
-/** An unsigned rumor: a NostrEvent shape with an id but no signature. */
-export interface DmRumor extends UnsignedEvent {
-  id: string;
-}
-
 /**
  * Build an unsigned DM rumor. The rumor keeps the REAL author and REAL time
  * (NIP-17 requires `id` and `created_at`); only the seal/wrap are backdated.
@@ -167,7 +164,7 @@ export function buildDmRumor(opts: {
   tags: string[][];
   pubkey: string;
   createdAt?: number;
-}): DmRumor {
+}): NostrRumor {
   const unsigned: UnsignedEvent = {
     kind: opts.kind,
     content: opts.content,
@@ -270,7 +267,7 @@ export function dmPeerOf(rumor: { pubkey: string; tags: string[][] }, self: stri
  * reader learns the deadline without having to trust the (relay-visible) wrap.
  */
 export async function sealDmRumor(
-  rumor: DmRumor,
+  rumor: NostrRumor,
   recipientPk: string,
   signer: Dm17Signer,
 ): Promise<NostrEvent> {
@@ -419,7 +416,7 @@ export async function openDmWrap(
     const sealCache = wrapCache && expirationOf(seal.tags) === undefined;
     const rumor = JSON.parse(
       await signer.nip44.decrypt(seal.pubkey, seal.content, { cache: sealCache }),
-    ) as DmRumor;
+    ) as NostrRumor;
     if (rumor.pubkey !== seal.pubkey) return undefined;
     if (typeof rumor.kind !== "number" || typeof rumor.content !== "string") return undefined;
     if (!Array.isArray(rumor.tags) || typeof rumor.created_at !== "number") return undefined;

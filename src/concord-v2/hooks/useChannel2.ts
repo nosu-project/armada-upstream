@@ -28,7 +28,8 @@ import {
 import { citationToTag, type AuthorityCitation } from "@/concord-v2/lib/edition";
 import { citationSatisfied } from "@/concord-v2/lib/control";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
-import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type Rumor } from "@/concord-v2/lib/stream";
+import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
 import { beginSyncTask, type SyncTaskHandle } from "@/lib/syncActivity";
@@ -772,7 +773,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       if (kind === KIND_DELETE && target) tags.push(["k", String(targetKind ?? KIND_MESSAGE)]);
       if (extraTags) tags.push(...extraTags);
 
-      const rumor: Rumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms: effectiveMs });
+      const rumor: NostrRumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms: effectiveMs });
       // The message renders IMMEDIATELY — before the seal, which for a
       // NIP-46 login is a remote round-trip that can take seconds — and with
       // NO pending spinner (matching V1): the broadcast is near-instant in
