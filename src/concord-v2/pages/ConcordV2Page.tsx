@@ -2,6 +2,7 @@ import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell,
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
+import { AppStageSlot } from "@/components/chat/AppStage";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
@@ -50,6 +51,8 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
+import { ChatScopeContext } from "@/contexts/ChatScopeContext";
+import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
@@ -943,6 +946,15 @@ export function ConcordV2Page() {
       (c) => c.name,
     );
   }, [channels, channelIdHex, config.lastChannelByServer, lastChannelKey]);
+
+  // The chat scope for in-message app affordances (a `.xdc` launch card) and
+  // the top-of-chat app stage. Present only once both community + channel
+  // resolve; drives `useChatScope()` and `<AppStageSlot>` like the NIP-29 /
+  // Concord v1 pages do.
+  const appScope = useMemo<AppScope | undefined>(
+    () => (community && channel ? { kind: "concord2", community, channel } : undefined),
+    [community, channel],
+  );
 
   // Individual mute states for the ⋮ menu. Like GroupPage, the side-by-side
   // "Mute channel" / "Mute community" items each reflect only their own scope
@@ -2170,6 +2182,10 @@ export function ConcordV2Page() {
               the one in encrypted voice). */}
           <CallStageSlot active={inThisVoice} />
 
+          {/* Top-of-chat app stage (webxdc apps) for this channel. */}
+          {appScope && <AppStageSlot scope={appScope} />}
+
+          <ChatScopeContext.Provider value={appScope}>
           <div className="relative flex flex-1 min-h-0">
             <ComposerBoundsProvider value={composerBoundsRef}>
             <div className={cn(
@@ -2513,6 +2529,7 @@ export function ConcordV2Page() {
               </div>
             </div>
           </div>
+          </ChatScopeContext.Provider>
         </main>
       </SwipeReveal>
 

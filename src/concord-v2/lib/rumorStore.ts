@@ -36,6 +36,7 @@ import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
+import { KIND_WEBXDC } from "@/concord-v2/lib/kinds";
 import { resolveMs, type OpenedEvent } from "@/concord-v2/lib/stream";
 import { messageMatchesMedia, type SearchMedia2 } from "@/concord-v2/lib/search";
 import { emitWireScopes } from "@/wire/bus";
@@ -193,6 +194,28 @@ export async function queryChannelRumors(
   };
   if (opts.before !== undefined) filter.until = opts.before - 1;
   const events = await rumorStore().query([filter], { signal: opts.signal });
+  return events.map((ev) => storedToOpenedChat(ev, channelIdHex));
+}
+
+/**
+ * Read a channel's cached WebXDC coordination rumors (kind {@link KIND_WEBXDC})
+ * for one app session (`#i` = the webxdc uuid). Deliberately SEPARATE from
+ * {@link queryChannelRumors}: 3310 is not in {@link CHAT_KINDS}, so these
+ * durable in-chat-app state updates are stored (the wire decrypts every inner
+ * kind) but never surface in the timeline. Both `channel` and the single-letter
+ * `i` are index-backed, so this is a cheap indexed read. Durable state only —
+ * realtime frames ride ephemeral 21059 wraps and are never stored.
+ */
+export async function queryWebxdcRumors(
+  channelIdHex: string,
+  uuid: string,
+  opts?: { signal?: AbortSignal },
+): Promise<OpenedChat[]> {
+  if (!channelIdHex || !uuid) return [];
+  const events = await rumorStore().query(
+    [{ kinds: [KIND_WEBXDC], "#channel": [channelIdHex], "#i": [uuid], limit: 1000 }],
+    { signal: opts?.signal },
+  );
   return events.map((ev) => storedToOpenedChat(ev, channelIdHex));
 }
 
