@@ -179,7 +179,7 @@ function GifGrid({ results, columns: columnCount, onSelect, isFavorite, onToggle
 }
 
 export function GifPicker({ onSelect }: GifPickerProps) {
-  const { query, setQuery, clearQuery, results, isLoading, isError, isSearching } = useGifSearch();
+  const { query, setQuery, clearQuery, results, isLoading, isError, isSearching, providerName } = useGifSearch();
   const inputRef = useRef<HTMLInputElement>(null);
   const isMobile = useIsMobile();
   const columnCount = isMobile ? 2 : 3;
@@ -250,7 +250,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
                 ref={inputRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search KLIPY"
+                placeholder={`Search ${providerName}`}
                 className="pl-8 pr-20 h-9 text-base md:text-sm bg-muted/50 border-0 rounded-lg"
               />
               {query ? (
@@ -263,7 +263,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
                 </button>
               ) : (
                 <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/50 pointer-events-none select-none">
-                  Powered by KLIPY
+                  Powered by {providerName}
                 </span>
               )}
             </div>

@@ -335,5 +335,6 @@ export function useGifSearch() {
     isLoading: activeQuery.isLoading,
     isError: activeQuery.isError,
     isSearching,
+    providerName: useKlipy ? 'KLIPY' : 'GIFverse',
   };
 }
