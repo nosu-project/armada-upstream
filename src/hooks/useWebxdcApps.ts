@@ -17,6 +17,8 @@ export interface WebxdcApp {
   name: string;
   /** Icon URL (NIP-94 `image`/`thumb`), if the publisher included one. */
   icon?: string;
+  /** The publisher's pubkey — used to filter by follows. */
+  author: string;
   /** Publish time, for newest-first ordering. */
   createdAt: number;
 }
@@ -68,6 +70,7 @@ export function useWebxdcApps(relays?: string[]) {
           url,
           name: deriveName(ev, url),
           icon: tag(ev, "image") ?? tag(ev, "thumb"),
+          author: ev.pubkey,
           createdAt: ev.created_at,
         });
       }

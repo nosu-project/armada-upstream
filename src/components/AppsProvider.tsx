@@ -17,6 +17,7 @@ import {
   type AppScope,
 } from "@/contexts/AppsContext";
 import type { AppSync } from "@/hooks/useWebxdcApi";
+import { cn } from "@/lib/utils";
 
 /** A short human label + icon for the running app, shown in the stage header. */
 function appHeader(app: AppKind): { label: string; icon: React.ReactNode } {
@@ -99,7 +100,10 @@ function RunningApp({
     const stage = (
       <div className="px-1 pt-1">
         <div className="clip-corner-lg bg-chrome shadow-lg overflow-hidden">
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50">
+          <div className={cn(
+            "flex items-center gap-2 px-3 py-2",
+            active.app.type !== "webxdc" && "border-b border-border/50",
+          )}>
             {icon}
             <span className="text-sm font-medium truncate flex-1 min-w-0">{label}</span>
             <Button

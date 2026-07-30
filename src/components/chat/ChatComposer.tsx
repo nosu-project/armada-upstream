@@ -512,7 +512,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const [pickerOpen, setPickerOpen] = useState(false);
   // Keeps the picker mounted through its slide animation (mount + visible flags).
   const { mounted: pickerMounted, visible: pickerVisible } = useMountedTransition(pickerOpen);
-  const [pickerTab, setPickerTab] = useState<"emoji" | "gif" | "stickers">("emoji");
+  const [pickerTab, setPickerTab] = useState<"emoji" | "gif" | "stickers" | "games">("emoji");
   const [plusOpen, setPlusOpen] = useState(false);
   const [removedEmbeds, setRemovedEmbeds] = useState<Set<string>>(new Set());
   /** Maps uploaded file URLs to their NIP-94 tags (grouped per upload). */
@@ -803,9 +803,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setUploadedFileGroups((prev) => new Map(prev).set(url, tags));
   }, []);
 
-  /** Whether the "add a game" discovery picker is open. */
-  const [gamePickerOpen, setGamePickerOpen] = useState(false);
-
   /**
    * Register a discovered webxdc game (a kind-1063 event) as an attachment. A
    * fresh `webxdc` uuid makes THIS message's copy its own shared session, so
@@ -822,7 +819,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     ];
     if (app.icon) tags.push(["image", app.icon], ["thumb", app.icon]);
     setUploadedFileGroups((prev) => new Map(prev).set(app.url, tags));
-    setGamePickerOpen(false);
+    setPickerOpen(false);
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, []);
 
@@ -1920,7 +1917,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     <button
                       type="button"
                       onClick={() => {
-                        setGamePickerOpen(true);
+                        setPickerTab("games");
+                        setPickerOpen(true);
                         setPlusOpen(false);
                       }}
                       className="flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
@@ -2209,7 +2207,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           )}
         >
           <div className="overflow-hidden min-h-0">
-          {pickerTab !== "gif" && customEmojis.length > 0 && (
+          {pickerTab !== "gif" && pickerTab !== "games" && customEmojis.length > 0 && (
             <div className="flex gap-1 px-3 pt-2">
               <button
                 type="button"
@@ -2270,6 +2268,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 requestAnimationFrame(() => textareaRef.current?.focus());
               }}
             />
+          ) : pickerTab === "games" ? (
+            <WebxdcGamePicker onSelect={registerGame} relays={conversationRelays} />
           ) : (
             <GifPicker
               onSelect={(gif) => {
@@ -2295,14 +2295,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           onPrev={lightboxPrev}
         />
       )}
-
-      {/* Discover + attach a webxdc game from published kind-1063 events. */}
-      <WebxdcGamePicker
-        open={gamePickerOpen}
-        onOpenChange={setGamePickerOpen}
-        onPick={registerGame}
-        relays={conversationRelays}
-      />
     </div>
   );
 }
