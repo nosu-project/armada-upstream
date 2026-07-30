@@ -4,6 +4,10 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.44.1] - 2026-07-30
+
+A maintenance release with no changes to the app itself. It restores automatic publishing to Google Play, delivering the 0.44.0 release — webxdc games in the composer, synced favorite GIFs, and curated Discover feeds — to Play Store users.
+
 ## [0.44.0] - 2026-07-29
 
 Webxdc games can now be launched from the composer and played directly in Concord communities. GIF search defaults to GIFverse, with KLIPY available as an opt-in provider; favorite GIFs sync across devices. Discover feeds filter to curated content by default, with a setting to show everything. Several fixes improve DM push notification reliability across focus and mute edge cases.
