@@ -18,6 +18,9 @@ export function XdcAttachment({ url, imeta }: { url: string; imeta?: ImetaEntry 
   const { activeApp, launchApp } = useApps();
   const name = imeta?.summary || "Webxdc app";
   const sessionId = imeta?.webxdc;
+  // A published game's icon is a plaintext URL; an encrypted attachment's thumb
+  // is ciphertext (would render broken), so only show it when unencrypted.
+  const icon = imeta?.encryption ? undefined : imeta?.thumbnail;
 
   const openHere = Boolean(
     activeApp &&
@@ -38,8 +41,14 @@ export function XdcAttachment({ url, imeta }: { url: string; imeta?: ImetaEntry 
       className="my-1.5 flex items-center gap-3 max-w-sm rounded-xl border border-border bg-secondary/30 px-3.5 py-2.5"
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="size-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-        <Blocks className="size-4.5 text-primary" />
+      <div className="size-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 overflow-hidden">
+        {/* A published game carries a plaintext icon URL; an encrypted
+            attachment's thumb is ciphertext, so fall back to the glyph there. */}
+        {icon ? (
+          <img src={icon} alt="" className="size-full object-cover" />
+        ) : (
+          <Blocks className="size-4.5 text-primary" />
+        )}
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-semibold truncate">{name}</p>

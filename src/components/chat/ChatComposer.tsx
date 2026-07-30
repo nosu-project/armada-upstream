@@ -2,6 +2,7 @@ import { encode as blurhashEncode } from "blurhash";
 import {
   ArrowUpRight,
   BarChart3,
+  Blocks,
   Loader2,
   Mic,
   MonitorPlay,
@@ -29,6 +30,7 @@ import { Lightbox } from "@/components/chat/Lightbox";
 import { MentionAutocomplete } from "@/components/chat/MentionAutocomplete";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { StickerPicker } from "@/components/chat/StickerPicker";
+import { WebxdcGamePicker } from "@/components/chat/WebxdcGamePicker";
 import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -58,6 +60,7 @@ import { extractHashtags } from "@/lib/hashtag";
 import { buzzThreadRef } from "@/buzz/protocol";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
+import { extractWebxdcMeta } from "@/lib/webxdcMeta";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
@@ -68,6 +71,7 @@ import { buildPollTags, KIND_POLL } from "@/lib/polls";
 import { cn } from "@/lib/utils";
 
 import type { AddrCoords } from "@/hooks/useEvent";
+import type { WebxdcApp } from "@/hooks/useWebxdcApps";
 import type { ImetaEncryption } from "@/lib/imeta";
 import type { ProcessedVideo } from "@/lib/video/types";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -715,11 +719,24 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // them to size and blur-up its placeholder before the image resolves.
         const dim = tags.find((t) => t[0] === "dim")?.[1];
         const blurhash = tags.find((t) => t[0] === "blurhash")?.[1];
+        const summary = tags.find((t) => t[0] === "summary")?.[1];
         const name = tags.find((t) => t[0] === "name")?.[1];
-        return { url, mime, name, isImage: mime.startsWith("image/"), encryption, dim, blurhash };
+        const icon = tags.find((t) => t[0] === "image" || t[0] === "thumb")?.[1];
+        const isWebxdc = mime === "application/x-webxdc";
+        return {
+          url,
+          mime,
+          name: summary ?? name,
+          icon,
+          isImage: mime.startsWith("image/"),
+          isWebxdc,
+          encryption,
+          dim,
+          blurhash,
+        };
       }),
-    [uploadedFileGroups],
-  );
+      [uploadedFileGroups],
+    );
 
   /** Image-only attachments, in chip order — the composer lightbox gallery. */
   const imageAttachments = useMemo(
@@ -784,6 +801,29 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const tags: string[][] = [["url", url], ["m", mime]];
     if (dim) tags.push(["dim", dim]);
     setUploadedFileGroups((prev) => new Map(prev).set(url, tags));
+  }, []);
+
+  /** Whether the "add a game" discovery picker is open. */
+  const [gamePickerOpen, setGamePickerOpen] = useState(false);
+
+  /**
+   * Register a discovered webxdc game (a kind-1063 event) as an attachment. A
+   * fresh `webxdc` uuid makes THIS message's copy its own shared session, so
+   * everyone who launches it from this message converges on one game state. The
+   * `.xdc` is a public URL (not re-uploaded / not encrypted).
+   */
+  const registerGame = useCallback((app: WebxdcApp) => {
+    const tags: string[][] = [
+      ["url", app.url],
+      ["m", "application/x-webxdc"],
+      ["webxdc", crypto.randomUUID()],
+      ["summary", app.name],
+      ["name", app.name],
+    ];
+    if (app.icon) tags.push(["image", app.icon], ["thumb", app.icon]);
+    setUploadedFileGroups((prev) => new Map(prev).set(app.url, tags));
+    setGamePickerOpen(false);
+    requestAnimationFrame(() => textareaRef.current?.focus());
   }, []);
 
   const resetComposeState = useCallback(() => {
@@ -936,6 +976,23 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         const sizeTag = tags.find((t) => t[0] === "size");
         if (sizeTag) sizeTag[1] = String(file.size);
         else tags.push(["size", String(file.size)]);
+      }
+
+      // A .xdc is a webxdc app. Browsers report an empty type for `.xdc`, so
+      // force the NIP-94 `m` (the server's guess is wrong), mint a shared
+      // session uuid, and lift the app's title from its manifest — so a
+      // hand-attached game renders as a launchable card, not a download.
+      if (originalMime === "application/x-webxdc" || /\.xdc$/i.test(file.name)) {
+        const mTag = tags.find((t) => t[0] === "m");
+        if (mTag) mTag[1] = "application/x-webxdc";
+        else tags.push(["m", "application/x-webxdc"]);
+        tags.push(["webxdc", crypto.randomUUID()]);
+        try {
+          const meta = await extractWebxdcMeta(file);
+          if (meta.name) tags.push(["summary", meta.name]);
+        } catch {
+          // Unreadable archive — leave it as a plain attachment.
+        }
       }
 
       if (abort.signal.aborted) return;
@@ -1640,6 +1697,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     encryption={att.encryption}
                   />
                 </button>
+              ) : att.isWebxdc ? (
+                <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
+                  {att.icon ? (
+                    <img src={att.icon} alt="" className="size-7 rounded object-cover" />
+                  ) : (
+                    <Blocks className="size-5 text-primary" />
+                  )}
+                  <span className="text-[10px] truncate max-w-full px-0.5">
+                    {att.name || "Game"}
+                  </span>
+                </div>
               ) : (
                 <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
                   <Paperclip className="size-5" />
@@ -1849,6 +1917,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                         <span className="font-medium">Watch together</span>
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGamePickerOpen(true);
+                        setPlusOpen(false);
+                      }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+                    >
+                      <Blocks className="size-4" />
+                      <span className="font-medium">Add game</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -2216,6 +2295,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           onPrev={lightboxPrev}
         />
       )}
+
+      {/* Discover + attach a webxdc game from published kind-1063 events. */}
+      <WebxdcGamePicker
+        open={gamePickerOpen}
+        onOpenChange={setGamePickerOpen}
+        onPick={registerGame}
+        relays={conversationRelays}
+      />
     </div>
   );
 }
