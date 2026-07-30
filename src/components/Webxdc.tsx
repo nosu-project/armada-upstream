@@ -17,6 +17,8 @@ import type {
 import { SandboxFrame, type SandboxFrameHandle } from "@/components/SandboxFrame";
 import { getMimeType, bytesToBase64, injectScriptTags } from "@/lib/sandbox";
 import type { FileResponse } from "@/lib/sandbox";
+import { decryptBytes } from "@/lib/encryptedMedia";
+import type { ImetaEncryption } from "@/lib/imeta";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,6 +30,12 @@ export interface WebxdcProps
   id: string;
   /** The `.xdc` archive: raw bytes or a URL to fetch them from. */
   xdc: Uint8Array | string;
+  /**
+   * AES-GCM params when the fetched blob is a client-encrypted attachment
+   * (Concord channels encrypt uploads). The archive is decrypted before unzip.
+   * Absent for plaintext attachments.
+   */
+  encryption?: ImetaEncryption;
   /** A `Webxdc` instance that backs the iframe's webxdc API calls. */
   webxdc: WebxdcAPI<unknown>;
 }
@@ -59,12 +67,18 @@ const WEBXDC_CSP = [
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Resolve `xdc` prop to a Uint8Array. */
-async function resolveXdc(xdc: Uint8Array | string): Promise<Uint8Array> {
+/** Resolve `xdc` prop to a Uint8Array, decrypting the blob if it's encrypted. */
+async function resolveXdc(
+  xdc: Uint8Array | string,
+  encryption?: ImetaEncryption,
+): Promise<Uint8Array> {
   if (typeof xdc === "string") {
     const res = await fetch(xdc);
     if (!res.ok) throw new Error(`Failed to fetch xdc: ${res.status}`);
-    return new Uint8Array(await res.arrayBuffer());
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    // Concord attachments are AES-GCM ciphertext on Blossom; decrypt to the
+    // real ZIP before unzip (a plaintext attachment has no encryption params).
+    return encryption ? decryptBytes(bytes, encryption.key, encryption.nonce) : bytes;
   }
   return xdc;
 }
@@ -224,7 +238,7 @@ function generateWebxdcBridge(api: WebxdcAPI<unknown>): string {
  * the bridge to the provided `WebxdcAPI` instance.
  */
 export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
-  { id, xdc, webxdc, ...iframeProps },
+  { id, xdc, encryption, webxdc, ...iframeProps },
   ref,
 ) {
   const sandboxRef = useRef<SandboxFrameHandle>(null);
@@ -232,12 +246,16 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
   // Keep latest props in refs so callbacks always see current values.
   const webxdcRef = useRef(webxdc);
   const xdcRef = useRef(xdc);
+  const encryptionRef = useRef(encryption);
   useEffect(() => {
     webxdcRef.current = webxdc;
   }, [webxdc]);
   useEffect(() => {
     xdcRef.current = xdc;
   }, [xdc]);
+  useEffect(() => {
+    encryptionRef.current = encryption;
+  }, [encryption]);
 
   // The unzipped file map, populated on first `onReady`.
   const fileMapRef = useRef<Map<string, Uint8Array> | null>(null);
@@ -272,7 +290,7 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
   // onReady: fetch and unzip the archive when the sandbox is ready.
   const onReady = useCallback(async () => {
     try {
-      const bytes = await resolveXdc(xdcRef.current);
+      const bytes = await resolveXdc(xdcRef.current, encryptionRef.current);
       fileMapRef.current = unzipXdc(bytes);
       bridgeScriptRef.current = generateWebxdcBridge(webxdcRef.current);
     } catch (err) {

@@ -4,6 +4,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 
 import type { Channel, Community } from "@/concord-v1/lib/types";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
+import type { ImetaEncryption } from "@/lib/imeta";
 
 /**
  * Which chat surface an app is running in. NIP-29 groups are addressed by
@@ -51,7 +52,18 @@ export function defaultSessionId(scope: AppScope, app: AppKind): string {
  */
 export type AppKind =
   | { type: "youtube" }
-  | { type: "webxdc"; url: string; name?: string; icon?: string };
+  | {
+      type: "webxdc";
+      url: string;
+      name?: string;
+      icon?: string;
+      /**
+       * AES-GCM params when the `.xdc` blob is a client-encrypted attachment
+       * (Concord channels encrypt uploads), so the archive is decrypted before
+       * unzip. Absent for plaintext (e.g. NIP-29) attachments.
+       */
+      encryption?: ImetaEncryption;
+    };
 
 /** A running in-chat app: the chat it lives in, what it is, and its sync session id. */
 export interface ActiveApp {

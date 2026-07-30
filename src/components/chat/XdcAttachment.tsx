@@ -30,7 +30,7 @@ export function XdcAttachment({ url, imeta }: { url: string; imeta?: ImetaEntry 
 
   const handleLaunch = () => {
     if (!scope) return;
-    launchApp(scope, { type: "webxdc", url, name }, sessionId);
+    launchApp(scope, { type: "webxdc", url, name, encryption: imeta?.encryption }, sessionId);
   };
 
   return (

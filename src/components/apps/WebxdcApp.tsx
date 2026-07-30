@@ -3,6 +3,7 @@ import { Blocks } from "lucide-react";
 import { Webxdc } from "@/components/Webxdc";
 import { useWebxdcApi, type AppSync } from "@/hooks/useWebxdcApi";
 import { deriveIframeSubdomain } from "@/lib/iframeSubdomain";
+import type { ImetaEncryption } from "@/lib/imeta";
 
 /**
  * Runs a `.xdc` webxdc app inside the cross-origin sandbox, backing its
@@ -15,11 +16,13 @@ export function WebxdcApp({
   url,
   sessionId,
   name,
+  encryption,
 }: {
   sync: AppSync;
   url: string;
   sessionId: string;
   name?: string;
+  encryption?: ImetaEncryption;
 }) {
   const api = useWebxdcApi(sync);
   const iframeId = deriveIframeSubdomain("webxdc", sessionId);
@@ -29,6 +32,7 @@ export function WebxdcApp({
       <Webxdc
         id={iframeId}
         xdc={url}
+        encryption={encryption}
         webxdc={api}
         title={name ?? "Webxdc app"}
         className="w-full h-full border-0"

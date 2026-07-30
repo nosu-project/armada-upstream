@@ -31,7 +31,7 @@ function AppSurface({ app, sessionId, sync }: { app: AppKind; sessionId: string;
   if (app.type === "youtube") {
     return <YouTubeWatchalong sync={sync} />;
   }
-  return <WebxdcApp sync={sync} url={app.url} sessionId={sessionId} name={app.name} />;
+  return <WebxdcApp sync={sync} url={app.url} sessionId={sessionId} name={app.name} encryption={app.encryption} />;
 }
 
 /** Render a running NIP-29-scoped app (resolves the group sync backend). */
