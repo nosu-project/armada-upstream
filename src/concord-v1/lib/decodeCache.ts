@@ -2,8 +2,8 @@
  * Decode-once memo for Concord's sealed outer events.
  *
  * Opening a sealed outer is the expensive step: a NIP-44 decrypt, a JSON parse,
- * and a Schnorr `verifyEvent` per event. The local event store (NIndexedDB,
- * `armada-events`) is append-only and accumulates every sealed blob ever seen,
+ * and a Schnorr `verifyEvent` per event. The local event store (the ArmadaDB
+ * `main` tenant) is append-only and accumulates every sealed blob ever seen,
  * so the read path re-reads the same blobs on every load, poll, and reconnect —
  * and re-verifying them all, serially, on the main thread is what makes a busy
  * channel "sit forever" decrypting its whole queue.

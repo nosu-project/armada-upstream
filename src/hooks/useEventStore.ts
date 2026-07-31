@@ -2,9 +2,9 @@ import { useContext } from 'react';
 import { EventStoreContext, type EventStoreContextType } from '@/contexts/EventStoreContext';
 
 /**
- * Access the app-wide IndexedDB event store.
+ * Access the app-wide event store (the ArmadaDB `main` tenant).
  *
- * Returns a `Promise<NIndexedDB>`; `await` it inside a query function:
+ * Returns a `Promise<ArmadaEventStore>`; `await` it inside a query function:
  *
  * ```ts
  * const eventStore = useEventStore();

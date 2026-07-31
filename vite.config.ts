@@ -121,13 +121,8 @@ export default defineConfig({
     port: 8080,
   },
   plugins: [react(), buildStamp(), serveChangelog()],
-  optimizeDeps: {
-    // Pre-bundling would break the package's `new URL('sqlite3.wasm', …)`
-    // asset resolution in dev; the worker imports it directly instead.
-    exclude: ["@sqlite.org/sqlite-wasm"],
-  },
   worker: {
-    // The sqlite worker is an ES module (it imports the wasm loader).
+    // The video worker is an ES module (`new Worker(…, { type: "module" })`).
     format: "es",
   },
   define: {

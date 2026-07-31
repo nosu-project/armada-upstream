@@ -2,12 +2,12 @@
  * The minimum surface {@link SqliteArmadaDB} needs from a SQLite library —
  * statement text plus bound parameters, on ONE connection.
  *
- * Deliberately narrower than a "run this batch atomically" interface (see
- * `@/lib/sqlite/driver`, which the old event store uses): the query planner
- * interleaves reads and writes inside a transaction — read the coordinate,
- * then supersede it — and issues `BEGIN IMMEDIATE` / `COMMIT` as ordinary
- * statements. A driver must therefore run statements in call order on a single
- * connection; it must NOT multiplex them across connections or reorder them.
+ * Deliberately narrower than a "run this batch atomically" interface: the
+ * query planner interleaves reads and writes inside a transaction — read the
+ * coordinate, then supersede it — and issues `BEGIN IMMEDIATE` / `COMMIT` as
+ * ordinary statements. A driver must therefore run statements in call order on
+ * a single connection; it must NOT multiplex them across connections or
+ * reorder them.
  *
  * Both methods may be sync or async, so this fits `node:sqlite`,
  * better-sqlite3, a SQLite-WASM worker behind postMessage, and the Capacitor

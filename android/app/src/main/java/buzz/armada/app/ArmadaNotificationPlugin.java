@@ -274,42 +274,6 @@ public class ArmadaNotificationPlugin extends Plugin {
     }
 
     /**
-     * Execute the WebView event store's statements atomically against the
-     * shared database (the SqlDriver transport — see nativeDriver.ts).
-     */
-    @PluginMethod
-    public void dbRun(PluginCall call) {
-        JSArray statements = call.getArray("statements");
-        if (statements == null) {
-            call.resolve();
-            return;
-        }
-        try {
-            SharedEventDb.get(getContext()).runBatch(statements);
-            call.resolve();
-        } catch (Exception e) {
-            call.reject("dbRun failed: " + e.getMessage());
-        }
-    }
-
-    /** Run one SELECT for the WebView store; rows are positional arrays. */
-    @PluginMethod
-    public void dbQuery(PluginCall call) {
-        String sql = call.getString("sql");
-        if (sql == null) {
-            call.reject("dbQuery: sql required");
-            return;
-        }
-        try {
-            JSObject ret = new JSObject();
-            ret.put("rows", SharedEventDb.get(getContext()).queryRows(sql, call.getArray("params")));
-            call.resolve(ret);
-        } catch (Exception e) {
-            call.reject("dbQuery failed: " + e.getMessage());
-        }
-    }
-
-    /**
      * Return (without consuming) the rolling per-room cache for one room —
      * the newest raw outer events the service received for it this service
      * lifetime. Keys: "h:<groupId>", "z:<pseudonym>", "c2:<channelId>", "dm".

@@ -148,7 +148,7 @@ async function openMessages(
 
 /**
  * Read a channel's sealed blobs back from the append-only local event store and
- * fold them into the timeline. The store (NIndexedDB, `armada-events`) mirrors
+ * fold them into the timeline. The store (the ArmadaDB `main` tenant) mirrors
  * every sealed outer the relays ever returned, so it is the complete local
  * source of truth — like Vector's SQLite. Reading + decoding from it (rather
  * than re-querying relays) is what makes a visited channel paint instantly and

@@ -18,6 +18,7 @@ client does not depend on it at build time.
 |--------------|-----------------------------------------------------------------|
 | `src/`       | React 19 + Vite web client (Tailwind + shadcn/ui + Nostrify)    |
 | `src/concord-v2/` | The Concord protocol implementation (CORD-01..07): stream, control, chat, invites, rekey, voice, crypto derivations |
+| `src/lib/db/` | ArmadaDB — the one local storage interface (tenants of rumors + a KV), its IndexedDB adapter, and the legacy-database migrations |
 | `android/`   | Capacitor Android project (signed APK/AAB built in CI)          |
 | `ios/`       | Capacitor iOS project (SwiftPM, no CocoaPods; built manually on a Mac — no CI) |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
@@ -180,8 +181,7 @@ cd ios/App && xcodebuild -project App.xcodeproj -scheme App \
 Android-only pieces that are simply absent on iOS, and are gated so they don't
 surface dead UI or throw: the `ArmadaNotification` background relay service
 (use `hasNativeNotificationService()`, not `isNativeRuntime()`, for anything
-touching it), the shared native SQLite store (iOS falls back to SQLite-WASM on
-OPFS, then IndexedDB), NIP-55 external signers (Amber), the Bluetooth mesh, and
+touching it), NIP-55 external signers (Amber), the Bluetooth mesh, and
 the Credential Manager nsec export. **iOS therefore has no notifications at
 all** — no background service, and no Web Push in WKWebView; that needs APNs or
 a native iOS equivalent. Deep links are also unhandled: there is no

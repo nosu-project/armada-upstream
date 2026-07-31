@@ -6,7 +6,6 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
 import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
@@ -15,22 +14,19 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * The shared Nostr event database — ONE file used by both sides of the app:
+ * The background service's Nostr event database.
  *
- *  - {@link NotificationRelayService} writes every event it receives (and
- *    every kind-0 profile it fetches) here, so the WebView finds them without
- *    a relay round-trip, and the notification drain is durable (a `seq`
- *    cursor instead of the old in-memory 200-event buffer).
- *  - The WebView's event store runs its whole NIP-01 filter engine against
- *    this same file through {@link ArmadaNotificationPlugin#dbRun} /
- *    {@link ArmadaNotificationPlugin#dbQuery} — so profiles fetched by either
- *    side are stored ONCE and visible to both.
+ * {@link NotificationRelayService} writes every event it receives (and every
+ * kind-0 profile it fetches) here, which makes the notification drain durable
+ * (a `seq` cursor instead of the old in-memory 200-event buffer) and lets the
+ * service reuse a profile it already fetched instead of re-fetching it.
  *
- * Schema and statement shapes are MIRRORED from the TypeScript side
- * (src/lib/sqlite/schema.ts and SqliteEventStore.ts) — any change must be
- * made in both places. All supersession logic is guarded SQL (no
- * read-modify-write), so the two writers can't race each other into a stale
- * replaceable version.
+ * The WebView no longer shares this file. It used to run its whole NIP-01
+ * filter engine against it over a plugin SQL bridge; its store is now ArmadaDB
+ * (src/lib/db), so the only path out of here is
+ * {@link ArmadaNotificationPlugin#drainEvents}. All supersession logic is
+ * guarded SQL (no read-modify-write), so concurrent writers can't race each
+ * other into a stale replaceable version.
  */
 final class SharedEventDb extends SQLiteOpenHelper {
 
@@ -58,7 +54,6 @@ final class SharedEventDb extends SQLiteOpenHelper {
 
     @Override
     public void onCreate(SQLiteDatabase db) {
-        // Mirrors EVENT_DB_SCHEMA in src/lib/sqlite/schema.ts.
         db.execSQL("CREATE TABLE IF NOT EXISTS events ("
                 + "seq INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + "id TEXT NOT NULL UNIQUE,"
@@ -89,10 +84,9 @@ final class SharedEventDb extends SQLiteOpenHelper {
     // ── Service write path ───────────────────────────────────────────────────
 
     /**
-     * Whether an event id is already stored — by either writer (the service's
-     * own inserts, src 'svc', or the WebView's store writes, src 'web'). Used
-     * as the durable notification-dedupe floor for DM gift wraps, which have
-     * no usable timestamp for since-gating.
+     * Whether an event id is already stored. Used as the durable
+     * notification-dedupe floor for DM gift wraps, which have no usable
+     * timestamp for since-gating.
      */
     boolean hasEvent(String id) {
         if (id == null || id.isEmpty()) return false;
@@ -103,8 +97,7 @@ final class SharedEventDb extends SQLiteOpenHelper {
     }
 
     /**
-     * Insert one event with full store semantics (mirrors
-     * SqliteEventStore.insertStatements): ephemeral kinds are skipped,
+     * Insert one event with full store semantics: ephemeral kinds are skipped,
      * replaceable/addressable events supersede older versions at the same
      * (pubkey, kind, d) coordinate — and a stale write is skipped — and
      * single-letter tags (< 200 chars) are indexed. Duplicates are no-ops.
@@ -174,8 +167,7 @@ final class SharedEventDb extends SQLiteOpenHelper {
 
     /**
      * The stored kind-0 for a pubkey (supersession keeps only the newest),
-     * or null. This is how the service reuses profiles the WEBVIEW fetched —
-     * the reason a profile is now stored (and fetched) once, not twice.
+     * or null — so a profile the service already fetched is not fetched again.
      */
     String getProfileRaw(String pubkey) {
         SQLiteDatabase db = getReadableDatabase();
@@ -209,79 +201,6 @@ final class SharedEventDb extends SQLiteOpenHelper {
                 new String[]{String.valueOf(cursor), SRC_SERVICE})) {
             while (c.moveToNext()) {
                 rows.add(new DrainRow(c.getLong(0), c.getString(1)));
-            }
-        }
-        return rows;
-    }
-
-    // ── WebView bridge (the JS store's SqlDriver transport) ──────────────────
-
-    /**
-     * Execute the JS store's statements atomically. Statement shapes come
-     * from SqliteEventStore.ts; params are String/Number/null.
-     */
-    void runBatch(JSONArray statements) throws JSONException {
-        SQLiteDatabase db = getWritableDatabase();
-        db.beginTransaction();
-        try {
-            for (int i = 0; i < statements.length(); i++) {
-                JSONObject stmt = statements.getJSONObject(i);
-                String sql = stmt.getString("sql");
-                JSONArray params = stmt.optJSONArray("params");
-                if (params == null || params.length() == 0) {
-                    db.execSQL(sql);
-                } else {
-                    Object[] args = new Object[params.length()];
-                    for (int p = 0; p < params.length(); p++) {
-                        Object v = params.get(p);
-                        args[p] = v == JSONObject.NULL ? null : v;
-                    }
-                    db.execSQL(sql, args);
-                }
-            }
-            db.setTransactionSuccessful();
-        } finally {
-            db.endTransaction();
-        }
-    }
-
-    /**
-     * Run one SELECT for the JS store; rows come back as positional value
-     * arrays. rawQuery binds args as TEXT — SQLite's column affinity converts
-     * them back for INTEGER comparisons (verified against real SQLite in
-     * SqliteEventStore.test.ts's node driver, which exercises the same SQL).
-     */
-    JSONArray queryRows(String sql, JSONArray params) throws JSONException {
-        String[] args = null;
-        if (params != null && params.length() > 0) {
-            args = new String[params.length()];
-            for (int i = 0; i < params.length(); i++) {
-                Object v = params.get(i);
-                args[i] = v == JSONObject.NULL ? null : String.valueOf(v);
-            }
-        }
-        JSONArray rows = new JSONArray();
-        SQLiteDatabase db = getReadableDatabase();
-        try (Cursor c = db.rawQuery(sql, args)) {
-            while (c.moveToNext()) {
-                JSONArray row = new JSONArray();
-                for (int i = 0; i < c.getColumnCount(); i++) {
-                    switch (c.getType(i)) {
-                        case Cursor.FIELD_TYPE_INTEGER:
-                            row.put(c.getLong(i));
-                            break;
-                        case Cursor.FIELD_TYPE_FLOAT:
-                            row.put(c.getDouble(i));
-                            break;
-                        case Cursor.FIELD_TYPE_NULL:
-                            row.put(JSONObject.NULL);
-                            break;
-                        default:
-                            row.put(c.getString(i));
-                            break;
-                    }
-                }
-                rows.put(row);
             }
         }
         return rows;

@@ -46,8 +46,8 @@ export interface ArmadaNotificationPlugin {
   submitAuth(options: { relayUrl: string; event: NostrEvent }): Promise<void>;
   /**
    * Drain raw outer wire events the background service received (it writes
-   * them durably into the shared native SQLite database — see dbQuery). Reads
-   * a page of service-received rows after the persisted drain cursor; the JS
+   * them durably into its own native SQLite database). Reads a page of
+   * service-received rows after the persisted drain cursor; the JS
    * layer routes each through wire ingest, then calls {@link ackDrain} with
    * the returned cursor so the page isn't replayed. Loss-proof across service
    * restarts and webview crashes (peek+ack, database-backed). Concord
@@ -56,19 +56,6 @@ export interface ArmadaNotificationPlugin {
   drainEvents(): Promise<{ events: string[]; cursor: number }>;
   /** Advance the persisted drain cursor after a drained page was ingested. */
   ackDrain(options: { cursor: number }): Promise<void>;
-  /**
-   * Run statements atomically against the shared native SQLite database (the
-   * one NotificationRelayService also writes). Transport for the JS event
-   * store's write path — see src/lib/sqlite/nativeDriver.ts.
-   */
-  dbRun(options: {
-    statements: Array<{ sql: string; params: Array<string | number | null> }>;
-  }): Promise<void>;
-  /** Run one SELECT against the shared database; rows are positional arrays. */
-  dbQuery(options: {
-    sql: string;
-    params: Array<string | number | null>;
-  }): Promise<{ rows: Array<Array<string | number | null>> }>;
   /**
    * Drain Concord inner events the service already decrypted (it holds the
    * channel key for the notification), each with the outer `z` pseudonym and

@@ -503,15 +503,15 @@ export function writeRumors(communityIdHex: string, opened: OpenedChat[]): void 
 //
 // The native background service (Android/iOS) receives V2 wraps but can't
 // decrypt them — it has no stream keys. It parks the raw kind-1059/21059 wraps
-// here (a SEPARATE tiny NIndexedDB) instead of the shared `armada-events` store;
-// the WebView's plane hooks — which DO hold the keys — read them with
+// here (a SEPARATE tiny tenant) instead of the shared event cache; the
+// WebView's plane hooks — which DO hold the keys — read them with
 // {@link peekPendingWraps}, decrypt, and acknowledge ONLY the wraps that
 // actually decoded with {@link ackPendingWraps}. A wrap is never deleted
 // before its rumor is safely in the opened-event store: an aborted or failed
 // decrypt round leaves it parked for the next read (a notified message must
 // never be locally destructible — issue #19). Undecodable stragglers (e.g. a
-// key never arrives) are pruned by age. So no 1059 ever lands in
-// `armada-events`, yet a notification's message survives a cold launch. Wraps
+// key never arrives) are pruned by age. So no 1059 ever lands in the `main`
+// tenant, yet a notification's message survives a cold launch. Wraps
 // are indexed only by their author (the stream address) so a plane can read
 // exactly its own.
 //

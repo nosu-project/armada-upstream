@@ -1,7 +1,7 @@
 /**
  * ArmadaDB — the shape all Armada client data is meant to converge on, with
- * one adapter per platform storage engine (IndexedDB on web, SQLite on
- * native/OPFS).
+ * one adapter per platform storage engine (IndexedDB everywhere today, SQLite
+ * once a driver exists for it — see `armadaDB.ts`).
  *
  * Two ideas carry the whole surface:
  *
