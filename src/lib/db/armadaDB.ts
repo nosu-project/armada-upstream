@@ -25,6 +25,11 @@ export const ARMADA_DB_NAME = "armada";
  * nothing and keeps them deletable if the registry itself is unreadable.
  */
 export const ARMADA_TENANTS = {
+  /**
+   * The general event cache: signed events fetched from relays (profiles,
+   * NIP-29 timelines, gift wraps, git activity). See `mainEventStore.ts`.
+   */
+  main: "main",
   /** Concord V2 wraps parked by the native service for WebView decryption. */
   c2Park: "c2park",
 } as const;

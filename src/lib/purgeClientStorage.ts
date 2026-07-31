@@ -2,7 +2,6 @@ import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
-import { purgeEventStore } from "@/lib/sqlite/eventStore";
 
 /**
  * localStorage keys that must survive a purge. `armada:login` is the nostrify
@@ -11,6 +10,21 @@ import { purgeEventStore } from "@/lib/sqlite/eventStore";
  * We clear it (and everything else) only as the final account logs out.
  */
 const PRESERVE_LOCAL_STORAGE_KEYS = new Set<string>(["armada:login"]);
+
+/**
+ * Remove the OPFS directory the retired SQLite-WASM event store used. Nothing
+ * writes it any more (the event cache is an ArmadaDB tenant), but a user
+ * upgrading across that change still has the bytes on disk, and a logout must
+ * not leave them.
+ */
+async function purgeOrphanedOpfs(): Promise<void> {
+  try {
+    const root = await navigator.storage?.getDirectory?.();
+    await root?.removeEntry(".armada-sqlite", { recursive: true });
+  } catch {
+    // best-effort — absent (the common case) or held open
+  }
+}
 
 /** Best-effort deletion of every IndexedDB database this origin owns. */
 async function purgeIndexedDB(): Promise<void> {
@@ -93,5 +107,5 @@ export async function purgeClientStorage(): Promise<void> {
   // ArmadaDB first: `deleteDatabase` against an open connection is blocked,
   // not applied, so its databases have to be closed before the sweep runs.
   await purgeArmadaDB();
-  await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeEventStore()]);
+  await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeOrphanedOpfs()]);
 }

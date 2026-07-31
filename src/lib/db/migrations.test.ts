@@ -30,7 +30,10 @@ async function freshModules(): Promise<MigrationsModule> {
   return await import("./migrations");
 }
 
-describe("runMigrations", () => {
+// Each case drives every drain in the catalogue against a real (fake-indexeddb)
+// origin, which is well past the default 5s budget when the whole suite is
+// competing for the CPU.
+describe("runMigrations", { timeout: 30_000 }, () => {
   beforeEach(() => {
     (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
   });

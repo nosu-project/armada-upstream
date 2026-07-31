@@ -9,7 +9,7 @@ import { EventStoreContext, type EventStoreContextType } from "@/contexts/EventS
 import { userReadRelays, userWriteRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCachedNip29Servers } from "@/hooks/useCachedNip29Servers";
-import { appEventStore } from "@/lib/sqlite/eventStore";
+import { appEventStore } from "@/lib/db/mainEventStore";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
 import { Nip46Signer } from "@/lib/nip46Signer";

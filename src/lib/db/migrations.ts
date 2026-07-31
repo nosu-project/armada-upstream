@@ -29,6 +29,7 @@ import { migrateLegacyDms } from "@/lib/nip17/dm17Store";
 import { migrateLegacyDecryptCache } from "@/lib/decryptCacheMigration";
 
 import { getArmadaDB } from "./armadaDB";
+import { LEGACY_EVENT_DB_NAME, migrateLegacyEvents } from "./eventStoreMigration";
 
 export interface Migration {
   /** Stable id (appears in no storage key — the drains own their own flags). */
@@ -74,6 +75,13 @@ export const MIGRATIONS: Migration[] = [
     legacy: [LEGACY_RUMOR_DB_NAME],
     perAccount: true,
     run: (self) => migrateLegacyRumors(self!),
+  },
+  {
+    id: "events",
+    label: "Moving the event cache",
+    legacy: [LEGACY_EVENT_DB_NAME],
+    perAccount: false,
+    run: () => migrateLegacyEvents(),
   },
   {
     // Nothing to copy: the parked-wrap store moved to the `c2park` tenant, and

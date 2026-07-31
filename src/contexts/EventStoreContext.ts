@@ -2,10 +2,9 @@ import { createContext } from 'react';
 import type { NostrEvent, NostrFilter } from '@nostrify/nostrify';
 
 /**
- * The surface every app event store implements. Backed by the shared SQLite
- * database (native on Android — the same file the notification service
- * writes — and SQLite-WASM over OPFS on web/Electron), with NIndexedDB as
- * the degraded-environment fallback. See src/lib/sqlite/eventStore.ts.
+ * The surface the app event store implements — a thin `NStore` shape over the
+ * ArmadaDB `main` tenant. See src/lib/db/mainEventStore.ts, which also
+ * documents why reads report an empty `sig`.
  */
 export interface ArmadaEventStore {
   event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<void>;
@@ -13,8 +12,6 @@ export interface ArmadaEventStore {
   count(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<{ count: number; approximate?: boolean }>;
   remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void>;
   close(): Promise<void>;
-  /** Optional fast wipe (logout purge) — drops every row, keeps the schema. */
-  wipe?(): Promise<void>;
 }
 
 /**
