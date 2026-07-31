@@ -113,6 +113,17 @@ export async function whenAuthSettled(url: string, groupsOf: () => GroupKey[]): 
 export interface PlaneScope {
   /** The scope key: single-flight identity, and (forward mode) the persisted cursor key. */
   scope: string;
+  /**
+   * The community this plane belongs to — which rumor-store tenant its opened
+   * events are written to.
+   *
+   * A structured field rather than something parsed back out of {@link scope}:
+   * `scope` is also the cursor key and the single-flight identity, so its
+   * format is free to change, and getting a tenant wrong writes one community's
+   * plane into another's database. Set by the scope factories, which each
+   * already take the community.
+   */
+  communityIdHex: string;
   /** The stream keys whose addresses this plane's wraps are authored by. */
   groups: GroupKey[];
   /**
@@ -176,6 +187,7 @@ export function controlScope(
 ): PlaneScope {
   return {
     scope: controlScopeKey(community, relayUrl),
+    communityIdHex: community.idHex,
     groups: [currentControlGroup(community)],
     complete: true,
     onFresh,
@@ -195,6 +207,7 @@ export function guestbookScope(
 ): PlaneScope {
   return {
     scope: `guestbook:${community.idHex}@${community.rootEpoch}|${relayUrl}`,
+    communityIdHex: community.idHex,
     groups: guestbookGroups(community),
     onFresh,
   };
@@ -785,7 +798,7 @@ async function runScopes(
           );
 
           if (opened.length > 0) {
-            await writeOpened(opened);
+            await writeOpened(s.communityIdHex, opened);
             for (const e of opened) freshPerScope[i].push(e);
           }
           // Only the memo advances, and only once the rumors are durably
@@ -808,16 +821,28 @@ async function runScopes(
       }
 
       // Forward scopes stay one batch — their `since` already narrowed them —
-      // then ONE store write and parallel cursor advances.
-      const forwardFresh: OpenedEvent[] = [];
+      // then one store write PER COMMUNITY and parallel cursor advances.
+      //
+      // Per community, not one write for the batch: a relay batch deliberately
+      // coalesces scopes from every community that shares this relay (see
+      // `enqueue`), so `forwardFresh` is a mixed bag and each community's
+      // events have to land in their own tenant. Bucketing keeps it at one
+      // write per community rather than one per scope — and a community's
+      // guestbook scopes for different relays are different batches anyway, so
+      // in practice that is still a single write.
+      const forwardFresh = new Map<string, OpenedEvent[]>();
       for (const [i, s] of scopes.entries()) {
         if (s.complete) continue;
         for (const e of await openPlaneWrapsChunked(perScope[i], s.groups)) {
           freshPerScope[i].push(e);
-          forwardFresh.push(e);
+          const bucket = forwardFresh.get(s.communityIdHex);
+          if (bucket) bucket.push(e);
+          else forwardFresh.set(s.communityIdHex, [e]);
         }
       }
-      if (forwardFresh.length > 0) await writeOpened(forwardFresh);
+      await Promise.all(
+        [...forwardFresh].map(([communityIdHex, fresh]) => writeOpened(communityIdHex, fresh)),
+      );
       await Promise.all(
         scopes.map((s, i) => {
           logSync(

@@ -170,7 +170,7 @@ describe("syncControlPlane — batched V2 sweep", () => {
       // First sweep: E2 lands from relay A; relay B fails (its cursor stays put).
       const first = await syncControlPlane(nostr, queryClient, [], [community]);
       expect(first.v2Touched).toEqual(new Set([community.idHex]));
-      let stored = await queryByStreams([control.pk]);
+      let stored = await queryByStreams(community.idHex, [control.pk]);
       expect(stored.map((e) => e.rumorId)).toContain(e2.rumorId);
       expect(stored.map((e) => e.rumorId)).not.toContain(e1.rumorId);
 
@@ -182,7 +182,7 @@ describe("syncControlPlane — batched V2 sweep", () => {
       // not skipped.
       const second = await syncControlPlane(nostr, queryClient, [], [community]);
       expect(second.v2Touched).toEqual(new Set([community.idHex]));
-      stored = await queryByStreams([control.pk]);
+      stored = await queryByStreams(community.idHex, [control.pk]);
       expect(stored.map((e) => e.rumorId), "the late older edition E1 must eventually land").toContain(
         e1.rumorId,
       );

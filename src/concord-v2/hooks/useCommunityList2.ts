@@ -9,6 +9,7 @@ import { readFolded, writeFolded } from "@/lib/foldedCache";
 import {
   addToList,
   assertListBounds,
+  communityListFoldKey,
   EMPTY_COMMUNITY_LIST,
   isExcluded,
   isLive,
@@ -21,6 +22,7 @@ import {
   rehydrateCommunity,
   removeFromList,
   type CommunityList,
+  type PersistedCommunityList,
   type CommunityListEntry,
   type JoinMaterial,
 } from "@/concord-v2/lib/communityList";
@@ -46,10 +48,10 @@ import type { NUser } from "@nostrify/react/login";
  */
 
 export type ListData = { event: NostrEvent | null; list: CommunityList; decryptFailed?: boolean };
-type PersistedList = { event: NostrEvent | null; list: CommunityList };
+export type PersistedList = PersistedCommunityList;
 
 export const listQueryKey = (pubkey: string | undefined) => ["concord2", "list", pubkey] as const;
-const foldKeyOf = (pubkey: string) => `concord2-list:${pubkey}`;
+const foldKeyOf = communityListFoldKey;
 
 /** Decode-once memo for the list decrypt, keyed by event id. */
 const listDecryptMemo = new Map<string, Promise<{ list: CommunityList; decryptFailed: boolean }>>();

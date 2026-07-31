@@ -225,6 +225,16 @@ export interface FoldedChannel {
   metadata: ChannelMetadata;
 }
 
+/**
+ * Where a community's folded control snapshot is cached (`foldedCache`).
+ *
+ * Lives here rather than beside the hook that writes it because non-React
+ * code reads it too — the notification-subscription builder, the switcher, and
+ * the rumor-store migration, none of which should drag React into their import
+ * graph to learn a string.
+ */
+export const controlFoldKey = (idHex: string) => `concord2-fold:${idHex}`;
+
 /** The Control Plane replayed into current state. */
 export interface FoldedControl {
   roster: CommunityRoles;

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { useDeferredFold } from "@/concord-v2/hooks/useDeferredFold2";
 import {
+  controlFoldKey,
   controlGroups,
   currentControlGroup,
   foldControlState,
@@ -27,12 +28,8 @@ import { onWireScopes } from "@/wire/bus";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/**
- * The persisted control-fold snapshot key for a community (see
- * {@link useDeferredFold}). Shared with the notification-subscription builder,
- * which reads the cached fold without mounting a per-community hook.
- */
-export const controlFoldKey = (idHex: string) => `concord2-fold:${idHex}`;
+/** Re-exported for the many call sites that reach it through this module. */
+export { controlFoldKey };
 
 /**
  * Fetch the community's Control Plane. Wraps are decrypted once into the
@@ -69,7 +66,7 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
     let cancelled = false;
     const seed = async (merge: boolean) => {
       if (!merge && (queryClient.getQueryData<OpenedEvent[]>(queryKey)?.length ?? 0) > 0) return;
-      const cached = await queryByStreams(controlGroups(community).map((g) => g.pk));
+      const cached = await queryByStreams(community.idHex, controlGroups(community).map((g) => g.pk));
       if (cancelled) return;
       logSync(
         "control",
@@ -123,7 +120,7 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
     staleTime: 15_000,
     queryFn: async () => {
       const groups = controlGroups(community!);
-      const stored = await queryByStreams(groups.map((g) => g.pk));
+      const stored = await queryByStreams(community!.idHex, groups.map((g) => g.pk));
       const prev = queryClient.getQueryData<OpenedEvent[]>(queryKey) ?? [];
       return mergeOpened(prev, stored);
     },
@@ -283,7 +280,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
       if (known !== undefined) return known;
 
       const group = dissolvedGroupKey(community!.id);
-      const cached = await queryByStreams([group.pk]);
+      const cached = await queryByStreams(community!.idHex, [group.pk]);
       const cachedGrave = cached.find((o) => isDissolvedOpened(o, community!.owner, community!.id));
       if (cachedGrave) {
         await rememberDissolved(community!.idHex, cachedGrave.ms);
@@ -301,7 +298,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
         ),
       );
       const opened = openPlaneWraps(results.flat(), [group]);
-      if (opened.length > 0) writeOpened(opened);
+      if (opened.length > 0) writeOpened(community!.idHex, opened);
       const grave = opened.find((o) => isDissolvedOpened(o, community!.owner, community!.id));
       if (!grave) return null;
       await rememberDissolved(community!.idHex, grave.ms);
@@ -337,7 +334,7 @@ export async function publishEdition2(
   // .unwrap_or(false)`).
   try {
     const grave = dissolvedGroupKey(community.id);
-    const cached = await queryByStreams([grave.pk]);
+    const cached = await queryByStreams(community.idHex, [grave.pk]);
     if (cached.some((o) => isDissolvedOpened(o, community.owner, community.id))) {
       throw new DissolvedError();
     }
@@ -359,7 +356,7 @@ export async function publishEdition2(
   // `since` cursor would skip it). Without this, a promote can "succeed" with
   // no visible effect until a full resync.
   try {
-    writeOpened([openWrap(wrap, control)]);
+    writeOpened(community.idHex, [openWrap(wrap, control)]);
   } catch {
     // best-effort — the relay echo remains the fallback
   }

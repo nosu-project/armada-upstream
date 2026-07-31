@@ -394,7 +394,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         const parked = await peekPendingWraps(channel!.streams.map((s) => s.group.pk));
         if (parked.length === 0) return;
         const opened = await openChatBatch(parked, channel!);
-        writeRumors(opened);
+        writeRumors(community!.idHex, opened);
         const openedWrapIds = new Set(opened.map((o) => o.wrapId));
         ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
       };
@@ -405,7 +405,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       };
 
       const composeFromStore = async (extra?: OpenedChat[]): Promise<OpenedChat[]> => {
-        const rumors = await queryChannelRumors(channelIdHex!, {
+        const rumors = await queryChannelRumors(community!.idHex, channelIdHex!, {
           limit: windowLimitRef.current,
           signal,
         });
@@ -448,7 +448,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 
         const firstOpened = await openChatBatch(newest.events, channel!, { signal });
         if (signal.aborted) return;
-        writeRumors(firstOpened);
+        writeRumors(community!.idHex, firstOpened);
         synced += firstOpened.length;
         tick();
         queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore(firstOpened));
@@ -490,7 +490,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
           channel!,
           { signal },
         );
-        writeRumors(opened);
+        writeRumors(community!.idHex, opened);
         synced += opened.length;
         tick();
 
@@ -588,7 +588,9 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       // If the rumor cache still has more than the current window, just widen
       // the window (a re-read, no network, no decrypt). Otherwise the cache is
       // exhausted, so page deeper history from the relays directly.
-      const inCache = await queryChannelRumors(channelIdHex!, { limit: windowLimitRef.current + 1 });
+      const inCache = await queryChannelRumors(community!.idHex, channelIdHex!, {
+        limit: windowLimitRef.current + 1,
+      });
       const localHasMore = inCache.length > windowLimitRef.current;
 
       windowLimitRef.current += WINDOW_SIZE;
@@ -601,7 +603,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
           maxPages: LOAD_OLDER_MAX_PAGES,
         });
         const opened = await openChatBatch(older.events, channel!);
-        writeRumors(opened);
+        writeRumors(community!.idHex, opened);
 
         const c = cursor.current.get(cursorKeyId) ?? { exhausted: false };
         if (older.oldest !== undefined && (c.oldest === undefined || older.oldest < c.oldest)) {
@@ -836,7 +838,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [sealed]));
       // Persist to the rumor cache so a refresh mid-flight keeps the message
       // (and a self-delete removes its target via the store's NIP-09).
-      writeRumors([sealed]);
+      writeRumors(community.idHex, [sealed]);
 
       void broadcast(wrap).catch(() => {
         if (isVisible) setStatus(rumor.id, "failed");

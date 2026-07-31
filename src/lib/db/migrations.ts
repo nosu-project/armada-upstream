@@ -22,6 +22,9 @@
  *    later still migrates without waiting for the next launch.
  */
 import { migrateLegacyInvites } from "@/concord-v2/lib/inviteInbox";
+import { DECRYPT_CACHE_DB_NAME } from "@/lib/AppSigner";
+import { migrateLegacyRumors } from "@/concord-v2/lib/rumorMigration";
+import { LEGACY_RUMOR_DB_NAME } from "@/concord-v2/lib/rumorStore";
 import { migrateLegacyDms } from "@/lib/nip17/dm17Store";
 import { migrateLegacyDecryptCache } from "@/lib/decryptCacheMigration";
 
@@ -47,7 +50,7 @@ export const MIGRATIONS: Migration[] = [
   {
     id: "decrypt-cache",
     label: "Moving the decrypt cache",
-    legacy: ["armada-decrypt-cache"],
+    legacy: [DECRYPT_CACHE_DB_NAME],
     perAccount: false,
     run: () => migrateLegacyDecryptCache(),
   },
@@ -64,6 +67,23 @@ export const MIGRATIONS: Migration[] = [
     legacy: ["armada-dm17-rumors"],
     perAccount: true,
     run: (self) => migrateLegacyDms(self!),
+  },
+  {
+    id: "c2-rumors",
+    label: "Moving community messages",
+    legacy: [LEGACY_RUMOR_DB_NAME],
+    perAccount: true,
+    run: (self) => migrateLegacyRumors(self!),
+  },
+  {
+    // Nothing to copy: the parked-wrap store moved to the `c2park` tenant, and
+    // its contents are raw wraps the native service re-delivers. Listed so the
+    // abandoned database is deleted rather than lingering forever.
+    id: "c2-pending",
+    label: "Clearing the wrap holding store",
+    legacy: ["armada-concord-pending"],
+    perAccount: false,
+    run: () => Promise.resolve(),
   },
 ];
 

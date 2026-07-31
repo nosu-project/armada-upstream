@@ -216,7 +216,7 @@ function Concord2MiniIcon({ communityId, name }: { communityId: string; name: st
   const displayName = folded?.metadata?.name || name;
   const initial = displayName.trim().charAt(0).toUpperCase() || "·";
   const channels = useChannels2(community, false);
-  const { byChannel } = useConcord2Unread(channels);
+  const { byChannel } = useConcord2Unread(community?.idHex, channels);
   const { isConcordChannelMuted } = useMutes();
   return (
     <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-muted text-success">
@@ -272,7 +272,7 @@ function Concord2UnreadProbe({
 }) {
   const community = useCommunity2(communityId);
   const channels = useChannels2(community, false);
-  const { byChannel } = useConcord2Unread(channels);
+  const { byChannel } = useConcord2Unread(community?.idHex, channels);
   const { isConcordChannelMuted } = useMutes();
   const unread = Object.keys(byChannel).some(
     (id) => !isConcordChannelMuted("c2", communityId, id),
@@ -837,7 +837,7 @@ function Concord2Button({
   // query key). Mirrors the NIP-29 rail badge. Muted channels (or a muted
   // community) don't light the unread dot; unread mentions still badge.
   const channels = useChannels2(community, false);
-  const { byChannel } = useConcord2Unread(channels);
+  const { byChannel } = useConcord2Unread(community?.idHex, channels);
   const { isConcordChannelMuted } = useMutes();
   const { communityLevel, setLevel: setNotifLevel } = useNotifLevels();
 

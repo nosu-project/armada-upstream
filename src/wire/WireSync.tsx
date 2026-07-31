@@ -690,9 +690,14 @@ export function WireSync() {
           }
 
           for (const [channel, wraps] of byChannel) {
+            // No community for this channel means no tenant to write to, so
+            // neither store nor ACK — the wraps stay parked for a later drain
+            // (a notified message must never be locally destructible).
+            const communityIdHex = spec.v2CommunityByChannel.get(channel.idHex);
+            if (!communityIdHex) continue;
             const opened = await openChatBatch(wraps, channel);
             if (opened.length === 0) continue;
-            writeRumors(opened);
+            writeRumors(communityIdHex, opened);
             scopes.add(`c2:${channel.idHex}`);
             const openedWrapIds = new Set(opened.map((o) => o.wrapId));
             acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
@@ -701,7 +706,7 @@ export function WireSync() {
           for (const [idHex, { groups, wraps }] of ctlByCommunity) {
             const opened = await openPlaneWrapsChunked(wraps, groups);
             if (opened.length === 0) continue;
-            await writeOpened(opened);
+            await writeOpened(idHex, opened);
             scopes.add(`c2ctl:${idHex}`);
             const openedWrapIds = new Set(opened.map((o) => o.wrapId));
             acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));

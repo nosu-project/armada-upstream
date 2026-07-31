@@ -29,7 +29,6 @@ import {
   signStreamAuthsChunked,
   streamPubkeysForRelay,
 } from "@/concord-v2/lib/streamAuth";
-import { warmRumorStore } from "@/concord-v2/lib/rumorStore";
 
 interface NostrProviderProps {
   children: React.ReactNode;
@@ -114,9 +113,9 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     // means the first channel open reads a warm store instead.
     void store.then((s) => s.query([{ kinds: [0], limit: 1 }])).catch(() => undefined);
     eventStore.current = store;
-    // Warm the Concord V2 rumor cache's IndexedDB connection too, so the first
-    // channel open reads a hot store instead of paying the cold-open penalty.
-    warmRumorStore();
+    // The Concord V2 rumor cache is NOT warmed here: it is one ArmadaDB tenant
+    // per community, and no community is known at provider mount. Each tenant's
+    // connection opens when its community is first read.
   }
 
   // Pool routes: app relays (non-NIP-29 traffic) + all servers

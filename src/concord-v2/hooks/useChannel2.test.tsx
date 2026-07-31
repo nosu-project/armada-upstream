@@ -48,6 +48,12 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 
 import { useChannelTimeline2, useChatModeration2 } from "./useChannel2";
 
+/**
+ * The community every channel in this file belongs to — the rumor-store tenant
+ * its messages are written to and read back from.
+ */
+const CID = "cc".repeat(32);
+
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
 const h = vi.hoisted(() => ({
@@ -221,10 +227,10 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
       // ── Prior session: 10 messages seen and decrypted, sync cursor saved.
       const oldWraps: NostrEvent[] = [];
       for (let i = 0; i < 10; i++) oldWraps.push(await wrapChatAt(channel, alice, `old-${i}`, base + i));
-      writeRumors(await openChatBatch(oldWraps, channel));
+      writeRumors(CID, await openChatBatch(oldWraps, channel));
       await updateChannelCursor(idHex, { newest: base + 9, oldest: base });
       await waitFor(async () => {
-        expect((await queryChannelRumors(idHex, { limit: 200 })).length).toBe(10);
+        expect((await queryChannelRumors(CID, idHex, { limit: 200 })).length).toBe(10);
       });
 
       // ── While the app was closed: 80 new messages (> BACKFILL_PAGE = 50).
@@ -238,7 +244,7 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
       relay.events = [...oldWraps, ...newWraps];
       h.pool = makePool({ [RELAY]: relay });
 
-      const community = { idHex: "cc".repeat(32), relays: [RELAY] } as unknown as CommunityV2;
+      const community = { idHex: CID, relays: [RELAY] } as unknown as CommunityV2;
       const { wrapper } = makeWrapper();
       const { result } = renderHook(() => useChannelTimeline2(community, channel), { wrapper });
 
@@ -290,10 +296,10 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
       // Prior session: 5 messages seen, cursor saved.
       const oldWraps: NostrEvent[] = [];
       for (let i = 0; i < 5; i++) oldWraps.push(await wrapChatAt(channel, alice, `old-${i}`, base + i));
-      writeRumors(await openChatBatch(oldWraps, channel));
+      writeRumors(CID, await openChatBatch(oldWraps, channel));
       await updateChannelCursor(idHex, { newest: base + 4, oldest: base });
       await waitFor(async () => {
-        expect((await queryChannelRumors(idHex, { limit: 200 })).length).toBe(5);
+        expect((await queryChannelRumors(CID, idHex, { limit: 200 })).length).toBe(5);
       });
 
       // While the app was closed: 10 new messages — well under one page, so
@@ -308,7 +314,7 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
       h.pool = makePool({ "wss://platform.test": platform, "wss://real.test": real });
 
       const community = {
-        idHex: "cc".repeat(32),
+        idHex: CID,
         relays: ["wss://platform.test", "wss://real.test"],
       } as unknown as CommunityV2;
       const { wrapper } = makeWrapper();
@@ -352,22 +358,22 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
     const controller = new AbortController();
     controller.abort();
     const interrupted = await openChatBatch(parked, channel, { signal: controller.signal });
-    writeRumors(interrupted);
+    writeRumors(CID, interrupted);
     ackPendingWraps(parked.filter((w) => interrupted.some((o) => o.wrapId === w.id)).map((w) => w.id));
 
     // The notified messages are still recoverable locally — decoded into the
     // rumor store, or still parked for the next read.
-    const decoded = await queryChannelRumors(idHex, { limit: 10 });
+    const decoded = await queryChannelRumors(CID, idHex, { limit: 10 });
     const stillParked = await peekPendingWraps(pks);
     expect(decoded.length + stillParked.length).toBeGreaterThanOrEqual(3);
 
     // …and the next (uninterrupted) round consumes them fully: decoded to the
     // store, acked out of the pending store.
     const opened = await openChatBatch(stillParked, channel);
-    writeRumors(opened);
+    writeRumors(CID, opened);
     ackPendingWraps(stillParked.filter((w) => opened.some((o) => o.wrapId === w.id)).map((w) => w.id));
     await waitFor(async () => {
-      expect((await queryChannelRumors(idHex, { limit: 10 })).length).toBe(3);
+      expect((await queryChannelRumors(CID, idHex, { limit: 10 })).length).toBe(3);
       expect((await peekPendingWraps(pks)).length).toBe(0);
     });
   });
@@ -380,9 +386,9 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
 
     // Channel A has decrypted history in the rumor store.
     const wraps = [await wrapChatAt(chanA.channel, alice, "a-msg", now - 100)];
-    writeRumors(await openChatBatch(wraps, chanA.channel));
+    writeRumors(CID, await openChatBatch(wraps, chanA.channel));
     await waitFor(async () => {
-      expect((await queryChannelRumors(chanA.idHex, { limit: 10 })).length).toBe(1);
+      expect((await queryChannelRumors(CID, chanA.idHex, { limit: 10 })).length).toBe(1);
     });
 
     // Channel B is empty and its relay is cold (auth round-trips), so B's first
@@ -390,7 +396,7 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
     const relay = new FakeRelay();
     relay.delayMs = 800;
     h.pool = makePool({ [RELAY]: relay });
-    const community = { idHex: "cc".repeat(32), relays: [RELAY] } as unknown as CommunityV2;
+    const community = { idHex: CID, relays: [RELAY] } as unknown as CommunityV2;
 
     const { wrapper } = makeWrapper();
     const { result, rerender } = renderHook(
@@ -431,10 +437,10 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
 
     // Channel A has history in the store; channel B has history ONLY on the
     // relay (cold — never opened this session), so B's store read returns [].
-    writeRumors(await openChatBatch([await wrapChatAt(chanA.channel, alice, "a-msg", now - 100)], chanA.channel));
+    writeRumors(CID, await openChatBatch([await wrapChatAt(chanA.channel, alice, "a-msg", now - 100)], chanA.channel));
     const bWrap = await wrapChatAt(chanB.channel, alice, "b-msg", now - 50);
     await waitFor(async () => {
-      expect((await queryChannelRumors(chanA.idHex, { limit: 10 })).length).toBe(1);
+      expect((await queryChannelRumors(CID, chanA.idHex, { limit: 10 })).length).toBe(1);
     });
 
     // B's relay is slow, so the window between the empty store read and the
@@ -443,7 +449,7 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
     relay.events = [bWrap];
     relay.delayMs = 600;
     h.pool = makePool({ [RELAY]: relay });
-    const community = { idHex: "cc".repeat(32), relays: [RELAY] } as unknown as CommunityV2;
+    const community = { idHex: CID, relays: [RELAY] } as unknown as CommunityV2;
 
     // Record EVERY render's (isLoading, message-count) so a single transient
     // "loaded + empty" frame — the flash — can't slip between polls.
@@ -490,7 +496,7 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
 describe("useChatModeration2 — the tombstone seal (CORD-02 §9)", () => {
   const owner = "0".repeat(64);
   const member = "2".repeat(64);
-  const community = { idHex: "cc".repeat(32), id: new Uint8Array(32).fill(0xcc), owner } as unknown as CommunityV2;
+  const community = { idHex: CID, id: new Uint8Array(32).fill(0xcc), owner } as unknown as CommunityV2;
   const GRAVE = 5_000_000;
 
   beforeEach(() => {

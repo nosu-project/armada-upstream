@@ -48,6 +48,12 @@ export interface ChannelEntry {
   /** The parent space's display name, shown as a subtitle. */
   spaceName: string;
   route: string;
+  /**
+   * Concord only: the owning community's id hex — which rumor-store tenant this
+   * channel's messages are in. Undefined for NIP-29, whose messages live in the
+   * shared relay event store.
+   */
+  communityIdHex?: string;
 }
 
 /** Everything the palette lists, in rail order. */
@@ -172,6 +178,7 @@ const concordTransport: Transport = {
       name: c.name,
       spaceName: entry.current.name,
       route: `/c/${encodeURIComponent(id)}/${encodeURIComponent(c.idHex)}`,
+      communityIdHex: community.idHex,
     }));
   },
   match(pathname) {
@@ -315,9 +322,29 @@ async function searchConcordMessages(
   byId: Map<string, ChannelEntry>,
   signal?: AbortSignal,
 ): Promise<MessageEntry[]> {
-  const ids = [...byId.keys()];
-  if (ids.length === 0) return [];
-  const hits = await searchRumors(ids, { query: needle, limit: PER_CORPUS_LIMIT, signal });
+  if (byId.size === 0) return [];
+
+  // One search per community: each community's messages live in their own
+  // rumor-store tenant, so this can't be a single scan across every channel id
+  // any more. `PER_CORPUS_LIMIT` therefore caps matches per COMMUNITY rather
+  // than across all of Concord — the caller's merged newest-first slice is what
+  // bounds the final list either way.
+  const byCommunity = new Map<string, string[]>();
+  for (const ch of byId.values()) {
+    if (!ch.communityIdHex) continue;
+    const bucket = byCommunity.get(ch.communityIdHex);
+    if (bucket) bucket.push(ch.id);
+    else byCommunity.set(ch.communityIdHex, [ch.id]);
+  }
+
+  const hits = (
+    await Promise.all(
+      [...byCommunity].map(([communityIdHex, ids]) =>
+        searchRumors(communityIdHex, ids, { query: needle, limit: PER_CORPUS_LIMIT, signal }),
+      ),
+    )
+  ).flat();
+
   const out: MessageEntry[] = [];
   for (const h of hits) {
     const ch = byId.get(h.channelIdHex);

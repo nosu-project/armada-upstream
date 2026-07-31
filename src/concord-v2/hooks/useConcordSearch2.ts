@@ -20,7 +20,11 @@ import type { ChatMsg } from "@/components/chat/transport";
  * @param allChannelIds every channel in the community (the default scope when
  *   the filter selects no specific channels).
  */
-export function useConcordSearch2(allChannelIds: string[], filters: SearchFilters2) {
+export function useConcordSearch2(
+  communityIdHex: string | undefined,
+  allChannelIds: string[],
+  filters: SearchFilters2,
+) {
   const debouncedQuery = useDebounce(filters.query.trim(), 300);
 
   // Effective scope: the chosen channels, or every channel when none picked.
@@ -34,12 +38,20 @@ export function useConcordSearch2(allChannelIds: string[], filters: SearchFilter
   const authorsKey = [...filters.authors].sort().join(",");
 
   const search = useQuery<ChatMsg[]>({
-    queryKey: ["concord2", "search", channelsKey, authorsKey, filters.media, debouncedQuery],
-    enabled: active && channelIds.length > 0,
+    queryKey: [
+      "concord2",
+      "search",
+      communityIdHex ?? null,
+      channelsKey,
+      authorsKey,
+      filters.media,
+      debouncedQuery,
+    ],
+    enabled: !!communityIdHex && active && channelIds.length > 0,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
-      const rumors = await searchRumors(channelIds, {
+      const rumors = await searchRumors(communityIdHex!, channelIds, {
         query: debouncedQuery,
         authors: filters.authors,
         media: filters.media,

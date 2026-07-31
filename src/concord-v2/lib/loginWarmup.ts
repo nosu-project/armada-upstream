@@ -117,7 +117,7 @@ export async function warmupCommunities2(
     let totalChannels = 0;
     for (const c of communities) {
       try {
-        const stored = await queryByStreams(controlGroups(c).map((g) => g.pk));
+        const stored = await queryByStreams(c.idHex, controlGroups(c).map((g) => g.pk));
         const folded = foldControlState(openControlEditions(stored), c.id, c.owner);
         // A sweep we KNOW came up short must never become the durable
         // baseline. This fold ran with no floor and no snapshot to correct it,
@@ -214,7 +214,7 @@ export async function warmupCommunities2(
                 const opened = await openChatBatch(chWraps, ch);
                 if (opened.length > 0) {
                   // writeRumors rings `c2:<channel>` on the wire bus once committed.
-                  writeRumors(opened);
+                  writeRumors(community.idHex, opened);
                   result.messages += opened.length;
                 }
               }

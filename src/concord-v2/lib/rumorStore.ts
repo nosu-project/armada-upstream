@@ -13,9 +13,27 @@
  *   chat:     store.query([{ kinds: [9], "#channel": [channelIdHex], limit }])
  *   control:  store.query([{ "#stream": [controlPk1, controlPk2, …] }])
  *
- * Backed by `@nostrify/indexeddb` (the strfry-port NStore), a SEPARATE database
- * from `armada-events` so its query engine, its custom tag index, and its NIP-09
- * deletion semantics stay isolated.
+ * Backed by ArmadaDB, ONE TENANT PER COMMUNITY (`c2:<communityIdHex>`) — a
+ * separate physical database each, and separate from `armada-events`, so each
+ * community's query engine, custom tag index, and NIP-09 deletion semantics stay
+ * isolated.
+ *
+ * The per-community split is a SECURITY boundary, not a performance one. Every
+ * read here is a tag query, and a tag is just data a keyholder wrote: the only
+ * thing stopping a member of community A from publishing a rumor tagged with a
+ * channel id belonging to community B — and having it served into B's timeline —
+ * is application-level validation (`checkChannelBinding` on the chat path,
+ * {@link writeOpened}'s refusal of any `channel` tag elsewhere). When every
+ * community shared one store, a single bug in either check leaked across
+ * communities. Now the tenant is chosen by the CALLER, from the community whose
+ * keys it already holds, so a forged tag can at worst collide inside the
+ * community that forged it. Defense in depth: the checks stay, and the storage
+ * boundary means a lapse in them is contained.
+ *
+ * Community ids are stable — `sha256("concord/community" || owner_xonly ||
+ * owner_salt)` (CORD-01 §A.4), with no epoch input — so a rekey or a Refounding
+ * rotates stream keys WITHOUT moving the tenant. One database per joined
+ * community, not one per epoch.
  *
  * The full signed SEAL is preserved (tag `seal`) because the Control Plane
  * re-wraps plaintext seals verbatim across epochs during a compaction (CORD-02
@@ -32,7 +50,6 @@
  * purgeClientStorage).
  */
 
-import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
@@ -45,7 +62,8 @@ import type { NRumorStore } from "@/lib/db/types";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { OpenedChat } from "@/concord-v2/lib/chat";
 
-const DB_NAME = "armada-concord-rumors";
+/** The legacy single-database store, kept only as the migration's source. */
+export const LEGACY_RUMOR_DB_NAME = "armada-concord-rumors";
 
 /** Provenance tags we inject onto the stored event (never part of the rumor). */
 const TAG_STREAM = "stream";
@@ -56,45 +74,24 @@ const TAG_SEALKIND = "sealkind";
 /** The chat plane's channel binding (CORD-03 §3) — the tag chat reads index. */
 const TAG_CHANNEL = "channel";
 
-/** Multi-letter tags chat/plane queries need indexed (beyond single-letter). */
-const QUERYABLE_TAGS = new Set(["channel", TAG_STREAM, "e", "q", "p", "k"]);
-
 /**
- * Index the tags our queries need. The default NIndexedDB policy only indexes
- * SINGLE-letter tags, but we query by `channel` and `stream` (multi-letter), so
- * a `{ "#channel": [...] }` / `{ "#stream": [...] }` filter would match nothing
- * without this. Never index the bulky `seal` blob.
+ * The opened-event store for one community.
+ *
+ * `defaultIndexTags` indexes every tag with a short name and a value under 200
+ * chars, which covers the multi-letter names the planes query (`channel`,
+ * `stream`) as well as the single-letter ones (`e`, `p`, `i`, `k`, `q`). The
+ * bulky {@link TAG_SEAL} blob is excluded by the value-length cap — a signed
+ * seal's JSON is always far past it.
  */
-function indexTags(event: NostrEvent): string[][] {
-  return event.tags.filter(
-    ([name, value]) =>
-      typeof name === "string" &&
-      typeof value === "string" &&
-      value.length > 0 &&
-      value.length < 200 &&
-      name !== TAG_SEAL &&
-      (name.length === 1 || QUERYABLE_TAGS.has(name)),
-  );
+function rumorStore(communityIdHex: string): NRumorStore {
+  return getArmadaDB().tenant(communityTenant(communityIdHex));
 }
 
-let store: NIndexedDB | undefined;
-
-/** The singleton opened-event store (opens the DB in the background on first use). */
-export function rumorStore(): NIndexedDB {
-  if (!store) store = new NIndexedDB(DB_NAME, { indexTags });
-  return store;
+/** The ArmadaDB tenant id holding a community's opened events. */
+export function communityTenant(communityIdHex: string): string {
+  return `c2:${communityIdHex}`;
 }
 
-/** Warm the IndexedDB connection so the first read hits a hot store. */
-export function warmRumorStore(): void {
-  try {
-    void rumorStore()
-      .query([{ kinds: [9], limit: 1 }])
-      .catch(() => undefined);
-  } catch {
-    // IndexedDB unavailable — the store degrades to a no-op.
-  }
-}
 
 // ── Codec: OpenedEvent ⇆ stored event ─────────────────────────────────────────
 //
@@ -110,7 +107,7 @@ export function warmRumorStore(): void {
 const PROVENANCE = new Set([TAG_STREAM, TAG_SEAL, TAG_WRAP, TAG_SEALKIND]);
 
 /** Build the stored event for an opened stream event (any plane). */
-export function openedToStored(opened: OpenedEvent): NostrEvent {
+export function openedToStored(opened: OpenedEvent): NostrRumor {
   const tags: string[][] = [
     ...opened.tags,
     [TAG_STREAM, opened.streamPk],
@@ -125,12 +122,11 @@ export function openedToStored(opened: OpenedEvent): NostrEvent {
     tags,
     created_at: opened.createdAt,
     pubkey: opened.author,
-    sig: "",
   };
 }
 
 /** Reconstruct an OpenedEvent from a stored event. */
-export function storedToOpened(ev: NostrEvent): OpenedEvent {
+export function storedToOpened(ev: NostrRumor): OpenedEvent {
   const tags = ev.tags.filter((t) => !PROVENANCE.has(t[0]));
   const streamPk = ev.tags.find((t) => t[0] === TAG_STREAM)?.[1] ?? "";
   const wrapId = ev.tags.find((t) => t[0] === TAG_WRAP)?.[1] ?? "";
@@ -170,7 +166,7 @@ export function storedToOpened(ev: NostrEvent): OpenedEvent {
 }
 
 /** Reconstruct an OpenedChat (adds channel/epoch from the rumor's binding tags). */
-export function storedToOpenedChat(ev: NostrEvent, channelIdHex: string): OpenedChat {
+export function storedToOpenedChat(ev: NostrRumor, channelIdHex: string): OpenedChat {
   const opened = storedToOpened(ev);
   const epochTag = opened.tags.find((t) => t[0] === "epoch")?.[1];
   return { ...opened, channelIdHex, epoch: epochTag ? BigInt(epochTag) : 0n };
@@ -187,6 +183,7 @@ const CHAT_KINDS = [5, 7, 9, 1018, 1068, 1111, 3302, 8333, 9735, 31922, 31923, 3
  * exclusive) pages older history out of the store.
  */
 export async function queryChannelRumors(
+  communityIdHex: string,
   channelIdHex: string,
   opts: { limit: number; before?: number; signal?: AbortSignal },
 ): Promise<OpenedChat[]> {
@@ -196,7 +193,7 @@ export async function queryChannelRumors(
     limit: opts.limit,
   };
   if (opts.before !== undefined) filter.until = opts.before - 1;
-  const events = await rumorStore().query([filter], { signal: opts.signal });
+  const events = await rumorStore(communityIdHex).query([filter], { signal: opts.signal });
   return events.map((ev) => storedToOpenedChat(ev, channelIdHex));
 }
 
@@ -210,12 +207,13 @@ export async function queryChannelRumors(
  * realtime frames ride ephemeral 21059 wraps and are never stored.
  */
 export async function queryWebxdcRumors(
+  communityIdHex: string,
   channelIdHex: string,
   uuid: string,
   opts?: { signal?: AbortSignal },
 ): Promise<OpenedChat[]> {
   if (!channelIdHex || !uuid) return [];
-  const events = await rumorStore().query(
+  const events = await rumorStore(communityIdHex).query(
     [{ kinds: [KIND_WEBXDC], "#channel": [channelIdHex], "#i": [uuid], limit: 1000 }],
     { signal: opts?.signal },
   );
@@ -237,13 +235,14 @@ export async function queryWebxdcRumors(
  * Channels with no cached rumors are omitted from the result map.
  */
 export async function queryRumorsByChannel(
+  communityIdHex: string,
   channelIdsHex: string[],
   opts: { perChannel: number; signal?: AbortSignal },
 ): Promise<Map<string, OpenedChat[]>> {
   const out = new Map<string, OpenedChat[]>();
   if (channelIdsHex.length === 0) return out;
 
-  const events = await rumorStore().query(
+  const events = await rumorStore(communityIdHex).query(
     channelIdsHex.map((idHex) => ({
       kinds: CHAT_KINDS,
       "#channel": [idHex],
@@ -279,6 +278,7 @@ export async function queryRumorsByChannel(
  * deep, in one cheap transaction.
  */
 export async function queryMentionRumors(
+  communityIdHex: string,
   channelIdsHex: string[],
   pubkey: string,
   opts: { limit: number; signal?: AbortSignal },
@@ -290,16 +290,10 @@ export async function queryMentionRumors(
     "#channel": channelIdsHex,
     limit: opts.limit,
   };
-  const events = await rumorStore().query([filter], { signal: opts.signal });
+  const events = await rumorStore(communityIdHex).query([filter], { signal: opts.signal });
   return events.map((ev) =>
     storedToOpenedChat(ev, ev.tags.find((t) => t[0] === "channel")?.[1] ?? ""),
   );
-}
-
-/** How many chat rumors are cached for a channel. */
-export async function countChannelRumors(channelIdHex: string): Promise<number> {
-  const { count } = await rumorStore().count([{ kinds: CHAT_KINDS, "#channel": [channelIdHex] }]);
-  return count;
 }
 
 /** Message kinds whose content is user-searchable: chat + NIP-22 thread comments. */
@@ -324,6 +318,7 @@ const SEARCH_SCAN_LIMIT = 5000;
  * channel id from its `channel` binding tag.
  */
 export async function searchRumors(
+  communityIdHex: string,
   channelIdsHex: string[],
   opts: {
     query: string;
@@ -342,7 +337,7 @@ export async function searchRumors(
   } = { kinds: SEARCHABLE_KINDS, "#channel": channelIdsHex, limit: SEARCH_SCAN_LIMIT };
   if (opts.authors && opts.authors.length > 0) filter.authors = opts.authors;
 
-  const events = await rumorStore().query([filter], { signal: opts.signal });
+  const events = await rumorStore(communityIdHex).query([filter], { signal: opts.signal });
   const q = opts.query.trim().toLowerCase();
   const media = opts.media ?? "all";
 
@@ -365,13 +360,14 @@ export async function searchRumors(
  * planes, which query by stream address rather than by channel tag.
  */
 export async function queryByStreams(
+  communityIdHex: string,
   streamPks: string[],
   opts?: { limit?: number; signal?: AbortSignal },
 ): Promise<OpenedEvent[]> {
   if (streamPks.length === 0) return [];
   const filter: { "#stream": string[]; limit?: number } = { "#stream": streamPks };
   if (opts?.limit !== undefined) filter.limit = opts.limit;
-  const events = await rumorStore().query([filter], { signal: opts?.signal });
+  const events = await rumorStore(communityIdHex).query([filter], { signal: opts?.signal });
   return events.map(storedToOpened);
 }
 
@@ -387,10 +383,10 @@ function forgesProvenance(opened: OpenedEvent): boolean {
   return opened.tags.some((t) => PROVENANCE.has(t[0]));
 }
 
-/** Store a batch verbatim. Best-effort: failures are swallowed. */
-function writeStored(opened: OpenedEvent[]): Promise<void> {
-  if (opened.length === 0) return Promise.resolve();
-  const s = rumorStore();
+/** Store a batch verbatim in a community's tenant. Best-effort: failures are swallowed. */
+function writeStored(communityIdHex: string, opened: OpenedEvent[]): Promise<void> {
+  if (opened.length === 0 || !communityIdHex) return Promise.resolve();
+  const s = rumorStore(communityIdHex);
   return Promise.all(opened.map((o) => s.event(openedToStored(o))))
     .then(() => undefined)
     .catch(() => undefined);
@@ -415,8 +411,9 @@ function writeStored(opened: OpenedEvent[]): Promise<void> {
  * hold. Reject rather than strip, so stored tags stay byte-identical to the
  * rumor's.
  */
-export function writeOpened(opened: OpenedEvent[]): Promise<void> {
+export function writeOpened(communityIdHex: string, opened: OpenedEvent[]): Promise<void> {
   return writeStored(
+    communityIdHex,
     opened.filter((o) => !forgesProvenance(o) && !o.tags.some((t) => t[0] === TAG_CHANNEL)),
   );
 }
@@ -432,14 +429,14 @@ export function writeOpened(opened: OpenedEvent[]): Promise<void> {
  * The emit is deferred until the write commits, so the re-read it triggers sees
  * the just-written rows.
  */
-export function writeRumors(opened: OpenedChat[]): void {
+export function writeRumors(communityIdHex: string, opened: OpenedChat[]): void {
   // The `channel` binding rides through: the chat decode path already proved it
   // equals the coordinate whose key opened the wrap (`checkChannelBinding`).
   // Forged provenance still can't.
   const safe = opened.filter((o) => !forgesProvenance(o));
   if (safe.length === 0) return;
   const channels = new Set(safe.map((o) => o.channelIdHex).filter(Boolean));
-  void writeStored(safe).then(() => {
+  void writeStored(communityIdHex, safe).then(() => {
     if (channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
   });
 }

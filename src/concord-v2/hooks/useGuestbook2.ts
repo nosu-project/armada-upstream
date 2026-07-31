@@ -40,7 +40,7 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
     refetchInterval: 60_000,
     queryFn: async () => {
       const fresh = await sweepGuestbook(nostr, community!);
-      const stored = await queryByStreams(guestbookGroups(community!).map((g) => g.pk));
+      const stored = await queryByStreams(community!.idHex, guestbookGroups(community!).map((g) => g.pk));
       return mergeOpened(stored, fresh);
     },
   });

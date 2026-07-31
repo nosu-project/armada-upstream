@@ -52,7 +52,7 @@ export interface Concord2Thread {
  * recomputes instantly. Reading a channel that shows a thread's replies also
  * advances that thread's stamp (the open-channel effect in ConcordV2Page).
  */
-export function useConcord2Threads(channels: ChannelV2[]): {
+export function useConcord2Threads(communityIdHex: string | undefined, channels: ChannelV2[]): {
   threads: Concord2Thread[];
   isLoading: boolean;
   hasNew: boolean;
@@ -66,7 +66,7 @@ export function useConcord2Threads(channels: ChannelV2[]): {
   const channelSig = channels.map((c) => c.idHex).join(",");
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { byChannel: rumorsByChannel, isLoading } = useCommunityRumors(channelIds);
+  const { byChannel: rumorsByChannel, isLoading } = useCommunityRumors(communityIdHex, channelIds);
 
   // Bucket each channel's folded rumors into the threads the user is in. Pure
   // computation over the shared scan — no store, no readMap dependency (that is

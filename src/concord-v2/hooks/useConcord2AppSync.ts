@@ -85,7 +85,7 @@ export function useConcord2AppSync(
     // backstop for a missed bus ring.
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
-      const rows = await queryWebxdcRumors(channelIdHex!, uuid, { signal });
+      const rows = await queryWebxdcRumors(community!.idHex, channelIdHex!, uuid, { signal });
       return rows.sort((a, b) => a.ms - b.ms);
     },
   });
@@ -133,7 +133,7 @@ export function useConcord2AppSync(
       // ingests other members'), so the local app sees its own move without a
       // relay round-trip. Ephemeral frames are never stored.
       if (!ephemeral) {
-        writeRumors([
+        writeRumors(community.idHex, [
           {
             rumorId: rumor.id,
             author: user.pubkey,

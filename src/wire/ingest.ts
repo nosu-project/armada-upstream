@@ -171,13 +171,21 @@ export async function ingestWireEvents(
     if (freshDmWraps.length > 0) scopes.add("dm:wrap");
   }
 
-  // V2: decrypt with the owning channel's stream keys → rumor store.
+  // V2: decrypt with the owning channel's stream keys → the owning community's
+  // rumor-store tenant.
   for (const [channel, wraps] of wrapsByChannel) {
     const opened = await openChatBatch(wraps, channel);
     if (opened.length === 0) continue;
-    writeRumors(opened);
-    scopes.add(`c2:${channel.idHex}`);
+    // A channel only reaches `v2ByPk` via the same spec input that registered
+    // its community, so a miss means the spec was rebuilt underneath us. Skip
+    // the write rather than guessing a tenant: the wraps are still on the relay
+    // (and, on native, still parked), so the next sweep re-ingests them once
+    // the channel's community is back in the spec. Guessing would file one
+    // community's messages under another.
     const communityIdHex = spec?.v2CommunityByChannel.get(channel.idHex);
+    if (!communityIdHex) continue;
+    writeRumors(communityIdHex, opened);
+    scopes.add(`c2:${channel.idHex}`);
     for (const c of v2Candidates(opened, channel, communityIdHex, self)) candidates.push(c);
   }
 
@@ -205,7 +213,7 @@ export async function ingestWireEvents(
       if (unseen.length === 0) continue;
       const opened = await openPlaneWrapsChunked(unseen, groups);
       if (opened.length > 0) {
-        await writeOpened(opened);
+        await writeOpened(idHex, opened);
         scopes.add(`c2ctl:${idHex}`);
       }
       // Record the junk before memoing it: the memo stops the sweep ever

@@ -202,8 +202,8 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
           // not this address / malformed
         }
       }
-      if (fresh.length > 0) writeOpened(fresh);
-      const stored = await queryByStreams([address.pk]);
+      if (fresh.length > 0) writeOpened(community!.idHex, fresh);
+      const stored = await queryByStreams(community!.idHex, [address.pk]);
       const byId = new Map<string, OpenedEvent>();
       for (const e of stored) byId.set(e.rumorId, e);
       for (const e of fresh) byId.set(e.rumorId, e);
@@ -532,8 +532,8 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
           // not this address / malformed
         }
       }
-      if (fresh.length > 0) writeOpened(fresh);
-      const stored = await queryByStreams(authors);
+      if (fresh.length > 0) writeOpened(community!.idHex, fresh);
+      const stored = await queryByStreams(community!.idHex, authors);
       const byId = new Map<string, OpenedEvent>();
       for (const e of stored) byId.set(e.rumorId, e);
       for (const e of fresh) byId.set(e.rumorId, e);
@@ -718,7 +718,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
       if (short) {
         throw new Error("This community's history is being flooded and couldn't be read in full; rotation aborted so nothing is lost.");
       }
-      const stored = await queryByStreams(controlGroups(community).map((g) => g.pk));
+      const stored = await queryByStreams(community.idHex, controlGroups(community).map((g) => g.pk));
       const verifySnap =
         community.rootEpoch > 0n
           ? new Set(stored.filter((ev) => ev.streamPk === currentControlGroup(community).pk).map((ev) => ev.rumorId))

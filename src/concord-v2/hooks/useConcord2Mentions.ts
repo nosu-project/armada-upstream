@@ -57,16 +57,19 @@ export function useConcord2Mentions(channels: ChannelV2[], communityIdHex: strin
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: mentions = [], isLoading } = useQuery<ChatMsg[]>({
-    queryKey: ["concord2-mentions", pubkey, channelSig],
+    queryKey: ["concord2-mentions", communityIdHex ?? null, pubkey, channelSig],
     queryFn: async ({ signal }) => {
-      const rumors = await queryMentionRumors(channelIds, pubkey!, { limit: MENTION_LIMIT, signal });
+      const rumors = await queryMentionRumors(communityIdHex!, channelIds, pubkey!, {
+        limit: MENTION_LIMIT,
+        signal,
+      });
       // Never surface self-mentions (e.g. quoting yourself). Newest-first.
       return rumors
         .filter((r) => r.author !== pubkey)
         .sort((a, b) => b.ms - a.ms)
         .map(openedToChatMsg);
     },
-    enabled: !!pubkey && channelIds.length > 0,
+    enabled: !!communityIdHex && !!pubkey && channelIds.length > 0,
     refetchInterval: 30_000,
     staleTime: 0,
   });

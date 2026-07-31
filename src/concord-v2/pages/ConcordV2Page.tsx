@@ -749,7 +749,7 @@ export function ConcordV2Page() {
     () => [...gitAttachmentsByChannel.values()].some((list) => list.some((attachment) => attachment.detachedAt === undefined)),
     [gitAttachmentsByChannel],
   );
-  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels, communityGitActivity.byChannel);
+  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(community?.idHex, channels, communityGitActivity.byChannel);
 
   // "Mark all as read": stamp every unread channel to its newest unread
   // message (monotonic stamps, so already-read channels no-op).
@@ -783,7 +783,7 @@ export function ConcordV2Page() {
     hasNew: hasNewThreadReplies,
     markRead: markThreadRead,
     markAllRead: markAllThreadsRead,
-  } = useConcord2Threads(channels);
+  } = useConcord2Threads(community?.idHex, channels);
 
   // Authenticate the connection as this community's per-channel stream keys
   // (control/guestbook/dissolved keys are registered app-wide in MainLayout).
@@ -1373,7 +1373,11 @@ export function ConcordV2Page() {
     results: searchResults,
     isLoading: searchLoading,
     active: searching,
-  } = useConcordSearch2(allChannelIds, searchOpen ? searchFilters : EMPTY_SEARCH_FILTERS);
+  } = useConcordSearch2(
+    community?.idHex,
+    allChannelIds,
+    searchOpen ? searchFilters : EMPTY_SEARCH_FILTERS,
+  );
 
   // Fulfil a pending Threads-tab open: once its channel is active and the
   // transport has loaded the root, open the thread panel with the freshly

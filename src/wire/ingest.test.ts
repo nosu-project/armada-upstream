@@ -180,15 +180,19 @@ describe("ingestWireEvents", () => {
 
   it("decrypts V2 wraps for held streams into the rumor store (never armada-events)", async () => {
     const { channel, idHex } = makeChannel();
+    const communityIdHex = "c".repeat(64);
     const alice = signer();
     const wrap = await wrapChat(channel, alice, "sealed hello");
-    const { store, sinks } = makeSinks({ v2ByPk: new Map([[wrap.pubkey, channel]]) });
+    const { store, sinks } = makeSinks({
+      v2ByPk: new Map([[wrap.pubkey, channel]]),
+      v2CommunityByChannel: new Map([[idHex, communityIdHex]]),
+    });
 
     const scopes = await collectScopes(() => ingestWireEvents(sinks, [wrap]));
 
     expect(store.events).toHaveLength(0); // wraps never land in armada-events
     expect(scopes.has(`c2:${idHex}`)).toBe(true);
-    const rumors = await queryChannelRumors(idHex, { limit: 10 });
+    const rumors = await queryChannelRumors(communityIdHex, idHex, { limit: 10 });
     expect(rumors.some((r) => r.content === "sealed hello")).toBe(true);
   });
 
@@ -213,7 +217,7 @@ describe("ingestWireEvents", () => {
 
     expect(store.events).toHaveLength(0); // wraps never land in armada-events
     expect(scopes.has(`c2ctl:${idHex}`)).toBe(true);
-    const opened = await queryByStreams([control.pk]);
+    const opened = await queryByStreams(idHex, [control.pk]);
     expect(opened.some((o) => o.content === "edition")).toBe(true);
   });
 
