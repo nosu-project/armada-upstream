@@ -1,10 +1,13 @@
-import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { ChevronLeft, ChevronRight, Download, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+import { toast } from "@/hooks/useToast";
+import { downloadUrl } from "@/lib/downloadFile";
 import { cn } from "@/lib/utils";
 
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
@@ -367,23 +370,63 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
   );
 }
 
-/** Top-bar button that opens the (resolved) original image in a new tab. */
+/**
+ * Top-bar button that saves the current image to the device.
+ *
+ * The bytes are fetched from the *resolved* source (a local `blob:` URL for
+ * encrypted / Buzz media, the original `https:` URL otherwise) and written to
+ * disk — Downloads on the web, the app's Documents directory on native, where
+ * a `blob:` anchor download silently fails. Cross-origin hosts without CORS
+ * can't be read, so `downloadUrl` falls back to opening the image instead.
+ */
 function LightboxDownloadButton({ image }: { image: EncryptedRef }) {
   const resolved = useResolvedMediaSrc(image);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (downloading || resolved.status !== "ready") return;
+      setDownloading(true);
+      try {
+        const result = await downloadUrl(resolved.src, { nameHint: image.url, mime: image.mime });
+        if (result === "downloaded") {
+          toast(
+            Capacitor.isNativePlatform()
+              ? { title: "Saved", description: "You'll find it in the Armada folder in Files." }
+              : { title: "Saved", description: "Check your downloads folder." },
+          );
+        } else {
+          toast({
+            title: "Opened in a new tab",
+            description: "This image couldn't be saved directly, so it opened instead.",
+          });
+        }
+      } catch {
+        toast({
+          title: "Download failed",
+          description: "Could not save this image. Please try again.",
+          variant: "destructive",
+        });
+      } finally {
+        setDownloading(false);
+      }
+    },
+    [downloading, resolved, image.url, image.mime],
+  );
+
   if (resolved.status !== "ready") return null;
   return (
     <button
       type="button"
-      aria-label="Open original"
-      title="Open original"
-      className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors"
-      onClick={(e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        window.open(resolved.src, "_blank", "noopener,noreferrer");
-      }}
+      aria-label="Download image"
+      title="Download"
+      disabled={downloading}
+      className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
+      onClick={handleDownload}
     >
-      <Download className="size-5" />
+      {downloading ? <Loader2 className="size-5 animate-spin" /> : <Download className="size-5" />}
     </button>
   );
 }
