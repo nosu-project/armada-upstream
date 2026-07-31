@@ -11,8 +11,11 @@
  *   `peer` — the conversation partner (how threads and the list query);
  *   `wrap` — the carrier wrap id (debugging/provenance only).
  *
- * Backed by `@nostrify/indexeddb` in its own database, so its tag index and
- * NIP-09 semantics stay isolated (mirrors Concord's `rumorStore.ts`).
+ * Backed by one ArmadaDB tenant PER VIEWER (`dm17:<self>`). Every read and
+ * write names the account it is for, so one logged-in profile's decrypted
+ * messages are not merely filtered out of another's reads — they are in a
+ * different database. (The store this replaced was global, keyed only by
+ * `peer`, and account isolation rested on nothing.)
  *
  * Deletes ARE deletes: a kind-5 rumor written here triggers the store's
  * self-only NIP-09 pass, physically removing the targeted rumor its author
@@ -32,7 +35,10 @@
 import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
+import { getArmadaDB } from "@/lib/db/armadaDB";
+import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   DM_RUMOR_KINDS,
   isExpired,
@@ -43,7 +49,8 @@ import {
 } from "@/lib/nip17/protocol";
 import { emitWireScopes } from "@/wire/bus";
 
-const DB_NAME = "armada-dm17-rumors";
+/** The global pre-tenant database, drained into the tenants on first use. */
+const LEGACY_DB_NAME = "armada-dm17-rumors";
 
 /** Provenance tags injected onto the stored event (never part of the rumor). */
 const TAG_PEER = "peer";
@@ -51,32 +58,105 @@ const TAG_WRAP = "wrap";
 const PROVENANCE = new Set([TAG_PEER, TAG_WRAP]);
 
 /**
- * Index the tags DM queries need. The default NIndexedDB policy only indexes
- * single-letter tags; we additionally query by the multi-letter `peer`.
+ * The opened-DM store for one account. ArmadaDB's default tag policy indexes
+ * the multi-letter `peer` these queries need.
  */
-function indexTags(event: NostrEvent): string[][] {
-  return event.tags.filter(
-    ([name, value]) =>
-      typeof name === "string" &&
-      typeof value === "string" &&
-      value.length > 0 &&
-      value.length < 200 &&
-      (name.length === 1 || name === TAG_PEER),
-  );
+export function dm17Store(self: string): NRumorStore {
+  return getArmadaDB().tenant(`dm17:${self}`);
 }
 
-let store: NIndexedDB | undefined;
+// ── Legacy drain ────────────────────────────────────────────────────────────
+//
+// DMs used to live in one global database keyed only by `peer` — it never
+// recorded WHICH account opened a rumor. Dropping it on upgrade would lose DM
+// history for good (re-decrypting means refetching gift wraps relays may have
+// already dropped), but copying it wholesale into the first account that reads
+// would hand that account another profile's messages — the leak the per-viewer
+// tenant exists to make impossible.
+//
+// So records are attributed before they move. A NIP-17 message names the
+// author in `pubkey` and its recipients in `p` tags, so `self` is one of the
+// two. Reactions and deletes name neither, but they carry an `e` pointing at
+// what they act on — so they come across when that target did. Attributing
+// them by shared `peer` instead would be wrong: two accounts on one device can
+// both have talked to the same person, and every record in that conversation
+// would then match both. On the ordinary single-account install everything
+// qualifies either way.
 
-/** The singleton opened-DM store (opens the DB lazily on first use). */
-export function dm17Store(): NIndexedDB {
-  if (!store) store = new NIndexedDB(DB_NAME, { indexTags });
-  return store;
+/** Records read from the legacy database in one drain (a bound, not a page). */
+const DRAIN_LIMIT = 50_000;
+
+const DRAIN_KEY = (self: string) => `dm17:migrated:${self}`;
+
+/** In-flight/settled drains, so concurrent reads share one pass. */
+const drains = new Map<string, Promise<void>>();
+
+function migrateLegacyDms(self: string): Promise<void> {
+  let drain = drains.get(self);
+  if (!drain) {
+    drain = drainLegacyDms(self);
+    drains.set(self, drain);
+  }
+  return drain;
+}
+
+/** Whether a stored record names `self` outright (author or recipient). */
+function namesSelf(ev: NostrEvent, self: string): boolean {
+  return ev.pubkey === self || ev.tags.some(([name, value]) => name === "p" && value === self);
+}
+
+async function drainLegacyDms(self: string): Promise<void> {
+  const db = getArmadaDB();
+  const key = DRAIN_KEY(self);
+  if (await db.kv.get<boolean>(key)) return;
+
+  try {
+    const legacy = new NIndexedDB(LEGACY_DB_NAME);
+    const all = await legacy.query([{ kinds: DM_RUMOR_KINDS, limit: DRAIN_LIMIT }]);
+
+    // Pass one: records that name `self` outright.
+    const mine = new Set<string>();
+    for (const ev of all) {
+      if (namesSelf(ev, self)) mine.add(ev.id);
+    }
+    // Pass two: reactions/deletes pointing at something already attributed.
+    // Repeated to a fixpoint so a delete of a reaction of a message follows
+    // the chain; `all` is finite and `mine` only grows, so this terminates.
+    for (;;) {
+      let added = false;
+      for (const ev of all) {
+        if (mine.has(ev.id)) continue;
+        const targets = ev.tags.filter(([name]) => name === "e").map(([, value]) => value);
+        if (targets.some((id) => mine.has(id))) {
+          mine.add(ev.id);
+          added = true;
+        }
+      }
+      if (!added) break;
+    }
+
+    const tenant = dm17Store(self);
+    for (const ev of all) {
+      if (!mine.has(ev.id)) continue;
+      const { sig: _sig, ...rumor } = ev;
+      await tenant.event(rumor);
+    }
+    await legacy.close();
+  } catch {
+    // Failed part-way, or IndexedDB is unavailable. Leave the flag unset and
+    // drop the memo so a later read retries: writes are keyed by rumor id, so
+    // recopying what already landed costs nothing.
+    drains.delete(self);
+    return;
+  }
+
+  await db.kv.set(key, true);
 }
 
 // ── Codec: OpenedDm ⇆ stored event ───────────────────────────────────────────
 
-/** Build the stored event for an opened DM rumor. */
-export function dm17ToStored(opened: OpenedDm): NostrEvent {
+/** Build the stored rumor for an opened DM. */
+export function dm17ToStored(opened: OpenedDm): NostrRumor {
   return {
     id: opened.rumorId,
     kind: opened.kind,
@@ -84,12 +164,11 @@ export function dm17ToStored(opened: OpenedDm): NostrEvent {
     tags: [...opened.tags, [TAG_PEER, opened.peer], [TAG_WRAP, opened.wrapId]],
     created_at: opened.createdAt,
     pubkey: opened.author,
-    sig: "",
   };
 }
 
-/** Reconstruct an OpenedDm from a stored event. */
-export function storedToDm17(ev: NostrEvent): OpenedDm {
+/** Reconstruct an OpenedDm from a stored rumor. */
+export function storedToDm17(ev: NostrRumor): OpenedDm {
   return {
     rumorId: ev.id,
     author: ev.pubkey,
@@ -110,14 +189,14 @@ export function storedToDm17(ev: NostrEvent): OpenedDm {
  * trigger the store's self-only NIP-09 removal of their targets. Best-effort;
  * resolves once the write commits.
  */
-export async function writeDm17Rumors(opened: OpenedDm[]): Promise<void> {
+export async function writeDm17Rumors(self: string, opened: OpenedDm[]): Promise<void> {
   // Already-expired rumors never reach persistent storage. `openDmWrap` also
   // rejects them, but this is the single choke point every writer goes through
   // (sync, backfill, our own optimistic sends), so it's where the guarantee
   // belongs: a disappearing message that arrives late is simply never stored.
   const fresh = opened.filter((o) => !isExpired(o.tags));
   if (fresh.length === 0) return;
-  const s = dm17Store();
+  const s = dm17Store(self);
   await Promise.all(
     fresh.map((o) =>
       s.event(dm17ToStored(o)).catch(() => {
@@ -134,16 +213,18 @@ export async function writeDm17Rumors(opened: OpenedDm[]): Promise<void> {
  * pages older history out of the store.
  */
 export async function queryDm17Thread(
+  self: string,
   peer: string,
   opts: { limit: number; before?: number; signal?: AbortSignal },
 ): Promise<OpenedDm[]> {
+  await migrateLegacyDms(self).catch(() => undefined);
   const filter: { kinds: number[]; "#peer": string[]; limit: number; until?: number } = {
     kinds: DM_RUMOR_KINDS,
     "#peer": [peer],
     limit: opts.limit,
   };
   if (opts.before !== undefined) filter.until = opts.before - 1;
-  const events = await dm17Store().query([filter], { signal: opts.signal });
+  const events = await dm17Store(self).query([filter], { signal: opts.signal });
   return events.filter((ev) => !isExpired(ev.tags)).map(storedToDm17);
 }
 
@@ -157,10 +238,12 @@ export async function queryDm17Thread(
  * always the live setting — whichever participant sent it.
  */
 export async function queryDm17Timer(
+  self: string,
   peer: string,
   opts: { signal?: AbortSignal } = {},
 ): Promise<number | undefined> {
-  const events = await dm17Store().query(
+  await migrateLegacyDms(self).catch(() => undefined);
+  const events = await dm17Store(self).query(
     [{ kinds: [KIND_DM_TIMER], "#peer": [peer], limit: 1 }],
     { signal: opts.signal },
   );
@@ -177,12 +260,14 @@ export async function queryDm17Timer(
  *
  * `mine` marks conversations the viewer has participated in (authored at least
  * one message to), so the list can keep a thread you started with someone you
- * don't follow — pass `self` to populate it (omitted, it's always false).
+ * don't follow.
  */
 export async function queryDm17Conversations(
-  opts: { self?: string; limit?: number; signal?: AbortSignal } = {},
+  self: string,
+  opts: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<Array<{ peer: string; latest: OpenedDm; mine: boolean }>> {
-  const events = await dm17Store().query(
+  await migrateLegacyDms(self).catch(() => undefined);
+  const events = await dm17Store(self).query(
     [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], limit: opts.limit ?? 500 }],
     { signal: opts.signal },
   );
@@ -192,7 +277,7 @@ export async function queryDm17Conversations(
     if (isExpired(ev.tags)) continue;
     const opened = storedToDm17(ev);
     if (!opened.peer) continue;
-    if (opts.self && opened.author === opts.self) mine.add(opened.peer);
+    if (opened.author === self) mine.add(opened.peer);
     const cur = byPeer.get(opened.peer);
     if (!cur || opened.createdAt > cur.createdAt) byPeer.set(opened.peer, opened);
   }
@@ -208,12 +293,14 @@ export async function queryDm17Conversations(
  * prompts the signer. Newest-first, capped at `limit` matches.
  */
 export async function searchDm17Rumors(
+  self: string,
   query: string,
   opts: { limit?: number; scan?: number; signal?: AbortSignal } = {},
 ): Promise<OpenedDm[]> {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
-  const events = await dm17Store().query(
+  await migrateLegacyDms(self).catch(() => undefined);
+  const events = await dm17Store(self).query(
     [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], limit: opts.scan ?? 2000 }],
     { signal: opts.signal },
   );
@@ -241,8 +328,11 @@ const SWEEP_MAX_PAGES = 20;
  * walks the store newest-first by `created_at` in bounded pages and removes
  * matches by id. Returns how many were removed.
  */
-export async function sweepExpiredDm17Rumors(opts: { signal?: AbortSignal } = {}): Promise<number> {
-  const s = dm17Store();
+export async function sweepExpiredDm17Rumors(
+  self: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<number> {
+  const s = dm17Store(self);
   const now = Math.floor(Date.now() / 1000);
   let until: number | undefined;
   let removed = 0;

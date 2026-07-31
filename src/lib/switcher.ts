@@ -63,6 +63,8 @@ export interface SwitcherContext {
   communities: Map<string, CommunityListEntry>;
   /** The shared app event store (NIP-29 timelines + kind-0 profiles). */
   eventStore: EventStoreContextType;
+  /** The viewer's pubkey — names the DM tenant to search. Absent: no DM hits. */
+  self?: string;
 }
 
 /** The event store handle carried in {@link SwitcherContext} (see useEventStore). */
@@ -365,8 +367,12 @@ async function searchNip29Messages(
 }
 
 /** DM matches; the author and partner are resolved to names by the view. */
-async function searchDmMessages(query: string, signal?: AbortSignal): Promise<MessageEntry[]> {
-  const hits = await searchDm17Rumors(query, { limit: PER_CORPUS_LIMIT, signal });
+async function searchDmMessages(
+  self: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<MessageEntry[]> {
+  const hits = await searchDm17Rumors(self, query, { limit: PER_CORPUS_LIMIT, signal });
   return hits.map((h) => ({
     key: `msg:${h.rumorId}`,
     content: snippet(h.content),
@@ -421,7 +427,7 @@ export async function searchSwitcherMessages(
   const groups = await Promise.all([
     wantChannels ? searchConcordMessages(needle, concordById, opts.signal) : [],
     wantChannels ? searchNip29Messages(needle, nip29ById, ctx.eventStore, opts.signal) : [],
-    wantDms ? searchDmMessages(query, opts.signal) : [],
+    wantDms && ctx.self ? searchDmMessages(ctx.self, query, opts.signal) : [],
   ]);
 
   return groups

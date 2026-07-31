@@ -51,12 +51,12 @@ export function useDmMessageSearch(
   // the list doesn't flicker between keystrokes.
   const [dm17Matches, setDm17Matches] = useState<Map<string, DmMessageMatch>>(new Map());
   useEffect(() => {
-    if (!needle) {
+    if (!needle || !self) {
       setDm17Matches(new Map());
       return;
     }
     let cancelled = false;
-    void searchDm17Rumors(query, { limit: 500 }).then((rumors) => {
+    void searchDm17Rumors(self, query, { limit: 500 }).then((rumors) => {
       if (cancelled) return;
       const byPeer = new Map<string, DmMessageMatch>();
       for (const r of rumors) {
@@ -70,7 +70,7 @@ export function useDmMessageSearch(
     return () => {
       cancelled = true;
     };
-  }, [needle, query]);
+  }, [needle, query, self]);
 
   // kind-4 matches are synchronous: scan the fetched ciphertext events for
   // those whose session-decrypted plaintext contains the needle.

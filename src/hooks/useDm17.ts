@@ -105,11 +105,11 @@ let lastSweepAt = 0;
  * store. Throttled and fire-and-forget: every DM surface calls it, and a miss
  * costs nothing (read paths filter expired rumors regardless).
  */
-function sweepExpiredSoon(): void {
+function sweepExpiredSoon(self: string): void {
   const now = Date.now();
   if (now - lastSweepAt < SWEEP_MIN_INTERVAL_MS) return;
   lastSweepAt = now;
-  void sweepExpiredDm17Rumors().catch(() => undefined);
+  void sweepExpiredDm17Rumors(self).catch(() => undefined);
 }
 
 /** Whether the current signer can do NIP-17 (NIP-44 encrypt/decrypt). */
@@ -274,7 +274,7 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
     );
     if (i + DECRYPT_WAVE < wraps.length) await new Promise((r) => setTimeout(r, 0));
   }
-  await writeDm17Rumors(opened);
+  await writeDm17Rumors(ctx.self, opened);
   feedNotifyCandidates(dm17NotifyCandidates(opened, ctx.self));
   persistSeenWraps(ctx.self);
   return true;
@@ -634,9 +634,9 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     queryFn: async ({ signal }) => {
       // LOCAL-FIRST: the store paints immediately; the inbox scan tops up in
       // the background (throttled) and rings the `dm` scope on new rumors.
-      const rows = await queryDm17Thread(peer!, { limit: THREAD_WINDOW, signal });
+      const rows = await queryDm17Thread(self!, peer!, { limit: THREAD_WINDOW, signal });
       if (ctx) void syncDm17Inbox(ctx, { interactive: true });
-      sweepExpiredSoon();
+      sweepExpiredSoon(self!);
       return rows.sort((a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1));
     },
     staleTime: 10_000,
@@ -652,7 +652,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   const timerQuery = useQuery<number>({
     queryKey: timerQueryKey,
     enabled: !!self && !!peer && support,
-    queryFn: async ({ signal }) => (await queryDm17Timer(peer!, { signal })) ?? 0,
+    queryFn: async ({ signal }) => (await queryDm17Timer(self!, peer!, { signal })) ?? 0,
     staleTime: 10_000,
   });
   const timer = timerQuery.data;
@@ -750,11 +750,11 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     if (nextExpiry === undefined) return;
     const delay = Math.min(nextExpiry * 1000 - Date.now(), 2 ** 31 - 1);
     const id = setTimeout(() => {
-      sweepExpiredSoon();
+      if (self) sweepExpiredSoon(self);
       setExpiryTick((t) => t + 1);
     }, Math.max(0, delay));
     return () => clearTimeout(id);
-  }, [nextExpiry]);
+  }, [nextExpiry, self]);
 
   const setStatus = useCallback((id: string, status: SendStatus | undefined) => {
     setPending((old) => {
@@ -862,14 +862,14 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
           // it back (see the prune effect) — the store write's `dm` ring is
           // debounced and the repaint costs an IndexedDB read, so dropping it
           // here would blank the row for that whole window.
-          await writeDm17Rumors([opened]);
+          if (self) await writeDm17Rumors(self, [opened]);
           setStatus(rumor.id, undefined);
         } catch {
           setStatus(rumor.id, "failed");
         }
       })();
     },
-    [publishRumor, setStatus],
+    [publishRumor, setStatus, self],
   );
 
   const openedOf = useCallback(
@@ -903,9 +903,9 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   const resolveTimer = useCallback(async (): Promise<number> => {
     const known = timerRef.current;
     if (known !== undefined) return known;
-    if (!peer) return 0;
-    return (await queryDm17Timer(peer).catch(() => undefined)) ?? 0;
-  }, [peer]);
+    if (!peer || !self) return 0;
+    return (await queryDm17Timer(self, peer).catch(() => undefined)) ?? 0;
+  }, [peer, self]);
 
   /** The NIP-40 deadline for something sent right now, or undefined when off. */
   const resolveExpiry = useCallback(async (): Promise<number | undefined> => {
@@ -978,7 +978,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
           tags: dmTimerTags(peer, next),
           pubkey: self,
         });
-        await writeDm17Rumors([openedOf(rumor)]);
+        await writeDm17Rumors(self, [openedOf(rumor)]);
         await queryClient.invalidateQueries({ queryKey: timerQueryKey });
         await publishRumor(rumor).catch(() => {});
       })();
@@ -1006,7 +1006,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
         next.delete(targetId);
         return next;
       });
-      void writeDm17Rumors([openedOf(rumor)]);
+      void writeDm17Rumors(self, [openedOf(rumor)]);
       void publishRumor(rumor).catch(() => {});
     },
     [canSend, self, peer, openedOf, publishRumor],
@@ -1061,11 +1061,11 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const until =
         oldestRef.current ??
         (messages.length > 0 ? messages[0].createdAt : Math.floor(Date.now() / 1000));
-      const before = await queryDm17Thread(peer, { limit: THREAD_WINDOW * 2 });
+      const before = await queryDm17Thread(self, peer, { limit: THREAD_WINDOW * 2 });
       const { oldest, exhausted } = await pageOlderDmWraps(ctx, until, true);
       if (oldest !== undefined) oldestRef.current = oldest;
       if (exhausted) setHasMore(false);
-      const after = await queryDm17Thread(peer, { limit: THREAD_WINDOW * 2 });
+      const after = await queryDm17Thread(self, peer, { limit: THREAD_WINDOW * 2 });
       const added = Math.max(0, after.length - before.length);
       if (added > 0) void queryClient.invalidateQueries({ queryKey });
       return added;
@@ -1162,12 +1162,12 @@ export function useDm17Backfill(): Dm17Backfill {
       const until =
         oldestRef.current ??
         (cursor?.oldest ? cursor.oldest - 1 : Math.floor(Date.now() / 1000));
-      const before = await queryDm17Conversations({ self });
+      const before = await queryDm17Conversations(self);
       const known = new Set(before.map((c) => c.peer));
       const { oldest, exhausted } = await pageOlderDmWraps(ctx, until, true);
       if (oldest !== undefined) oldestRef.current = oldest;
       if (exhausted) setHasMore(false);
-      const after = await queryDm17Conversations({ self });
+      const after = await queryDm17Conversations(self);
       // Unconditional: a page can add messages to conversations that already
       // exist without changing how many there are.
       void queryClient.invalidateQueries({ queryKey: ["dm17", "conversations"] });
@@ -1220,7 +1220,7 @@ export function useDm17Conversations(opts?: { interactive?: boolean }): {
     queryKey,
     enabled: !!self && support,
     queryFn: async ({ signal }) => {
-      const rows = await queryDm17Conversations({ self, signal });
+      const rows = await queryDm17Conversations(self!, { signal });
       if (!ctx) return rows;
 
       // On the FIRST sync this device's rumor store is empty, so `rows` is not
@@ -1233,7 +1233,7 @@ export function useDm17Conversations(opts?: { interactive?: boolean }): {
         return rows;
       }
       if (await syncDm17Inbox(ctx, { interactive })) markDmSynced("nip17", self);
-      return await queryDm17Conversations({ self, signal });
+      return await queryDm17Conversations(self!, { signal });
     },
     staleTime: 15_000,
     refetchInterval: 60_000,

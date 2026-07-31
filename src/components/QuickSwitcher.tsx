@@ -16,6 +16,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
@@ -117,6 +118,7 @@ export function QuickSwitcher() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
+  const { user } = useCurrentUser();
   const { config } = useAppContext();
 
   const liveServers = useNip29Servers();
@@ -140,8 +142,9 @@ export function QuickSwitcher() {
       queryClient,
       eventStore,
       communities: new Map(communities.map((c) => [c.community_id, c])),
+      self: user?.pubkey,
     }),
-    [queryClient, eventStore, communities],
+    [queryClient, eventStore, communities, user?.pubkey],
   );
   // Keep the keydown listener stable while always seeing the freshest context.
   const ctxRef = useRef(ctx);

@@ -1,3 +1,4 @@
+import { NIndexedDB } from "@nostrify/indexeddb";
 import { IDBFactory } from "fake-indexeddb";
 import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
@@ -63,28 +64,33 @@ describe("dm17Store", () => {
     const fromAlice = opened({ author: alice, peer: alice, content: "hi from alice" });
     const toAlice = opened({ author: self, peer: alice, content: "hi back" });
     const fromBob = opened({ author: bob, peer: bob, content: "unrelated" });
-    await writeDm17Rumors([fromAlice, toAlice, fromBob]);
+    await writeDm17Rumors(self, [fromAlice, toAlice, fromBob]);
 
-    const thread = await queryDm17Thread(alice, { limit: 50 });
+    const thread = await queryDm17Thread(self, alice, { limit: 50 });
     const ids = thread.map((r) => r.rumorId).sort();
     expect(ids).toEqual([fromAlice.rumorId, toAlice.rumorId].sort());
   });
 
   it("groups conversations by peer, newest message first", async () => {
-    const convos = await queryDm17Conversations();
+    const convos = await queryDm17Conversations(self);
     expect(convos.map((c) => c.peer)).toEqual([bob, alice]);
     expect(convos[1].latest.content).toBe("hi back");
   });
 
   it("marks conversations the viewer has messaged as `mine`", async () => {
-    const convos = await queryDm17Conversations({ self });
+    const convos = await queryDm17Conversations(self);
     const byPeer = new Map(convos.map((c) => [c.peer, c]));
     // alice's thread has a self-authored "hi back"; bob only messaged us.
     expect(byPeer.get(alice)?.mine).toBe(true);
     expect(byPeer.get(bob)?.mine).toBe(false);
-    // Without `self`, participation can't be determined — always false.
-    const anon = await queryDm17Conversations();
-    expect(anon.every((c) => c.mine === false)).toBe(true);
+  });
+
+  it("keeps each account's messages in its own tenant", async () => {
+    const other = getPublicKey(generateSecretKey());
+    // Everything above was written as `self`. Another logged-in account reads
+    // its own tenant, which has none of it — not a filtered view of one store.
+    expect(await queryDm17Conversations(other)).toEqual([]);
+    expect(await queryDm17Thread(other, alice, { limit: 50 })).toEqual([]);
   });
 
   it("applies a kind-5 delete rumor to the author's own target only", async () => {
@@ -96,7 +102,7 @@ describe("dm17Store", () => {
       content: "👍",
       tags: dmReactionTags(self, target.rumorId, KIND_DM_CHAT),
     });
-    await writeDm17Rumors([target, reaction]);
+    await writeDm17Rumors(self, [target, reaction]);
 
     // A FOREIGN delete (authored by someone else) must not remove it.
     const foreignDelete = opened({
@@ -106,8 +112,8 @@ describe("dm17Store", () => {
       content: "",
       tags: dmDeleteTags(self, target.rumorId, KIND_DM_CHAT),
     });
-    await writeDm17Rumors([foreignDelete]);
-    let thread = await queryDm17Thread(alice, { limit: 50 });
+    await writeDm17Rumors(self, [foreignDelete]);
+    let thread = await queryDm17Thread(self, alice, { limit: 50 });
     expect(thread.some((r) => r.rumorId === target.rumorId)).toBe(true);
 
     // The author's own delete removes it.
@@ -118,8 +124,8 @@ describe("dm17Store", () => {
       content: "",
       tags: dmDeleteTags(self, target.rumorId, KIND_DM_CHAT),
     });
-    await writeDm17Rumors([ownDelete]);
-    thread = await queryDm17Thread(alice, { limit: 50 });
+    await writeDm17Rumors(self, [ownDelete]);
+    thread = await queryDm17Thread(self, alice, { limit: 50 });
     expect(thread.some((r) => r.rumorId === target.rumorId)).toBe(false);
     // The reaction survives (deletes are per-target).
     expect(thread.some((r) => r.rumorId === reaction.rumorId)).toBe(true);
@@ -131,7 +137,7 @@ describe("dm17Store disappearing messages", () => {
 
   /** Put a stored rumor in directly, bypassing writeDm17Rumors' expiry guard. */
   async function forceStore(o: OpenedDm): Promise<void> {
-    await dm17Store().event(dm17ToStored(o));
+    await dm17Store(self).event(dm17ToStored(o));
   }
 
   const now = () => Math.floor(Date.now() / 1000);
@@ -143,8 +149,8 @@ describe("dm17Store disappearing messages", () => {
       content: "should never land",
       tags: dmChatTags(self, { expiresAt: now() - 1 }),
     });
-    await writeDm17Rumors([expired]);
-    const thread = await queryDm17Thread(carol, { limit: 50 });
+    await writeDm17Rumors(self, [expired]);
+    const thread = await queryDm17Thread(self, carol, { limit: 50 });
     expect(thread.some((r) => r.rumorId === expired.rumorId)).toBe(false);
   });
 
@@ -155,8 +161,8 @@ describe("dm17Store disappearing messages", () => {
       content: "still here",
       tags: dmChatTags(self, { expiresAt: now() + 3600 }),
     });
-    await writeDm17Rumors([live]);
-    const thread = await queryDm17Thread(carol, { limit: 50 });
+    await writeDm17Rumors(self, [live]);
+    const thread = await queryDm17Thread(self, carol, { limit: 50 });
     expect(thread.some((r) => r.rumorId === live.rumorId)).toBe(true);
   });
 
@@ -170,33 +176,71 @@ describe("dm17Store disappearing messages", () => {
     await forceStore(stale);
 
     // Present in the raw store...
-    expect((await dm17Store().query([{ ids: [stale.rumorId] }])).length).toBe(1);
+    expect((await dm17Store(self).query([{ ids: [stale.rumorId] }])).length).toBe(1);
     // ...but never handed to a reader.
-    const thread = await queryDm17Thread(carol, { limit: 50 });
+    const thread = await queryDm17Thread(self, carol, { limit: 50 });
     expect(thread.some((r) => r.rumorId === stale.rumorId)).toBe(false);
-    const convos = await queryDm17Conversations({ self });
+    const convos = await queryDm17Conversations(self);
     expect(convos.find((c) => c.peer === carol)?.latest.rumorId).not.toBe(stale.rumorId);
 
     // Hiding is not disappearing: the sweep removes the plaintext.
-    expect(await sweepExpiredDm17Rumors()).toBeGreaterThan(0);
-    expect((await dm17Store().query([{ ids: [stale.rumorId] }])).length).toBe(0);
+    expect(await sweepExpiredDm17Rumors(self)).toBeGreaterThan(0);
+    expect((await dm17Store(self).query([{ ids: [stale.rumorId] }])).length).toBe(0);
   });
 
   it("reads back the newest timer change, whichever side set it", async () => {
-    expect(await queryDm17Timer(carol)).toBeUndefined();
+    expect(await queryDm17Timer(self, carol)).toBeUndefined();
 
-    await writeDm17Rumors([
+    await writeDm17Rumors(self, [
       opened({ author: self, peer: carol, kind: KIND_DM_TIMER, content: "", tags: dmTimerTags(carol, 86400) }),
     ]);
-    expect(await queryDm17Timer(carol)).toBe(86400);
+    expect(await queryDm17Timer(self, carol)).toBe(86400);
 
     // The peer turns it off; the newer change wins.
-    await writeDm17Rumors([
+    await writeDm17Rumors(self, [
       opened({ author: carol, peer: carol, kind: KIND_DM_TIMER, content: "", tags: dmTimerTags(self, 0) }),
     ]);
-    expect(await queryDm17Timer(carol)).toBe(0);
+    expect(await queryDm17Timer(self, carol)).toBe(0);
 
     // A timer set on one conversation never leaks into another.
-    expect(await queryDm17Timer(bob)).toBeUndefined();
+    expect(await queryDm17Timer(self, bob)).toBeUndefined();
+  });
+});
+
+describe("dm17Store legacy drain", () => {
+  // The pre-tenant database was global: it recorded `peer`, never which
+  // account opened the rumor. So the drain has to attribute each record from
+  // the rumor itself, or it hands one profile another's messages.
+  const ana = getPublicKey(generateSecretKey());
+  const ben = getPublicKey(generateSecretKey());
+  const carla = getPublicKey(generateSecretKey());
+
+  it("moves only the reading account's messages out of the global store", async () => {
+    const legacy = new NIndexedDB("armada-dm17-rumors");
+
+    // Ana ↔ Carla, both directions.
+    const anaSent = opened({ author: ana, peer: carla, content: "ana to carla", tags: dmChatTags(carla) });
+    const anaGot = opened({ author: carla, peer: carla, content: "carla to ana", tags: dmChatTags(ana) });
+    // Ben ↔ Carla, from the same device. Ana must never see these.
+    const benSent = opened({ author: ben, peer: carla, content: "ben to carla", tags: dmChatTags(carla) });
+    // A reaction of Ana's carries no `p` — attributable only by conversation.
+    const anaReacted = opened({
+      author: ana,
+      peer: carla,
+      kind: KIND_DM_REACTION,
+      content: "👍",
+      tags: [["e", anaGot.rumorId]],
+    });
+    for (const o of [anaSent, anaGot, benSent, anaReacted]) {
+      await legacy.event({ ...dm17ToStored(o), sig: "" });
+    }
+    await legacy.close();
+
+    const drained = await queryDm17Thread(ana, carla, { limit: 50 });
+    const ids = new Set(drained.map((r) => r.rumorId));
+    expect(ids.has(anaSent.rumorId)).toBe(true);
+    expect(ids.has(anaGot.rumorId)).toBe(true);
+    expect(ids.has(anaReacted.rumorId)).toBe(true);
+    expect(ids.has(benSent.rumorId)).toBe(false);
   });
 });
