@@ -1,0 +1,367 @@
+// @vitest-environment node
+/**
+ * SQLite-specific tests: the parts of the adapter the shared conformance suite
+ * (ArmadaDB.test.ts) can't see — the query planner's index choices, its paged
+ * and split scans, the FTS5 search paths, and the invariant that no index row
+ * (tag, coordinate or full-text) outlives the rumor it describes.
+ */
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { SqliteArmadaDB } from "./SqliteArmadaDB";
+
+import type { SqliteArmadaDBOpts } from "./SqliteArmadaDB";
+import type { NostrRumor } from "@/lib/nostrRumor";
+import type { ArmadaSqlDriver, SqlRow, SqlValue } from "./driver";
+
+/** A driver that also records the SELECTs it ran, so plans can be inspected. */
+class RecordingDriver implements ArmadaSqlDriver {
+  readonly db = new DatabaseSync(":memory:");
+  readonly selects: Array<{ sql: string; params: SqlValue[] }> = [];
+
+  run(sql: string, params: SqlValue[] = []): void {
+    this.db.prepare(sql).run(...params);
+  }
+
+  all(sql: string, params: SqlValue[] = []): SqlRow[] {
+    if (sql.startsWith("SELECT")) this.selects.push({ sql, params });
+    return this.db.prepare(sql).all(...params) as SqlRow[];
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  /** The `EXPLAIN QUERY PLAN` detail lines for every recorded SELECT. */
+  plans(): string[] {
+    return this.selects.flatMap(({ sql, params }) => {
+      const rows = this.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params);
+      return (rows as Array<{ detail: string }>).map((row) => row.detail);
+    });
+  }
+}
+
+const drivers: RecordingDriver[] = [];
+
+function makeDb(opts: SqliteArmadaDBOpts = {}): { db: SqliteArmadaDB; driver: RecordingDriver } {
+  const driver = new RecordingDriver();
+  drivers.push(driver);
+  return { db: new SqliteArmadaDB(driver, opts), driver };
+}
+
+afterEach(() => {
+  for (const driver of drivers.splice(0)) {
+    try {
+      driver.close();
+    } catch {
+      // already closed
+    }
+  }
+});
+
+let seq = 0;
+
+function rumor(partial: Partial<NostrRumor> = {}): NostrRumor {
+  seq++;
+  return {
+    id: partial.id ?? `id-${String(seq).padStart(6, "0")}`,
+    pubkey: "pk-default",
+    kind: 1,
+    created_at: 1000 + seq,
+    content: "",
+    tags: [],
+    ...partial,
+  };
+}
+
+/** Rows straight out of the tables, bypassing the store. */
+function rows(driver: RecordingDriver, sql: string): SqlRow[] {
+  return driver.db.prepare(sql).all() as SqlRow[];
+}
+
+describe("SqliteArmadaDB — query plans", () => {
+  it("drives a tag query off the tag index, never scanning rumors", async () => {
+    const { db, driver } = makeDb();
+    await db.tenant("t").event(rumor({ tags: [["channel", "c1"]] }));
+
+    driver.selects.length = 0;
+    await db.tenant("t").query([{ "#channel": ["c1"], kinds: [1] }]);
+
+    const plans = driver.plans();
+    expect(plans.some((detail) => detail.includes("rumor_tags"))).toBe(true);
+    expect(plans.some((detail) => /SCAN rumor/.test(detail))).toBe(false);
+  });
+
+  it("forces the pubkey+kind index for an authors+kinds query", async () => {
+    const { db, driver } = makeDb();
+    await db.tenant("t").event(rumor({ pubkey: "alice", kind: 7 }));
+
+    driver.selects.length = 0;
+    await db.tenant("t").query([{ authors: ["alice"], kinds: [7] }]);
+
+    expect(driver.plans().some((detail) => detail.includes("rumors_pubkey_kind"))).toBe(true);
+  });
+
+  it("forces the created_at index for an unconstrained query", async () => {
+    const { db, driver } = makeDb();
+    await db.tenant("t").event(rumor());
+
+    driver.selects.length = 0;
+    await db.tenant("t").query([{ limit: 10 }]);
+
+    expect(driver.plans().some((detail) => detail.includes("rumors_created_at"))).toBe(true);
+  });
+
+  it("reads a single covered scan without a second key lookup", async () => {
+    const { db, driver } = makeDb();
+    await db.tenant("t").event(rumor({ kind: 1 }));
+
+    driver.selects.length = 0;
+    await db.tenant("t").query([{ kinds: [1], limit: 5 }]);
+
+    // One statement, and it reads the bodies inline.
+    expect(driver.selects).toHaveLength(1);
+    expect(driver.selects[0].sql).toContain("SELECT json FROM rumors INDEXED BY rumors_kind");
+  });
+});
+
+describe("SqliteArmadaDB — scans", () => {
+  it("pages a scan that SQL can't fully express", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    // `authors` can't filter a tag scan, so this post-filters in memory and
+    // pages by keyset — 600 candidates over a 512-row page.
+    const writes: Promise<void>[] = [];
+    for (let i = 0; i < 600; i++) {
+      writes.push(
+        store.event(
+          rumor({ pubkey: i % 2 === 0 ? "alice" : "bob", tags: [["channel", "c1"]] }),
+        ),
+      );
+    }
+    await Promise.all(writes);
+
+    const got = await store.query([{ "#channel": ["c1"], authors: ["alice"] }]);
+
+    expect(got).toHaveLength(300);
+    expect(got.every((r) => r.pubkey === "alice")).toBe(true);
+    // Newest first, with no duplicates across pages.
+    expect(new Set(got.map((r) => r.id)).size).toBe(300);
+    expect(got[0].created_at).toBeGreaterThan(got[got.length - 1].created_at);
+  });
+
+  it("merges a scan split across statements by a long value list", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    // One kind in each half of the split, plus one outside the list entirely.
+    const wanted = [rumor({ kind: 1 }), rumor({ kind: 600 })];
+    await store.event(rumor({ kind: 900 }));
+    await Promise.all(wanted.map((r) => store.event(r)));
+
+    // 600 kinds > MAX_IN, so the scan runs as two statements and is merged.
+    const kinds = Array.from({ length: 600 }, (_, i) => i + 1);
+    const got = await store.query([{ kinds }]);
+
+    expect(got.map((r) => r.id).sort()).toEqual(wanted.map((r) => r.id).sort());
+  });
+
+  it("intersects several tag terms without reading non-matching bodies", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    const both = rumor({ tags: [["channel", "c1"], ["reply", "r1"]] });
+    await store.event(both);
+    await store.event(rumor({ tags: [["channel", "c1"]] }));
+    await store.event(rumor({ tags: [["reply", "r1"]] }));
+
+    expect(await store.query([{ "#channel": ["c1"], "#reply": ["r1"] }])).toEqual([both]);
+  });
+
+  it("honors a limit on a paged scan", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    await Promise.all(
+      Array.from({ length: 50 }, (_, i) =>
+        store.event(rumor({ created_at: 5000 + i, tags: [["channel", "c1"]] }))),
+    );
+
+    const got = await store.query([{ "#channel": ["c1"], limit: 10 }]);
+
+    expect(got).toHaveLength(10);
+    expect(got[0].created_at).toBe(5049);
+  });
+});
+
+describe("SqliteArmadaDB — search", () => {
+  it("matches keywords case- and accent-insensitively", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const hit = rumor({ content: "Ahoy Matelot" });
+    await store.event(hit);
+    await store.event(rumor({ content: "nothing here" }));
+
+    expect(await store.query([{ search: "ahoy" }])).toEqual([hit]);
+    expect(await store.query([{ search: "MATELOT" }])).toEqual([hit]);
+    expect(await store.query([{ search: "matelôt" }])).toEqual([hit]);
+  });
+
+  it("requires every keyword and honors negation", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const both = rumor({ content: "red boat" });
+    await store.event(both);
+    await store.event(rumor({ content: "red anchor" }));
+
+    expect(await store.query([{ search: "red boat" }])).toEqual([both]);
+    expect(await store.query([{ search: "red -anchor" }])).toEqual([both]);
+    expect(await store.query([{ search: "red boat anchor" }])).toEqual([]);
+  });
+
+  it("combines search with other constraints", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const hit = rumor({ kind: 1, pubkey: "alice", content: "treasure map" });
+    await store.event(hit);
+    await store.event(rumor({ kind: 1, pubkey: "bob", content: "treasure map" }));
+
+    expect(await store.query([{ search: "treasure", authors: ["alice"] }])).toEqual([hit]);
+    expect(await store.query([{ search: "treasure", kinds: [7] }])).toEqual([]);
+  });
+
+  it("keeps search results inside their tenant", async () => {
+    const { db } = makeDb();
+    const mine = rumor({ content: "shared word" });
+    await db.tenant("a").event(mine);
+    await db.tenant("b").event(rumor({ content: "shared word" }));
+
+    expect(await db.tenant("a").query([{ search: "shared" }])).toEqual([mine]);
+  });
+
+  it("filters a scan by a keyword too common to drive one", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    // More matches than are worth driving a query with (MAX_SEARCH_IDS), so
+    // the keyword filters an ordinary indexed scan instead.
+    await Promise.all(
+      Array.from({ length: 1100 }, (_, i) =>
+        store.event(rumor({ created_at: 5000 + i, content: `common message ${i}` }))),
+    );
+    await store.event(rumor({ created_at: 9999, content: "unrelated" }));
+
+    const got = await store.query([{ search: "common", limit: 5 }]);
+
+    expect(got).toHaveLength(5);
+    expect(got.every((r) => r.content.includes("common"))).toBe(true);
+    expect(await store.count([{ search: "common" }])).toEqual({
+      count: 1100,
+      approximate: false,
+    });
+  });
+
+  it("still matches keywords with the index turned off", async () => {
+    const { db, driver } = makeDb({ search: false });
+    const store = db.tenant("t");
+    const hit = rumor({ content: "the quick brown fox" });
+    await store.event(hit);
+    await store.event(rumor({ content: "nothing here" }));
+
+    expect(await store.query([{ search: "BROWN" }])).toEqual([hit]);
+    expect(await store.query([{ search: "quick -fox" }])).toEqual([]);
+    // No index to keep — that's the point.
+    expect(
+      rows(driver, `SELECT name FROM sqlite_master WHERE name LIKE '%fts%'`),
+    ).toHaveLength(0);
+  });
+
+  it("stops finding a rumor once it is removed", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+    await store.event(rumor({ content: "ephemeral phrase" }));
+
+    await store.remove([{ search: "ephemeral" }]);
+
+    expect(await store.query([{ search: "ephemeral" }])).toEqual([]);
+    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(0);
+  });
+});
+
+describe("SqliteArmadaDB — index upkeep", () => {
+  it("leaves no tag or coordinate rows behind when a version is superseded", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+
+    await store.event(
+      rumor({ id: "v1", kind: 30078, pubkey: "alice", created_at: 100, tags: [["d", "x"], ["channel", "c1"]] }),
+    );
+    await store.event(
+      rumor({ id: "v2", kind: 30078, pubkey: "alice", created_at: 200, tags: [["d", "x"], ["channel", "c2"]] }),
+    );
+
+    expect(rows(driver, "SELECT id FROM rumors").map((r) => r.id)).toEqual(["v2"]);
+    expect(rows(driver, "SELECT DISTINCT id FROM rumor_tags").map((r) => r.id)).toEqual(["v2"]);
+    expect(rows(driver, "SELECT coord, id FROM rumor_coords")).toEqual([
+      { coord: "30078:alice:x", id: "v2" },
+    ]);
+    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(1);
+  });
+
+  it("leaves no rows behind when a rumor is removed", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+
+    await store.event(
+      rumor({ id: "gone", kind: 10002, pubkey: "alice", tags: [["channel", "c1"]] }),
+    );
+    await store.remove([{ ids: ["gone"] }]);
+
+    expect(rows(driver, "SELECT id FROM rumors")).toHaveLength(0);
+    expect(rows(driver, "SELECT id FROM rumor_tags")).toHaveLength(0);
+    expect(rows(driver, "SELECT coord FROM rumor_coords")).toHaveLength(0);
+    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(0);
+  });
+
+  it("does not free a coordinate a stale write failed to take", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+
+    await store.event(rumor({ id: "new", kind: 10002, pubkey: "alice", created_at: 200 }));
+    await store.event(rumor({ id: "old", kind: 10002, pubkey: "alice", created_at: 100 }));
+
+    expect(rows(driver, "SELECT id FROM rumors").map((r) => r.id)).toEqual(["new"]);
+    expect(rows(driver, "SELECT id FROM rumor_coords").map((r) => r.id)).toEqual(["new"]);
+  });
+
+  it("commits a burst of writes as one transaction", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+
+    const writes = [store.event(rumor()), store.event(rumor()), store.event(rumor())];
+    driver.selects.length = 0;
+    await Promise.all(writes);
+
+    expect(rows(driver, "SELECT id FROM rumors")).toHaveLength(3);
+  });
+
+  it("wipes every table", async () => {
+    const { db, driver } = makeDb();
+    await db.tenant("t").event(rumor({ kind: 10002, tags: [["channel", "c1"]] }));
+    await db.kv.set("cursor", 1);
+
+    await db.wipe();
+
+    for (const table of ["rumors", "rumor_tags", "rumor_coords", "rumors_fts", "kv"]) {
+      expect(rows(driver, `SELECT * FROM ${table}`)).toHaveLength(0);
+    }
+  });
+
+  it("rejects a write whose transaction fails", async () => {
+    const { db, driver } = makeDb();
+    driver.close();
+
+    await expect(db.tenant("t").event(rumor())).rejects.toThrow();
+  });
+});

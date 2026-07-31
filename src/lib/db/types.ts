@@ -25,7 +25,15 @@ import type { NostrRumor } from "@/lib/nostrRumor";
  * have no `sig`.
  */
 export interface NRumorStore {
-  /** Rumors matching any of the filters, newest first (ties: smaller id first). */
+  /**
+   * Rumors matching any of the filters, newest first (ties: smaller id first).
+   *
+   * One caveat on NIP-50 `search`, the only place the adapters don't agree
+   * exactly: SQLite resolves it against an FTS5 index, so keywords match whole
+   * **words** (case- and accent-insensitively), while IndexedDB scans content
+   * for **substrings**. `brown` finds "the quick brown fox" on both; `brow`
+   * finds it only on IndexedDB.
+   */
   query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]>;
   /** Store one rumor. Resolves once the write has committed. */
   event(event: NostrRumor, opts?: { signal?: AbortSignal }): Promise<void>;

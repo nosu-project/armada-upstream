@@ -11,39 +11,24 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { IndexedDBArmadaDB } from "./IndexedDBArmadaDB";
 import { SqliteArmadaDB } from "./SqliteArmadaDB";
-import { ARMADA_DB_SCHEMA } from "./sqliteSchema";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
-import type { SqlDriver, SqlParam, SqlStatement } from "@/lib/sqlite/driver";
+import type { ArmadaSqlDriver, SqlRow, SqlValue } from "./driver";
 import type { ArmadaDB } from "./types";
 
-class NodeSqlDriver implements SqlDriver {
-  private readonly db: DatabaseSync;
+/** The whole driver contract, over Node's built-in SQLite. */
+class NodeSqlDriver implements ArmadaSqlDriver {
+  private readonly db = new DatabaseSync(":memory:");
 
-  constructor() {
-    this.db = new DatabaseSync(":memory:");
-    for (const stmt of ARMADA_DB_SCHEMA) this.db.exec(stmt);
+  run(sql: string, params: SqlValue[] = []): void {
+    this.db.prepare(sql).run(...params);
   }
 
-  async run(statements: SqlStatement[]): Promise<void> {
-    this.db.exec("BEGIN");
-    try {
-      for (const s of statements) {
-        this.db.prepare(s.sql).run(...(s.params ?? []));
-      }
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+  all(sql: string, params: SqlValue[] = []): SqlRow[] {
+    return this.db.prepare(sql).all(...params) as SqlRow[];
   }
 
-  async query(sql: string, params?: SqlParam[]): Promise<SqlParam[][]> {
-    const rows = this.db.prepare(sql).all(...(params ?? []));
-    return rows.map((row) => Object.values(row as Record<string, SqlParam>));
-  }
-
-  async close(): Promise<void> {
+  close(): void {
     this.db.close();
   }
 }
