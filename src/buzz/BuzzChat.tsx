@@ -60,6 +60,7 @@ import { useEvent } from "@/hooks/useEvent";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shortTimeAgo } from "@/lib/formatTime";
+import { withSignature } from "@/lib/publishOutbox";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
@@ -628,7 +629,9 @@ export function BuzzChat({
     async (event: NostrEvent) => {
       markFailed(event.id);
       try {
-        await republish({ event, relay: relayUrl });
+        // The timeline copy may have come from the event store, which drops
+        // signatures; the outbox holds the signed one.
+        await republish({ event: await withSignature(event), relay: relayUrl });
         markSent(event.id);
       } catch {
         markFailed(event.id);

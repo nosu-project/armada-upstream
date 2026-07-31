@@ -29,7 +29,8 @@ export function PublishOutbox() {
     flushingRef.current = true;
     try {
       const now = Date.now();
-      const due = getQueuedPublishes().filter((item) => !item.nextAttemptAt || item.nextAttemptAt <= now);
+      const queued = await getQueuedPublishes();
+      const due = queued.filter((item) => !item.nextAttemptAt || item.nextAttemptAt <= now);
       for (const item of due) {
         try {
           if (item.relay) {
@@ -37,9 +38,9 @@ export function PublishOutbox() {
           } else {
             await nostr.event(item.event, { signal: AbortSignal.timeout(timeoutRef.current) });
           }
-          removeQueuedPublish(item.id);
+          await removeQueuedPublish(item.id);
         } catch (error) {
-          markQueuedPublishFailure(item.id, error);
+          await markQueuedPublishFailure(item.id, error);
         }
       }
     } finally {

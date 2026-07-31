@@ -91,7 +91,11 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
       // offline-created profiles/settings visible immediately and gives the
       // retry worker a durable copy if the app closes before relays recover.
       void eventStore.then((store) => store.event(event)).catch(() => undefined);
-      queueSignedEvent(event, relay);
+      // Awaited, unlike the store write: the queue and the `removeQueuedPublish`
+      // below are both async now, and a fire-and-forget queue could land AFTER
+      // the removal that a successful publish issues — leaving a delivered
+      // event queued forever.
+      await queueSignedEvent(event, relay);
 
       // Let callers optimistically render the event before the network call.
       onSigned?.(event);
@@ -106,10 +110,14 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         } else {
           await nostr.event(event, { signal: AbortSignal.timeout(timeout) });
         }
-        removeQueuedPublish(event.id);
       } catch (error) {
         throw new PublishQueuedError(event, error);
       }
+
+      // Outside the try: the relay has accepted the event by now, so a failure
+      // to clear its queue entry must not be reported as a queued publish. The
+      // worst case is one redundant re-delivery, which relays dedup by id.
+      await removeQueuedPublish(event.id).catch(() => undefined);
 
       return event;
     },

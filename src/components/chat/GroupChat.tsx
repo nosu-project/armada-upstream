@@ -31,6 +31,7 @@ import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { withSignature } from "@/lib/publishOutbox";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
@@ -423,7 +424,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     async (event: NostrEvent) => {
       markFailed(event.id);
       try {
-        await republish({ event, relay: relayUrl });
+        // The timeline copy may have come from the event store, which drops
+        // signatures; the outbox holds the signed one.
+        await republish({ event: await withSignature(event), relay: relayUrl });
         markSent(event.id);
       } catch {
         markFailed(event.id);
