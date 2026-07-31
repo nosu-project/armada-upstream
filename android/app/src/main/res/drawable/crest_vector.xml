@@ -21,8 +21,20 @@
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="96dp"
     android:height="96dp"
-    android:viewportWidth="128"
-    android:viewportHeight="128">
+    android:viewportWidth="192"
+    android:viewportHeight="192">
+
+    <!-- The Android 12+ SplashScreen API masks windowSplashScreenAnimatedIcon
+         to a circle ~2/3 the icon canvas. The mark is authored in a 128x128
+         box that it nearly fills (the sail's tip and the bottom wave sit at the
+         frame edge), so this outer group insets it 32 on every side into a 192
+         viewport: the mark's ~120dp bounding circle then fits inside the ~128dp
+         visible circle instead of being cropped. All child coordinates/pivots
+         stay in the original 128 space. -->
+    <group
+        android:name="markGroup"
+        android:translateX="32"
+        android:translateY="32">
 
     <!-- Three cyan wave lines. Each sweeps open from x=64, the mark's
          centerline, which is also every line's own center. -->
@@ -83,4 +95,5 @@
         android:pathData="M76.84,79.165 c-0.15,0 -0.31,-0.05 -0.44,-0.15 l-12.41,-9.65 -12.41,9.65 c-0.31,0.24 -0.76,0.19 -1,-0.13 a0.706,0.706 0 0 1 0.13,-1 l12.85,-9.99 c0.26,-0.2 0.62,-0.2 0.88,0 l12.85,9.99 a0.715,0.715 0 0 1 -0.43,1.28 z"
         android:fillColor="#F84D96"
         android:fillAlpha="0" />
+    </group>
 </vector>
