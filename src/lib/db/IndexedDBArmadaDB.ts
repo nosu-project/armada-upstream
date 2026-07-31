@@ -1,0 +1,168 @@
+/**
+ * The IndexedDB adapter for {@link ArmadaDB} — the web/Electron backend.
+ *
+ * Each tenant is its own IndexedDB database wrapping Nostrify's `NIndexedDB`
+ * (a strfry-derived query planner: id / tag / pubkey+kind index cascade,
+ * batched writes, replaceable supersession, NIP-09 on write). Rumors are
+ * stored as events with an empty `sig`, which is stripped again on read —
+ * the field is never exposed and never trusted.
+ *
+ * One database per tenant, rather than one shared database with a tenant
+ * column, because IndexedDB has no cheap way to prefix every index: scoping
+ * would mean rebuilding the planner around composite keys. Separate databases
+ * get isolation for free, and a tenant can be dropped with a single
+ * `deleteDatabase`.
+ */
+import { NIndexedDB } from "@nostrify/indexeddb";
+import { openDB } from "idb";
+
+import { defaultIndexTags } from "./types";
+
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { DBSchema, IDBPDatabase } from "idb";
+import type { NostrRumor } from "@/lib/nostrRumor";
+import type { ArmadaDB, ArmadaDBOpts, ArmadaKV, NRumorStore } from "./types";
+
+/** Strip the placeholder signature `NIndexedDB` round-trips. */
+function toRumor(event: NostrEvent): NostrRumor {
+  const { sig: _sig, ...rumor } = event;
+  return rumor;
+}
+
+/** Present a rumor as an event for `NIndexedDB`, which types `sig` required. */
+function toEvent(rumor: NostrRumor): NostrEvent {
+  return { ...rumor, sig: "" };
+}
+
+class IndexedDBRumorStore implements NRumorStore {
+  private readonly store: NIndexedDB;
+
+  constructor(name: string, indexTags: (rumor: NostrRumor) => string[][]) {
+    this.store = new NIndexedDB(name, { indexTags: (event) => indexTags(event) });
+  }
+
+  async query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> {
+    const events = await this.store.query(filters, opts);
+    return events.map(toRumor);
+  }
+
+  event(event: NostrRumor, opts?: { signal?: AbortSignal }): Promise<void> {
+    return this.store.event(toEvent(event), opts);
+  }
+
+  async count(
+    filters: NostrFilter[],
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ count: number; approximate: boolean }> {
+    const { count, approximate } = await this.store.count(filters, opts);
+    return { count, approximate: approximate ?? false };
+  }
+
+  remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
+    return this.store.remove(filters, opts);
+  }
+
+  close(): Promise<void> {
+    return this.store.close();
+  }
+
+  [Symbol.toStringTag] = "IndexedDBRumorStore";
+}
+
+interface KVSchema extends DBSchema {
+  kv: { key: string; value: unknown };
+}
+
+/**
+ * KV over its own single-object-store database. Values are stored natively
+ * (structured clone), so a JSON round-trip is never paid.
+ *
+ * Every operation degrades to a no-op when IndexedDB is unavailable (iOS
+ * Lockdown Mode, some private-browsing contexts), matching `NIndexedDB`.
+ */
+class IndexedDBKV implements ArmadaKV {
+  private readonly db: Promise<IDBPDatabase<KVSchema> | null>;
+
+  constructor(name: string) {
+    this.db = IndexedDBKV.open(name);
+  }
+
+  private static async open(name: string): Promise<IDBPDatabase<KVSchema> | null> {
+    if (typeof indexedDB === "undefined") return null;
+    try {
+      return await openDB<KVSchema>(name, 1, {
+        upgrade(db) {
+          db.createObjectStore("kv");
+        },
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async get<T>(key: string): Promise<T | undefined> {
+    const db = await this.db;
+    if (!db) return undefined;
+    try {
+      return (await db.get("kv", key)) as T | undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async set<T>(key: string, value: T): Promise<void> {
+    const db = await this.db;
+    if (!db) return;
+    // `undefined` is out of contract (it has no JSON form); normalize to null
+    // so both adapters agree instead of one storing a hole.
+    await db.put("kv", value === undefined ? null : value, key);
+  }
+
+  async close(): Promise<void> {
+    (await this.db)?.close();
+  }
+}
+
+export class IndexedDBArmadaDB implements ArmadaDB {
+  private readonly stores = new Map<string, IndexedDBRumorStore>();
+  private readonly indexTags: (rumor: NostrRumor) => string[][];
+  readonly kv: IndexedDBKV;
+
+  /**
+   * @param name Prefix for the IndexedDB databases this instance owns:
+   *   `${name}:kv` and one `${name}:t:${tenantId}` per tenant.
+   */
+  constructor(
+    private readonly name: string,
+    opts: ArmadaDBOpts = {},
+  ) {
+    this.indexTags = opts.indexTags ?? defaultIndexTags;
+    this.kv = new IndexedDBKV(`${name}:kv`);
+  }
+
+  tenant(id: string): NRumorStore {
+    let store = this.stores.get(id);
+    if (!store) {
+      store = new IndexedDBRumorStore(IndexedDBArmadaDB.databaseName(this.name, id), this.indexTags);
+      this.stores.set(id, store);
+    }
+    return store;
+  }
+
+  /**
+   * The IndexedDB database backing a tenant. Exposed so a purge can delete
+   * tenant databases without opening them.
+   */
+  static databaseName(name: string, tenantId: string): string {
+    return `${name}:t:${tenantId}`;
+  }
+
+  /** Close every connection this instance opened. */
+  async close(): Promise<void> {
+    const stores = [...this.stores.values()];
+    this.stores.clear();
+    await Promise.all([...stores.map((s) => s.close()), this.kv.close()]);
+  }
+
+  [Symbol.toStringTag] = "IndexedDBArmadaDB";
+}
