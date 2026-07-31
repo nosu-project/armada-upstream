@@ -18,13 +18,11 @@ import type { ArmadaDB } from "./types";
 export const ARMADA_DB_NAME = "armada";
 
 /**
- * Tenants whose id is a fixed string, named here so the logout purge can
- * delete their databases on Firefox — which has no `indexedDB.databases()` to
- * enumerate with, and so cannot discover a tenant it was never told about.
+ * Tenants whose id is a fixed string, so call sites share one spelling.
  *
- * Tenants with a DYNAMIC id (per community, per account) can't be listed and
- * are therefore purged only where enumeration exists. Migrating such a store
- * needs a durable tenant registry first.
+ * The purge doesn't depend on this list — it reads the adapter's durable
+ * tenant registry, which covers dynamic ids too — but naming them costs
+ * nothing and keeps them deletable if the registry itself is unreadable.
  */
 export const ARMADA_TENANTS = {
   /** Concord V2 wraps parked by the native service for WebView decryption. */
@@ -42,21 +40,29 @@ export function getArmadaDB(): ArmadaDB {
 /**
  * Close and delete every database the app-wide instance owns (logout purge).
  *
- * Tenant database names are dynamic (`armada:t:<id>`), so the general purge
- * can only find them where `indexedDB.databases()` exists — Firefox has no
- * such call, and gets {@link ARMADA_TENANTS} instead. Deleting them here also
- * means the connections are CLOSED first: `deleteDatabase` against an open
- * connection is blocked, not applied.
+ * Tenant database names are dynamic (`armada:t:<id>`), and Firefox has no
+ * `indexedDB.databases()` to enumerate them with — so the adapter keeps a
+ * durable registry of every tenant it has opened, and that is what this
+ * deletes. Enumeration, where it exists, is a second pass on top. Deleting
+ * here also means the connections are CLOSED first: `deleteDatabase` against
+ * an open connection is blocked, not applied.
  */
 export async function purgeArmadaDB(): Promise<void> {
-  await instance?.close().catch(() => undefined);
-  instance = undefined;
+  if (typeof indexedDB === "undefined") {
+    instance = undefined;
+    return;
+  }
 
-  if (typeof indexedDB === "undefined") return;
+  // Opened if it wasn't already: the registry is on disk, so a logout in a
+  // session that never touched the database still has tenants to delete.
+  const db = (instance ??= new IndexedDBArmadaDB(ARMADA_DB_NAME));
+  const tenantIds = await db.tenantIds().catch(() => [] as string[]);
+  await db.close().catch(() => undefined);
+  instance = undefined;
 
   const names = new Set<string>([
     `${ARMADA_DB_NAME}:kv`,
-    ...Object.values(ARMADA_TENANTS).map((id) =>
+    ...[...tenantIds, ...Object.values(ARMADA_TENANTS)].map((id) =>
       IndexedDBArmadaDB.databaseName(ARMADA_DB_NAME, id)
     ),
   ]);
@@ -68,7 +74,7 @@ export async function purgeArmadaDB(): Promise<void> {
       }
     }
   } catch {
-    // best-effort — fall through with just the KV database
+    // best-effort — the registry above is the primary source
   }
 
   await Promise.all(
