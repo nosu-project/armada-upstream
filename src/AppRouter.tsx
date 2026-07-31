@@ -28,7 +28,6 @@ import { lazyWithReload } from "@/lib/chunkReload";
 // Each import is wrapped with lazyWithReload so a stale-chunk fetch after a
 // deploy (an open tab referencing pruned hashes) triggers a one-time reload to
 // a consistent build instead of surfacing as a crash.
-const AboutPage = lazy(lazyWithReload(() => import("@/pages/AboutPage").then((m) => ({ default: m.AboutPage }))));
 const ConcordPage = lazy(lazyWithReload(() => import("@/concord-v1/pages/ConcordPage").then((m) => ({ default: m.ConcordPage }))));
 const ConcordV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page }))));
 const DiscoverPage = lazy(lazyWithReload(() => import("@/pages/DiscoverPage").then((m) => ({ default: m.DiscoverPage }))));
@@ -280,7 +279,6 @@ export function AppRouter() {
                 dotted HMAC token, never an naddr), dispatched by InviteRoute. */}
             <Route path="/invite" element={<InvitePage />} />
             <Route path="/invite/:naddr" element={<InviteRoute />} />
-            <Route path="/about" element={<AboutPage />} />
             <Route path="/changelog" element={<ChangelogPage />} />
             <Route path="/privacy" element={<PrivacyPolicyPage />} />
             <Route path="/terms" element={<TermsPage />} />

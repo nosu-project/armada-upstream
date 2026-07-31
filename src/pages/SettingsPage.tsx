@@ -1,11 +1,9 @@
 import {
   AlertTriangle,
-  Anchor,
   ArrowLeft,
   Bell,
   ChevronDown,
   Compass,
-  ChevronRight,
   Download,
   FileText,
   Image,
@@ -85,7 +83,6 @@ type SectionId =
   | "wallet"
   | "advanced"
   | "install"
-  | "about"
   | "danger";
 
 interface NavItem {
@@ -316,7 +313,6 @@ export function SettingsPage() {
     if (canInstall) {
       appItems.push({ id: "install", title: "Install app", icon: Download, inline: true });
     }
-    appItems.push({ id: "about", title: "About", icon: Anchor, inline: true });
     const groups: NavGroup[] = [
       { heading: "User settings", items: userItems },
       { heading: "App settings", items: appItems },
@@ -645,16 +641,6 @@ export function SettingsPage() {
             onClick={() => install()}
           >
             <Download className="size-4 text-muted-foreground" />
-          </SettingsRow>
-        );
-      case "about":
-        return (
-          <SettingsRow
-            label="How Armada works"
-            description="The two ways to talk, and what stays private."
-            onClick={() => navigate("/about")}
-          >
-            <ChevronRight className="size-4 text-muted-foreground" />
           </SettingsRow>
         );
       case "danger":

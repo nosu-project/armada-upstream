@@ -1,10 +1,10 @@
-import { useMemo, useState, type ReactNode } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { Navigate, useNavigate } from "react-router-dom";
 import { Check, Copy, Eye, EyeOff } from "lucide-react";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 
-import { ArmadaCrest, ArmadaCrestKeyframes, ArmadaIdentity, ArmadaKey } from "@/components/brand/ArmadaCrest";
-import { BrandMark } from "@/components/brand/BrandMark";
+import { ArmadaIdentity, ArmadaKey } from "@/components/brand/ArmadaCrest";
+import { LandingPage } from "@/components/landing/LandingPage";
 import LoginDialog from "@/components/auth/LoginDialog";
 import { AddBody } from "@/components/dialogs/AddDialog";
 import { WizardShell } from "@/components/onboarding/WizardShell";
@@ -80,6 +80,10 @@ export function WelcomePage() {
   const navigate = useNavigate();
   const login = useLoginActions();
   const [joinOpen, setJoinOpen] = useState(false);
+  // The landing's scroll container. The ASCII sea reads its scrollTop inside
+  // its own animation frame, so this is passed down rather than lifted into
+  // state — scrolling the landing must not re-render this page.
+  const landingScrollRef = useRef<HTMLElement>(null);
   // Wizard position. null = not in the wizard (landing when signed out; the
   // in-layout create/join step when signed in with no server).
   const [step, setStep] = useState<WizardStep | null>(null);
@@ -379,42 +383,22 @@ export function WelcomePage() {
   }
 
   // ── Signed-out landing ──────────────────────────────────────────────────
+  // The marketing surface lives in {@link LandingPage}: a scrolling deck over
+  // the ASCII sea. `<main>` is the scroll container, and the sea reads its
+  // scrollTop directly, so the ref has to be handed down.
   return (
-    <main className="flex-1 min-w-0 overflow-y-auto">
-      <div className="mx-auto flex min-h-full max-w-xl flex-col items-center justify-center gap-12 px-6 py-16 safe-area-top safe-area-bottom">
-        <div className="flex flex-col items-center gap-8">
-          <ArmadaCrest size={150} />
-          <BrandMark />
-        </div>
+    <main ref={landingScrollRef} className="relative flex-1 min-w-0 overflow-y-auto">
+      <LandingPage onJoin={() => setJoinOpen(true)} scrollRef={landingScrollRef} />
 
-        <div className="w-full max-w-sm">
-          <Button
-            size="lg"
-            onClick={() => setJoinOpen(true)}
-            className="h-12 w-full clip-corner-lg text-base font-medium"
-          >
-            Join
-          </Button>
-          <Link
-            to="/about"
-            className="mt-4 block text-center text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            How does Armada work?
-          </Link>
-        </div>
-
-        <LoginDialog
-          isOpen={joinOpen}
-          onClose={() => setJoinOpen(false)}
-          onLogin={() => setJoinOpen(false)}
-          onSignupClick={() => {
-            setJoinOpen(false);
-            setStep("generate");
-          }}
-        />
-      </div>
-
-      <ArmadaCrestKeyframes />
+      <LoginDialog
+        isOpen={joinOpen}
+        onClose={() => setJoinOpen(false)}
+        onLogin={() => setJoinOpen(false)}
+        onSignupClick={() => {
+          setJoinOpen(false);
+          setStep("generate");
+        }}
+      />
     </main>
   );
 }
