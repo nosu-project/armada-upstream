@@ -60,6 +60,23 @@ export interface ArmadaKV {
   /** The value, or `undefined` if the key was never set. */
   get<T>(key: string): Promise<T | undefined>;
   set<T>(key: string, value: T): Promise<void>;
+  /** Forget a key. Deleting one that was never set is a no-op, not an error. */
+  delete(key: string): Promise<void>;
+  /**
+   * Every key currently set, restricted to those starting with `prefix` when
+   * one is given (an empty prefix means all of them).
+   *
+   * The order is each adapter's native string collation — IndexedDB compares
+   * UTF-16 code units, SQLite's `BINARY` compares UTF-8 bytes — which agree on
+   * everything except astral-plane characters. Sort yourself if you need an
+   * order both adapters promise.
+   *
+   * This is how a subsystem gets enumeration out of a store that is otherwise
+   * addressed by exact key: give related entries a shared key prefix and scan
+   * it. Both adapters push the prefix down to a range scan, so the cost is in
+   * what matches, not in what's stored.
+   */
+  keys(prefix?: string): Promise<string[]>;
 }
 
 export interface ArmadaDB {
@@ -93,4 +110,22 @@ export function defaultIndexTags(rumor: NostrRumor): string[][] {
   return rumor.tags.filter(
     ([name, value]) => !!name && name.length <= 20 && !!value && value.length < 200,
   );
+}
+
+/**
+ * The exclusive upper bound of the key range starting with `prefix`, or
+ * `undefined` when there isn't one — an empty prefix, or a prefix ending in the
+ * maximal code unit, both of which are open-ended.
+ *
+ * Shared by the adapters' {@link ArmadaKV.keys} so they narrow their scans the
+ * same way. It is only ever a NARROWING: the two engines' collations disagree
+ * about astral-plane characters, so a range can admit a key that doesn't
+ * actually start with the prefix, and both adapters filter the result rather
+ * than trust the bound.
+ */
+export function prefixUpperBound(prefix: string): string | undefined {
+  if (!prefix) return undefined;
+  const last = prefix.charCodeAt(prefix.length - 1);
+  if (last === 0xffff) return undefined;
+  return prefix.slice(0, -1) + String.fromCharCode(last + 1);
 }

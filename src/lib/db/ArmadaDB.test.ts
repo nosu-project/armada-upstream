@@ -356,5 +356,66 @@ describe.each(backends)("$name", ({ create }) => {
       expect(await db.kv.get("t")).toBe("kv value");
       expect((await db.tenant("t").query([{}])).length).toBe(1);
     });
+
+    it("deletes a key", async () => {
+      await db.kv.set("gone", "here");
+      await db.kv.delete("gone");
+
+      expect(await db.kv.get("gone")).toBeUndefined();
+    });
+
+    it("deleting a key that was never set is a no-op", async () => {
+      await expect(db.kv.delete("never")).resolves.toBeUndefined();
+    });
+
+    it("lists every key when no prefix is given", async () => {
+      await db.kv.set("a", 1);
+      await db.kv.set("b", 2);
+
+      expect((await db.kv.keys()).sort()).toEqual(["a", "b"]);
+      expect((await db.kv.keys("")).sort()).toEqual(["a", "b"]);
+    });
+
+    it("lists only the keys under a prefix", async () => {
+      await db.kv.set("p:1", 1);
+      await db.kv.set("p:2", 2);
+      await db.kv.set("q:1", 3);
+
+      expect((await db.kv.keys("p:")).sort()).toEqual(["p:1", "p:2"]);
+    });
+
+    it("treats the prefix as a boundary, not a substring match", async () => {
+      // `p` is a prefix of `pp`, so a bound that ran to the wrong successor
+      // would drag `pp:1` in. It must not.
+      await db.kv.set("p:1", 1);
+      await db.kv.set("pp:1", 2);
+      await db.kv.set("op:1", 3);
+
+      expect(await db.kv.keys("p:")).toEqual(["p:1"]);
+      expect(await db.kv.keys("pp")).toEqual(["pp:1"]);
+    });
+
+    it("lists no keys under an unmatched prefix", async () => {
+      await db.kv.set("a:1", 1);
+
+      expect(await db.kv.keys("z:")).toEqual([]);
+    });
+
+    it("stops listing a key once it is deleted", async () => {
+      await db.kv.set("d:1", 1);
+      await db.kv.set("d:2", 2);
+      await db.kv.delete("d:1");
+
+      expect(await db.kv.keys("d:")).toEqual(["d:2"]);
+    });
+
+    it("scans a prefix ending in the maximal code unit", async () => {
+      // \uffff has no successor code unit, so the range degrades to open-ended
+      // and the prefix filter is the only thing keeping `x` out.
+      await db.kv.set("k\uffff:1", 1);
+      await db.kv.set("x", 2);
+
+      expect(await db.kv.keys("k\uffff")).toEqual(["k\uffff:1"]);
+    });
   });
 });

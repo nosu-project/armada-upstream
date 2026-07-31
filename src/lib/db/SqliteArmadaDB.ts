@@ -54,7 +54,7 @@ import { NKinds } from "@nostrify/nostrify";
 import { ParsedFilter } from "./ParsedFilter";
 import { batch, memberOf, where } from "./sql";
 import { ARMADA_DB_FTS_SCHEMA, ARMADA_DB_SCHEMA } from "./sqliteSchema";
-import { defaultIndexTags } from "./types";
+import { defaultIndexTags, prefixUpperBound } from "./types";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -1154,6 +1154,32 @@ class SqliteKV implements ArmadaKV {
         [key, json],
       )
     );
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.db.ready;
+    await this.db.transaction(() => this.db.run(`DELETE FROM kv WHERE key = ?`, [key]));
+  }
+
+  async keys(prefix?: string): Promise<string[]> {
+    await this.db.ready;
+
+    let rows: SqlRow[];
+    if (!prefix) {
+      rows = await this.db.all(`SELECT key FROM kv ORDER BY key`);
+    } else {
+      const upper = prefixUpperBound(prefix);
+      rows = upper === undefined
+        ? await this.db.all(`SELECT key FROM kv WHERE key >= ? ORDER BY key`, [prefix])
+        : await this.db.all(
+          `SELECT key FROM kv WHERE key >= ? AND key < ? ORDER BY key`,
+          [prefix, upper],
+        );
+    }
+
+    const keys = rows.map((row) => String(row.key));
+    // The range is a scan hint, not the contract — see `prefixUpperBound`.
+    return prefix ? keys.filter((key) => key.startsWith(prefix)) : keys;
   }
 }
 

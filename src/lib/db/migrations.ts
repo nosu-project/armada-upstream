@@ -27,6 +27,7 @@ import { migrateLegacyRumors } from "@/concord-v2/lib/rumorMigration";
 import { LEGACY_RUMOR_DB_NAME } from "@/concord-v2/lib/rumorStore";
 import { migrateLegacyDms } from "@/lib/nip17/dm17Store";
 import { migrateLegacyDecryptCache } from "@/lib/decryptCacheMigration";
+import { LEGACY_PROVENANCE_DB_NAME, migrateLegacyProvenance } from "@/lib/relayProvenance";
 
 import { getArmadaDB } from "./armadaDB";
 import { LEGACY_EVENT_DB_NAME, migrateLegacyEvents } from "./eventStoreMigration";
@@ -82,6 +83,13 @@ export const MIGRATIONS: Migration[] = [
     legacy: [LEGACY_EVENT_DB_NAME],
     perAccount: false,
     run: () => migrateLegacyEvents(),
+  },
+  {
+    id: "provenance",
+    label: "Moving relay provenance",
+    legacy: [LEGACY_PROVENANCE_DB_NAME],
+    perAccount: false,
+    run: () => migrateLegacyProvenance(),
   },
   {
     // Nothing to copy: the parked-wrap store moved to the `c2park` tenant, and
