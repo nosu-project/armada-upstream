@@ -1,4 +1,4 @@
-import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Shield, ShieldOff, Smile, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 
 import { memo, useMemo, useState } from "react";
 
@@ -33,7 +33,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { DisplayName } from "@/components/DisplayName";
+import { Input } from "@/components/ui/input";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useMemberSearch } from "@/hooks/useMemberSearch";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { requestMention } from "@/hooks/useMentionBus";
@@ -558,6 +560,8 @@ export function MemberList({
   onAddMembers,
   className,
 }: MemberListProps) {
+  const [query, setQuery] = useState("");
+
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
   // Stable per-member arrays: `[memberRoles[pubkey]]` inline would hand the
   // memoized MemberRow a fresh `roles` identity every render.
@@ -584,10 +588,37 @@ export function MemberList({
     const bo = isOwnerRole(b) ? 0 : 1;
     return ao - bo || a.pubkey.localeCompare(b.pubkey);
   });
-  const visibleAdmins = sortedAdmins.filter((a) => !sectioned.has(a.pubkey));
-  const regulars = members
-    .filter((pubkey) => !adminMap.has(pubkey) && !sectioned.has(pubkey))
+  const allRegulars = members
+    .filter((pubkey) => !adminMap.has(pubkey))
     .sort((a, b) => a.localeCompare(b));
+
+  // One pass over the whole roster: every section filters against the same
+  // match set, so a name only has to be resolved once.
+  const roster = useMemo(
+    () => [...admins.map((a) => a.pubkey), ...allRegulars],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [admins.map((a) => a.pubkey).join(","), allRegulars.join(",")],
+  );
+  const matched = useMemberSearch(roster, query);
+  const searching = matched !== null;
+
+  // A member hoisted into a role section renders only there; when a query is
+  // active every section is also narrowed to the matches.
+  const visibleAdmins = sortedAdmins.filter(
+    (a) => !sectioned.has(a.pubkey) && (!matched || matched.has(a.pubkey)),
+  );
+  const regulars = allRegulars.filter(
+    (pubkey) => !sectioned.has(pubkey) && (!matched || matched.has(pubkey)),
+  );
+  const visibleSections = (roleSections ?? []).map((section) => ({
+    ...section,
+    members: matched ? section.members.filter((pubkey) => matched.has(pubkey)) : section.members,
+  }));
+  const noMatches =
+    searching &&
+    visibleAdmins.length === 0 &&
+    regulars.length === 0 &&
+    visibleSections.every((section) => section.members.length === 0);
 
   return (
     <aside
@@ -595,7 +626,8 @@ export function MemberList({
         // Floating roster: detached by a margin, cut-corner card, same recessed
         // chrome shade as the rail/console/header. No border. Matches the thread
         // panel: full-screen card overlay on mobile, in-flow card on desktop.
-        "flex flex-col flex-1 min-w-0 overflow-y-auto",
+        // The search stays pinned; only the roster below it scrolls.
+        "flex flex-col flex-1 min-w-0 overflow-hidden",
         "m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome",
         className,
       )}
@@ -620,6 +652,48 @@ export function MemberList({
           </span>
           Add members
         </button>
+      )}
+
+      <div className="shrink-0 px-1 pb-1.5 pt-1">
+        <div className="flex items-center gap-1.5 rounded-md bg-background/60 px-2 focus-within:ring-1 focus-within:ring-ring">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <Input
+            // Deliberately not type="search": WebKit/Blink render their own
+            // cancel button for it, which would sit beside ours.
+            type="text"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            // Escape clears the filter first; a second press falls through to
+            // whatever owns the panel (e.g. closing the mobile overlay).
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && query) {
+                event.stopPropagation();
+                setQuery("");
+              }
+            }}
+            placeholder="Search members"
+            aria-label="Search members"
+            className="h-8 border-0 bg-transparent px-0 text-sm shadow-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+          />
+          {query && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Clear member search"
+              className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={() => setQuery("")}
+            >
+              <X className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto">
+      {noMatches && (
+        <p className="px-2 py-3 text-xs text-muted-foreground">
+          No members match “{query.trim()}”.
+        </p>
       )}
       {visibleAdmins.length > 0 && (
         <>
@@ -655,49 +729,57 @@ export function MemberList({
         </>
       )}
 
-      {(roleSections ?? []).map((section) => (
-        <div key={section.id}>
-          <h3
-            className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-            style={section.color ? { color: roleTint(section.color) } : undefined}
-          >
-            {section.name} · {section.members.length}
-          </h3>
-          {section.members.map((pubkey) => (
-            <MemberRow
-              key={pubkey}
-              pubkey={pubkey}
-              roles={adminMap.get(pubkey)}
-              presence={presence?.[pubkey]}
-              canModerate={canModerate}
-              viewerIsAdmin={viewerIsAdmin}
-              currentUserPubkey={currentUserPubkey}
-              onRemove={onRemove}
-              onSetRole={onSetRole}
-              onKick={onKick}
-              onBan={onBan}
-              banLabel={banLabel}
-              onUnban={onUnban}
-              isBanned={bannedPubkeys?.has(pubkey)}
-              onEditProfile={onEditProfile}
-              onMessage={onMessage}
-              roleCatalog={roleCatalog}
-              customRoleIds={memberRoleIds?.[pubkey]}
-              canEditRoles={canEditMemberRoles?.(pubkey)}
-              onToggleRole={onToggleRole}
-              isRoleToggling={isRoleToggling}
-            />
-          ))}
-        </div>
-      ))}
+      {visibleSections.map((section) =>
+        !searching || section.members.length > 0 ? (
+          <div key={section.id}>
+            <h3
+              className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+              style={section.color ? { color: roleTint(section.color) } : undefined}
+            >
+              {section.name} · {section.members.length}
+            </h3>
+            {section.members.map((pubkey) => (
+              <MemberRow
+                key={pubkey}
+                pubkey={pubkey}
+                roles={adminMap.get(pubkey)}
+                presence={presence?.[pubkey]}
+                canModerate={canModerate}
+                viewerIsAdmin={viewerIsAdmin}
+                currentUserPubkey={currentUserPubkey}
+                onRemove={onRemove}
+                onSetRole={onSetRole}
+                onKick={onKick}
+                onBan={onBan}
+                banLabel={banLabel}
+                onUnban={onUnban}
+                isBanned={bannedPubkeys?.has(pubkey)}
+                onEditProfile={onEditProfile}
+                onMessage={onMessage}
+                roleCatalog={roleCatalog}
+                customRoleIds={memberRoleIds?.[pubkey]}
+                canEditRoles={canEditMemberRoles?.(pubkey)}
+                onToggleRole={onToggleRole}
+                isRoleToggling={isRoleToggling}
+              />
+            ))}
+          </div>
+        ) : null,
+      )}
 
-      <h3 className="px-2 py-1 mt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Members · {regulars.length}
-      </h3>
+      {/* While searching, an empty Members section is just "no hits here" —
+          the no-matches line above already says so. */}
+      {(!searching || regulars.length > 0) && (
+        <h3 className="px-2 py-1 mt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Members · {regulars.length}
+        </h3>
+      )}
       {regulars.length === 0 ? (
-        <p className="px-2 py-2 text-xs text-muted-foreground">
-          No visible members. The relay may hide the member list.
-        </p>
+        !searching && (
+          <p className="px-2 py-2 text-xs text-muted-foreground">
+            No visible members. The relay may hide the member list.
+          </p>
+        )
       ) : (
         regulars.map((pubkey) => (
           <MemberRow
@@ -726,6 +808,7 @@ export function MemberList({
           />
         ))
       )}
+      </div>
     </aside>
   );
 }
