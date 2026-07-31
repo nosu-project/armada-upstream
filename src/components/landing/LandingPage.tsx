@@ -212,13 +212,15 @@ export function LandingPage({
               className="group mt-5 flex w-full flex-col items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
               How does Armada work?
-              {/* Not `font-mono`: U+2B9F is outside most monospace faces, so
-                  the UI stack is likelier to have a real glyph. */}
+              {/* U+2193 (↓), not a fancier chevron/triangle-headed arrow: it's
+                  in the WGL4 core set, so Android's default Roboto (and every
+                  other system font) has a real glyph instead of tofu. Kept off
+                  `font-mono` for the same reason — the UI stack is the safest. */}
               <span
                 aria-hidden="true"
-                className="animate-[armada-bob_2.4s_ease-in-out_infinite] text-sm leading-none text-[hsl(var(--accent2)/0.75)] group-hover:text-[hsl(var(--accent2))]"
+                className="animate-[armada-bob_2.4s_ease-in-out_infinite] text-base leading-none text-[hsl(var(--accent2)/0.75)] group-hover:text-[hsl(var(--accent2))]"
               >
-                &#11167;
+                &#8595;
               </span>
             </button>
           </div>
