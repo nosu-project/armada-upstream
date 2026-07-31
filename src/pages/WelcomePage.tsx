@@ -345,7 +345,7 @@ export function WelcomePage() {
           </p>
         </div>
 
-        <ProfileSettings saveLabel="Continue" centerSave onSaved={() => setStep("add")} />
+        <ProfileSettings saveLabel="Continue" centerSave showNip05={false} onSaved={() => setStep("add")} />
 
         <Button
           variant="ghost"
