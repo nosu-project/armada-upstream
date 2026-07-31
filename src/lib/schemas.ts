@@ -82,6 +82,7 @@ export const AppConfigSchema = z.object({
   railOrder: z.array(z.string()).catch([]),
   railLayout: z.array(RailLayoutNodeSchema).catch([]),
   railOpenFolders: z.array(z.string()).catch([]),
+  collapsedChannelCategories: z.record(z.string(), z.array(z.string())).catch({}),
   memberListVisible: z.boolean().optional().catch(undefined),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),

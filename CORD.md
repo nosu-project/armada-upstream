@@ -554,3 +554,97 @@ badge/section tint (low 24 bits, `#rrggbb`).
 Implementation: `client/src/concord-v2/lib/roles.ts` (`Role.display`, written
 only when true), `client/src/components/chat/MemberList.tsx` (the hoisted
 sections).
+
+---
+
+## Channel Categories
+
+Sidebar grouping for Channels. CORD-03 has no notion of it, so a Channel MAY
+carry a display-only member in its metadata:
+
+```jsonc
+{
+  "name": "standup",
+  "private": false,
+  "custom": {
+    "armada.category": { "name": "Team" }
+  }
+}
+```
+
+`name` is bounded by the same 64 bytes as every other name (CORD-02 §6); a
+blank, over-long or malformed value reads as *uncategorized* rather than
+invalidating the Channel. Editors MUST round-trip the member they don't
+understand (CORD-02 §6), so a client unaware of this convention loses the
+arrangement but never a Channel.
+
+### A category is not an entity
+
+There is no category object, and no id. A category exists exactly as long as
+some Channel names it, which is the whole design:
+
+- **Nothing to keep in sync.** No list to create, delete or garbage-collect,
+  and no way to hold a category pointing at a Channel that no longer exists (or
+  the reverse). Filing a Channel is one ordinary version-chained Channel edition
+  requiring MANAGE_CHANNELS — the same authority as renaming it.
+- **No shared list to clobber.** Two moderators filing different Channels at
+  once collide on individual Channels rather than on one arrangement, mirroring
+  how CORD-04 keeps Role order per-entity.
+- **An empty category is unrepresentable.** It cannot outlive its last Channel.
+
+The cost is that renaming a category means re-filing each Channel in it, and
+that two Channels can disagree about the spelling. Clients SHOULD group
+case-insensitively and label the group from the first Channel in display order,
+so `Voice` and `voice` render as one heading rather than two.
+
+### Order
+
+Categories are ordered by their first Channel, and Channels keep their order
+within a category — so a community that orders its Channels orders its
+categories by the same act, with no second arrangement to maintain and no way
+for the two to contradict each other. Uncategorized Channels render first,
+ungrouped: a community that files nothing sees the flat list it had before.
+
+The client has no Channel ordering of its own yet: `channelsView` sorts
+alphabetically by name, so today a category sits where its alphabetically first
+member puts it — a category holding `#aaa` heads the list however its heading is
+spelled, and renaming or adding one Channel can move a whole heading. Category
+order becomes controllable when Channel order does; nothing here changes when
+it lands.
+
+### Visibility
+
+A member sees a category exactly when they can see at least one Channel in it.
+This needs no rule of its own: a member is shown only the Channels whose keys
+they hold (CORD-03) — `channelsView` omits a Private Channel whose key the
+member does not hold rather than teasing it — so a category all of whose
+Channels are gated away has nothing left to derive it from and does not render.
+The heading therefore never advertises Channels the viewer cannot read.
+
+The honest bound: Channel METADATA lives on the Control Plane and is readable
+by every member, gated content or not. Hiding the heading is a display courtesy
+of the same kind as omitting the Channel itself; a client reading the fold
+directly still sees that the category exists. **Categories organize a sidebar;
+they are not an access control.**
+
+### Implementation
+
+In the Armada client:
+
+- `client/src/concord-v2/lib/channelCategory.ts` — the metadata accessors
+  (`channelCategory` / `withChannelCategory`), the casefolded `categoryKey`,
+  and `groupChannelsByCategory` (the uncategorized run + ordered categories).
+- `client/src/concord-v2/lib/community.ts` — `channelsView` surfaces `category`
+  on each Channel it decides the member can see.
+- `client/src/concord-v2/hooks/useCommunityActions2.ts` — `setChannelCategory`
+  publishes the Channel edition, round-tripping the Channel's other extensions
+  (`armada.git` today) and its `private` flag. It refuses a Channel absent from
+  the Control fold rather than filing it against a default `{name:"",
+  private:false}` metadata, which would blank the name and publish a Private
+  Channel as public.
+- `client/src/concord-v2/pages/ConcordV2Page.tsx` +
+  `client/src/concord-v2/components/ChannelCategoryHeading2.tsx` — the
+  collapsible headings. A collapsed category still shows the active Channel and
+  anything unread, so folding one away never hides a mention. Which headings are
+  folded is per-device state in `AppConfig.collapsedChannelCategories`, keyed by
+  community id then casefolded category name.

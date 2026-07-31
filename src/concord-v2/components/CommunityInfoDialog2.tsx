@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   Check,
+  Folder,
   Hash,
   ImagePlus,
   Loader2,
@@ -12,7 +13,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -24,7 +25,16 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useNostr } from "@nostrify/react";
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
+import { categoryKey } from "@/concord-v2/lib/channelCategory";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
@@ -729,8 +739,18 @@ function ChannelsSection({
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
 }) {
   const channels = useChannels2(community);
-  const { renameChannel, isRenaming, deleteChannel, createChannel, isAddingChannel } =
+  const { renameChannel, isRenaming, setChannelCategory, isFiling, deleteChannel, createChannel, isAddingChannel } =
     useCommunityManagement2(community);
+
+  // Existing category names, in sidebar order, offered when filing a channel
+  // so a moderator picks "Voice" rather than retyping it as "voice".
+  const categoryNames = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const ch of channels) {
+      if (ch.category && !seen.has(categoryKey(ch.category))) seen.set(categoryKey(ch.category), ch.category);
+    }
+    return [...seen.values()];
+  }, [channels]);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
 
@@ -775,11 +795,13 @@ function ChannelsSection({
             key={ch.idHex}
             channel={ch}
             canManage={canManage}
-            disabled={isRenaming}
+            disabled={isRenaming || isFiling}
+            categories={categoryNames}
             onRename={(name) => renameChannel({ channelIdHex: ch.idHex, name })}
             accessRoles={channelRoles?.get(ch.idHex) ?? []}
             onPrivatise={onPrivatiseChannel ? () => onPrivatiseChannel(ch.idHex) : undefined}
             onRotateKey={onRotateChannelKey ? () => onRotateChannelKey(ch.idHex) : undefined}
+            onSetCategory={(category) => setChannelCategory({ channelIdHex: ch.idHex, category })}
             onDelete={
               canManage && channels.length > 1
                 ? async () => {
@@ -842,7 +864,9 @@ function ChannelRow({
   channel,
   canManage,
   disabled,
+  categories,
   onRename,
+  onSetCategory,
   onDelete,
   accessRoles,
   onPrivatise,
@@ -851,7 +875,10 @@ function ChannelRow({
   channel: ChannelV2;
   canManage: boolean;
   disabled: boolean;
+  /** Category names already in use, offered so near-duplicates aren't retyped. */
+  categories: string[];
   onRename: (name: string) => Promise<void>;
+  onSetCategory: (name: string | undefined) => Promise<void>;
   onDelete?: () => void;
   /** The Roles scoped to this channel — who may read it (CORD-03/04 §2). */
   accessRoles?: Array<{ id: string; name: string }>;
@@ -864,6 +891,21 @@ function ChannelRow({
   const [value, setValue] = useState(channel.name);
   const [accessOpen, setAccessOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [naming, setNaming] = useState(false);
+  const [categoryDraft, setCategoryDraft] = useState("");
+
+  const file = async (name: string | undefined) => {
+    try {
+      await onSetCategory(name);
+      toast({ title: name ? `Moved to ${name}` : "Removed from category" });
+    } catch (e) {
+      toast({
+        title: "Couldn't move channel",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    }
+  };
 
   useEffect(() => {
     setValue(channel.name);
@@ -902,7 +944,7 @@ function ChannelRow({
   // Offered on every channel a manager can edit: a private one shows who may
   // read it, a public one offers the conversion that gives it a key.
   const showAccessButton = canManage && Boolean(onPrivatise || (channel.isPrivate && onRotateKey));
-  return (
+  const row = (
     <div className="px-1">
     <div className="flex items-center gap-2">
       <Icon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -934,7 +976,12 @@ function ChannelRow({
         </form>
       ) : (
         <>
-          <span className="flex-1 truncate text-sm">{channel.name}</span>
+          <span className="flex-1 min-w-0 truncate text-sm">
+            {channel.name}
+            {channel.category && (
+              <span className="ml-1.5 text-xs text-muted-foreground">{channel.category}</span>
+            )}
+          </span>
           {showAccessButton && (
             <Button
               type="button"
@@ -947,6 +994,46 @@ function ChannelRow({
             >
               <Shield className="size-3.5" />
             </Button>
+          )}
+          {canManage && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="size-7 shrink-0 text-muted-foreground"
+                  aria-label={`Category for ${channel.name}`}
+                  disabled={disabled}
+                >
+                  <Folder className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="text-xs text-muted-foreground">Category</DropdownMenuLabel>
+                {categories.map((name) => (
+                  <DropdownMenuItem
+                    key={name}
+                    onSelect={() => void file(name)}
+                    disabled={categoryKey(name) === categoryKey(channel.category ?? "")}
+                  >
+                    <Folder className="size-3.5" />
+                    <span className="truncate">{name}</span>
+                  </DropdownMenuItem>
+                ))}
+                {categories.length > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuItem onSelect={(e) => { e.preventDefault(); setNaming(true); }}>
+                  <Plus className="size-3.5" />
+                  New category…
+                </DropdownMenuItem>
+                {channel.category && (
+                  <DropdownMenuItem onSelect={() => void file(undefined)}>
+                    <X className="size-3.5" />
+                    Remove from category
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           {canManage && (
             <Button
@@ -1053,6 +1140,36 @@ function ChannelRow({
         </div>
       </div>
     )}
+    </div>
+  );
+
+  if (!naming) return row;
+  return (
+    <div className="space-y-1">
+      {row}
+      <form
+        className="flex items-center gap-1 px-1"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const trimmed = categoryDraft.trim();
+          setNaming(false);
+          setCategoryDraft("");
+          if (trimmed) void file(trimmed);
+        }}
+      >
+        <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+        <Input
+          value={categoryDraft}
+          onChange={(e) => setCategoryDraft(e.target.value)}
+          placeholder="Category name"
+          autoFocus
+          className="h-7 text-sm"
+          onBlur={() => { setNaming(false); setCategoryDraft(""); }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") { setNaming(false); setCategoryDraft(""); }
+          }}
+        />
+      </form>
     </div>
   );
 }

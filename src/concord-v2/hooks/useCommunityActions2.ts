@@ -37,11 +37,14 @@ import { KIND_INVITE_BUNDLE, VSK_INVITE_REVOKED } from "@/concord-v2/lib/kinds";
 import {
   capRelays,
   channelGitRepositoryAttachments,
+  NAME_MAX_BYTES,
+  utf8Len,
   withChannelGitRepositoryAttachments,
   type ChannelMetadata,
   type CommunityV2,
   type PrivateChannelKey,
 } from "@/concord-v2/lib/types";
+import { withChannelCategory } from "@/concord-v2/lib/channelCategory";
 import { controlGroups, foldControlState, openControlWraps } from "@/concord-v2/lib/control";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 
@@ -962,6 +965,56 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     },
   });
 
+  /**
+   * File a channel into a category (or out of one with `undefined`).
+   *
+   * A category is only ever the set of channels naming it, so there is nothing
+   * else to publish: this one edition both creates a category and, when it was
+   * the last member, removes it.
+   *
+   * Refuses a channel the Control fold hasn't produced yet. `channelsView`
+   * renders bundle-held private channels ahead of their fold (a fresh join),
+   * and filing one of those against a default `{name:"", private:false}` would
+   * publish an edition that blanks the name and turns a Private Channel public.
+   * Every other metadata edit here (`publiciseChannel`, `attachRepository`)
+   * takes the same refusal.
+   */
+  const setChannelCategory = useMutation<void, Error, { channelIdHex: string; category: string | undefined }>({
+    mutationFn: async ({ channelIdHex, category }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      const trimmed = category?.trim();
+      if (trimmed && utf8Len(trimmed) > NAME_MAX_BYTES) {
+        throw new Error(`Category names are limited to ${NAME_MAX_BYTES} bytes.`);
+      }
+      const def = folded?.channels.get(channelIdHex);
+      if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
+      if (def.deleted) throw new Error("This channel was deleted.");
+      const ownerHex = folded?.ownerHex ?? community.owner;
+      if (!isAuthorized(folded?.roster ?? { roles: [], grants: [] }, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS)) {
+        throw new Error("Filing a channel needs the Manage-channels permission.");
+      }
+      const head = folded?.heads.get(channelIdHex);
+      await publishEdition2(
+        nostr,
+        community,
+        user.signer,
+        buildChannelEdition(
+          hex32(channelIdHex),
+          // Round-trips everything the category doesn't touch — the `private`
+          // flag and any sibling extension (CORD-02 §6).
+          withChannelCategory(def.metadata, trimmed),
+          {
+            actorPubkey: user.pubkey,
+            version: head ? head.version + 1n : 1n,
+            prevHash: head?.hash,
+            authority: citationFor(community, folded, user.pubkey),
+          },
+        ),
+      );
+      invalidateControl2(queryClient, community.idHex);
+    },
+  });
+
   const deleteChannel = useMutation<void, Error, { channelIdHex: string }>({
     mutationFn: async ({ channelIdHex }) => {
       if (!user || !community) throw new Error("Not ready.");
@@ -1058,6 +1111,8 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     createChannel: createChannel.mutateAsync,
     isAddingChannel: createChannel.isPending,
     renameChannel: renameChannel.mutateAsync,
+    setChannelCategory: setChannelCategory.mutateAsync,
+    isFiling: setChannelCategory.isPending,
     isRenaming: renameChannel.isPending,
     privatiseChannel: privatiseChannel.mutateAsync,
     publiciseChannel: publiciseChannel.mutateAsync,

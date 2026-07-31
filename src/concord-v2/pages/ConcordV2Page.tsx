@@ -11,6 +11,8 @@ import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
 import { ProfileRelayHints } from "@/components/ProfileRelayHints";
+import { ChannelCategoryHeading2 } from "@/concord-v2/components/ChannelCategoryHeading2";
+import { groupChannelsByCategory } from "@/concord-v2/lib/channelCategory";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
@@ -774,6 +776,38 @@ export function ConcordV2Page() {
   // resolves within a frame or two, so the skeleton would otherwise flash for a
   // nanosecond — which reads as a glitch. Delay it so fast loads show nothing.
   const showChannelSkeleton = useDelayedFlag(!community || channels.length === 0);
+
+  // Categories are derived from the channels the member can actually see —
+  // `channelsView` has already dropped any whose key they don't hold — so a
+  // category all of whose channels are gated away simply isn't here. No
+  // separate visibility rule to keep in step (see channelCategory.ts).
+  const { uncategorized: uncategorizedChannels, categories: channelCategories } = useMemo(
+    () => groupChannelsByCategory(channels, (c) => c.category),
+    [channels],
+  );
+
+  const collapsedCategories = useMemo(
+    () => new Set(config.collapsedChannelCategories[community?.idHex ?? ""] ?? []),
+    [config.collapsedChannelCategories, community?.idHex],
+  );
+
+  const toggleCategory = useCallback(
+    (key: string) => {
+      const idHex = community?.idHex;
+      if (!idHex) return;
+      updateConfig((current) => {
+        const collapsed = new Set(current.collapsedChannelCategories[idHex] ?? []);
+        if (collapsed.has(key)) collapsed.delete(key);
+        else collapsed.add(key);
+        const next = { ...current.collapsedChannelCategories };
+        // Don't leave an empty array behind for every community ever visited.
+        if (collapsed.size > 0) next[idHex] = [...collapsed];
+        else delete next[idHex];
+        return { ...current, collapsedChannelCategories: next };
+      });
+    },
+    [community?.idHex, updateConfig],
+  );
 
   // Per-channel unread badges, computed purely from the local rumor cache
   // (which the wire keeps fed for every channel of every community).
@@ -2021,6 +2055,29 @@ export function ConcordV2Page() {
     }
   };
 
+  /** Curried on the sidebar's navigate callback, which differs per instance. */
+  const renderChannelRow = (onNavigate?: () => void) => (c: ChannelV2) => {
+    if (!community) return null;
+    const inCall = Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex);
+    return (
+      <ChannelRow2
+        key={c.idHex}
+        community={community}
+        channel={c}
+        active={Boolean(view === "channel" && channel && channel.idHex === c.idHex)}
+        inCall={inCall}
+        speaking={inCall ? speakingPubkeys : undefined}
+        muted={inCall ? mutedPubkeys : undefined}
+        unread={unreadByChannel[c.idHex]}
+        onSelect={() => {
+          selectChannel(c.idHex);
+          onNavigate?.();
+        }}
+        onJoinVoice={handleJoinVoice}
+      />
+    );
+  };
+
   const channelList = (onNavigate?: () => void, className?: string) => (
     <ChannelSidebarView
       className={className ?? (onNavigate ? "flex-1" : "hidden sidebar:flex")}
@@ -2280,26 +2337,35 @@ export function ConcordV2Page() {
           </div>
         ) : null
       ) : (
-        channels.map((c) => {
-          const inCall = Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex);
-          return (
-            <ChannelRow2
-              key={c.idHex}
-              community={community}
-              channel={c}
-              active={Boolean(view === "channel" && channel && channel.idHex === c.idHex)}
-              inCall={inCall}
-              speaking={inCall ? speakingPubkeys : undefined}
-              muted={inCall ? mutedPubkeys : undefined}
-              unread={unreadByChannel[c.idHex]}
-              onSelect={() => {
-                selectChannel(c.idHex);
-                onNavigate?.();
-              }}
-              onJoinVoice={handleJoinVoice}
-            />
-          );
-        })
+        <>
+          {uncategorizedChannels.map(renderChannelRow(onNavigate))}
+          {channelCategories.map((group) => {
+            const collapsed = collapsedCategories.has(group.key);
+            // A collapsed category still surfaces the channel you are in and
+            // anything unread — folding a heading away is for tidiness, and
+            // must never make the active channel vanish or silence a mention.
+            const shown = collapsed
+              ? group.channels.filter(
+                  (c) =>
+                    (view === "channel" && channel?.idHex === c.idHex) || unreadByChannel[c.idHex],
+                )
+              : group.channels;
+            return (
+              // `space-y-0.5` mirrors the sidebar's own row spacing: these rows
+              // are nested a level deeper than the uncategorized ones, so
+              // without it a filed channel sits flush against its neighbour.
+              <div key={group.key} className="space-y-0.5">
+                <ChannelCategoryHeading2
+                  name={group.name}
+                  collapsed={collapsed}
+                  onToggle={() => toggleCategory(group.key)}
+                  hasUnread={group.channels.some((c) => unreadByChannel[c.idHex])}
+                />
+                {shown.map(renderChannelRow(onNavigate))}
+              </div>
+            );
+          })}
+        </>
       )}
     </ChannelSidebarView>
   );

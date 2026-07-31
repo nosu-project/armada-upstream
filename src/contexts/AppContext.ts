@@ -81,6 +81,19 @@ export interface AppConfig {
    */
   railOpenFolders: string[];
   /**
+   * Collapsed channel categories, `communityIdHex` → casefolded category keys
+   * (see `channelCategory.ts`). Per-device UI state, like `railOpenFolders`:
+   * which headings you have folded away is a property of the screen you are
+   * sitting at, not of the account.
+   *
+   * Keyed by category NAME rather than an id because categories have no ids —
+   * they exist only as the set of channels naming them. Renaming a category
+   * therefore un-collapses it, which is the right failure: a heading that
+   * reappears is noticed and re-folded, whereas one that stays folded under a
+   * name nobody recognizes is not.
+   */
+  collapsedChannelCategories: Record<string, string[]>;
+  /**
    * Whether the desktop member-list side panel is shown in community views.
    * Tri-state: `undefined` means "use the per-device default" (shown on real
    * desktop, hidden on touch, matching `useIsTouch()`); once the user hides or
@@ -394,6 +407,7 @@ export const defaultConfig: AppConfig = {
   railOrder: [],
   railLayout: [],
   railOpenFolders: [],
+  collapsedChannelCategories: {},
   appRelays: [...APP_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
   useAppRelays: true,

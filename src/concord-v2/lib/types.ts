@@ -291,6 +291,8 @@ export interface ChannelV2 {
   idHex: string;
   name: string;
   isPrivate: boolean;
+  /** Sidebar grouping (channelCategory.ts); undefined renders ungrouped. */
+  category?: string;
   /** The current epoch's call coordinates — every Channel is callable (CORD-07 §1). */
   voice: VoiceKeys;
   /**
