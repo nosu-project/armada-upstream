@@ -1,5 +1,6 @@
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { DECRYPT_CACHE_DB_NAME } from "@/lib/AppSigner";
+import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
 import { purgeEventStore } from "@/lib/sqlite/eventStore";
 
@@ -25,6 +26,10 @@ async function purgeIndexedDB(): Promise<void> {
       "armada-concord-invites",
       "armada-dm17-rumors",
       "armada-relay-provenance",
+      // ArmadaDB's KV database. Its tenant databases (`armada:t:<id>`) have
+      // dynamic names, so `purgeArmadaDB` deletes those — it can enumerate
+      // and, more importantly, close them first.
+      `${ARMADA_DB_NAME}:kv`,
       DECRYPT_CACHE_DB_NAME,
     ];
     const dbs =
@@ -86,5 +91,8 @@ export async function purgeClientStorage(): Promise<void> {
   clearRenderedPlaintext();
   resetDecryptConsent();
   purgeLocalStorage();
+  // ArmadaDB first: `deleteDatabase` against an open connection is blocked,
+  // not applied, so its databases have to be closed before the sweep runs.
+  await purgeArmadaDB();
   await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeEventStore()]);
 }

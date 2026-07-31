@@ -8,6 +8,7 @@ import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-
 
 import { ensureAndroidBackListener } from "@/hooks/useAndroidBack";
 import { AppProvider } from "@/components/AppProvider";
+import { ArmadaDBProvider } from "@/components/ArmadaDBProvider";
 import { ControlPlaneSync } from "@/components/ControlPlaneSync";
 import { DeepLinkWarmup } from "@/components/DeepLinkWarmup";
 import { DesktopBadge } from "@/components/DesktopBadge";
@@ -57,36 +58,38 @@ if (Capacitor.isNativePlatform()) {
 export function App() {
   return (
     <AppProvider storageKey="armada:app-config">
-      <PlausibleProvider>
-        <QueryClientProvider client={queryClient}>
-          <NostrLoginProvider storageKey="armada:login" storage={secureStorage}>
-            <NostrProvider>
-              <WalletProvider>
-                <TooltipProvider>
-                  <ReadStateProvider>
-                    <WireSync />
-                    <NostrSync />
-                    <PublishOutbox />
-                    <SyncGate />
-                    <DeepLinkWarmup />
-                    <DesktopBadge />
-                    <NativeNotifications />
-                    <NativeReadMarkerSync />
-                    <NativeReadDismiss />
-                    <WebPushNotifications />
-                    <ControlPlaneSync />
-                    <ScreenSharePicker />
-                    <LoginSetup />
-                    <MeshProvider>
-                      <AppRouter />
-                    </MeshProvider>
-                  </ReadStateProvider>
-                </TooltipProvider>
-              </WalletProvider>
-            </NostrProvider>
-          </NostrLoginProvider>
-        </QueryClientProvider>
-      </PlausibleProvider>
+      <ArmadaDBProvider>
+        <PlausibleProvider>
+          <QueryClientProvider client={queryClient}>
+            <NostrLoginProvider storageKey="armada:login" storage={secureStorage}>
+              <NostrProvider>
+                <WalletProvider>
+                  <TooltipProvider>
+                    <ReadStateProvider>
+                      <WireSync />
+                      <NostrSync />
+                      <PublishOutbox />
+                      <SyncGate />
+                      <DeepLinkWarmup />
+                      <DesktopBadge />
+                      <NativeNotifications />
+                      <NativeReadMarkerSync />
+                      <NativeReadDismiss />
+                      <WebPushNotifications />
+                      <ControlPlaneSync />
+                      <ScreenSharePicker />
+                      <LoginSetup />
+                      <MeshProvider>
+                        <AppRouter />
+                      </MeshProvider>
+                    </ReadStateProvider>
+                  </TooltipProvider>
+                </WalletProvider>
+              </NostrProvider>
+            </NostrLoginProvider>
+          </QueryClientProvider>
+        </PlausibleProvider>
+      </ArmadaDBProvider>
     </AppProvider>
   );
 }
