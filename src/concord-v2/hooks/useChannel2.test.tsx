@@ -44,6 +44,7 @@ import {
 } from "@/concord-v2/lib/rumorStore";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 import { useChannelTimeline2, useChatModeration2 } from "./useChannel2";
 
@@ -342,7 +343,7 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
     // interruption: the decode round produces nothing (aborted signal), so
     // NOTHING may be acknowledged — the wraps must stay parked.
     const pks = channel.streams.map((s) => s.group.pk);
-    const parked: NostrEvent[] = [];
+    const parked: NostrRumor[] = [];
     await waitFor(async () => {
       parked.length = 0;
       parked.push(...(await peekPendingWraps(pks)));

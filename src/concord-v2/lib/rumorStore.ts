@@ -40,6 +40,9 @@ import { KIND_WEBXDC } from "@/concord-v2/lib/kinds";
 import { resolveMs, type OpenedEvent } from "@/concord-v2/lib/stream";
 import { messageMatchesMedia, type SearchMedia2 } from "@/concord-v2/lib/search";
 import { emitWireScopes } from "@/wire/bus";
+import { ARMADA_TENANTS, getArmadaDB } from "@/lib/db/armadaDB";
+import type { NRumorStore } from "@/lib/db/types";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import type { OpenedChat } from "@/concord-v2/lib/chat";
 
 const DB_NAME = "armada-concord-rumors";
@@ -456,19 +459,21 @@ export function writeRumors(opened: OpenedChat[]): void {
 // `armada-events`, yet a notification's message survives a cold launch. Wraps
 // are indexed only by their author (the stream address) so a plane can read
 // exactly its own.
+//
+// Lives in its own ArmadaDB tenant. Wraps are stored WITHOUT their signature:
+// a wrap is signed by a throwaway ephemeral key, `openWrap` never checks that
+// signature, and everything authenticating the message is the seal sealed
+// inside it — so there is nothing here to preserve.
 
-const PENDING_DB_NAME = "armada-concord-pending";
+const PENDING_TENANT = ARMADA_TENANTS.c2Park;
 
 /** Parked wraps older than this are pruned (key never arrived / dead plane). */
 const PENDING_MAX_AGE_SECS = 14 * 24 * 3600;
 
-let pending: NIndexedDB | undefined;
-
-function pendingStore(): NIndexedDB {
-  // Default indexTags already covers single-letter `p`; we query by `authors`
-  // (the wrap's stream pubkey), which needs no tag index.
-  if (!pending) pending = new NIndexedDB(PENDING_DB_NAME);
-  return pending;
+function pendingStore(): NRumorStore {
+  // Queried by `authors` (the wrap's stream pubkey) only, so no tag index
+  // matters here.
+  return getArmadaDB().tenant(PENDING_TENANT);
 }
 
 /**
@@ -511,7 +516,7 @@ export function parkPendingWraps(wraps: NostrEvent[]): void {
  * every {@link PENDING_PRUNE_INTERVAL_MS} — age-prunes permanently-undecodable
  * stragglers (a readwrite scan kept off the per-peek path).
  */
-export async function peekPendingWraps(streamPks: string[]): Promise<NostrEvent[]> {
+export async function peekPendingWraps(streamPks: string[]): Promise<NostrRumor[]> {
   if (streamPks.length === 0) return [];
   if (pendingKnownEmpty === true) return [];
   const s = pendingStore();

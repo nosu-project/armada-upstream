@@ -53,6 +53,7 @@ import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { beginSyncTask } from "@/lib/syncActivity";
 import { logSync, sinceMs } from "@/lib/syncLog";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -207,7 +208,7 @@ export function mergeOpened(...sets: OpenedEvent[][]): OpenedEvent[] {
 }
 
 /** Decrypt raw plane wraps under the held groups into opened events. */
-export function openPlaneWraps(wraps: NostrEvent[], groups: GroupKey[]): OpenedEvent[] {
+export function openPlaneWraps(wraps: NostrRumor[], groups: GroupKey[]): OpenedEvent[] {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
   const out: OpenedEvent[] = [];
   for (const wrap of wraps) {
@@ -233,7 +234,7 @@ const PLANE_DECODE_SLICE_MS = 5;
  * seals) — all synchronous noble crypto — so decoding a whole plane in one
  * unbroken loop freezes the UI for the duration on a phone.
  */
-export async function openPlaneWrapsChunked(wraps: NostrEvent[], groups: GroupKey[]): Promise<OpenedEvent[]> {
+export async function openPlaneWrapsChunked(wraps: NostrRumor[], groups: GroupKey[]): Promise<OpenedEvent[]> {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
   const out: OpenedEvent[] = [];
   let sliceStart = performance.now();

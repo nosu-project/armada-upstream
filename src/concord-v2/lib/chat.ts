@@ -12,7 +12,7 @@
  * store costs near-nothing after the first pass.
  */
 
-import type { NostrEvent } from "nostr-tools/pure";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 import { KIND_CALENDAR_DATE, KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
@@ -43,7 +43,7 @@ export function forgetChatSkips(): void {
   skippedNoKey.clear();
 }
 
-function openOne(wrap: NostrEvent, channel: ChannelV2): OpenedChat | null {
+function openOne(wrap: NostrRumor, channel: ChannelV2): OpenedChat | null {
   const memoKey = `${wrap.id}|${channel.idHex}`;
   const cached = decodeMemo.get(memoKey);
   if (cached !== undefined) return cached;
@@ -86,7 +86,7 @@ const DECODE_SLICE_MS = 5;
  * silent, as in Vector's read path.
  */
 export async function openChatBatch(
-  wraps: NostrEvent[],
+  wraps: NostrRumor[],
   channel: ChannelV2,
   opts?: { signal?: AbortSignal },
 ): Promise<OpenedChat[]> {

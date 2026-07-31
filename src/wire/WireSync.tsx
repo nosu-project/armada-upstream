@@ -38,6 +38,7 @@ import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Floor for a relay's `since` when we have no cursor yet (fresh device): a
@@ -669,9 +670,9 @@ export function WireSync() {
           const acked: string[] = [];
 
           // Chat wraps → rumor store, grouped per owning channel.
-          const byChannel = new Map<ChannelV2, NostrEvent[]>();
+          const byChannel = new Map<ChannelV2, NostrRumor[]>();
           // Control wraps → opened-event store, grouped per owning community.
-          const ctlByCommunity = new Map<string, { groups: GroupKey[]; wraps: NostrEvent[] }>();
+          const ctlByCommunity = new Map<string, { groups: GroupKey[]; wraps: NostrRumor[] }>();
           for (const wrap of parked) {
             const channel = spec.v2ByPk.get(wrap.pubkey);
             if (channel) {

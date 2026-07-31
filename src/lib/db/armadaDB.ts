@@ -17,6 +17,20 @@ import type { ArmadaDB } from "./types";
 /** Prefix for the IndexedDB databases the app-wide instance owns. */
 export const ARMADA_DB_NAME = "armada";
 
+/**
+ * Tenants whose id is a fixed string, named here so the logout purge can
+ * delete their databases on Firefox — which has no `indexedDB.databases()` to
+ * enumerate with, and so cannot discover a tenant it was never told about.
+ *
+ * Tenants with a DYNAMIC id (per community, per account) can't be listed and
+ * are therefore purged only where enumeration exists. Migrating such a store
+ * needs a durable tenant registry first.
+ */
+export const ARMADA_TENANTS = {
+  /** Concord V2 wraps parked by the native service for WebView decryption. */
+  c2Park: "c2park",
+} as const;
+
 let instance: IndexedDBArmadaDB | undefined;
 
 /** The app-wide database, opened on first use. */
@@ -30,9 +44,9 @@ export function getArmadaDB(): ArmadaDB {
  *
  * Tenant database names are dynamic (`armada:t:<id>`), so the general purge
  * can only find them where `indexedDB.databases()` exists — Firefox has no
- * such call and falls back to a fixed list. Deleting them here also means the
- * connections are CLOSED first: `deleteDatabase` against an open connection is
- * blocked, not applied.
+ * such call, and gets {@link ARMADA_TENANTS} instead. Deleting them here also
+ * means the connections are CLOSED first: `deleteDatabase` against an open
+ * connection is blocked, not applied.
  */
 export async function purgeArmadaDB(): Promise<void> {
   await instance?.close().catch(() => undefined);
@@ -40,7 +54,12 @@ export async function purgeArmadaDB(): Promise<void> {
 
   if (typeof indexedDB === "undefined") return;
 
-  const names = new Set<string>([`${ARMADA_DB_NAME}:kv`]);
+  const names = new Set<string>([
+    `${ARMADA_DB_NAME}:kv`,
+    ...Object.values(ARMADA_TENANTS).map((id) =>
+      IndexedDBArmadaDB.databaseName(ARMADA_DB_NAME, id)
+    ),
+  ]);
 
   try {
     if (typeof indexedDB.databases === "function") {
