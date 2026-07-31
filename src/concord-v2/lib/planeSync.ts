@@ -325,7 +325,7 @@ export function _configureSweepPagingForTests(cfg: Partial<typeof paging>): void
  * and the folds re-read the store, so a cold launch can skip re-decrypting
  * the whole plane. A session-only memo made every relaunch re-pay the full
  * NIP-44+Schnorr pass over thousands of control wraps — the main-thread stall
- * on startup. Wiped with the rest of `armada-concord-cache` on logout; an
+ * on startup. Wiped with the rest of the fold cache on logout; an
  * evicted or lost id merely re-decrypts once.
  */
 const seenCompleteWraps = new Set<string>();

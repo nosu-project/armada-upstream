@@ -414,7 +414,7 @@ export async function updateDm17Cursor(self: string, patch: Partial<Dm17Cursor>)
 // with only a session-scoped seen set every cold launch re-decrypted up to a
 // full inbox page — two NIP-44 opens per wrap — before the UI settled. An
 // Android WebView kill makes every resume a cold start, so the memo must be
-// durable. Wiped with `armada-concord-cache` on logout; a lost or evicted id
+// durable. Wiped with the rest of the fold cache on logout; a lost or evicted id
 // merely re-decrypts once.
 
 const seenWrapsKey = (self: string) => `dm17-seen:${self}`;

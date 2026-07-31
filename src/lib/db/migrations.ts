@@ -28,6 +28,7 @@ import { LEGACY_RUMOR_DB_NAME } from "@/concord-v2/lib/rumorStore";
 import { migrateLegacyDms } from "@/lib/nip17/dm17Store";
 import { migrateLegacyDecryptCache } from "@/lib/decryptCacheMigration";
 import { LEGACY_PROVENANCE_DB_NAME, migrateLegacyProvenance } from "@/lib/relayProvenance";
+import { LEGACY_FOLDED_DB_NAME, migrateLegacyFolded } from "@/lib/foldedCache";
 
 import { getArmadaDB } from "./armadaDB";
 import { LEGACY_EVENT_DB_NAME, migrateLegacyEvents } from "./eventStoreMigration";
@@ -49,6 +50,17 @@ export interface Migration {
 }
 
 export const MIGRATIONS: Migration[] = [
+  {
+    // First, because the `c2-rumors` drain reads folds to attribute rumors to
+    // communities. That ordering isn't load-bearing — `readFolded` awaits this
+    // drain itself, so a lazy trigger outside the gate is safe too — but the
+    // dependency is real and the list may as well show it.
+    id: "folded",
+    label: "Moving cached community data",
+    legacy: [LEGACY_FOLDED_DB_NAME],
+    perAccount: false,
+    run: () => migrateLegacyFolded(),
+  },
   {
     id: "decrypt-cache",
     label: "Moving the decrypt cache",

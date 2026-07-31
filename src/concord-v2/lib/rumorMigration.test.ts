@@ -93,7 +93,7 @@ function legacyRow(id: string, tags: string[][], kind = KIND_MESSAGE): NostrEven
 }
 
 /**
- * Seed the caches the drain reads (both live in `armada-concord-cache`) and the
+ * Seed the caches the drain reads (both live in the fold cache) and the
  * legacy store, then run the drain against a fresh module graph so its
  * per-viewer memo doesn't leak between tests.
  */

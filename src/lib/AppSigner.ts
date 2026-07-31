@@ -24,8 +24,8 @@ import type { BtcSigner } from "@/lib/bitcoin-signers";
 //
 // Trust note: this persists DECRYPTED plaintext at rest, in exchange for a
 // dramatically better remote-signer experience. That is a deliberate tradeoff
-// (and matches `armada-concord-cache`, which already persists decrypted
-// community data). Anyone with disk/profile access can read it; it is wiped on
+// (and matches the fold cache, which already persists decrypted community
+// data). Anyone with disk/profile access can read it; it is wiped on
 // final logout by `purgeClientStorage`.
 //
 // The IndexedDB connection lives on the instance (opened lazily, kept open for

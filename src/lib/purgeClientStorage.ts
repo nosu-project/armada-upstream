@@ -33,9 +33,6 @@ async function purgeIndexedDB(): Promise<void> {
     // `indexedDB.databases()` is unsupported on Firefox; fall back to the
     // known Armada database names so we still wipe the bulk of the data.
     const known = [
-      "armada-events",
-      "armada-concord-cache",
-      "armada-relay-provenance",
       // ArmadaDB's KV database. Its tenant databases (`armada:t:<id>`) have
       // dynamic names, so `purgeArmadaDB` deletes those — it can enumerate
       // and, more importantly, close them first.
