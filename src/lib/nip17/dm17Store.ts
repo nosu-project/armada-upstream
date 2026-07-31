@@ -52,7 +52,16 @@ import { emitWireScopes } from "@/wire/bus";
 /** The global pre-tenant database, drained into the tenants on first use. */
 const LEGACY_DB_NAME = "armada-dm17-rumors";
 
-/** Provenance tags injected onto the stored event (never part of the rumor). */
+/**
+ * Provenance tags injected onto the stored event (never part of the rumor).
+ *
+ * Only `peer` is written: it is the conversation index every read filters on,
+ * and there is nowhere else to put it. `wrap` is read but no longer written —
+ * nothing consumes an {@link OpenedDm}'s `wrapId` once it comes back out of the
+ * store (the transport dedupes on wraps it holds in hand), so injecting it only
+ * rewrote a rumor's tags for no reader. Kept in {@link PROVENANCE} so rows
+ * written before that still strip it.
+ */
 const TAG_PEER = "peer";
 const TAG_WRAP = "wrap";
 const PROVENANCE = new Set([TAG_PEER, TAG_WRAP]);
@@ -161,7 +170,7 @@ export function dm17ToStored(opened: OpenedDm): NostrRumor {
     id: opened.rumorId,
     kind: opened.kind,
     content: opened.content,
-    tags: [...opened.tags, [TAG_PEER, opened.peer], [TAG_WRAP, opened.wrapId]],
+    tags: [...opened.tags, [TAG_PEER, opened.peer]],
     created_at: opened.createdAt,
     pubkey: opened.author,
   };

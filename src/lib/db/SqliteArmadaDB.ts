@@ -216,8 +216,14 @@ export class SqliteArmadaDB implements ArmadaDB {
   putRumor(tenant: string, rumor: NostrRumor): Promise<void> {
     if (NKinds.ephemeral(rumor.kind)) return Promise.resolve();
 
+    // `NostrRumor` has no `sig`, but a caller can hand over a full `NostrEvent`
+    // structurally, and the row is `JSON.stringify(rumor)` — so a signature
+    // would be persisted verbatim here while the IndexedDB adapter drops it.
+    // Strip it so the two agree that the store holds rumors, nothing else.
+    const { sig: _sig, ...stored } = rumor as NostrRumor & { sig?: string };
+
     return new Promise<void>((resolve, reject) => {
-      this.pending.push({ tenant, rumor, resolve, reject });
+      this.pending.push({ tenant, rumor: stored, resolve, reject });
       this.scheduleFlush();
     });
   }

@@ -56,8 +56,15 @@ function opened(opts: { author: string; peer: string; kind?: number; content?: s
 describe("dm17Store", () => {
   it("round-trips the stored codec, stripping provenance tags", () => {
     const o = opened({ author: alice, peer: alice, content: "codec" });
-    const back = storedToDm17(dm17ToStored(o));
-    expect(back).toEqual(o);
+    const stored = dm17ToStored(o);
+    // `peer` is the conversation index and the ONLY tag injected; the rumor's
+    // own tags are otherwise stored exactly as its author wrote them.
+    expect(stored.tags).toEqual([...o.tags, ["peer", alice]]);
+
+    const back = storedToDm17(stored);
+    // The wrap id is transport provenance with no reader on this side of the
+    // store, so it is not persisted and comes back empty.
+    expect(back).toEqual({ ...o, wrapId: "" });
   });
 
   it("writes rumors and reads a thread scoped by peer", async () => {

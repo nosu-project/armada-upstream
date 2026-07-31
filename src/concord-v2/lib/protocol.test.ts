@@ -190,7 +190,7 @@ describe("Concord V2 end to end", () => {
     };
     const control1 = currentControlGroup(rotatedOwner);
     for (const head of ownerFold.headEditions.values()) {
-      wire.push(rewrapSeal(head.opened.seal, control1));
+      wire.push(rewrapSeal(head.opened.seal!, control1));
     }
 
     // ── 7. Alice receives the rotation: authorized, continuous, carries her blob.

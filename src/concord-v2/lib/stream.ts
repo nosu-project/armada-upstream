@@ -177,9 +177,17 @@ export interface OpenedEvent {
   streamPk: string;
   /** Which seal form carried the rumor (20013 encrypted / 20014 plaintext). */
   sealKind: number;
-  /** The verified seal event itself — needed to re-wrap plaintext seals (compaction). */
-  seal: NostrEvent;
+  /**
+   * The verified seal event itself — needed to re-wrap plaintext seals
+   * (compaction). Present on anything {@link openWrap} produced; ABSENT on
+   * events read back from the opened-event store, which keeps seals out of the
+   * stored rumor (`readStoredSeal` fetches them).
+   */
+  seal?: NostrEvent;
 }
+
+/** An {@link OpenedEvent} straight off a wrap, whose seal is always present. */
+export type OpenedWireEvent = OpenedEvent & { seal: NostrEvent };
 
 /**
  * Reconstruct the ms timestamp. A missing tag means offset 0; a malformed tag
@@ -220,7 +228,7 @@ export function resolveMs(createdAtSecs: number, tags: string[][]): number {
  *      claimed one) and that the rumor's pubkey equals the seal's signer (or a
  *      keyholder could re-seal another member's rumor under their own name).
  */
-export function openWrap(wrap: NostrRumor, stream: GroupKey): OpenedEvent {
+export function openWrap(wrap: NostrRumor, stream: GroupKey): OpenedWireEvent {
   if (wrap.kind !== KIND_WRAP && wrap.kind !== KIND_WRAP_EPHEMERAL) {
     throw new StreamError("bad-wrap-kind", `not a stream wrap: kind ${wrap.kind}`);
   }

@@ -5,10 +5,10 @@
  * persist those wraps anywhere: caching ciphertext is wasteful (every cold read
  * would re-run two NIP-44 opens and a Schnorr verify per event) and pollutes the
  * shared `armada-events` store. Instead we decrypt once on ingest and persist
- * the recovered {@link OpenedEvent} here — a signature-less event (`sig: ""`)
- * carrying its real kind / author / content / tags plus the plane provenance
- * (stream address, seal) folded into tags — so every plane reads back with an
- * ordinary Nostr filter and no decrypt:
+ * the recovered {@link OpenedEvent} here — a rumor carrying its real kind /
+ * author / content / tags, plus the few provenance values a plane must be able
+ * to FILTER on — so every plane reads back with an ordinary Nostr filter and no
+ * decrypt:
  *
  *   chat:     store.query([{ kinds: [9], "#channel": [channelIdHex], limit }])
  *   control:  store.query([{ "#stream": [controlPk1, controlPk2, …] }])
@@ -35,9 +35,14 @@
  * rotates stream keys WITHOUT moving the tenant. One database per joined
  * community, not one per epoch.
  *
- * The full signed SEAL is preserved (tag `seal`) because the Control Plane
- * re-wraps plaintext seals verbatim across epochs during a compaction (CORD-02
- * §5 / `rewrapSeal`). Chat never re-wraps, but stores the seal uniformly.
+ * The full signed SEAL is preserved too — the Control Plane re-wraps plaintext
+ * seals verbatim across epochs during a compaction (CORD-02 §5 / `rewrapSeal`)
+ * — but in ArmadaDB's KV, keyed by rumor id ({@link readStoredSeal}), NOT in
+ * the stored rumor. A seal is not part of the rumor its author signed, and
+ * serializing one into a tag value rewrites the very bytes the rumor id
+ * commits to. It is also bulky and read by exactly one call site, so a
+ * separate key is what it should have been: the row stays the rumor, and the
+ * seal is fetched when a compaction actually needs it.
  *
  * Deletes ARE deletes: a kind-5 rumor written here triggers the store's NIP-09
  * pass, which physically removes the targeted event it authored. Moderator
@@ -53,7 +58,7 @@
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
-import { KIND_WEBXDC } from "@/concord-v2/lib/kinds";
+import { KIND_SEAL_PLAINTEXT, KIND_WEBXDC } from "@/concord-v2/lib/kinds";
 import { resolveMs, type OpenedEvent } from "@/concord-v2/lib/stream";
 import { messageMatchesMedia, type SearchMedia2 } from "@/concord-v2/lib/search";
 import { emitWireScopes } from "@/wire/bus";
@@ -96,12 +101,18 @@ export function communityTenant(communityIdHex: string): string {
 // ── Codec: OpenedEvent ⇆ stored event ─────────────────────────────────────────
 //
 // The stored event IS the recovered rumor (its `id` is the rumor id, the NIP-01
-// hash), `pubkey` the REAL author (so NIP-09 self-delete matches), `sig: ""`.
+// hash), `pubkey` the REAL author (so NIP-09 self-delete matches), and no `sig`.
 // Plane provenance rides synthetic tags: `stream` (the wrap author / stream
-// address — how non-chat planes query), `wrap`, `sealkind`, and `seal` (the full
-// signed seal JSON, so a control compaction can re-wrap it). These are stripped
-// on read so the reconstructed OpenedEvent's `tags` are byte-identical to the
-// rumor's.
+// address — how non-chat planes query), `wrap`, and `sealkind`. These are
+// stripped on read so the reconstructed OpenedEvent's `tags` are byte-identical
+// to the rumor's.
+//
+// Only values that must be FILTERED on (`stream`) or read synchronously off a
+// store row (`wrap`, `sealkind` — the fold, the guestbook and the dissolution
+// check all branch on them per row) are injected here. The seal, which needs
+// neither, lives in KV instead; see {@link readStoredSeal}. `seal` stays in
+// {@link PROVENANCE} so rows written before that move — including everything
+// copied verbatim out of the legacy database — still strip it on read.
 
 /** Synthetic provenance tag names, stripped when reconstructing the rumor. */
 const PROVENANCE = new Set([TAG_STREAM, TAG_SEAL, TAG_WRAP, TAG_SEALKIND]);
@@ -113,7 +124,6 @@ export function openedToStored(opened: OpenedEvent): NostrRumor {
     [TAG_STREAM, opened.streamPk],
     [TAG_WRAP, opened.wrapId],
     [TAG_SEALKIND, String(opened.sealKind)],
-    [TAG_SEAL, JSON.stringify(opened.seal)],
   ];
   return {
     id: opened.rumorId,
@@ -132,13 +142,15 @@ export function storedToOpened(ev: NostrRumor): OpenedEvent {
   const wrapId = ev.tags.find((t) => t[0] === TAG_WRAP)?.[1] ?? "";
   const sealKind = Number(ev.tags.find((t) => t[0] === TAG_SEALKIND)?.[1] ?? "0");
 
-  // The seal is the full signed NIP-59 seal JSON — bulky, and needed ONLY by
-  // the control-plane rekey path (rewrapSeal), NEVER to render a chat message.
-  // Parsing it eagerly here cost a JSON.parse of a large blob for every message
-  // in the window on every channel read (a real switch-latency tax on Android).
-  // Defer it behind a lazy, memoized getter so the parse happens only if a
-  // consumer actually reads `.seal`.
-  const sealRaw = ev.tags.find((t) => t[0] === TAG_SEAL)?.[1] ?? "{}";
+  // Rows written before the seal moved to KV still carry it as a tag; keep
+  // reading those so a compaction on an un-rewritten store still finds them.
+  // The blob is bulky and needed ONLY by the control-plane rekey path
+  // (rewrapSeal), NEVER to render a chat message, so the parse stays behind a
+  // lazy memoized getter — eagerly parsing it cost a JSON.parse per message in
+  // the window on every channel read (a real switch-latency tax on Android).
+  // Rows written since carry no tag and read back `undefined`; the seal comes
+  // from {@link readStoredSeal}.
+  const sealRaw = ev.tags.find((t) => t[0] === TAG_SEAL)?.[1];
   let sealParsed: NostrEvent | undefined;
 
   return {
@@ -152,12 +164,13 @@ export function storedToOpened(ev: NostrRumor): OpenedEvent {
     wrapId,
     streamPk,
     sealKind,
-    get seal(): NostrEvent {
+    get seal(): NostrEvent | undefined {
+      if (sealRaw === undefined) return undefined;
       if (sealParsed === undefined) {
         try {
           sealParsed = JSON.parse(sealRaw) as NostrEvent;
         } catch {
-          sealParsed = {} as NostrEvent;
+          return undefined;
         }
       }
       return sealParsed;
@@ -383,11 +396,56 @@ function forgesProvenance(opened: OpenedEvent): boolean {
   return opened.tags.some((t) => PROVENANCE.has(t[0]));
 }
 
+// ── Seals ─────────────────────────────────────────────────────────────────────
+//
+// A seal is the author-signed NIP-59 envelope the rumor arrived in — evidence
+// ABOUT the rumor, not part of it. It is kept only so a Refounding's compaction
+// can republish an entity's head under the new epoch verbatim (CORD-06 §3), and
+// is read by exactly one call site, once per rotation.
+
+/** KV key holding the signed seal a stored rumor arrived in. */
+function sealKey(communityIdHex: string, rumorId: string): string {
+  return `c2seal:${communityIdHex}:${rumorId}`;
+}
+
+/**
+ * The seal a stored rumor arrived in, or undefined if none was kept.
+ *
+ * Only PLAINTEXT seals are kept: `rewrapSeal` refuses an encrypted one (its
+ * ciphertext is bound to the old stream's conversation key, so it cannot
+ * survive a re-wrap), which makes storing them pure cost — and encrypted is
+ * what chat, guestbook and rekey all use, i.e. nearly every rumor in the store.
+ *
+ * Prefer a seal already on the {@link OpenedEvent}: an event opened this
+ * session carries the real one, and a row predating the KV move carries it as a
+ * tag. This is the fallback for everything else.
+ */
+export async function readStoredSeal(
+  communityIdHex: string,
+  rumorId: string,
+): Promise<NostrEvent | undefined> {
+  if (!communityIdHex || !rumorId) return undefined;
+  try {
+    return await getArmadaDB().kv.get<NostrEvent>(sealKey(communityIdHex, rumorId));
+  } catch {
+    return undefined;
+  }
+}
+
 /** Store a batch verbatim in a community's tenant. Best-effort: failures are swallowed. */
 function writeStored(communityIdHex: string, opened: OpenedEvent[]): Promise<void> {
   if (opened.length === 0 || !communityIdHex) return Promise.resolve();
-  const s = rumorStore(communityIdHex);
-  return Promise.all(opened.map((o) => s.event(openedToStored(o))))
+  const db = getArmadaDB();
+  const s = db.tenant(communityTenant(communityIdHex));
+  return Promise.all(
+    opened.flatMap((o) => {
+      const write = s.event(openedToStored(o));
+      const seal = o.seal;
+      return seal && o.sealKind === KIND_SEAL_PLAINTEXT
+        ? [write, db.kv.set(sealKey(communityIdHex, o.rumorId), seal)]
+        : [write];
+    }),
+  )
     .then(() => undefined)
     .catch(() => undefined);
 }
@@ -500,7 +558,9 @@ export function parkPendingWraps(wraps: NostrEvent[]): void {
   if (wraps.length === 0) return;
   pendingKnownEmpty = false;
   const s = pendingStore();
-  void Promise.all(wraps.map((w) => s.event(w))).catch(() => undefined);
+  void Promise.all(
+    wraps.map(({ sig: _sig, ...wrap }) => s.event(wrap)),
+  ).catch(() => undefined);
 }
 
 /**

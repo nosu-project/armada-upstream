@@ -1109,7 +1109,7 @@ describe("control plane fold (CORD-04)", () => {
 
     // Refounding: re-wrap ONLY the head into epoch 1 (plaintext seal survives).
     const control1 = controlGroupKey(root, communityId, 1); // (test shortcut: same root, new epoch address)
-    const rewrapped = rewrapSeal(p2.opened.seal, control1);
+    const rewrapped = rewrapSeal(p2.opened.seal!, control1);
 
     const joinerView = openControlWraps([rewrapped], [control1]);
     const folded = foldControlState(joinerView, communityId, owner.pubkey);
@@ -1181,7 +1181,7 @@ describe("control plane fold (CORD-04)", () => {
 
     // e2 Refounding: compaction re-wraps the head (v3) under the new epoch.
     const control2 = controlGroupKey(root, communityId, 2);
-    const rewrapped = rewrapSeal(p3.opened.seal, control2);
+    const rewrapped = rewrapSeal(p3.opened.seal!, control2);
 
     // The rejoiner's readable view: e0 fragment + e2 snapshot; e1 is dark.
     const view = [...openControlWraps([w1], [control]), ...openControlWraps([rewrapped], [control2])];
@@ -1199,7 +1199,7 @@ describe("control plane fold (CORD-04)", () => {
     // A hostile keyholder re-wraps the OLD banning edition into the current
     // epoch to poison the subset. Version anchoring defeats it: a re-wrap
     // can't raise the version inside the signed seal, so v1 loses to v3.
-    const poison = rewrapSeal(p1.opened.seal, control2);
+    const poison = rewrapSeal(p1.opened.seal!, control2);
     const poisonedView = [...view, ...openControlWraps([poison], [control2])];
     const poisonedSnap = new Set([bytesToHex(p3.rumorId), bytesToHex(p1.rumorId)]);
     const resistant = foldControlState(poisonedView, communityId, owner.pubkey, undefined, poisonedSnap);
@@ -1223,7 +1223,7 @@ describe("control plane fold (CORD-04)", () => {
     const b3 = buildBanlistEdition(communityId, [], { actorPubkey: owner.pubkey, version: 3n, prevHash: p2.selfHash });
     const p3 = openControlWraps([await sealEdition(b3, control1, owner)], [control1])[0];
     const control2 = controlGroupKey(root, communityId, 2);
-    const rewrapped = rewrapSeal(p3.opened.seal, control2);
+    const rewrapped = rewrapSeal(p3.opened.seal!, control2);
 
     // Fold 1: only the old fragment is readable; no current-epoch editions yet.
     const first = foldControlState(
@@ -1253,7 +1253,7 @@ describe("control plane fold (CORD-04)", () => {
     const m2 = buildMetadataEdition(communityId, { name: "Two", relays: [] }, { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash });
     const w2 = await sealEdition(m2, control, owner);
     const control1 = controlGroupKey(root, communityId, 1);
-    const poison = rewrapSeal(p1.opened.seal, control1);
+    const poison = rewrapSeal(p1.opened.seal!, control1);
 
     // View: the store's full e0 chain + the poison; only the poison is
     // current-epoch-attributed.
@@ -1274,14 +1274,14 @@ describe("control plane fold (CORD-04)", () => {
     const m2 = buildMetadataEdition(communityId, { name: "Two", relays: [] }, { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash });
     const p2 = openControlWraps([await sealEdition(m2, control, owner)], [control])[0];
     const control1 = controlGroupKey(root, communityId, 1);
-    const rewrapV2 = rewrapSeal(p2.opened.seal, control1);
+    const rewrapV2 = rewrapSeal(p2.opened.seal!, control1);
     const snapView = openControlWraps([rewrapV2], [control1]);
     const tracked = foldControlState(snapView, communityId, owner.pubkey, undefined, new Set([bytesToHex(p2.rumorId)]));
     expect(tracked.metadata?.name).toBe("Two");
 
     // The relay then serves only a re-wrap of the OLD v1: nothing at/above the
     // floor remains — the entity holds (no downgrade) and flags incomplete.
-    const rewrapV1 = rewrapSeal(p1.opened.seal, control1);
+    const rewrapV1 = rewrapSeal(p1.opened.seal!, control1);
     const starved = foldControlState(
       openControlWraps([rewrapV1], [control1]),
       communityId,

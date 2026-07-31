@@ -38,7 +38,7 @@ import {
 } from "@/concord-v2/lib/rekey";
 import { citationSatisfied } from "@/concord-v2/lib/control";
 import { hasPermission, Permissions } from "@/concord-v2/lib/roles";
-import { queryByStreams, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
+import { queryByStreams, readStoredSeal, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { openWrap, rewrapSeal, sealRumor, wrapSeal, type OpenedEvent } from "@/concord-v2/lib/stream";
 import { buildRefreshedBundleEvents, type InviteBundle } from "@/concord-v2/lib/invite";
 import { fetchInviteList } from "@/concord-v2/hooks/useInvites2";
@@ -815,9 +815,19 @@ export function useRefound2(community: CommunityV2 | undefined) {
       // orphaning them under a sibling key (§3 idempotency).
       const newControl = controlGroupKey(newRoot, community.id, newEpoch);
       for (const head of folded.headEditions.values()) {
+        // A head folded from the opened-event store carries no seal on the
+        // event itself (the store keeps seals in KV, not in the rumor), so
+        // fall back to a keyed read. A head we cannot re-wrap is a head that
+        // vanishes from the new epoch, which §3's fold-all-or-abort forbids —
+        // so a missing seal aborts rather than skipping the entity.
+        const seal =
+          head.opened.seal ?? (await readStoredSeal(community.idHex, head.opened.rumorId));
+        if (!seal) {
+          throw new Error("Missing the signed history needed to carry this community's state into the new epoch; nothing was lost, try again after a resync.");
+        }
         let rewrapped: NostrEvent;
         try {
-          rewrapped = rewrapSeal(head.opened.seal, newControl);
+          rewrapped = rewrapSeal(seal, newControl);
         } catch {
           // An encrypted-seal head can't re-wrap; control heads are plaintext
           // by construction, so this is defensive only.

@@ -18,6 +18,8 @@ import {
   queryChannelRumors,
   queryMentionRumors,
   queryRumorsByChannel,
+  readStoredSeal,
+  storedToOpened,
   storedToOpenedChat,
   writeOpened,
   writeRumors,
@@ -48,6 +50,11 @@ function makeChannel(): { channel: ChannelV2; idHex: string } {
     channel: { id: channelId, idHex, name: "general", isPrivate: false, voice, streams: [stream], current: stream },
     idHex,
   };
+}
+
+/** `finalizeEvent` tags events with a non-enumerable-in-JSON `verified` symbol; strip it. */
+function plain(event: NostrEvent): NostrEvent {
+  return JSON.parse(JSON.stringify(event)) as NostrEvent;
 }
 
 function signer(sk = generateSecretKey()) {
@@ -167,7 +174,7 @@ describe("concord-v2 rumor store", () => {
     expect(after.some((m) => m.rumorId === msg.id)).toBe(false);
   });
 
-  it("preserves the full signed seal through the opened-event store (control compaction)", async () => {
+  it("preserves the full signed seal in KV, not in the stored rumor (control compaction)", async () => {
     const alice = signer();
     const control = channelGroupKey(new Uint8Array(32).fill(9), new Uint8Array(32).fill(1), 0);
     // A plaintext-sealed control-style edition.
@@ -182,16 +189,67 @@ describe("concord-v2 rumor store", () => {
     const wrap = wrapSeal(seal, control);
     const opened = openWrap(wrap, control);
 
+    // The rumor is stored as its author wrote it: no seal folded into its tags.
+    expect(openedToStored(opened).tags.some((t) => t[0] === "seal")).toBe(false);
+    expect(openedToStored(opened).tags).toEqual([...rumor.tags, ["stream", opened.streamPk], ["wrap", opened.wrapId], ["sealkind", String(KIND_SEAL_PLAINTEXT)]]);
+
     writeOpened(CID, [opened]);
     const [back] = await eventually(() => queryByStreams(CID, [control.pk]), (r) => r.length === 1);
     expect(back.rumorId).toBe(opened.rumorId);
     expect(back.author).toBe(alice.pubkey);
     expect(back.sealKind).toBe(KIND_SEAL_PLAINTEXT);
-    // The reconstructed seal is byte-identical and re-wrappable (compaction).
-    expect(back.seal.id).toBe(seal.id);
-    expect(back.seal.sig).toBe(seal.sig);
-    const rewrapped = rewrapSeal(back.seal, control);
+    expect(back.seal).toBeUndefined();
+
+    // The seal read back out of KV is byte-identical and re-wrappable.
+    const stored = await eventually(() => readStoredSeal(CID, opened.rumorId), (s) => !!s);
+    expect(stored).toEqual(plain(seal));
+    const rewrapped = rewrapSeal(stored!, control);
     expect(openWrap(rewrapped, control).rumorId).toBe(opened.rumorId);
+  });
+
+  it("keeps no seal for encrypted-sealed rumors (they can never be re-wrapped)", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const rumor = chatRumor(idHex, alice, KIND_MESSAGE, "chat", 1000);
+
+    writeRumors(CID, await openChatBatch([await wrapChat(rumor, channel, alice)], channel));
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 10 }), (r) => r.length === 1);
+
+    expect(await readStoredSeal(CID, rumor.id)).toBeUndefined();
+  });
+
+  it("still reads a seal folded into the tags of a row written before the KV move", () => {
+    const alice = signer();
+    const control = channelGroupKey(new Uint8Array(32).fill(11), new Uint8Array(32).fill(1), 0);
+    const rumor = buildRumor({
+      kind: 3308,
+      content: "{}",
+      tags: [["vsk", "0"], ["eid", "ef".repeat(32)], ["ev", "1"]],
+      pubkey: alice.pubkey,
+      ms: null,
+    });
+    const seal = finalizeEvent({ kind: KIND_SEAL_PLAINTEXT, content: JSON.stringify(rumor), tags: [], created_at: rumor.created_at }, alice.sk);
+
+    const legacy: NostrRumor = {
+      ...openedToStored({
+        rumorId: rumor.id,
+        author: alice.pubkey,
+        kind: rumor.kind,
+        content: rumor.content,
+        tags: rumor.tags,
+        ms: rumor.created_at * 1000,
+        createdAt: rumor.created_at,
+        wrapId: "w",
+        streamPk: control.pk,
+        sealKind: KIND_SEAL_PLAINTEXT,
+      }),
+    };
+    legacy.tags = [...legacy.tags, ["seal", JSON.stringify(seal)]];
+
+    const back = storedToOpened(legacy);
+    expect(back.seal).toEqual(plain(seal));
+    // …and the tag never leaks into the reconstructed rumor.
+    expect(back.tags).toEqual(rumor.tags);
   });
 
   it("parks, peeks (non-destructively), and acks raw wraps", async () => {
