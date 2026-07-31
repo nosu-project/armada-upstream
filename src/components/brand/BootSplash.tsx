@@ -20,4 +20,16 @@ export function BootSplash() {
   );
 }
 
+/**
+ * The same full-screen wait, with no mark and no motion.
+ *
+ * Used only where the destination is the welcome screen, which draws the crest
+ * itself the moment it paints: showing it here too started the ~1.1s draw,
+ * cut it off as soon as the route resolved, and handed over to a second,
+ * restarting draw. Everywhere else keeps {@link BootSplash}.
+ */
+export function BlankSplash() {
+  return <div className="fixed inset-0 z-50 bg-background" role="status" aria-label="Loading" />;
+}
+
 export default BootSplash;

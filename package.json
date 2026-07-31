@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "gen:icons": "node scripts/gen-icons.mjs",
     "build": "vite build -l error && cp dist/index.html dist/404.html",
     "test": "tsc --noEmit && eslint --cache . && vitest run --passWithNoTests --reporter=dot && vite build -l error"
   },

@@ -744,9 +744,8 @@ export function SettingsPage() {
           {/* Bottom ornament */}
           <div className="flex items-center gap-2 px-6 pt-2 pb-1">
             <div className="h-px flex-1 bg-gradient-to-r from-transparent via-primary/20 to-primary/30" />
-            <svg width="22" height="22" viewBox="0 0 256 256" fill="none" aria-hidden className="text-primary/30 shrink-0">
-              <path d="M128 56 L180 162 H158 L128 100 L98 162 H76 Z" fill="currentColor" />
-              <path d="M106 134 H150 L158 150 H98 Z" fill="hsl(var(--background))" />
+            <svg width="22" height="22" viewBox="0 0 128 128" fill="none" aria-hidden className="text-primary/30 shrink-0">
+              <path d="M64 4.225l-39.97 88.5h17.13l2.31-5.2 2.76-6.22-2.22-1.43-1.42-12.84h9.99l4.89-11.01L64 41.335l11.42 25.7h9.99l-1.43 12.84-2.22 1.43 2.77 6.22 2.31 5.2h17.13z" fill="currentColor" />
             </svg>
             <div className="h-px flex-1 bg-gradient-to-l from-transparent via-primary/20 to-primary/30" />
           </div>

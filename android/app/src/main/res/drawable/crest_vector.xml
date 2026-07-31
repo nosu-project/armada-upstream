@@ -1,69 +1,86 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Static Armada crest as a vector, translated from ArmadaCrest.tsx (256x256
-  viewport). Used as the base for the animated splash icon (splash_logo_anim.xml)
-  and animatable via the named group/path ids below:
-    - hullFrame  : the cut-corner hull frame (draws on via trimPathEnd)
-    - bladeGroup : the rose "advancing-A" (fades/scales in, then glows)
-    - wake1/wake2: the cyan wake strokes (sweep on a loop)
+  Static Armada mark as a vector, translated from ArmadaCrest.tsx / public/logo.svg
+  (128x128 viewport). Base for the animated splash icon (splash_logo_anim.xml),
+  animatable via the named groups/paths below:
+    - wave1..3Group : pivot at the mark's centerline, so each wave line can
+                      sweep open horizontally (scaleX)
+    - wave1..3      : the cyan wave lines (fade in with the sweep)
+    - sailTrace     : stroke-only copy of the sail, drawn by trimPathEnd — this
+                      is the "pen" that traces the outline, then fades out
+    - sail          : the rose sail's fill (floods in behind the trace)
+    - caret         : the waterline reflection (inks in last)
+  Every animatable attribute rests at its *pre*-animation value here (alpha 0,
+  scaleX a sliver, trimPathEnd 0) because splash_logo_anim.xml always runs; the
+  final frame is the finished mark, which the splash holds until the WebView
+  paints.
   Colors mirror the app's dark-theme tokens:
-    foreground 42 38% 90% -> #EFE6CE, primary 330 90% 62% -> #F84D96 (rose),
-    accent2 180 90% 55% -> #1AE8E8 (cyan), background #100B15.
+    primary 330 90% 62% -> #F84D96 (rose), accent2 180 90% 55% -> #1AE8E8 (cyan).
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="96dp"
     android:height="96dp"
-    android:viewportWidth="256"
-    android:viewportHeight="256">
+    android:viewportWidth="128"
+    android:viewportHeight="128">
 
-    <!-- Cut-corner hull frame. trimPathEnd animates the draw-on. -->
-    <path
-        android:name="hullFrame"
-        android:pathData="M64,16 H232 a8,8 0 0 1 8,8 V192 L192,240 H24 a8,8 0 0 1 -8,-8 V64 Z"
-        android:strokeColor="#EFE6CE"
-        android:strokeWidth="10"
-        android:strokeLineCap="butt"
-        android:strokeLineJoin="miter"
-        android:trimPathStart="0"
-        android:trimPathEnd="0" />
-
-    <!-- The advancing-A blade (rose). Group scales/pivots for the entrance. -->
+    <!-- Three cyan wave lines. Each sweeps open from x=64, the mark's
+         centerline, which is also every line's own center. -->
     <group
-        android:name="bladeGroup"
-        android:pivotX="128"
-        android:pivotY="128"
-        android:scaleX="0.6"
-        android:scaleY="0.6">
+        android:name="wave1Group"
+        android:pivotX="64"
+        android:pivotY="102.7"
+        android:scaleX="0.15">
         <path
-            android:name="blade"
-            android:pathData="M128,56 L180,162 H158 L128,100 L98,162 H76 Z"
-            android:fillColor="#F84D96"
+            android:name="wave1"
+            android:pathData="M95.4,104.865 H32.59 c-1.18,0 -2.14,-0.96 -2.14,-2.14 s0.96,-2.14 2.14,-2.14 H95.4 c1.18,0 2.14,0.96 2.14,2.14 s-0.96,2.14 -2.14,2.14 z"
+            android:fillColor="#1AE8E8"
             android:fillAlpha="0" />
-        <!-- Waterline crossbar (negative cut, painted in the bg color). -->
+    </group>
+    <group
+        android:name="wave2Group"
+        android:pivotX="64"
+        android:pivotY="114.1"
+        android:scaleX="0.15">
         <path
-            android:name="bladeCut"
-            android:pathData="M106,134 H150 L158,150 H98 Z"
-            android:fillColor="#100B15"
+            android:name="wave2"
+            android:pathData="M83.98,115.565 H44.01 a1.43,1.43 0 1 1 0,-2.86 h39.97 a1.43,1.43 0 1 1 0,2.86 z"
+            android:fillColor="#1AE8E8"
+            android:fillAlpha="0" />
+    </group>
+    <group
+        android:name="wave3Group"
+        android:pivotX="64"
+        android:pivotY="122.7"
+        android:scaleX="0.15">
+        <path
+            android:name="wave3"
+            android:pathData="M73.99,123.775 H54.01 a1.071,1.071 0 0 1 0,-2.14 h19.98 a1.071,1.071 0 0 1 0,2.14 z"
+            android:fillColor="#1AE8E8"
             android:fillAlpha="0" />
     </group>
 
-    <!-- Cyan wake strokes. trimPath sweeps them left->right on a loop. -->
+    <!-- The rose sail's fill, flooding in behind the trace below it. -->
     <path
-        android:name="wake1"
-        android:pathData="M88,184 H168"
-        android:strokeColor="#1AE8E8"
-        android:strokeWidth="6"
-        android:strokeLineCap="round"
-        android:trimPathStart="0"
-        android:trimPathEnd="0" />
+        android:name="sail"
+        android:pathData="M64,4.225 l-39.97,88.5 h17.13 l2.31,-5.2 2.76,-6.22 -2.22,-1.43 -1.42,-12.84 h9.99 l4.89,-11.01 L64,41.335 l11.42,25.7 h9.99 l-1.43,12.84 -2.22,1.43 2.77,6.22 2.31,5.2 h17.13 z"
+        android:fillColor="#F84D96"
+        android:fillAlpha="0" />
+    <!-- The tracing pen: same outline, stroke only (trimPath* applies to the
+         stroke, so this copy must not carry a fill). -->
     <path
-        android:name="wake2"
-        android:pathData="M104,200 H152"
-        android:strokeColor="#1AE8E8"
-        android:strokeAlpha="0.7"
-        android:strokeWidth="4"
+        android:name="sailTrace"
+        android:pathData="M64,4.225 l-39.97,88.5 h17.13 l2.31,-5.2 2.76,-6.22 -2.22,-1.43 -1.42,-12.84 h9.99 l4.89,-11.01 L64,41.335 l11.42,25.7 h9.99 l-1.43,12.84 -2.22,1.43 2.77,6.22 2.31,5.2 h17.13 z"
+        android:fillColor="#00000000"
+        android:strokeColor="#F84D96"
+        android:strokeWidth="2"
         android:strokeLineCap="round"
-        android:trimPathStart="0"
+        android:strokeLineJoin="round"
         android:trimPathEnd="0" />
+    <!-- Waterline reflection, inked in last. -->
+    <path
+        android:name="caret"
+        android:pathData="M76.84,79.165 c-0.15,0 -0.31,-0.05 -0.44,-0.15 l-12.41,-9.65 -12.41,9.65 c-0.31,0.24 -0.76,0.19 -1,-0.13 a0.706,0.706 0 0 1 0.13,-1 l12.85,-9.99 c0.26,-0.2 0.62,-0.2 0.88,0 l12.85,9.99 a0.715,0.715 0 0 1 -0.43,1.28 z"
+        android:fillColor="#F84D96"
+        android:fillAlpha="0" />
 </vector>

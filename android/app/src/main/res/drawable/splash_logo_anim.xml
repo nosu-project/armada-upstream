@@ -1,39 +1,88 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Animated Armada crest for the launch splash (API 31+ windowSplashScreen-
-  AnimatedIcon). Approximates ArmadaCrest.tsx's entrance:
-    - the hull frame draws on (trimPathEnd 0 -> 1),
-    - the rose blade fades + scales up (springy),
-    - the cyan wake strokes sweep on after.
-  Total ~1000ms, matched by windowSplashScreenAnimationDuration in styles.xml.
-  The splash is held past this by MainActivity until the WebView paints, so the
-  final frame (full crest) simply sits until the app takes over.
+  Animated Armada mark for the launch splash (API 31+ windowSplashScreen-
+  AnimatedIcon). Mirrors ArmadaCrest.tsx's one-shot draw:
+    - the three wave lines sweep open from the centerline, staggered,
+    - a hairline stroke traces the sail's outline (trimPathEnd) and dissolves,
+    - the sail's fill floods in behind the trace,
+    - the waterline caret inks in last.
+  Ends at 960ms, inside the 1000ms windowSplashScreenAnimationDuration in
+  styles.xml. The splash is held past this by MainActivity until the WebView
+  paints, so the final frame (the finished mark) simply sits until the app
+  takes over.
+
+  There is no halo sheen here (the web mark's last beat): AVDs have no
+  drop-shadow equivalent, and the splash background is already flat dark.
 -->
 <animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:drawable="@drawable/crest_vector">
 
-    <!-- Hull frame draws on. -->
-    <target android:name="hullFrame">
+    <!-- Wave lines sweep open horizontally, top to bottom. -->
+    <target android:name="wave1Group">
         <aapt:attr name="android:animation">
             <objectAnimator
-                android:propertyName="trimPathEnd"
-                android:startOffset="80"
-                android:duration="650"
-                android:valueFrom="0"
+                android:propertyName="scaleX"
+                android:duration="380"
+                android:valueFrom="0.15"
                 android:valueTo="1"
                 android:valueType="floatType"
-                android:interpolator="@android:interpolator/decelerate_quint" />
+                android:interpolator="@android:interpolator/decelerate_cubic" />
         </aapt:attr>
     </target>
-
-    <!-- Blade fades in. -->
-    <target android:name="blade">
+    <target android:name="wave1">
         <aapt:attr name="android:animation">
             <objectAnimator
                 android:propertyName="fillAlpha"
-                android:startOffset="380"
-                android:duration="420"
+                android:duration="240"
+                android:valueFrom="0"
+                android:valueTo="1"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_cubic" />
+        </aapt:attr>
+    </target>
+    <target android:name="wave2Group">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="scaleX"
+                android:startOffset="70"
+                android:duration="380"
+                android:valueFrom="0.15"
+                android:valueTo="1"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_cubic" />
+        </aapt:attr>
+    </target>
+    <target android:name="wave2">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="fillAlpha"
+                android:startOffset="70"
+                android:duration="240"
+                android:valueFrom="0"
+                android:valueTo="1"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_cubic" />
+        </aapt:attr>
+    </target>
+    <target android:name="wave3Group">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="scaleX"
+                android:startOffset="140"
+                android:duration="380"
+                android:valueFrom="0.15"
+                android:valueTo="1"
+                android:valueType="floatType"
+                android:interpolator="@android:interpolator/decelerate_cubic" />
+        </aapt:attr>
+    </target>
+    <target android:name="wave3">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:propertyName="fillAlpha"
+                android:startOffset="140"
+                android:duration="240"
                 android:valueFrom="0"
                 android:valueTo="1"
                 android:valueType="floatType"
@@ -41,50 +90,36 @@
         </aapt:attr>
     </target>
 
-    <!-- Blade cut (waterline) fades in with the blade. -->
-    <target android:name="bladeCut">
-        <aapt:attr name="android:animation">
-            <objectAnimator
-                android:propertyName="fillAlpha"
-                android:startOffset="380"
-                android:duration="420"
-                android:valueFrom="0"
-                android:valueTo="1"
-                android:valueType="floatType"
-                android:interpolator="@android:interpolator/decelerate_cubic" />
-        </aapt:attr>
-    </target>
-
-    <!-- Blade group scales up (springy overshoot). -->
-    <target android:name="bladeGroup">
+    <!-- The pen traces the sail's outline, then dissolves as the fill lands. -->
+    <target android:name="sailTrace">
         <aapt:attr name="android:animation">
             <set>
                 <objectAnimator
-                    android:propertyName="scaleX"
-                    android:startOffset="380"
-                    android:duration="500"
-                    android:valueFrom="0.6"
+                    android:propertyName="trimPathEnd"
+                    android:startOffset="60"
+                    android:duration="640"
+                    android:valueFrom="0"
                     android:valueTo="1"
                     android:valueType="floatType"
-                    android:interpolator="@android:interpolator/overshoot" />
+                    android:interpolator="@android:interpolator/fast_out_slow_in" />
                 <objectAnimator
-                    android:propertyName="scaleY"
-                    android:startOffset="380"
-                    android:duration="500"
-                    android:valueFrom="0.6"
-                    android:valueTo="1"
+                    android:propertyName="strokeAlpha"
+                    android:startOffset="700"
+                    android:duration="180"
+                    android:valueFrom="1"
+                    android:valueTo="0"
                     android:valueType="floatType"
-                    android:interpolator="@android:interpolator/overshoot" />
+                    android:interpolator="@android:interpolator/linear" />
             </set>
         </aapt:attr>
     </target>
 
-    <!-- Wake strokes sweep on after the blade settles. -->
-    <target android:name="wake1">
+    <!-- The sail's fill floods in behind the trace. -->
+    <target android:name="sail">
         <aapt:attr name="android:animation">
             <objectAnimator
-                android:propertyName="trimPathEnd"
-                android:startOffset="640"
+                android:propertyName="fillAlpha"
+                android:startOffset="380"
                 android:duration="340"
                 android:valueFrom="0"
                 android:valueTo="1"
@@ -92,12 +127,14 @@
                 android:interpolator="@android:interpolator/decelerate_cubic" />
         </aapt:attr>
     </target>
-    <target android:name="wake2">
+
+    <!-- Waterline caret inks in last. -->
+    <target android:name="caret">
         <aapt:attr name="android:animation">
             <objectAnimator
-                android:propertyName="trimPathEnd"
-                android:startOffset="720"
-                android:duration="340"
+                android:propertyName="fillAlpha"
+                android:startOffset="700"
+                android:duration="260"
                 android:valueFrom="0"
                 android:valueTo="1"
                 android:valueType="floatType"
