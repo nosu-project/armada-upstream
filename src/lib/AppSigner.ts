@@ -1,4 +1,4 @@
-import { type DBSchema, type IDBPDatabase, openDB } from "idb";
+import { getArmadaDB } from "@/lib/db/armadaDB";
 
 import type { NostrSigner } from "@nostrify/nostrify";
 import type { BtcSigner } from "@/lib/bitcoin-signers";
@@ -33,18 +33,14 @@ import type { BtcSigner } from "@/lib/bitcoin-signers";
 // (private mode / SSR).
 // ============================================================================
 
-/** IndexedDB database holding the persistent decrypt cache. */
+/** The pre-ArmadaDB database, drained by the `decrypt-cache` migration. */
 export const DECRYPT_CACHE_DB_NAME = "armada-decrypt-cache";
-const DB_VERSION = 1;
-const STORE = "decrypts";
 
-interface DecryptCacheDB extends DBSchema {
-  [STORE]: {
-    /** sha256(method ∥ userPubkey ∥ counterparty ∥ ciphertext), hex. */
-    key: string;
-    value: { id: string; plaintext: string };
-  };
-}
+/**
+ * KV key for a derived cache id. ArmadaDB's KV is one shared namespace, so
+ * every subsystem prefixes its own keys.
+ */
+export const decryptCacheKey = (id: string): string => `decrypt:${id}`;
 
 /** A signer's `nip04`/`nip44` crypto bundle. */
 type CryptoMethods = NonNullable<NostrSigner["nip04"]>;
@@ -70,10 +66,6 @@ type DecryptMethod = "nip04" | "nip44";
 export class AppSigner implements NostrSigner {
   readonly #upstream: NostrSigner;
   readonly #pubkey: string;
-
-  /** Lazily-opened, instance-lived IndexedDB connection (or null when IDB is
-   *  unavailable). Undefined until first use. */
-  #db: Promise<IDBPDatabase<DecryptCacheDB> | null> | undefined;
 
   /** In-flight decrypts, keyed by cache id, so concurrent callers asking for
    *  the same ciphertext share one cache-read + upstream-decrypt. */
@@ -203,26 +195,10 @@ export class AppSigner implements NostrSigner {
     return hex;
   }
 
-  #getDB(): Promise<IDBPDatabase<DecryptCacheDB> | null> {
-    if (this.#db) return this.#db;
-    if (typeof indexedDB === "undefined") {
-      this.#db = Promise.resolve(null);
-      return this.#db;
-    }
-    this.#db = openDB<DecryptCacheDB>(DECRYPT_CACHE_DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        db.createObjectStore(STORE, { keyPath: "id" });
-      },
-    }).catch(() => null);
-    return this.#db;
-  }
-
-  /** The cached plaintext for a derived id, or `undefined` on a miss / no IDB. */
+  /** The cached plaintext for a derived id, or `undefined` on a miss. */
   async #get(id: string): Promise<string | undefined> {
-    const db = await this.#getDB();
-    if (!db) return undefined;
     try {
-      return (await db.get(STORE, id))?.plaintext;
+      return await getArmadaDB().kv.get<string>(decryptCacheKey(id));
     } catch {
       return undefined;
     }
@@ -231,23 +207,10 @@ export class AppSigner implements NostrSigner {
   /** Persist a decrypt result. Best-effort: failures are swallowed since the
    *  cache is never on the critical path. */
   async #put(id: string, plaintext: string): Promise<void> {
-    const db = await this.#getDB();
-    if (!db) return;
     try {
-      await db.put(STORE, { id, plaintext });
+      await getArmadaDB().kv.set(decryptCacheKey(id), plaintext);
     } catch {
       // best-effort
-    }
-  }
-
-  /** Test seam: close the cached connection so the next use reopens it. */
-  async __closeForTests(): Promise<void> {
-    const prev = this.#db;
-    this.#db = undefined;
-    try {
-      (await prev)?.close();
-    } catch {
-      // ignore
     }
   }
 }

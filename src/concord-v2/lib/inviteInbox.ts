@@ -80,7 +80,7 @@ const LEGACY_MIGRATION_KEY = (recipient: string) => `invites:migrated:${recipien
 /** In-flight/settled drains, so concurrent reads share one pass. */
 const drains = new Map<string, Promise<void>>();
 
-function migrateLegacyInvites(recipient: string): Promise<void> {
+export function migrateLegacyInvites(recipient: string): Promise<void> {
   let drain = drains.get(recipient);
   if (!drain) {
     drain = drainLegacyInvites(recipient);

@@ -91,7 +91,7 @@ const DRAIN_KEY = (self: string) => `dm17:migrated:${self}`;
 /** In-flight/settled drains, so concurrent reads share one pass. */
 const drains = new Map<string, Promise<void>>();
 
-function migrateLegacyDms(self: string): Promise<void> {
+export function migrateLegacyDms(self: string): Promise<void> {
   let drain = drains.get(self);
   if (!drain) {
     drain = drainLegacyDms(self);

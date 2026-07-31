@@ -51,7 +51,8 @@ describe("AppSigner", () => {
     const firstSigner = new AppSigner(first.upstream, user);
     await firstSigner.nip44!.decrypt(PEER, "CIPHER");
     expect(first.nip44Decrypt).toHaveBeenCalledTimes(1);
-    await firstSigner.__closeForTests();
+    // No per-instance connection to close any more: the cache lives in
+    // ArmadaDB's KV, which every signer instance shares.
 
     // A brand new instance (e.g. after a reload) must read from the same DB.
     const second = makeUpstream(user);
