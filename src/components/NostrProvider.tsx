@@ -30,7 +30,6 @@ import {
   streamPubkeysForRelay,
 } from "@/concord-v2/lib/streamAuth";
 import { warmRumorStore } from "@/concord-v2/lib/rumorStore";
-import { warmInviteInbox } from "@/concord-v2/lib/inviteInbox";
 
 interface NostrProviderProps {
   children: React.ReactNode;
@@ -118,8 +117,6 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     // Warm the Concord V2 rumor cache's IndexedDB connection too, so the first
     // channel open reads a hot store instead of paying the cold-open penalty.
     warmRumorStore();
-    // Same for the V2 direct-invite inbox cache.
-    warmInviteInbox();
   }
 
   // Pool routes: app relays (non-NIP-29 traffic) + all servers

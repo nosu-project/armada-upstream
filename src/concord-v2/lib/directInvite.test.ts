@@ -1,3 +1,4 @@
+import { NIndexedDB } from "@nostrify/indexeddb";
 import { IDBFactory } from "fake-indexeddb";
 import { getConversationKey, decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
@@ -155,25 +156,36 @@ describe("direct-invite inbox store", () => {
   }
 
   it("round-trips an unwrapped invite through the codec", async () => {
-    const { wrap, unwrapped, recipientPk, inviterPk } = await makeUnwrapped();
+    const { wrap, unwrapped, inviterPk } = await makeUnwrapped();
 
-    const stored = unwrappedToStored(wrap, unwrapped, recipientPk);
+    const stored = unwrappedToStored(wrap, unwrapped);
     expect(stored.id).toBe(wrap.id);
-    expect(stored.sig).toBe("");
     expect(stored.kind).toBe(KIND_DIRECT_INVITE);
     expect(stored.pubkey).toBe(inviterPk);
-    // The recipient is stamped as an indexed `#p` tag so reads stay scoped.
-    expect(stored.tags).toContainEqual(["p", recipientPk]);
+    // The tenant names the account, so no recipient tag is written any more.
+    expect(stored.tags.some((t) => t[0] === "p")).toBe(false);
 
     const back = storedToInvite(stored);
     expect(back.wrapId).toBe(wrap.id);
     expect(back.sender).toBe(inviterPk);
     expect(back.rumor.content).toBe(unwrapped.rumor.content);
-    // Provenance tags — including the recipient `p` — are stripped from the
-    // reconstructed rumor.
     expect(
-      back.rumor.tags.some((t) => t[0] === "wrap" || t[0] === "sender" || t[0] === "wrapts" || t[0] === "p"),
+      back.rumor.tags.some((t) => t[0] === "wrap" || t[0] === "sender" || t[0] === "wrapts"),
     ).toBe(false);
+  });
+
+  it("strips the recipient tag a record drained from the shared store carries", () => {
+    // Pre-tenant records stamped `["p", recipient]` as their scope. They are
+    // copied across verbatim, so the read path still has to strip it.
+    const back = storedToInvite({
+      id: "wrap-id",
+      kind: KIND_DIRECT_INVITE,
+      content: "{}",
+      created_at: 1,
+      pubkey: "sender-pk",
+      tags: [["p", "recipient-pk"], ["wrap", "wrap-id"], ["sender", "sender-pk"]],
+    });
+    expect(back.rumor.tags).toEqual([]);
   });
 
   it("persists and queries invites without re-decrypting", async () => {
@@ -185,6 +197,27 @@ describe("direct-invite inbox store", () => {
     );
     const mine = got.find((i) => i.wrapId === wrap.id)!;
     expect(JSON.parse(mine.rumor.content).community_id).toBe(bundle.community_id);
+  });
+
+  it("recovers invites left in the pre-tenant shared database", async () => {
+    const { wrap, unwrapped, recipientPk } = await makeUnwrapped();
+
+    // A record written the old way: the shared database, scoped by `#p`. The
+    // sync cursor is already past this wrap, so if the migration drops it the
+    // invite is gone for good — nothing would ever refetch it.
+    const legacy = new NIndexedDB("armada-concord-invites");
+    await legacy.event({
+      ...unwrappedToStored(wrap as NostrEvent, unwrapped),
+      tags: [...unwrappedToStored(wrap as NostrEvent, unwrapped).tags, ["p", recipientPk]],
+      sig: "",
+    });
+    await legacy.close();
+
+    const got = await eventually(
+      () => queryStoredInvites(recipientPk),
+      (r) => r.some((i) => i.wrapId === wrap.id),
+    );
+    expect(got.find((i) => i.wrapId === wrap.id)!.sender).toBe(unwrapped.sender);
   });
 
   it("scopes reads to the recipient — another account never sees the invite", async () => {
