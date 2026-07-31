@@ -150,6 +150,23 @@ describe.each(backends)("$name", ({ create }) => {
       expect(await store.query([{ search: "%" }])).toEqual([]);
     });
 
+    it("matches nothing for a search that names nothing it can match", async () => {
+      const store = db.tenant("t");
+      const a = rumor({ content: "the quick brown fox" });
+      const b = rumor({ content: "nothing here" });
+      await store.event(a);
+      await store.event(b);
+
+      // Neither is a keyword either adapter can honor — the first is a NIP-50
+      // extension nobody implements, the second is punctuation. Dropping the
+      // constraint would answer a narrowing query with the whole tenant.
+      expect(await store.query([{ search: "domain:example.com" }])).toEqual([]);
+      expect(await store.query([{ search: '""' }])).toEqual([]);
+
+      // Asking for nothing constrains nothing, which is not the same thing.
+      expect(await store.query([{ search: "" }])).toHaveLength(2);
+    });
+
     it("returns rumors newest first, ties broken by smaller id", async () => {
       const store = db.tenant("t");
       const newest = rumor({ id: "c", created_at: 300 });

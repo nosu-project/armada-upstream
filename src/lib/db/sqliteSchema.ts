@@ -48,9 +48,10 @@
  * primary partition of this database: a query must never scan past its own
  * namespace, and `main` (the relay cache) will dwarf every community tenant
  * while sharing `p` and `e` tag values with all of them. So the tenant is
- * folded into the tokens themselves — every token is `<tenant>:<name>:<value>`
- * — which makes each posting list tenant-exact, rather than being one more
- * enormous list to intersect or a condition that discards rows after the fact.
+ * folded into the tokens themselves — every token is `t<ord>:<name>:<value>`,
+ * where `ord` is the tenant's row in `tenants` — which makes each posting list
+ * tenant-exact, rather than being one more enormous list to intersect or a
+ * condition that discards rows after the fact.
  *
  *   rumors         the value store, keyed by the time-encoded `seq` rowid.
  *                  `tenant`, `kind`, `pubkey` and `created_at` are duplicated
@@ -61,6 +62,7 @@
  *                  still one index lookup. Contentless and `detail=none`,
  *                  which reduces FTS5 to a bare inverted index — no positions,
  *                  no column tags, no copy of the text.
+ *   tenants        tenant id → the small integer its tokens name it by.
  *   rumors_fts     NIP-50 search over `content` (see
  *                  {@link ARMADA_DB_FTS_SCHEMA}), tokenized for prose.
  *   rumor_coords   replaceable/addressable coordinates (`kind:pubkey:d`) → the
@@ -136,6 +138,19 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
     created_at INTEGER NOT NULL,
     PRIMARY KEY (tenant, coord)
   ) WITHOUT ROWID`,
+  // Tenants, interned to a small integer so a token can name one in a couple
+  // of characters. `ord` is the rowid, so it is allocated by the insert.
+  //
+  // Interning rather than hashing the tenant id is a correctness decision, not
+  // a size one: two tenants that collided would SHARE posting lists, which is
+  // a cross-tenant read. A truncated hash makes that a birthday problem over
+  // ids that are partly attacker-chosen (`c2:<community id>`), and a full hash
+  // would put 64 characters in front of every token. An integer from the
+  // database can't collide at all.
+  `CREATE TABLE IF NOT EXISTS tenants (
+    ord INTEGER PRIMARY KEY,
+    id TEXT NOT NULL UNIQUE
+  )`,
   `CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

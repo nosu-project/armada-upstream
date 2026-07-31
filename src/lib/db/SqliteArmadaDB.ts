@@ -70,8 +70,7 @@
  *    that writer is equally disciplined about transactions.
  */
 import { NKinds } from "@nostrify/nostrify";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+import { utf8ToBytes } from "@noble/hashes/utils.js";
 
 import { ParsedFilter } from "./ParsedFilter";
 import { batch, memberOf, where } from "./sql";
@@ -167,8 +166,8 @@ export class SqliteArmadaDB implements ArmadaDB {
   /** Whether the content index is maintained, and so usable by `search`. */
   private readonly search: boolean;
   private readonly stores = new Map<string, SqliteRumorStore>();
-  /** Memoised {@link tenantToken}s — one hash per tenant, not per token. */
-  private readonly tenantTokens = new Map<string, string>();
+  /** Memoised {@link tenantOrd}s — one lookup per tenant, not per token. */
+  private readonly ords = new Map<string, number>();
 
   /** Rumors queued by `event()`, awaiting the next batched commit. */
   private pending: PendingWrite[] = [];
@@ -232,8 +231,13 @@ export class SqliteArmadaDB implements ArmadaDB {
         await this.run(`INSERT INTO rumors_fts (rumors_fts) VALUES ('delete-all')`);
       }
       await this.run(`DELETE FROM rumor_coords`);
+      await this.run(`DELETE FROM tenants`);
       await this.run(`DELETE FROM kv`);
     });
+
+    // Interned ids are reallocated from scratch after this, so a remembered
+    // one would name the wrong tenant.
+    this.ords.clear();
   }
 
   /** Close the underlying connection, if the driver has one to close. */
@@ -304,6 +308,7 @@ export class SqliteArmadaDB implements ArmadaDB {
 
   /** Apply a single rumor's writes. Runs inside the batch transaction. */
   private async writeRumor(tenant: string, rumor: NostrRumor): Promise<void> {
+    const prefix = `t${await this.internTenant(tenant)}`;
     let seq: number | undefined;
 
     if (NKinds.replaceable(rumor.kind) || NKinds.addressable(rumor.kind)) {
@@ -322,7 +327,7 @@ export class SqliteArmadaDB implements ArmadaDB {
         await this.deleteRumors(tenant, [Number(existing.seq)]);
       }
 
-      seq = await this.insertRumor(tenant, rumor);
+      seq = await this.insertRumor(tenant, prefix, rumor);
       if (seq === undefined) return;
 
       await this.run(
@@ -331,7 +336,7 @@ export class SqliteArmadaDB implements ArmadaDB {
         [tenant, coord, rumor.id, seq, rumor.created_at],
       );
     } else {
-      seq = await this.insertRumor(tenant, rumor);
+      seq = await this.insertRumor(tenant, prefix, rumor);
       if (seq === undefined) return;
     }
 
@@ -359,7 +364,11 @@ export class SqliteArmadaDB implements ArmadaDB {
    * returns rows gives up SQLite's fast path and pays a result set per write,
    * which costs far more than the extra round trip saves.
    */
-  private async insertRumor(tenant: string, rumor: NostrRumor): Promise<number | undefined> {
+  private async insertRumor(
+    tenant: string,
+    prefix: string,
+    rumor: NostrRumor,
+  ): Promise<number | undefined> {
     const base = bucket(rumor.created_at);
 
     const [row] = await this.all(
@@ -391,7 +400,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     // write path maintains itself — one row, however many tags the rumor has.
     await this.run(
       `INSERT INTO rumor_tags_fts (rowid, tokens) VALUES (?, ?)`,
-      [seq, this.tagTokens(tenant, rumor)],
+      [seq, this.tagTokens(prefix, rumor)],
     );
 
     return seq;
@@ -407,8 +416,7 @@ export class SqliteArmadaDB implements ArmadaDB {
    * store, and intersecting one of those costs more than testing `kind` on the
    * rows the tag already found.
    */
-  private tagTokens(tenant: string, rumor: NostrRumor): string {
-    const prefix = this.tenantToken(tenant);
+  private tagTokens(prefix: string, rumor: NostrRumor): string {
     const tokens: string[] = [`${prefix}:_p:${part(rumor.pubkey)}`];
     const seen = new Set<string>();
 
@@ -424,23 +432,48 @@ export class SqliteArmadaDB implements ArmadaDB {
   }
 
   /**
-   * The token prefix that scopes a tenant's index terms to it.
+   * The integer a tenant's tokens name it by, or `undefined` if the tenant has
+   * never been written to — in which case it holds no rumors, and so no tokens
+   * either.
    *
-   * Short lowercase-alphanumeric ids (`main`, `c2park`) are used verbatim,
-   * which keeps the index readable; anything else is a truncated hash, since
-   * hex-escaping `c2:<64 hex>` would put 135 characters in front of every
-   * token. The two forms can't collide — a hash starts with `_`, which a
-   * verbatim id can never contain.
+   * Interned rather than derived from the id, so distinct tenants can't share
+   * a prefix. A hash could: truncated, by birthday over ids that are partly
+   * attacker-chosen (`c2:<community id>`), and sharing a prefix means sharing
+   * posting lists, which is a cross-tenant read. Untruncated it would put 64
+   * characters in front of every token in the index.
+   *
+   * One lookup per tenant per process — the answer is durable, so a second
+   * writer on the same file agrees with it.
    */
-  private tenantToken(tenant: string): string {
-    let token = this.tenantTokens.get(tenant);
-    if (token === undefined) {
-      token = VERBATIM.test(tenant) && tenant.length <= 16
-        ? tenant
-        : `_${bytesToHex(sha256(utf8ToBytes(tenant)).slice(0, 8))}`;
-      this.tenantTokens.set(tenant, token);
-    }
-    return token;
+  private async tenantOrd(tenant: string): Promise<number | undefined> {
+    const cached = this.ords.get(tenant);
+    if (cached !== undefined) return cached;
+
+    const [row] = await this.all(`SELECT ord FROM tenants WHERE id = ?`, [tenant]);
+    if (!row) return undefined;
+
+    const ord = Number(row.ord);
+    this.ords.set(tenant, ord);
+    return ord;
+  }
+
+  /** The token prefix for a tenant, or `undefined` if it holds no rumors. */
+  private async tenantPrefix(tenant: string): Promise<string | undefined> {
+    const ord = await this.tenantOrd(tenant);
+    return ord === undefined ? undefined : `t${ord}`;
+  }
+
+  /** The same, allocating one for a tenant being written to for the first time. */
+  private async internTenant(tenant: string): Promise<number> {
+    const existing = await this.tenantOrd(tenant);
+    if (existing !== undefined) return existing;
+
+    await this.run(`INSERT OR IGNORE INTO tenants (id) VALUES (?)`, [tenant]);
+
+    const [row] = await this.all(`SELECT ord FROM tenants WHERE id = ?`, [tenant]);
+    const ord = Number(row.ord);
+    this.ords.set(tenant, ord);
+    return ord;
   }
 
   /**
@@ -539,11 +572,13 @@ export class SqliteArmadaDB implements ArmadaDB {
     await this.ready;
 
     const byId = new Map<string, NostrRumor>();
+    const prefix = await this.tenantPrefix(tenant);
 
     // Run sequentially: the driver holds a single connection, so concurrency
     // would buy nothing and could interleave badly.
     for (const filter of filters) {
-      for (const rumor of await this.queryFilter(tenant, new ParsedFilter(filter), opts?.signal)) {
+      const parsed = new ParsedFilter(filter);
+      for (const rumor of await this.queryFilter(tenant, prefix, parsed, opts?.signal)) {
         byId.set(rumor.id, rumor);
       }
     }
@@ -554,17 +589,22 @@ export class SqliteArmadaDB implements ArmadaDB {
   /** Run a single parsed filter through the planner. */
   private async queryFilter(
     tenant: string,
+    prefix: string | undefined,
     filter: ParsedFilter,
     signal?: AbortSignal,
   ): Promise<NostrRumor[]> {
     if (filter.neverMatch) return [];
+
+    // No prefix means the tenant has never been written to, so it holds no
+    // tokens — and a tag filter has nothing to match against.
+    if (filter.tags.length > 0 && prefix === undefined) return [];
 
     const limit = filter.limit ?? Infinity;
     if (limit <= 0) return [];
 
     signal?.throwIfAborted();
 
-    const plan = this.planScan(tenant, filter);
+    const plan = this.planScan(tenant, prefix, filter);
 
     // ids plans are lookups by key, not scans.
     if (plan.ids) {
@@ -807,7 +847,7 @@ export class SqliteArmadaDB implements ArmadaDB {
    * one of those indexes leads with `tenant` and is ordered by time already,
    * so each is read newest-first, within one namespace, with no sorter.
    */
-  private planScan(tenant: string, filter: ParsedFilter): ScanPlan {
+  private planScan(tenant: string, prefix: string | undefined, filter: ParsedFilter): ScanPlan {
     // 1. ids — the (tenant, id) unique index.
     if (filter.ids) {
       return { ids: filter.ids, cursors: [], sqlOnly: false, searched: false };
@@ -821,7 +861,7 @@ export class SqliteArmadaDB implements ArmadaDB {
 
     // 2. tags, or a NIP-50 search: the index drives.
     if (filter.tags.length > 0 || search) {
-      const plan = this.planFts(tenant, filter, search, min, max, exact);
+      const plan = this.planFts(tenant, prefix, filter, search, min, max, exact);
       if (plan) return plan;
     }
 
@@ -928,17 +968,17 @@ export class SqliteArmadaDB implements ArmadaDB {
    */
   private planFts(
     tenant: string,
+    prefix: string | undefined,
     filter: ParsedFilter,
     search: string | undefined,
     min: number | undefined,
     max: number | undefined,
     exact: boolean,
   ): ScanPlan | undefined {
-    const prefix = this.tenantToken(tenant);
     const groups: string[][] = [];
 
     for (const tag of filter.tags) {
-      groups.push(tag.values.map((value) => tagToken(prefix, tag.name, value)));
+      groups.push(tag.values.map((value) => tagToken(prefix!, tag.name, value)));
     }
 
     // A search whose keywords are all negations has nothing for FTS5 to match
@@ -955,7 +995,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       filter.authors.length <= MAX_AUTHOR_TERMS;
 
     if (inIndex) {
-      groups.push(filter.authors!.map((pubkey) => `${prefix}:_p:${part(pubkey)}`));
+      groups.push(filter.authors!.map((pubkey) => `${prefix!}:_p:${part(pubkey)}`));
     }
 
     if (groups.length === 0 && !search) return undefined;
@@ -1033,7 +1073,12 @@ export class SqliteArmadaDB implements ArmadaDB {
       if (filter.neverMatch) return { count: 0, approximate: false };
 
       if (filter.limit === undefined) {
-        const plan = this.planScan(tenant, filter);
+        const prefix = await this.tenantPrefix(tenant);
+        if (filter.tags.length > 0 && prefix === undefined) {
+          return { count: 0, approximate: false };
+        }
+
+        const plan = this.planScan(tenant, prefix, filter);
 
         if (plan.sqlOnly && !plan.ids && plan.cursors.length === 1) {
           const [cursor] = plan.cursors;

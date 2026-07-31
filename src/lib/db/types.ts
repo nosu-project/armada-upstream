@@ -28,11 +28,21 @@ export interface NRumorStore {
   /**
    * Rumors matching any of the filters, newest first (ties: smaller id first).
    *
-   * One caveat on NIP-50 `search`, the only place the adapters don't agree
-   * exactly: SQLite resolves it against an FTS5 index, so keywords match whole
-   * **words** (case- and accent-insensitively), while IndexedDB scans content
-   * for **substrings**. `brown` finds "the quick brown fox" on both; `brow`
-   * finds it only on IndexedDB.
+   * NIP-50 `search` is the one place the adapters don't agree exactly:
+   *
+   *  - SQLite resolves it against an FTS5 index, so keywords match whole
+   *    **words** (case- and accent-insensitively), while IndexedDB scans
+   *    content for **substrings**. `brown` finds "the quick brown fox" on
+   *    both; `brow` finds it only on IndexedDB.
+   *  - SQLite parses the input per NIP-50 — several keywords all have to
+   *    match, `-keyword` excludes, and `key:value` extensions are ignored as
+   *    unsupported — while IndexedDB (via `NIndexedDB`) tests the raw string
+   *    as one substring. So `red -anchor` finds "red boat" only on SQLite.
+   *
+   * They do agree on failing CLOSED: a non-empty search that names nothing
+   * either can match (`domain:example.com`, `""`) matches nothing, rather than
+   * dropping the constraint and answering a narrowing query with everything.
+   * An absent or blank `search` asked for nothing and constrains nothing.
    */
   query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]>;
   /** Store one rumor. Resolves once the write has committed. */

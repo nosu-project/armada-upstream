@@ -7,8 +7,6 @@
  * outlives the rumor it describes.
  */
 import { DatabaseSync } from "node:sqlite";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SqliteArmadaDB } from "./SqliteArmadaDB";
@@ -170,7 +168,7 @@ describe("SqliteArmadaDB — query plans", () => {
     // One statement, one MATCH — the terms are intersected inside FTS5 rather
     // than by driving on one and filtering by the other.
     expect(driver.selects).toHaveLength(1);
-    expect(driver.selects[0].params[0]).toBe('"t:channel:c1" AND "t:reply:r1"');
+    expect(driver.selects[0].params[0]).toBe('"t1:channel:c1" AND "t1:reply:r1"');
   });
 
   it("folds an author constraint into the same match as the tags", async () => {
@@ -183,43 +181,57 @@ describe("SqliteArmadaDB — query plans", () => {
     expect(await db.tenant("t").query([{ "#channel": ["c1"], authors: ["alice"] }])).toEqual([mine]);
 
     expect(driver.selects).toHaveLength(1);
-    expect(driver.selects[0].params[0]).toBe('"t:channel:c1" AND "t:_p:alice"');
+    expect(driver.selects[0].params[0]).toBe('"t1:channel:c1" AND "t1:_p:alice"');
   });
 
   it("scopes tokens to their tenant", async () => {
     const { db, driver } = makeDb();
     await db.tenant("a").event(rumor({ pubkey: "alice", tags: [["channel", "c1"]] }));
+    await db.tenant("b").event(rumor({ pubkey: "alice", tags: [["channel", "c1"]] }));
 
-    expect(rows(driver, "SELECT rowid FROM rumor_tags_fts")).toHaveLength(1);
     // The tenant leads every token, so no posting list is ever shared between
     // two tenants — a query never walks past its own namespace.
+    expect(rows(driver, "SELECT ord, id FROM tenants")).toEqual([
+      { ord: 1, id: "a" },
+      { ord: 2, id: "b" },
+    ]);
     expect(
-      rows(driver, `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"a:channel:c1"'`),
+      rows(driver, `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"t1:channel:c1"'`),
     ).toHaveLength(1);
     expect(
-      rows(driver, `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"b:channel:c1"'`),
+      rows(driver, `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"t2:channel:c1"'`),
+    ).toHaveLength(1);
+    expect(
+      rows(driver, `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"t3:channel:c1"'`),
     ).toHaveLength(0);
   });
 
-  it("hashes a tenant id too long to spell out in every token", async () => {
+  it("names a tenant by an interned integer, not by its id", async () => {
     const { db, driver } = makeDb();
-    const tenant = `c2:${"ab".repeat(32)}`;
+    // Two ids that a truncated hash could be ground into colliding, and that
+    // would be unwieldy to spell out in every token.
+    const one = `c2:${"ab".repeat(32)}`;
+    const two = `c2:${"cd".repeat(32)}`;
     const hit = rumor({ tags: [["channel", "c1"]] });
-    await db.tenant(tenant).event(hit);
+    await db.tenant(one).event(hit);
+    await db.tenant(two).event(rumor({ tags: [["channel", "c1"]] }));
 
-    // Hex-escaping a 67-character id would put 135 characters in front of
-    // every token, so the prefix is a truncated hash instead — `_` plus 16 hex
-    // characters, a form no verbatim id can take.
-    const prefix = `_${bytesToHex(sha256(utf8ToBytes(tenant)).slice(0, 8))}`;
-    expect(prefix).toMatch(/^_[0-9a-f]{16}$/);
-    expect(
-      rows(
-        driver,
-        `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"${prefix}:channel:c1"'`,
-      ),
-    ).toHaveLength(1);
+    expect(rows(driver, "SELECT ord, id FROM tenants")).toEqual([
+      { ord: 1, id: one },
+      { ord: 2, id: two },
+    ]);
+    expect(await db.tenant(one).query([{ "#channel": ["c1"] }])).toEqual([hit]);
+  });
 
-    expect(await db.tenant(tenant).query([{ "#channel": ["c1"] }])).toEqual([hit]);
+  it("finds nothing in a tenant that has never been written to", async () => {
+    const { db } = makeDb();
+    await db.tenant("a").event(rumor({ tags: [["channel", "c1"]] }));
+
+    expect(await db.tenant("unwritten").query([{ "#channel": ["c1"] }])).toEqual([]);
+    expect(await db.tenant("unwritten").count([{ "#channel": ["c1"] }])).toEqual({
+      count: 0,
+      approximate: false,
+    });
   });
 
   it("escapes a tag value the tokenizer would otherwise split or fold", async () => {
@@ -561,7 +573,7 @@ describe("SqliteArmadaDB — index upkeep", () => {
 
     await db.wipe();
 
-    for (const table of ["rumors", "rumor_coords", "kv"]) {
+    for (const table of ["rumors", "rumor_coords", "tenants", "kv"]) {
       expect(rows(driver, `SELECT * FROM ${table}`)).toHaveLength(0);
     }
     for (const table of ["rumor_tags_fts", "rumors_fts"]) {
@@ -574,5 +586,228 @@ describe("SqliteArmadaDB — index upkeep", () => {
     driver.close();
 
     await expect(db.tenant("t").event(rumor())).rejects.toThrow();
+  });
+});
+
+describe("SqliteArmadaDB — injection", () => {
+  /** Payloads aimed at SQL, at FTS5's query language, and at the token encoding. */
+  const HOSTILE = [
+    `'; DROP TABLE rumors; --`,
+    `' OR '1'='1`,
+    `" OR "1"="1`,
+    `x" OR "y`,
+    `"`,
+    `""`,
+    `\\`,
+    `*`,
+    `^`,
+    `(a OR b)`,
+    `NEAR(a b, 5)`,
+    `a AND b`,
+    `{content}`,
+    `content:secret`,
+    `-negated`,
+    `a b`,
+    `tab\there`,
+    `new\nline`,
+    `nul\u0000byte`,
+    `emoji🏴‍☠️`,
+    `ÜPPER`,
+  ];
+
+  it("survives hostile tag values without matching anything else", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+
+    const planted = rumor({ id: "planted", tags: [["channel", "secret"]] });
+    await store.event(planted);
+
+    for (const [i, payload] of HOSTILE.entries()) {
+      const carrier = rumor({ id: `carrier-${i}`, tags: [["channel", payload]] });
+      await store.event(carrier);
+
+      // The value round-trips exactly...
+      expect(await store.query([{ "#channel": [payload] }])).toEqual([carrier]);
+      // ...and nothing it contains reaches the query as syntax.
+      expect(await store.query([{ "#channel": ["secret"] }])).toEqual([planted]);
+    }
+
+    expect(rows(driver, "SELECT count(*) AS c FROM rumors")[0].c).toBe(HOSTILE.length + 1);
+  });
+
+  it("survives hostile tag names, ids, pubkeys, content and tenant ids", async () => {
+    const { db, driver } = makeDb();
+
+    for (const [i, payload] of HOSTILE.entries()) {
+      const store = db.tenant(`tenant-${payload}`);
+      const r = rumor({
+        id: `id-${payload}-${i}`,
+        pubkey: `pk-${payload}`,
+        content: payload,
+        tags: [[payload.slice(0, 20), "value"]],
+      });
+      await store.event(r);
+
+      expect(await store.query([{ ids: [r.id] }])).toEqual([r]);
+      expect(await store.query([{ authors: [r.pubkey] }])).toEqual([r]);
+      expect(await store.query([{ [`#${payload.slice(0, 20)}`]: ["value"] }])).toEqual([r]);
+    }
+
+    // Every table is still there, with exactly what was written.
+    expect(rows(driver, "SELECT count(*) AS c FROM rumors")[0].c).toBe(HOSTILE.length);
+    expect(rows(driver, "SELECT count(*) AS c FROM tenants")[0].c).toBe(HOSTILE.length);
+  });
+
+  it("survives hostile search input", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const secret = rumor({ id: "secret", content: "classified fleet positions" });
+    await store.event(secret);
+
+    for (const payload of HOSTILE) {
+      const got = await store.query([{ search: payload }]);
+      // None of these name a word the rumor has, so the only ones it may
+      // answer are the pure negations — which ask for rumors LACKING a word.
+      expect(got).toEqual(payload.startsWith("-") ? [secret] : []);
+    }
+
+    // Still findable by its own words, so no index was damaged along the way.
+    expect(await store.query([{ search: "classified" }])).toEqual([secret]);
+  });
+
+  it("fails closed on a search that parses to no keywords", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const secret = rumor({ id: "secret", content: "classified fleet positions" });
+    await store.event(secret);
+
+    // Both are consumed entirely by the NIP-50 parse — the first is an
+    // extension this store doesn't implement, the second tokenizes to nothing.
+    // Dropping the constraint would answer a narrowing query with the whole
+    // tenant, so they match nothing instead.
+    expect(await store.query([{ search: "domain:example.com" }])).toEqual([]);
+    expect(await store.query([{ search: '""' }])).toEqual([]);
+    expect(await store.count([{ search: "domain:example.com" }]))
+      .toEqual({ count: 0, approximate: false });
+
+    // An absent or blank search asked for nothing, so it constrains nothing.
+    expect(await store.query([{ search: "" }])).toEqual([secret]);
+    expect(await store.query([{ search: "   " }])).toEqual([secret]);
+  });
+
+  it("cannot forge another rumor's author token through a tag", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    // A space would end a token, so a value carrying one could append tokens of
+    // its own to the row — here, a claim to have been written by `victim`.
+    const forger = rumor({
+      id: "forger",
+      pubkey: "attacker",
+      tags: [["channel", "c1 t1:_p:victim"], ["_p", "victim"], ["p", "victim"]],
+    });
+    await store.event(forger);
+    const real = rumor({ id: "real", pubkey: "victim", tags: [["channel", "c1"]] });
+    await store.event(real);
+
+    expect(await store.query([{ authors: ["victim"] }])).toEqual([real]);
+    expect(await store.query([{ "#channel": ["c1"], authors: ["victim"] }])).toEqual([real]);
+    // The forged value is a value, not two tokens.
+    expect(await store.query([{ "#channel": ["c1"] }])).toEqual([real]);
+    expect(await store.query([{ "#channel": ["c1 t1:_p:victim"] }])).toEqual([forger]);
+  });
+
+  it("cannot reach another tenant by forging its token prefix", async () => {
+    const { db } = makeDb();
+    const mine = rumor({ id: "mine", tags: [["channel", "c1"]] });
+    await db.tenant("a").event(mine);
+
+    // `a` is interned as t1, so these are attempts to name it from outside.
+    const store = db.tenant("b");
+    await store.event(rumor({ id: "probe", tags: [["t1", "channel"], ["channel", "c1"]] }));
+
+    expect(await db.tenant("a").query([{ "#channel": ["c1"] }])).toEqual([mine]);
+    expect(await store.query([{ "#channel": ["c1"] }])).toHaveLength(1);
+    expect((await store.query([{ "#channel": ["c1"] }]))[0].id).toBe("probe");
+  });
+
+  it("cannot delete another author's rumors with a crafted a tag", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    const victim = rumor({
+      id: "victim",
+      kind: 30078,
+      pubkey: "victim",
+      created_at: 100,
+      tags: [["d", "x"]],
+    });
+    await store.event(victim);
+
+    // The coordinate is spelled with `:`, so a request whose own pubkey is a
+    // prefix of the victim's, or which packs the victim's into a `d` tag, must
+    // still not resolve to the victim's coordinate.
+    await store.event(rumor({
+      id: "req",
+      kind: 5,
+      pubkey: "attacker",
+      created_at: 200,
+      tags: [
+        ["a", "30078:victim:x"],
+        ["a", "30078:attacker:x:30078:victim:x"],
+        ["e", "victim"],
+      ],
+    }));
+
+    expect(await store.query([{ kinds: [30078] }])).toEqual([victim]);
+  });
+
+  it("survives a NUL byte in a search, which FTS5 cannot be handed", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const hit = rumor({ id: "hit", content: "hello world" });
+    await store.event(hit);
+
+    // FTS5's query parser is NUL-terminated, so a phrase containing one loses
+    // its closing quote and the query dies with `unterminated string`. Such
+    // keywords are matched in memory instead.
+    expect(await store.query([{ search: "hello\u0000" }])).toEqual([]);
+    expect(await store.query([{ search: "\u0000" }])).toEqual([]);
+    expect(await store.query([{ search: "hello" }])).toEqual([hit]);
+  });
+
+  it("survives every control character in every user-controlled string", async () => {
+    const { db } = makeDb();
+
+    for (let code = 0; code < 0x20; code++) {
+      const payload = `a${String.fromCharCode(code)}b`;
+      const store = db.tenant(`tenant${payload}`);
+
+      await store.event(rumor({
+        id: `id${payload}`,
+        pubkey: `pk${payload}`,
+        content: payload,
+        tags: [["channel", payload]],
+      }));
+
+      // Each of these puts the payload somewhere different: a bound
+      // parameter, a token, and an FTS5 query expression.
+      expect(await store.query([{ "#channel": [payload] }])).toHaveLength(1);
+      expect(await store.query([{ authors: [`pk${payload}`] }])).toHaveLength(1);
+      expect(await store.query([{ ids: [`id${payload}`] }])).toHaveLength(1);
+      await expect(store.query([{ search: payload }])).resolves.toBeInstanceOf(Array);
+    }
+  });
+
+  it("survives hostile kv keys", async () => {
+    const { db, driver } = makeDb();
+
+    for (const payload of HOSTILE) {
+      await db.kv.set(payload, { payload });
+      expect(await db.kv.get(payload)).toEqual({ payload });
+    }
+
+    expect(rows(driver, "SELECT count(*) AS c FROM kv")[0].c).toBe(HOSTILE.length);
+    expect(await db.kv.keys("'")).toEqual([`' OR '1'='1`, `'; DROP TABLE rumors; --`]);
   });
 });
