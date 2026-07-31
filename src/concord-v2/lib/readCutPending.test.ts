@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { addReadCutPending, clearReadCutPending, readCutPending } from "@/concord-v2/lib/readCutPending";
+import {
+  addReadCutPending,
+  clearReadCutPending,
+  readCutPending,
+  readCutPendingReady,
+} from "@/concord-v2/lib/readCutPending";
+import { resetKvCaches } from "@/lib/db/kvCache";
 
 const ME = "me".padEnd(64, "0");
 const CID = "cid".padEnd(64, "0");
@@ -36,10 +42,33 @@ describe("readCutPending", () => {
     expect(readCutPending(ME, "other".padEnd(64, "0"))).toBeUndefined();
   });
 
-  it("ignores malformed stored JSON", () => {
+  it("migrates an intent left in localStorage by an older build", async () => {
+    // The intent moved into ArmadaDB's KV. A ban that failed its rotation
+    // before the upgrade still has to be retried after it.
+    resetKvCaches();
+    localStorage.setItem(
+      `concord2:read-cut-pending:${ME}:${CID}`,
+      JSON.stringify({ targets: [A], keep: [B, C] }),
+    );
+
+    await readCutPendingReady();
+
+    expect(readCutPending(ME, CID)).toEqual({ targets: [A], keep: [B, C] });
+    expect(localStorage.getItem(`concord2:read-cut-pending:${ME}:${CID}`)).toBeNull();
+  });
+
+  it("ignores a malformed stored value", async () => {
+    resetKvCaches();
     localStorage.setItem(`concord2:read-cut-pending:${ME}:${CID}`, "{ not json");
+    await readCutPendingReady();
     expect(readCutPending(ME, CID)).toBeUndefined();
-    localStorage.setItem(`concord2:read-cut-pending:${ME}:${CID}`, JSON.stringify({ targets: "x", keep: [] }));
+
+    resetKvCaches();
+    localStorage.setItem(
+      `concord2:read-cut-pending:${ME}:${CID}`,
+      JSON.stringify({ targets: "x", keep: [] }),
+    );
+    await readCutPendingReady();
     expect(readCutPending(ME, CID)).toBeUndefined();
   });
 });

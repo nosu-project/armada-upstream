@@ -12,6 +12,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { hasDurableEmojis } from "@/lib/emojiPalette";
 import { parseAddr } from "@/lib/parseAddr";
 import { KIND_USER_EMOJIS } from "@/lib/selfSyncKinds";
 
@@ -20,25 +21,15 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 /** NIP-30 emoji set (a shareable pack). */
 export const KIND_EMOJI_SET = 30030;
 
-/**
- * Whether a durable, reload-surviving palette exists for `pubkey`.
- *
- * `useCustomEmojis` owns `armada:custom-emojis:<pubkey>` in localStorage and
- * only writes it once a palette has actually resolved (never from a failed
- * read). It therefore answers "has this account ever had emojis?" across page
- * loads — the in-memory React Query caches are wiped on reload and are empty
- * exactly when a cold-start read is most likely to race out. The key is kept in
- * sync with `useCustomEmojis` by hand; we can't import it without a module
- * cycle (that hook already imports from here).
- */
-function hasDurableEmojis(pubkey: string): boolean {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(`armada:custom-emojis:${pubkey}`) ?? "");
-    return Array.isArray(parsed) && parsed.length > 0;
-  } catch {
-    return false;
-  }
-}
+// Whether a durable, reload-surviving palette exists for an account —
+// "has it ever had emojis?", across page loads, which the in-memory React Query
+// caches cannot answer since they are empty exactly when a cold-start read is
+// most likely to race out.
+//
+// `hasDurableEmojis` lives in `@/lib/emojiPalette` now, which owns the storage
+// both hooks read — it used to be a localStorage key written out here as well
+// and kept in sync with `useCustomEmojis` by hand, since that hook imports from
+// this one.
 
 /** The outcome of reading the user's kind-10030 list. */
 export interface EmojiListRead {

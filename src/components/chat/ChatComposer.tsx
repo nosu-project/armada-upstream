@@ -55,6 +55,7 @@ import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { useToast } from "@/hooks/useToast";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import { KvPrefixCache } from "@/lib/db/kvCache";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
 import { buzzThreadRef } from "@/buzz/protocol";
@@ -128,44 +129,50 @@ function pollOptionId(): string {
   return Math.random().toString(36).slice(2, 8);
 }
 
-/** A per-channel composer draft persisted in localStorage. */
+/** A per-channel composer draft. */
 interface Draft {
   content: string;
   /** Uploaded attachments as [url, NIP-94 tags] entries (Blossom URLs). */
   attachments: [string, string[][]][];
 }
 
+const EMPTY_DRAFT: Draft = { content: "", attachments: [] };
+
 /**
- * Read a channel draft. Tolerates the legacy plain-string format (older builds
- * stored just the text) by treating a non-JSON value as the content.
+ * Per-channel drafts, in ArmadaDB's KV behind a synchronous cache.
+ *
+ * One entry per channel ever typed in, never evicted, and each can hold up to
+ * the NIP-44 plaintext cap — the unbounded claim on localStorage that made this
+ * worth moving. It is also the most sensitive thing that was in there: unsent
+ * plaintext, plus the `decryption-key` imeta tags of encrypted attachments. KV
+ * is no more private than localStorage (same origin, same attacker), but it is
+ * covered by the same logout purge and no longer competes for a 5 MB budget it
+ * could silently exhaust.
+ *
+ * Tolerates the legacy plain-string format (older builds stored just the text)
+ * by treating a non-object value as the content.
  */
+const draftCache = new KvPrefixCache<Partial<Draft> | string>({
+  prefix: "draft:",
+  legacyPrefix: "chat-draft:",
+});
+
 function readDraft(key: string): Draft {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return { content: "", attachments: [] };
-    if (raw[0] === "{") {
-      const parsed = JSON.parse(raw) as Partial<Draft>;
-      return {
-        content: typeof parsed.content === "string" ? parsed.content : "",
-        attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
-      };
-    }
-    return { content: raw, attachments: [] };
-  } catch {
-    return { content: "", attachments: [] };
-  }
+  const stored = draftCache.get(key);
+  if (stored === undefined) return EMPTY_DRAFT;
+  if (typeof stored === "string") return { content: stored, attachments: [] };
+  return {
+    content: typeof stored.content === "string" ? stored.content : "",
+    attachments: Array.isArray(stored.attachments) ? stored.attachments : [],
+  };
 }
 
 /** Write or clear a channel draft. Clears when there's nothing worth keeping. */
 function writeDraft(key: string, content: string, attachments: Map<string, string[][]>): void {
-  try {
-    if (content.trim() || attachments.size > 0) {
-      localStorage.setItem(key, JSON.stringify({ content, attachments: [...attachments] }));
-    } else {
-      localStorage.removeItem(key);
-    }
-  } catch {
-    // localStorage might be full or unavailable.
+  if (content.trim() || attachments.size > 0) {
+    draftCache.set(key, { content, attachments: [...attachments] });
+  } else {
+    draftCache.delete(key);
   }
 }
 
@@ -451,7 +458,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return caps;
   }, [sendOverride, pollsEnabled, onPollSubmit, onSlashAction, canModerate]);
 
-  const draftKey = `chat-draft:${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
+  // The `chat-draft:` prefix is the CACHE's now, not part of the id — it is
+  // what the legacy localStorage keys are drained under, so an id that carried
+  // the prefix too would look up `draft:chat-draft:…` and never find them.
+  const draftKey = `${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
   const [content, setContent] = useState(() => readDraft(draftKey).content);
 
@@ -583,6 +593,20 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const voiceRecorder = useVoiceRecorder();
   const [isPublishingVoice, setIsPublishingVoice] = useState(false);
 
+  // Whether the draft cache has finished loading from KV. The persist effect
+  // below is gated on it: a composer that mounted cold reads an empty draft,
+  // and writing that back would DELETE the stored one before it ever arrived.
+  const [draftsReady, setDraftsReady] = useState(() => draftCache.warmed);
+  useEffect(() => {
+    let cancelled = false;
+    void draftCache.ready().then(() => {
+      if (!cancelled) setDraftsReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // When switching channels, load that channel's draft (text + attachments).
   useEffect(() => {
     const draft = readDraft(draftKey);
@@ -597,6 +621,21 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // for.
     setBotCommand(null);
     armedBotRef.current = undefined;
+
+    // The read above is empty until the cache warms. Fill in afterwards, but
+    // only into fields the user hasn't touched — a restored draft must never
+    // overwrite what someone is in the middle of typing.
+    let cancelled = false;
+    void draftCache.ready().then(() => {
+      if (cancelled) return;
+      const warmed = readDraft(draftKey);
+      if (!warmed.content && warmed.attachments.length === 0) return;
+      setContent((prev) => (prev ? prev : warmed.content));
+      setUploadedFileGroups((prev) => (prev.size > 0 ? prev : new Map(warmed.attachments)));
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [draftKey]);
 
   // Auto-resize the textarea as content grows/shrinks. Also recompute on
@@ -650,6 +689,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // an in-memory ref (never persisted), so a restored ciphertext URL would be
   // undecryptable; drop them from the draft rather than persist a dead blob.
   useEffect(() => {
+    // Not before the cache has warmed: an empty composer writes a CLEAR, which
+    // would delete the very draft still on its way in from KV.
+    if (!draftsReady) return;
     const timer = setTimeout(() => {
       const persistable = encryptAttachments
         ? new Map([...uploadedFileGroups].filter(([url]) => !attachmentEncryption.current.has(url)))
@@ -657,7 +699,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       writeDraft(draftKey, content, persistable);
     }, 300);
     return () => clearTimeout(timer);
-  }, [content, uploadedFileGroups, draftKey, encryptAttachments]);
+  }, [content, uploadedFileGroups, draftKey, encryptAttachments, draftsReady]);
 
   // Detect quote embeds in content (nevent, note, naddr) for preview + q tags.
   const detectedEmbeds = useMemo(() => {
@@ -835,11 +877,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setPollOptions([{ id: pollOptionId(), label: "" }, { id: pollOptionId(), label: "" }]);
     setPollType("singlechoice");
     setPollDuration(7);
-    try {
-      localStorage.removeItem(draftKey);
-    } catch {
-      // ignore
-    }
+    draftCache.delete(draftKey);
     onCancelReply?.();
     // Keep the composer focused after sending so the user can immediately type
     // the next message (clicking the send button otherwise drops focus).

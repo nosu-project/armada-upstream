@@ -8,7 +8,12 @@ import { useRefound2 } from "@/concord-v2/hooks/useRekey2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { banShouldRotate, buildBanlistEdition, buildGrantEdition, hasForeignLiveLinks } from "@/concord-v2/lib/control";
 import { banlistLocator, bytesToHex, grantLocator, hex32 } from "@/concord-v2/lib/derive";
-import { addReadCutPending, clearReadCutPending, readCutPending } from "@/concord-v2/lib/readCutPending";
+import {
+  addReadCutPending,
+  clearReadCutPending,
+  readCutPending,
+  readCutPendingReady,
+} from "@/concord-v2/lib/readCutPending";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { toast } from "@/hooks/useToast";
@@ -223,22 +228,36 @@ export function useReadCutRetry2(community: CommunityV2 | undefined): void {
   useEffect(() => {
     if (retried.current || !user || !community || !folded || !canRefound) return;
     if (refoundsInFlight > 0) return; // a user ban is mid-rotation — let it finish
-    const pending = readCutPending(user.pubkey, community.idHex);
-    if (!pending) return;
-    retried.current = true;
-    if (hasForeignLiveLinks(folded, user.pubkey)) {
-      clearReadCutPending(user.pubkey, community.idHex);
-      return;
-    }
-    refound({ keep: pending.keep, exclude: pending.targets })
-      .then(() => {
+
+    let cancelled = false;
+    void (async () => {
+      // The intent lives in KV behind a synchronous cache. Reading it before
+      // the cache has warmed would report "no cut owed" and strand a banned
+      // member as still-readable — the exact failure this retry exists for.
+      await readCutPendingReady();
+      if (cancelled || retried.current) return;
+
+      const pending = readCutPending(user.pubkey, community.idHex);
+      if (!pending) return;
+      retried.current = true;
+      if (hasForeignLiveLinks(folded, user.pubkey)) {
         clearReadCutPending(user.pubkey, community.idHex);
-        if (community) invalidateControl2(queryClient, community.idHex);
-        toast({ title: "Key rotation completed", description: "An earlier ban's key rotation has now finished." });
-      })
-      .catch(() => {
-        // Still failing — retry again next visit.
-      });
+        return;
+      }
+      refound({ keep: pending.keep, exclude: pending.targets })
+        .then(() => {
+          clearReadCutPending(user.pubkey, community.idHex);
+          if (community) invalidateControl2(queryClient, community.idHex);
+          toast({ title: "Key rotation completed", description: "An earlier ban's key rotation has now finished." });
+        })
+        .catch(() => {
+          // Still failing — retry again next visit.
+        });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, community, folded, canRefound, refoundsInFlight]);
 }

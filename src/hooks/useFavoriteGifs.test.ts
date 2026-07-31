@@ -37,9 +37,11 @@ function shard(deviceId: string, records: FavoriteGifRecord[]): FavoriteGifShard
   return { version: 1, deviceId, records };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   localStorage.clear();
-  resetFavoriteGifsCache();
+  // The shards live in ArmadaDB's KV now, which `localStorage.clear()` doesn't
+  // touch — the reset is what isolates one case from the next.
+  await resetFavoriteGifsCache();
   vi.restoreAllMocks();
 });
 
@@ -73,13 +75,13 @@ describe("favorite GIF cross-device merge", () => {
       .toEqual(["new", "restored"]);
   });
 
-  it("breaks same-clock conflicts deterministically on every device", () => {
+  it("breaks same-clock conflicts deterministically on every device", async () => {
     const add = record("same", true, 10, "aaa");
     const remove = record("same", false, 10, "zzz");
     hydrateFavoriteGifShards(SELF, [shard("a", [add]), shard("b", [remove])]);
     expect(getFavoriteGifRecords(SELF)[0].favorite).toBe(false);
 
-    resetFavoriteGifsCache();
+    await resetFavoriteGifsCache();
     localStorage.clear();
     hydrateFavoriteGifShards(SELF, [shard("b", [remove]), shard("a", [add])]);
     expect(getFavoriteGifRecords(SELF)[0].favorite).toBe(false);

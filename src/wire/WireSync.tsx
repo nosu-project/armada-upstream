@@ -24,6 +24,7 @@ import { useFollowList } from "@/hooks/useFollowList";
 import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import { hasNativeNotificationService } from "@/hooks/useNativeNotifications";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
+import { KvPrefixCache } from "@/lib/db/kvCache";
 import { onFoldedWrite, readFolded } from "@/lib/foldedCache";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { onRelayReopened } from "@/lib/relayReopen";
@@ -88,33 +89,33 @@ const WATCHDOG_TICK_MS = 5_000;
  */
 const REPLAY_BATCH_MAX = 200;
 
-function cursorKey(relay: string): string {
-  return `armada:wire-cursor:${relay}`;
-}
+/**
+ * Per-relay resume cursors, in ArmadaDB's KV behind a synchronous cache.
+ *
+ * One entry per relay ever contacted, never evicted, which is what made this
+ * worth moving off localStorage. A read before {@link cursors.ready} resolves
+ * just resumes from the fresh lookback, so the relay loop awaits it once
+ * before its first round rather than re-reading the whole backlog.
+ */
+const cursors = new KvPrefixCache<number>({
+  prefix: "wire-cursor:",
+  legacyPrefix: "armada:wire-cursor:",
+});
 
 function readCursor(relay: string): number | undefined {
-  try {
-    const raw = localStorage.getItem(cursorKey(relay));
-    const n = raw ? Number(raw) : NaN;
-    return Number.isFinite(n) && n > 0 ? n : undefined;
-  } catch {
-    return undefined;
-  }
+  const n = cursors.get(relay);
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 function writeCursor(relay: string, createdAt: number): void {
-  try {
-    // Clamp against the local clock: an event stamped in the future (a
-    // member's skewed clock, a hostile timestamp) must not drag the cursor
-    // past `now` — every later REQ would open with `since > now` and the wire
-    // would go deaf on this relay (persistently — the cursor is durable)
-    // while everyone else's correctly-stamped messages stop matching.
-    const next = Math.min(createdAt, Math.floor(Date.now() / 1000));
-    const prev = readCursor(relay) ?? 0;
-    if (next > prev) localStorage.setItem(cursorKey(relay), String(next));
-  } catch {
-    // localStorage unavailable — resume from the fresh lookback next launch.
-  }
+  // Clamp against the local clock: an event stamped in the future (a
+  // member's skewed clock, a hostile timestamp) must not drag the cursor
+  // past `now` — every later REQ would open with `since > now` and the wire
+  // would go deaf on this relay (persistently — the cursor is durable)
+  // while everyone else's correctly-stamped messages stop matching.
+  const next = Math.min(createdAt, Math.floor(Date.now() / 1000));
+  const prev = readCursor(relay) ?? 0;
+  if (next > prev) cursors.set(relay, next);
 }
 
 /**
@@ -398,6 +399,10 @@ export function WireSync() {
             wakeSleep = finish;
             controller.signal.addEventListener("abort", finish);
           });
+        // The cursors are in KV now, so the first round has to wait for them.
+        // Reading an unwarmed cache would resume from the fresh lookback and
+        // re-ingest the backlog on every launch.
+        await cursors.ready();
         // Routine rotations are silent in the log; only the first round and
         // anomalies (swallowed REQ, reopen restart, early CLOSED) speak.
         let firstRound = true;

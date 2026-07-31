@@ -187,7 +187,7 @@ export async function pendingUpgrades(): Promise<PendingUpgrades> {
   const version = await readSchemaVersion();
   return {
     legacy: await pendingLegacyDatabases(),
-    schema: pendingSchemaMigrations(version),
+    schema: await pendingSchemaMigrations(version),
     future: isFutureVersion(version),
   };
 }
@@ -259,7 +259,7 @@ export async function runMigrations(
   // every conversion here is a guess; leave the data exactly as found.
   if (isFutureVersion(version)) return;
 
-  const schema = pendingSchemaMigrations(version);
+  const schema = await pendingSchemaMigrations(version);
   const jobs = [
     ...MIGRATIONS.flatMap<{ label: string; run: () => Promise<void> }>((m) =>
       m.perAccount

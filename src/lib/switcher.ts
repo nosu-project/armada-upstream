@@ -27,7 +27,7 @@ import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
-import type { RelayInfoDocument } from "@/hooks/useRelayInfo";
+import { relayInfoCache, type RelayInfoDocument } from "@/hooks/useRelayInfo";
 import type { Nip29Group } from "@/lib/nip29";
 
 /** A navigable space: a NIP-29 server or a Concord community. */
@@ -96,21 +96,15 @@ interface Transport {
 
 /**
  * Resolve a server's display name from whatever is already known — the NIP-11
- * query cache, then the localStorage last-known-good doc — falling back to the
- * bare host. Never triggers a fetch; the switcher must open instantly.
+ * query cache, then the persisted last-known-good doc — falling back to the
+ * bare host. Never triggers a fetch, and never awaits the relay-info cache's
+ * warm: the switcher must open instantly, and the host is a usable answer.
  */
 function serverName(queryClient: QueryClient, relayUrl: string): string {
   const cached = queryClient.getQueryData<RelayInfoDocument>(["relay-info", relayUrl]);
   if (cached?.name) return cached.name;
-  try {
-    const raw = localStorage.getItem(`armada:relay-info:${relayUrl}`);
-    if (raw) {
-      const parsed = JSON.parse(raw) as RelayInfoDocument;
-      if (parsed?.name) return parsed.name;
-    }
-  } catch {
-    // Unparseable cache — fall through to the host.
-  }
+  const persisted = relayInfoCache.get(relayUrl);
+  if (persisted?.name) return persisted.name;
   return relayUrl.replace(/^wss?:\/\//, "").replace(/\/$/, "");
 }
 

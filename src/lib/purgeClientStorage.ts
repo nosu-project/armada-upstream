@@ -1,5 +1,6 @@
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
+import { resetKvCaches } from "@/lib/db/kvCache";
 import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
 
@@ -100,6 +101,10 @@ function purgeLocalStorage(): void {
 export async function purgeClientStorage(): Promise<void> {
   clearRenderedPlaintext();
   resetDecryptConsent();
+  // The KV-backed caches (drafts, relay info, emoji palettes, GIF shards) keep
+  // their own copy in memory. Deleting the database underneath them would
+  // leave the next account reading the previous one's data straight out of it.
+  resetKvCaches();
   purgeLocalStorage();
   // ArmadaDB first: `deleteDatabase` against an open connection is blocked,
   // not applied, so its databases have to be closed before the sweep runs.

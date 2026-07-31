@@ -2,6 +2,7 @@ import { useCallback, useSyncExternalStore } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import type { GifResult } from "@/hooks/useGifSearch";
+import { KvPrefixCache } from "@/lib/db/kvCache";
 import { KIND_APP_SPECIFIC, T_ARMADA_GIF_FAVORITES } from "@/lib/selfSyncKinds";
 
 /** Legacy, device-wide favorites written by Armada before account sync existed. */
@@ -10,9 +11,46 @@ export const FAVORITE_GIFS_EVENT_KIND = KIND_APP_SPECIFIC;
 export const FAVORITE_GIFS_EVENT_TAG = T_ARMADA_GIF_FAVORITES;
 export const FAVORITE_GIFS_D_PREFIX = "armada/gif-favorites/";
 
+/**
+ * The device id stays in localStorage, deliberately, unlike the shards below.
+ * It is 36 bytes, and it has to be readable SYNCHRONOUSLY: `ownShardKey`
+ * embeds it, so an async read that came back empty would mint a second id and
+ * fork this installation's shard in two.
+ */
 const DEVICE_ID_PREFIX = "armada:favorite-gifs:device-id:";
-const OWN_SHARD_PREFIX = "armada:favorite-gifs:shard:";
-const MERGED_PREFIX = "armada:favorite-gifs:merged:";
+
+/**
+ * The shards themselves are in ArmadaDB's KV — unbounded with the number of
+ * favorites, tens of KB each, and both writes swallowed quota failures.
+ *
+ * Two caches rather than one over `armada:favorite-gifs:`, so the drain cannot
+ * reach `device-id:` and delete the localStorage copy the id must keep.
+ */
+const shardStore = new KvPrefixCache<unknown>({
+  prefix: "favorite-gifs-shard:",
+  legacyPrefix: "armada:favorite-gifs:shard:",
+});
+const mergedStore = new KvPrefixCache<unknown>({
+  prefix: "favorite-gifs-merged:",
+  legacyPrefix: "armada:favorite-gifs:merged:",
+});
+
+/**
+ * Load both stores, then drop the derived memos below and re-render: they may
+ * hold results computed while the stores still read empty.
+ */
+function warmFavoriteGifStores(): Promise<void> {
+  return Promise.all([shardStore.ready(), mergedStore.ready()]).then(() => {
+    mergedCache.clear();
+    ownShardCache.clear();
+    notify();
+  });
+}
+
+/** Whether both stores have loaded, i.e. whether a miss means "nothing". */
+function storesWarm(): boolean {
+  return shardStore.warmed && mergedStore.warmed;
+}
 
 export interface FavoriteGifRecord {
   gif: GifResult;
@@ -122,37 +160,36 @@ function mergeRecords(...sets: readonly FavoriteGifRecord[][]): FavoriteGifRecor
   return [...merged.values()].sort((a, b) => b.updatedAt - a.updatedAt || b.operationId.localeCompare(a.operationId));
 }
 
-function mergedKey(pubkey: string): string {
-  return `${MERGED_PREFIX}${pubkey}`;
-}
-
-function ownShardKey(pubkey: string): string {
-  return `${OWN_SHARD_PREFIX}${pubkey}:${favoriteGifsDeviceId(pubkey)}`;
+function ownShardId(pubkey: string): string {
+  return `${pubkey}:${favoriteGifsDeviceId(pubkey)}`;
 }
 
 function loadMerged(pubkey: string): FavoriteGifRecord[] {
   const hit = mergedCache.get(pubkey);
   if (hit) return hit;
+  void warmFavoriteGifStores();
   let records: FavoriteGifRecord[] = [];
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(mergedKey(pubkey)) ?? "");
-    if (Array.isArray(parsed)) records = mergeRecords(parsed.filter(isRecord));
-  } catch {
-    // Missing/corrupt cache: the relay pull and own shard will rebuild it.
-  }
+  const parsed = mergedStore.get(pubkey);
+  if (Array.isArray(parsed)) records = mergeRecords(parsed.filter(isRecord));
   records = mergeRecords(records, loadOwnFavoriteGifShard(pubkey).records);
-  mergedCache.set(pubkey, records);
+  // Only memoise a result the stores could actually answer. Caching an empty
+  // read taken before they loaded would outlive the load.
+  if (storesWarm()) mergedCache.set(pubkey, records);
   return records;
 }
 
+/**
+ * Persist the union. MERGES with what is already stored rather than replacing
+ * it: a toggle taken before the stores loaded computed its `records` from an
+ * empty read, and a straight replace would drop every favorite still on disk.
+ * Merging is free of that hazard by construction — the CRDT keeps the highest
+ * `updatedAt` per GIF, so no stale record can win and no tombstone is lost.
+ */
 function saveMerged(pubkey: string, records: FavoriteGifRecord[]): void {
-  const next = mergeRecords(records);
+  const stored = mergedStore.get(pubkey);
+  const next = mergeRecords(records, Array.isArray(stored) ? stored.filter(isRecord) : []);
   mergedCache.set(pubkey, next);
-  try {
-    localStorage.setItem(mergedKey(pubkey), JSON.stringify(next));
-  } catch {
-    // The in-memory copy remains usable when localStorage is unavailable/full.
-  }
+  mergedStore.set(pubkey, next);
 }
 
 function notify(): void {
@@ -163,25 +200,25 @@ function notify(): void {
 export function loadOwnFavoriteGifShard(pubkey: string): FavoriteGifShard {
   const hit = ownShardCache.get(pubkey);
   if (hit) return hit;
+  void warmFavoriteGifStores();
   const empty: FavoriteGifShard = { version: 1, deviceId: favoriteGifsDeviceId(pubkey), records: [] };
-  try {
-    const parsed = parseFavoriteGifShard(JSON.parse(localStorage.getItem(ownShardKey(pubkey)) ?? ""));
-    const shard = parsed?.deviceId === empty.deviceId ? parsed : empty;
-    ownShardCache.set(pubkey, shard);
-    return shard;
-  } catch {
-    ownShardCache.set(pubkey, empty);
-    return empty;
-  }
+  const parsed = parseFavoriteGifShard(shardStore.get(ownShardId(pubkey)));
+  const shard = parsed?.deviceId === empty.deviceId ? parsed : empty;
+  // As in `loadMerged`: an empty read taken before the stores loaded is not an
+  // answer worth remembering.
+  if (storesWarm()) ownShardCache.set(pubkey, shard);
+  return shard;
 }
 
+/** Persist this device's shard, merging with what is stored — see `saveMerged`. */
 function saveOwnShard(pubkey: string, shard: FavoriteGifShard): void {
-  ownShardCache.set(pubkey, shard);
-  try {
-    localStorage.setItem(ownShardKey(pubkey), JSON.stringify(shard));
-  } catch {
-    // The in-memory shard can still be published this session.
-  }
+  const stored = parseFavoriteGifShard(shardStore.get(ownShardId(pubkey)));
+  const next: FavoriteGifShard = {
+    ...shard,
+    records: mergeRecords(shard.records, stored?.deviceId === shard.deviceId ? stored.records : []),
+  };
+  ownShardCache.set(pubkey, next);
+  shardStore.set(ownShardId(pubkey), next);
 }
 
 /** Fold decrypted shards into the durable local union. Tombstones are retained. */
@@ -372,8 +409,10 @@ export function useFavoriteGifs() {
 }
 
 /** Test seam for independent localStorage scenarios. */
-export function resetFavoriteGifsCache(): void {
+export async function resetFavoriteGifsCache(): Promise<void> {
   mergedCache.clear();
   ownShardCache.clear();
   snapshotCache.clear();
+  // The shards outlive `localStorage.clear()` now — they are in KV.
+  await Promise.all([shardStore.clear(), mergedStore.clear()]);
 }
