@@ -183,6 +183,7 @@ const SANDBOX_ALLOW = [
   "microphone",
   "midi",
   "picture-in-picture",
+  "pointer-lock",
   "screen-wake-lock",
   "speaker-selection",
   "storage-access",
@@ -350,9 +351,12 @@ export const SandboxFrame = forwardRef<SandboxFrameHandle, SandboxFrameProps>(
         // allow-scripts + allow-same-origin let apps run JS and use origin-keyed
         // storage and register the iframe.diy Service Worker; because the iframe
         // lives on a distinct HMAC-derived subdomain it is still a different
-        // origin from the parent app. Notably omits allow-top-navigation
+        // origin from the parent app. allow-pointer-lock lets games (e.g.
+        // webxdc first-person shooters) capture the mouse via
+        // requestPointerLock(); it's escapable with Esc and gated on a user
+        // gesture, so it's safe to delegate. Notably omits allow-top-navigation
         // (prevents window.top.location phishing redirects).
-        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock"
         {...iframeProps}
       />
     );
