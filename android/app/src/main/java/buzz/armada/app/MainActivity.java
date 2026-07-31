@@ -21,6 +21,15 @@ public class MainActivity extends BridgeActivity {
     // (e.g. a JS crash before paint) so the splash can't hang forever.
     private static final long SPLASH_MAX_MS = 8000;
 
+    // Floor on how long the splash stays up, matching the crest entrance
+    // animation (splash_logo_anim.xml ends at ~960ms, inside the 1000ms
+    // windowSplashScreenAnimationDuration in styles.xml). The WebView can paint
+    // before the animation finishes; without this floor an early paint lifts the
+    // splash mid-animation, which looks janky. The web-painted signal still gates
+    // dismissal past this point — this only stops the splash lifting EARLY, never
+    // extends a slow cold start.
+    private static final long SPLASH_MIN_MS = 1000;
+
     // How often to check WebReadyPlugin.webPainted (ms).
     private static final long SPLASH_POLL_MS = 16;
 
@@ -58,15 +67,19 @@ public class MainActivity extends BridgeActivity {
         EdgeToEdge.enable(this);
         super.onCreate(savedInstanceState);
 
-        // Poll the web-painted flag; lift the splash once set, with a safety
-        // timeout so it can never hang.
+        // Poll the web-painted flag; lift the splash once it's set AND the crest
+        // animation has had its SPLASH_MIN_MS to play out, with a safety timeout
+        // (SPLASH_MAX_MS) that overrides both so it can never hang.
         final Handler handler = new Handler(Looper.getMainLooper());
-        final long deadline = System.currentTimeMillis() + SPLASH_MAX_MS;
+        final long start = System.currentTimeMillis();
+        final long deadline = start + SPLASH_MAX_MS;
+        final long animationDone = start + SPLASH_MIN_MS;
         handler.post(
             new Runnable() {
                 @Override
                 public void run() {
-                    if (WebReadyPlugin.webPainted || System.currentTimeMillis() >= deadline) {
+                    long now = System.currentTimeMillis();
+                    if ((WebReadyPlugin.webPainted && now >= animationDone) || now >= deadline) {
                         webNotReady = false;
                     } else {
                         handler.postDelayed(this, SPLASH_POLL_MS);
