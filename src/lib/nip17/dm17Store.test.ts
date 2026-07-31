@@ -4,8 +4,10 @@ import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import {
+  DM17_DRAIN_PAGE,
   dm17Store,
   dm17ToStored,
+  migrateLegacyDms,
   queryDm17Conversations,
   queryDm17Thread,
   queryDm17Timer,
@@ -250,4 +252,23 @@ describe("dm17Store legacy drain", () => {
     expect(ids.has(anaReacted.rumorId)).toBe(true);
     expect(ids.has(benSent.rumorId)).toBe(false);
   });
+
+  it("pages past the scan window instead of copying only the newest slice", async () => {
+    // The drain used to read the store with one `limit`-capped query. Anything
+    // past the cap was left behind — and then deleted with the database, since
+    // the drain resolved either way. Re-decrypting is not a recovery path: it
+    // needs gift wraps the relays have long since dropped.
+    const dana = getPublicKey(generateSecretKey());
+    const total = DM17_DRAIN_PAGE + 50;
+
+    const legacy = new NIndexedDB("armada-dm17-rumors");
+    for (let i = 0; i < total; i++) {
+      const o = opened({ author: dana, peer: carla, content: `msg-${i}`, tags: dmChatTags(carla) });
+      await legacy.event({ ...dm17ToStored(o), sig: "" });
+    }
+    await legacy.close();
+
+    await migrateLegacyDms(dana);
+    expect((await dm17Store(dana).count([{ kinds: [KIND_DM_CHAT] }])).count).toBe(total);
+  }, 60_000);
 });

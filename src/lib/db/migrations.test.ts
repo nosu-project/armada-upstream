@@ -1,13 +1,16 @@
 // @vitest-environment node
 /**
- * The migration catalogue's two load-bearing rules:
+ * The migration catalogue's load-bearing rules:
  *
  *  - a per-account drain runs for EVERY logged-in account before the shared
- *    database behind it is deleted, and
- *  - nothing is deleted at all if a drain failed.
+ *    database behind it is deleted,
+ *  - nothing is deleted at all if a drain failed OR could not yet run, and
+ *  - the schema version only advances over data that actually made it across.
  *
- * Both exist because the legacy databases are the only copy of data that
- * cannot be refetched. Getting either wrong destroys it silently.
+ * The first three exist because the legacy databases are the only copy of data
+ * that cannot be refetched. Getting any of them wrong destroys it silently —
+ * "resolved" is the signal to delete, so a drain that copies nothing and
+ * resolves is indistinguishable from one that copied everything.
  */
 import { NIndexedDB } from "@nostrify/indexeddb";
 import { IDBFactory } from "fake-indexeddb";
@@ -95,5 +98,169 @@ describe("runMigrations", { timeout: 30_000 }, () => {
     const { pendingLegacyDatabases, runMigrations } = await freshModules();
     await runMigrations([A]);
     expect(await pendingLegacyDatabases()).toEqual([]);
+  });
+
+  it("deletes nothing when a drain copies nothing and resolves", async () => {
+    // The failure mode the "throws" case above cannot see: a drain that
+    // swallows its own error resolves, and a resolved drain is the catalogue's
+    // signal that the source is safe to delete.
+    const mod = await freshModules();
+    const original = mod.MIGRATIONS[0].run;
+    mod.MIGRATIONS[0].run = () => Promise.resolve();
+    try {
+      const legacy = new NIndexedDB("armada-concord-cache");
+      await legacy.event({
+        id: "row",
+        kind: 1,
+        content: "",
+        created_at: 1,
+        pubkey: A,
+        tags: [],
+        sig: "",
+      });
+      await legacy.close();
+
+      await mod.runMigrations([A]);
+      // Resolved, so it IS deleted — which is exactly why a drain must not
+      // resolve without having copied. The rest of this file pins the drains
+      // that could previously do so.
+      expect(await databaseNames()).not.toContain("armada-concord-cache");
+    } finally {
+      mod.MIGRATIONS[0].run = original;
+    }
+  });
+
+  it("keeps the Concord store when the account's community list isn't cached", async () => {
+    // Community rows carry no community id — attribution needs the cached,
+    // decrypted list, and without it the drain can claim nothing. Resolving
+    // anyway would delete a history that is frequently only on this device.
+    const legacy = new NIndexedDB("armada-concord-rumors");
+    await legacy.event({
+      id: "c".repeat(64),
+      kind: 9,
+      content: "hello",
+      created_at: 1000,
+      pubkey: A,
+      tags: [["channel", "d".repeat(64)]],
+      sig: "",
+    });
+    await legacy.close();
+
+    const { runMigrations } = await freshModules();
+    await runMigrations([A]);
+
+    expect(await databaseNames()).toContain("armada-concord-rumors");
+    const { getArmadaDB } = await import("./armadaDB");
+    expect(await getArmadaDB().kv.get(`c2rumors:migrated:${A}`)).toBeUndefined();
+  });
+
+  it("drains the Concord store when the cached list says the account has left", async () => {
+    // A cached but EMPTY list is an answer, unlike no cached list: nothing in
+    // the store is attributable, so there is nothing to lose by deleting it.
+    const legacy = new NIndexedDB("armada-concord-rumors");
+    await legacy.event({
+      id: "c".repeat(64),
+      kind: 9,
+      content: "orphan",
+      created_at: 1000,
+      pubkey: A,
+      tags: [["channel", "d".repeat(64)]],
+      sig: "",
+    });
+    await legacy.close();
+
+    const mod = await freshModules();
+    const { writeFolded } = await import("@/lib/foldedCache");
+    const { communityListFoldKey } = await import("@/concord-v2/lib/communityList");
+    await writeFolded(communityListFoldKey(A), { event: null, list: { entries: [] } });
+
+    await mod.runMigrations([A]);
+
+    expect(await databaseNames()).not.toContain("armada-concord-rumors");
+  });
+});
+
+describe("schema version", { timeout: 30_000 }, () => {
+  beforeEach(() => {
+    (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
+  });
+
+  it("stamps the current version after a clean run", async () => {
+    const { runMigrations } = await freshModules();
+    await runMigrations([A]);
+
+    const { getArmadaDB } = await import("./armadaDB");
+    const { ARMADA_DB_VERSION, SCHEMA_VERSION_KEY } = await import("./schema");
+    expect(await getArmadaDB().kv.get(SCHEMA_VERSION_KEY)).toBe(ARMADA_DB_VERSION);
+  });
+
+  it("leaves the version unstamped when a drain failed", async () => {
+    // The stamp says "this data is in the current shape". Data still sitting
+    // in an undrained database is not, and a schema migration written later
+    // would skip right over it.
+    const mod = await freshModules();
+    const original = mod.MIGRATIONS[0].run;
+    mod.MIGRATIONS[0].run = () => Promise.reject(new Error("disk on fire"));
+    try {
+      await mod.runMigrations([A]);
+      const { getArmadaDB } = await import("./armadaDB");
+      const { SCHEMA_VERSION_KEY } = await import("./schema");
+      expect(await getArmadaDB().kv.get(SCHEMA_VERSION_KEY)).toBeUndefined();
+    } finally {
+      mod.MIGRATIONS[0].run = original;
+    }
+  });
+
+  it("leaves data written by a newer build alone", async () => {
+    const mod = await freshModules();
+    const { getArmadaDB } = await import("./armadaDB");
+    const { SCHEMA_VERSION_KEY } = await import("./schema");
+    await getArmadaDB().kv.set(SCHEMA_VERSION_KEY, 999);
+
+    const legacy = new NIndexedDB("armada-concord-invites");
+    await legacy.event({
+      id: "invite",
+      kind: 3313,
+      content: "{}",
+      created_at: 1,
+      pubkey: "sender",
+      tags: [["p", A]],
+      sig: "",
+    });
+    await legacy.close();
+
+    await mod.runMigrations([A]);
+
+    // No conversion here was written against that shape, so nothing runs and
+    // the marker is never walked backwards.
+    expect(await getArmadaDB().kv.get(SCHEMA_VERSION_KEY)).toBe(999);
+    expect(await databaseNames()).toContain("armada-concord-invites");
+  });
+
+  it("marks a fresh install up to date without creating legacy databases", async () => {
+    // A drain that opens a legacy database CREATES it, so an install with
+    // nothing to migrate would manufacture the very database the gate scans
+    // for and show a storage-upgrade overlay on its second launch, forever.
+    const { markUpToDate, pendingUpgrades, legacyDatabaseNames } = await freshModules();
+
+    const pending = await pendingUpgrades();
+    expect(pending.legacy).toEqual([]);
+    expect(pending.schema).toEqual([]);
+    expect(pending.future).toBe(false);
+
+    await markUpToDate();
+
+    // Now exercise the lazy drain paths the app hits during an ordinary session.
+    const { readFolded } = await import("@/lib/foldedCache");
+    const { eventIdsForRelay } = await import("@/lib/relayProvenance");
+    const { queryDm17Conversations } = await import("@/lib/nip17/dm17Store");
+    const { queryStoredInvites } = await import("@/concord-v2/lib/inviteInbox");
+    await readFolded("anything");
+    await eventIdsForRelay("wss://relay.example");
+    await queryDm17Conversations(A);
+    await queryStoredInvites(A);
+
+    const names = await databaseNames();
+    expect(names.filter((n) => legacyDatabaseNames().includes(n))).toEqual([]);
   });
 });

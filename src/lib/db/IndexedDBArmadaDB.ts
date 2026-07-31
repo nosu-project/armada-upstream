@@ -81,7 +81,14 @@ interface KVSchema extends DBSchema {
   tenants: { key: string; value: true };
 }
 
-/** Bumped when {@link KVSchema} gains a store. */
+/**
+ * Bumped when {@link KVSchema} gains a store.
+ *
+ * This is IndexedDB's own version — the STORE LAYOUT of this one database,
+ * upgraded by the transaction below. It is not the data-schema version: what
+ * the keys mean and what shape their values are in is `ARMADA_DB_VERSION` in
+ * `schema.ts`, which spans every database and both adapters.
+ */
 const KV_DB_VERSION = 2;
 
 /**

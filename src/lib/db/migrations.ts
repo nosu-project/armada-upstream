@@ -32,6 +32,15 @@ import { LEGACY_FOLDED_DB_NAME, migrateLegacyFolded } from "@/lib/foldedCache";
 
 import { getArmadaDB } from "./armadaDB";
 import { LEGACY_EVENT_DB_NAME, migrateLegacyEvents } from "./eventStoreMigration";
+import { MIGRATIONS_COMPLETE_KEY } from "./legacyDatabases";
+import {
+  ARMADA_DB_VERSION,
+  isFutureVersion,
+  pendingSchemaMigrations,
+  readSchemaVersion,
+  stampSchemaVersion,
+  type SchemaMigration,
+} from "./schema";
 
 export interface Migration {
   /** Stable id (appears in no storage key — the drains own their own flags). */
@@ -116,7 +125,7 @@ export const MIGRATIONS: Migration[] = [
 ];
 
 /** Set once every migration has run for every account and the old data is gone. */
-const COMPLETE_KEY = "migrations:complete";
+const COMPLETE_KEY = MIGRATIONS_COMPLETE_KEY;
 
 /** Every legacy database name any migration consumes. */
 export function legacyDatabaseNames(): string[] {
@@ -127,15 +136,27 @@ export function legacyDatabaseNames(): string[] {
  * Which legacy databases are still present, i.e. whether there is anything to
  * migrate at all.
  *
- * Enumerating the origin is the direct answer, and the one that self-heals: a
+ * The completion flag is checked FIRST, ahead of enumerating the origin. It is
+ * set only after a run in which every drain succeeded and every database was
+ * deleted, so it can't mask unfinished work — and it does mask the one thing
+ * enumeration gets wrong: a drain opening a legacy database creates it, so an
+ * empty one can exist at an origin that has already migrated (or never had
+ * anything to migrate) and would otherwise re-trigger the gate forever.
+ *
+ * Otherwise enumeration is the direct answer, and the one that self-heals: a
  * database left behind by a half-finished run is found again next launch.
- * Firefox has no `indexedDB.databases()`, so it falls back to a KV flag — and
- * when even that is unset, to assuming the worst. Assuming the worst is cheap:
- * the drains no-op once their own flags are set.
+ * Firefox has no `indexedDB.databases()`, so it falls back to assuming the
+ * worst — cheap, since the drains no-op once their own flags are set.
  */
 export async function pendingLegacyDatabases(): Promise<string[]> {
   const names = legacyDatabaseNames();
   if (typeof indexedDB === "undefined") return [];
+
+  try {
+    if (await getArmadaDB().kv.get<boolean>(COMPLETE_KEY)) return [];
+  } catch {
+    // fall through to enumeration
+  }
 
   if (typeof indexedDB.databases === "function") {
     try {
@@ -144,11 +165,61 @@ export async function pendingLegacyDatabases(): Promise<string[]> {
       );
       return names.filter((name) => present.has(name));
     } catch {
-      // fall through to the flag
+      // fall through to assuming the worst
     }
   }
 
-  return (await getArmadaDB().kv.get<boolean>(COMPLETE_KEY)) ? [] : names;
+  return names;
+}
+
+/** Everything the startup gate has to do before the app can read its data. */
+export interface PendingUpgrades {
+  /** Legacy databases still holding data (see {@link pendingLegacyDatabases}). */
+  legacy: string[];
+  /** Schema conversions owed for the version on disk. */
+  schema: SchemaMigration[];
+  /** The data was written by a newer build; nothing will be run against it. */
+  future: boolean;
+}
+
+/** What {@link runMigrations} would actually do, without doing any of it. */
+export async function pendingUpgrades(): Promise<PendingUpgrades> {
+  const version = await readSchemaVersion();
+  return {
+    legacy: await pendingLegacyDatabases(),
+    schema: pendingSchemaMigrations(version),
+    future: isFutureVersion(version),
+  };
+}
+
+/**
+ * Record that the data on disk matches this build.
+ *
+ * Never moves the marker BACKWARDS. A profile stamped by a newer build keeps
+ * its stamp: overwriting it with ours would make that build re-run, on its next
+ * launch, migrations it already applied.
+ */
+async function stampCurrentVersion(): Promise<void> {
+  const from = await readSchemaVersion();
+  if (isFutureVersion(from) || from === ARMADA_DB_VERSION) return;
+  await stampSchemaVersion();
+}
+
+/**
+ * Mark an origin with nothing to migrate as fully up to date.
+ *
+ * Called by the gate on the quiet path — a fresh install, or any launch after
+ * the upgrade — and it is what keeps a fresh install quiet: with the flag set,
+ * no drain ever opens (and so never creates) a legacy database, so none is
+ * there for the next launch's gate to find.
+ */
+export async function markUpToDate(): Promise<void> {
+  await stampCurrentVersion();
+  try {
+    await getArmadaDB().kv.set(COMPLETE_KEY, true);
+  } catch {
+    // best-effort: the drains' own flags still make this idempotent
+  }
 }
 
 export interface MigrationProgress {
@@ -161,29 +232,55 @@ export interface MigrationProgress {
 }
 
 /**
- * Run every migration for every account, then delete the databases they
- * consumed.
+ * Bring the origin up to {@link ARMADA_DB_VERSION}: drain every legacy database
+ * for every account, delete them, apply any schema conversions, and stamp the
+ * version.
  *
- * Deletion is the whole reason this runs across all accounts at once: a
+ * Deletion is the whole reason the drains run across all accounts at once: a
  * per-account drain takes only its own account's share, so the shared database
  * behind it stays live until the last account has been through. A drain that
- * throws leaves its own flag unset and this returns early WITHOUT deleting —
- * the next launch retries rather than destroying data nobody copied.
+ * throws leaves its own flag unset and nothing is deleted this round — the next
+ * launch retries rather than destroying data nobody copied. That guarantee
+ * rests on drains actually REPORTING failure, so a drain must not resolve after
+ * swallowing its own error.
+ *
+ * The schema step is ordered after the drains and gated on them: a conversion
+ * is written against the current shape, and data still sitting in a legacy
+ * database hasn't reached that shape yet. Running one over a half-migrated
+ * origin would convert some rows and miss the rest, then stamp the version so
+ * nothing ever revisits them.
  */
 export async function runMigrations(
   accounts: string[],
   onProgress?: (progress: MigrationProgress) => void,
 ): Promise<void> {
-  const jobs = MIGRATIONS.flatMap<{ m: Migration; self: string | undefined }>((m) =>
-    m.perAccount ? accounts.map((self) => ({ m, self })) : [{ m, self: undefined }],
-  );
+  const version = await readSchemaVersion();
+  // Written by a newer build. Its shape is not one this code has ever seen, so
+  // every conversion here is a guess; leave the data exactly as found.
+  if (isFutureVersion(version)) return;
 
+  const schema = pendingSchemaMigrations(version);
+  const jobs = [
+    ...MIGRATIONS.flatMap<{ label: string; run: () => Promise<void> }>((m) =>
+      m.perAccount
+        ? accounts.map((self) => ({ label: m.label, run: () => m.run(self) }))
+        : [{ label: m.label, run: () => m.run(undefined) }],
+    ),
+  ];
+  const schemaJobs = schema.map((m) => ({
+    to: m.to,
+    label: m.label,
+    selves: m.perAccount ? accounts : [undefined],
+  }));
+
+  const total = jobs.length + schemaJobs.reduce((n, s) => n + s.selves.length, 0);
   let done = 0;
   let failed = false;
-  for (const { m, self } of jobs) {
-    onProgress?.({ label: m.label, done, total: jobs.length });
+
+  for (const job of jobs) {
+    onProgress?.({ label: job.label, done, total });
     try {
-      await m.run(self);
+      await job.run();
     } catch {
       // Keep going: one subsystem failing shouldn't strand the others. Nothing
       // is deleted this round.
@@ -191,11 +288,39 @@ export async function runMigrations(
     }
     done++;
   }
-  onProgress?.({ label: "Cleaning up", done, total: jobs.length });
 
+  if (!failed) {
+    onProgress?.({ label: "Cleaning up", done, total });
+    await deleteLegacyDatabases();
+    await getArmadaDB().kv.set(COMPLETE_KEY, true);
+  }
+
+  // A schema conversion assumes the drains landed, so a failed drain stops the
+  // version advancing too — otherwise the stamp would declare data converted
+  // that is still sitting in a database the next launch has yet to drain.
   if (failed) return;
-  await deleteLegacyDatabases();
-  await getArmadaDB().kv.set(COMPLETE_KEY, true);
+
+  for (const [i, step] of schemaJobs.entries()) {
+    const m = schema[i];
+    for (const self of step.selves) {
+      onProgress?.({ label: step.label, done, total });
+      try {
+        await m.run(self);
+      } catch {
+        // Stop at the first failure: versions are applied in order, and
+        // skipping one to run the next hands it data in a shape it was never
+        // written for. The version isn't stamped, so the next launch retries.
+        return;
+      }
+      done++;
+    }
+    // Stamped once the step has run for EVERY account, and per step rather than
+    // once at the end, so a run interrupted half way down the list resumes at
+    // the next step instead of starting over.
+    await stampSchemaVersion(step.to);
+  }
+
+  await stampCurrentVersion();
 }
 
 /** Delete every consumed database, best-effort. */

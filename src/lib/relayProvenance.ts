@@ -1,6 +1,7 @@
 import { openDB } from "idb";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 // ============================================================================
@@ -114,7 +115,12 @@ let drain: Promise<void> | undefined;
  * upgrading.
  */
 export function migrateLegacyProvenance(): Promise<void> {
-  drain ??= drainLegacyProvenance();
+  drain ??= drainLegacyProvenance().catch((err: unknown) => {
+    // Retry next launch rather than marking a partial copy done. Re-reported
+    // so the startup gate doesn't delete the source of an unfinished copy.
+    drain = undefined;
+    throw err;
+  });
   return drain;
 }
 
@@ -122,28 +128,25 @@ async function drainLegacyProvenance(): Promise<void> {
   const db = getArmadaDB();
   if (await db.kv.get<boolean>(DONE_KEY)) return;
   if (typeof indexedDB === "undefined") return;
+  // `openDB` CREATES the database when it is absent; see `skipLegacyDrain`.
+  if (await skipLegacyDrain(LEGACY_PROVENANCE_DB_NAME)) return;
 
+  const legacy = await openDB(LEGACY_PROVENANCE_DB_NAME, 1, {
+    upgrade(d) {
+      if (!d.objectStoreNames.contains(LEGACY_STORE)) {
+        d.createObjectStore(LEGACY_STORE, { keyPath: "key" });
+      }
+    },
+  });
   try {
-    // `openDB` without an upgrade callback still CREATES the database when it
-    // is absent — harmless, and the migration deletes it either way.
-    const legacy = await openDB(LEGACY_PROVENANCE_DB_NAME, 1, {
-      upgrade(d) {
-        if (!d.objectStoreNames.contains(LEGACY_STORE)) {
-          d.createObjectStore(LEGACY_STORE, { keyPath: "key" });
-        }
-      },
-    });
     const rows = (await legacy.getAll(LEGACY_STORE)) as Array<{ relay: string; eventId: string }>;
     for (const { relay, eventId } of rows) {
       if (typeof relay === "string" && typeof eventId === "string") {
         await db.kv.set(rowKey(relay, eventId), 1);
       }
     }
+  } finally {
     legacy.close();
-  } catch {
-    // Retry next launch rather than marking a partial copy done.
-    drain = undefined;
-    return;
   }
 
   await db.kv.set(DONE_KEY, true);

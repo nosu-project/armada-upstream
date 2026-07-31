@@ -33,6 +33,7 @@ import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -80,10 +81,21 @@ const LEGACY_MIGRATION_KEY = (recipient: string) => `invites:migrated:${recipien
 /** In-flight/settled drains, so concurrent reads share one pass. */
 const drains = new Map<string, Promise<void>>();
 
+/**
+ * Copy `recipient`'s invites out of the shared database. Idempotent, memoised,
+ * and REJECTS on failure — the startup gate deletes the shared database once
+ * every drain has resolved for every account, so a swallowed error here would
+ * read as a finished copy and take the invites with it.
+ */
 export function migrateLegacyInvites(recipient: string): Promise<void> {
   let drain = drains.get(recipient);
   if (!drain) {
-    drain = drainLegacyInvites(recipient);
+    drain = drainLegacyInvites(recipient).catch((err: unknown) => {
+      // Drop the memo so a later read retries: writes are keyed by wrap id, so
+      // recopying what already landed costs nothing.
+      drains.delete(recipient);
+      throw err;
+    });
     drains.set(recipient, drain);
   }
   return drain;
@@ -93,22 +105,21 @@ async function drainLegacyInvites(recipient: string): Promise<void> {
   const db = getArmadaDB();
   const key = LEGACY_MIGRATION_KEY(recipient);
   if (await db.kv.get<boolean>(key)) return;
+  // `NIndexedDB` CREATES the database on its first query, which would leave a
+  // device that never had one with the very database the startup gate scans
+  // for. See `skipLegacyDrain`.
+  if (await skipLegacyDrain(LEGACY_DB_NAME)) return;
 
+  const legacy = new NIndexedDB(LEGACY_DB_NAME);
   try {
-    const legacy = new NIndexedDB(LEGACY_DB_NAME);
     const events = await legacy.query([{ kinds: [KIND_DIRECT_INVITE], "#p": [recipient] }]);
     const tenant = db.tenant(`invites:${recipient}`);
     for (const event of events) {
       const { sig: _sig, ...rumor } = event;
       await tenant.event(rumor);
     }
-    await legacy.close();
-  } catch {
-    // Failed part-way, or IndexedDB is unavailable. Leave the flag unset and
-    // drop the memo so a later read retries: writes are keyed by wrap id, so
-    // recopying what already landed costs nothing.
-    drains.delete(recipient);
-    return;
+  } finally {
+    await legacy.close().catch(() => undefined);
   }
 
   await db.kv.set(key, true);

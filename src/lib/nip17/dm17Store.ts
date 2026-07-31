@@ -36,6 +36,7 @@ import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -92,18 +93,46 @@ export function dm17Store(self: string): NRumorStore {
 // would then match both. On the ordinary single-account install everything
 // qualifies either way.
 
-/** Records read from the legacy database in one drain (a bound, not a page). */
-const DRAIN_LIMIT = 50_000;
+/**
+ * Records read per page of the newest-first scan.
+ *
+ * The whole store is read, not a single capped query: attribution needs every
+ * record at once (a delete of a reaction of a message is only attributable
+ * once its target is), so pages are accumulated rather than processed one by
+ * one. This is a page size, not a ceiling on what is copied.
+ */
+export const DM17_DRAIN_PAGE = 500;
+
+/**
+ * Pages a single drain will walk. A store this deep is far past any real DM
+ * history; hitting the bound means something is wrong with the paging, and the
+ * drain FAILS rather than copying a prefix and letting the gate delete the
+ * rest.
+ */
+const DRAIN_MAX_PAGES = 2_000;
 
 const DRAIN_KEY = (self: string) => `dm17:migrated:${self}`;
 
 /** In-flight/settled drains, so concurrent reads share one pass. */
 const drains = new Map<string, Promise<void>>();
 
+/**
+ * Copy `self`'s share of the legacy database across. Idempotent and memoised.
+ *
+ * REJECTS on failure: the startup gate deletes the legacy database only once
+ * every drain has resolved for every account, so a drain that swallowed its
+ * error and resolved would have the gate delete DM history nobody copied.
+ * Every caller in this module already guards the call.
+ */
 export function migrateLegacyDms(self: string): Promise<void> {
   let drain = drains.get(self);
   if (!drain) {
-    drain = drainLegacyDms(self);
+    drain = drainLegacyDms(self).catch((err: unknown) => {
+      // Drop the memo so a later read retries: writes are keyed by rumor id,
+      // so recopying what already landed costs nothing.
+      drains.delete(self);
+      throw err;
+    });
     drains.set(self, drain);
   }
   return drain;
@@ -114,14 +143,46 @@ function namesSelf(ev: NostrEvent, self: string): boolean {
   return ev.pubkey === self || ev.tags.some(([name, value]) => name === "p" && value === self);
 }
 
+/** Every legacy record, newest first, paged so a deep history isn't truncated. */
+async function readLegacyDms(legacy: NIndexedDB): Promise<NostrEvent[]> {
+  const all: NostrEvent[] = [];
+  const seen = new Set<string>();
+  let until: number | undefined;
+
+  for (let page = 0; page < DRAIN_MAX_PAGES; page++) {
+    const filter: { kinds: number[]; limit: number; until?: number } = {
+      kinds: DM_RUMOR_KINDS,
+      limit: DM17_DRAIN_PAGE,
+    };
+    if (until !== undefined) filter.until = until;
+    const rows = await legacy.query([filter]);
+    // Ties on `created_at` make pages overlap, so progress is measured in NEW
+    // ids rather than in rows returned.
+    const fresh = rows.filter((ev) => !seen.has(ev.id));
+    if (fresh.length === 0) return all;
+    for (const ev of fresh) {
+      seen.add(ev.id);
+      all.push(ev);
+    }
+    if (rows.length < DM17_DRAIN_PAGE) return all;
+    until = Math.min(...rows.map((ev) => ev.created_at));
+  }
+
+  throw new Error("dm17 legacy drain exceeded its page bound");
+}
+
 async function drainLegacyDms(self: string): Promise<void> {
   const db = getArmadaDB();
   const key = DRAIN_KEY(self);
   if (await db.kv.get<boolean>(key)) return;
+  // `NIndexedDB` CREATES the database on its first query, which would leave a
+  // device that never had one with the very database the startup gate scans
+  // for. See `skipLegacyDrain`.
+  if (await skipLegacyDrain(LEGACY_DB_NAME)) return;
 
+  const legacy = new NIndexedDB(LEGACY_DB_NAME);
   try {
-    const legacy = new NIndexedDB(LEGACY_DB_NAME);
-    const all = await legacy.query([{ kinds: DM_RUMOR_KINDS, limit: DRAIN_LIMIT }]);
+    const all = await readLegacyDms(legacy);
 
     // Pass one: records that name `self` outright.
     const mine = new Set<string>();
@@ -150,13 +211,8 @@ async function drainLegacyDms(self: string): Promise<void> {
       const { sig: _sig, ...rumor } = ev;
       await tenant.event(rumor);
     }
-    await legacy.close();
-  } catch {
-    // Failed part-way, or IndexedDB is unavailable. Leave the flag unset and
-    // drop the memo so a later read retries: writes are keyed by rumor id, so
-    // recopying what already landed costs nothing.
-    drains.delete(self);
-    return;
+  } finally {
+    await legacy.close().catch(() => undefined);
   }
 
   await db.kv.set(key, true);

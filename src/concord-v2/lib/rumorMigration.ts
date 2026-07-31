@@ -51,6 +51,7 @@ import { mirrorGroups } from "@/concord-v2/lib/relayMirror";
 import { communityTenant, LEGACY_RUMOR_DB_NAME } from "@/concord-v2/lib/rumorStore";
 import { readFolded } from "@/lib/foldedCache";
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { MigrationDeferredError, skipLegacyDrain } from "@/lib/db/legacyDatabases";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { FoldedControl } from "@/concord-v2/lib/control";
@@ -76,13 +77,21 @@ const drains = new Map<string, Promise<void>>();
 /**
  * Copy `self`'s communities' rows out of the legacy store. Idempotent and
  * memoised: once the flag is set this costs a single KV read.
+ *
+ * REJECTS when the copy fails OR when it cannot yet be attempted. The startup
+ * gate deletes the legacy database once every drain has resolved for every
+ * account, and this is the drain guarding the least replaceable data in the
+ * app — a member's own device is frequently the last copy of a community's
+ * history. Resolving without having copied would be indistinguishable from
+ * having copied, and the gate would delete it.
  */
 export function migrateLegacyRumors(self: string): Promise<void> {
   let drain = drains.get(self);
   if (!drain) {
-    drain = drainLegacyRumors(self).catch(() => {
+    drain = drainLegacyRumors(self).catch((err: unknown) => {
       // Retry on the next call rather than leaving a rejected promise cached.
       drains.delete(self);
+      throw err;
     });
     drains.set(self, drain);
   }
@@ -93,18 +102,32 @@ async function drainLegacyRumors(self: string): Promise<void> {
   const db = getArmadaDB();
   if (await db.kv.get<boolean>(doneKey(self))) return;
   if (typeof indexedDB === "undefined") return;
+  // `NIndexedDB` CREATES the database on its first query, which would leave a
+  // device that never had one with the very database the startup gate scans
+  // for. See `skipLegacyDrain`.
+  if (await skipLegacyDrain(LEGACY_RUMOR_DB_NAME)) return;
 
   const communities = await viewerCommunities(self);
-  // No cached list is not the same as no communities: it may be a cold profile
-  // whose list has never been read. Leave the flag unset so a later launch,
-  // once the list is cached, still gets a pass.
-  if (communities.length === 0) return;
-
   const legacy = new NIndexedDB(LEGACY_RUMOR_DB_NAME, { indexTags: legacyIndexTags });
 
   try {
-    for (const community of communities) {
-      await drainCommunity(legacy, community);
+    // A cached list that is EMPTY is an answer: this account has no live
+    // communities, so no row in the store is attributable to it (and any row
+    // that is there belongs to a community it left, whose secrets are gone —
+    // undecryptable either way). NO cached list is not an answer: the profile
+    // may simply never have read it this install.
+    if (communities === undefined) {
+      // Deferring costs a second gate appearance next launch, once a Concord
+      // read has cached the list. Not deferring costs the history itself, so
+      // the check is worth one query: defer only if there is anything to lose.
+      const any = await legacy.query([{ limit: 1 }]);
+      if (any.length > 0) {
+        throw new MigrationDeferredError(`no cached community list for ${self.slice(0, 8)}`);
+      }
+    } else {
+      for (const community of communities) {
+        await drainCommunity(legacy, community);
+      }
     }
   } finally {
     await legacy.close().catch(() => undefined);
@@ -216,10 +239,14 @@ async function copyMatching(
 /**
  * `self`'s joined communities, rehydrated from the locally cached list. No
  * signer and no network: the cached list is already decrypted.
+ *
+ * `undefined` when there is no cached list at all, which the caller must not
+ * confuse with an empty one — the first says nothing about what the account
+ * owns, the second says it owns nothing.
  */
-async function viewerCommunities(self: string): Promise<CommunityV2[]> {
+async function viewerCommunities(self: string): Promise<CommunityV2[] | undefined> {
   const persisted = await readFolded<PersistedCommunityList>(communityListFoldKey(self));
-  if (!persisted?.list) return [];
+  if (!persisted?.list) return undefined;
 
   const out: CommunityV2[] = [];
   for (const entry of liveEntries(persisted.list)) {

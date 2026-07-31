@@ -18,6 +18,7 @@
 import { NIndexedDB } from "@nostrify/indexeddb";
 
 import { ARMADA_TENANTS, getArmadaDB } from "./armadaDB";
+import { skipLegacyDrain } from "./legacyDatabases";
 
 /** The retired IndexedDB event cache. */
 export const LEGACY_EVENT_DB_NAME = "armada-events";
@@ -35,10 +36,18 @@ const MAX_PAGES = 200;
 
 let drain: Promise<void> | undefined;
 
-/** Copy the legacy event cache into the `main` tenant. Runs at most once. */
+/**
+ * Copy the legacy event cache into the `main` tenant. Runs at most once.
+ *
+ * REJECTS when the copy fails. Nothing here is irreplaceable, but the startup
+ * gate reads a resolved drain as "safe to delete the source", and that same
+ * round deletes databases that ARE irreplaceable — so this reports failure
+ * like every other drain rather than quietly costing the user a cold refetch.
+ */
 export function migrateLegacyEvents(): Promise<void> {
-  drain ??= drainLegacyEvents().catch(() => {
+  drain ??= drainLegacyEvents().catch((err: unknown) => {
     drain = undefined;
+    throw err;
   });
   return drain;
 }
@@ -47,6 +56,15 @@ async function drainLegacyEvents(): Promise<void> {
   const db = getArmadaDB();
   if (await db.kv.get<boolean>(DONE_KEY)) return;
   if (typeof indexedDB === "undefined") return;
+  // `NIndexedDB` CREATES the database on its first query; see `skipLegacyDrain`.
+  if (await skipLegacyDrain(LEGACY_EVENT_DB_NAME)) {
+    // Still sweep OPFS. A user who ran the SQLite-WASM backend has no
+    // `armada-events` database at all, so this is the only path that reaches
+    // them — and the directory is tens of megabytes nothing will ever read.
+    await removeLegacyOpfs();
+    await db.kv.set(DONE_KEY, true);
+    return;
+  }
 
   const legacy = new NIndexedDB(LEGACY_EVENT_DB_NAME);
   const tenant = db.tenant(ARMADA_TENANTS.main);
@@ -79,9 +97,6 @@ async function drainLegacyEvents(): Promise<void> {
       if (rows.length < PAGE_LIMIT) break;
       until = Math.min(...rows.map((ev) => ev.created_at));
     }
-  } catch {
-    drain = undefined;
-    return;
   } finally {
     await legacy.close().catch(() => undefined);
   }

@@ -232,9 +232,13 @@ describe("migrateLegacyRumors", () => {
     ).toBe(0);
   });
 
-  it("does not mark itself done when no community list is cached yet", async () => {
+  it("refuses to finish when no community list is cached yet", async () => {
     // A cold profile whose list has never been read must get another pass —
     // treating "no list" as "nothing to migrate" would strand every community.
+    //
+    // Leaving the flag unset is not enough on its own: the startup catalogue
+    // reads a RESOLVED drain as "the source is safe to delete", and deletes
+    // the legacy database for all accounts at once. So this has to reject.
     vi.resetModules();
     const { legacyIndexTags, migrateLegacyRumors } = await import(
       "@/concord-v2/lib/rumorMigration"
@@ -243,10 +247,32 @@ describe("migrateLegacyRumors", () => {
     await legacy.event(legacyRow("orphan", [["channel", "c9".repeat(32)]]));
     await legacy.close();
 
-    await migrateLegacyRumors(SELF);
+    await expect(migrateLegacyRumors(SELF)).rejects.toThrow(/deferred/i);
 
     const { getArmadaDB } = await import("@/lib/db/armadaDB");
     expect(await getArmadaDB().kv.get(`c2rumors:migrated:${SELF}`)).toBeUndefined();
+  });
+
+  it("finishes when the cached list is empty — nothing is attributable", async () => {
+    // A cached but EMPTY list IS an answer, unlike no cached list at all: any
+    // row left in the store belongs to a community this account has left, whose
+    // secrets are gone, so it is undecryptable and safe to leave behind.
+    vi.resetModules();
+    const { legacyIndexTags, migrateLegacyRumors } = await import(
+      "@/concord-v2/lib/rumorMigration"
+    );
+    const { writeFolded } = await import("@/lib/foldedCache");
+    const { communityListFoldKey } = await import("@/concord-v2/lib/communityList");
+    await writeFolded(communityListFoldKey(SELF), { event: null, list: { entries: [] } });
+
+    const legacy = new NIndexedDB(LEGACY, { indexTags: legacyIndexTags });
+    await legacy.event(legacyRow("orphan", [["channel", "c9".repeat(32)]]));
+    await legacy.close();
+
+    await migrateLegacyRumors(SELF);
+
+    const { getArmadaDB } = await import("@/lib/db/armadaDB");
+    expect(await getArmadaDB().kv.get(`c2rumors:migrated:${SELF}`)).toBe(true);
   });
 
   it("is idempotent — a second run neither duplicates nor drops", async () => {

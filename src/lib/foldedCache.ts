@@ -17,6 +17,7 @@
 import { openDB } from "idb";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 
 /** Legacy standalone database, drained by {@link migrateLegacyFolded}. */
 export const LEGACY_FOLDED_DB_NAME = "armada-concord-cache";
@@ -145,9 +146,19 @@ let drain: Promise<void> | undefined;
  * rumors to communities), and it reaches them only through `readFolded`. So it
  * cannot observe a pre-drain state no matter which drain the gate runs first,
  * or whether it was triggered lazily outside the gate at all.
+ *
+ * REJECTS when the copy fails. The startup gate deletes the legacy databases
+ * only if every drain resolved, so a drain that swallowed its own error and
+ * resolved anyway would hand the gate a green light to delete data it never
+ * copied. Both accessors above already guard the call.
  */
 export function migrateLegacyFolded(): Promise<void> {
-  drain ??= drainLegacyFolded();
+  drain ??= drainLegacyFolded().catch((err: unknown) => {
+    // Retry next call rather than caching the rejection, then re-report so the
+    // gate keeps its hands off the legacy database.
+    drain = undefined;
+    throw err;
+  });
   return drain;
 }
 
@@ -155,15 +166,17 @@ async function drainLegacyFolded(): Promise<void> {
   const db = getArmadaDB();
   if (await db.kv.get<boolean>(DONE_KEY)) return;
   if (typeof indexedDB === "undefined") return;
+  // `openDB` CREATES the database when it is absent, so a device that never
+  // had one would end up with an empty database named exactly like the thing
+  // the startup gate looks for.
+  if (await skipLegacyDrain(LEGACY_FOLDED_DB_NAME)) return;
 
+  const legacy = await openDB(LEGACY_FOLDED_DB_NAME, 1, {
+    upgrade(d) {
+      if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE);
+    },
+  });
   try {
-    // `openDB` without an upgrade callback still CREATES the database when it
-    // is absent — harmless, and the migration deletes it either way.
-    const legacy = await openDB(LEGACY_FOLDED_DB_NAME, 1, {
-      upgrade(d) {
-        if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE);
-      },
-    });
     // The legacy store held the SAME encoded strings, so this is a copy, not a
     // re-encode: nothing is decoded and re-serialized on the way through.
     const [keys, values] = await Promise.all([
@@ -176,11 +189,8 @@ async function drainLegacyFolded(): Promise<void> {
         await db.kv.set(foldedKey(key), value);
       }
     }
+  } finally {
     legacy.close();
-  } catch {
-    // Retry next launch rather than marking a partial copy done.
-    drain = undefined;
-    return;
   }
 
   await db.kv.set(DONE_KEY, true);
