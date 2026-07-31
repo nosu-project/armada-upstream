@@ -21,6 +21,7 @@ import {
 } from '@/lib/bitcoin';
 import type { FeeRates } from '@/lib/bitcoin';
 import { extractTxFromSignedPsbtV2 } from '@/lib/psbtV2';
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export type OnchainFeeSpeed = 'fastest' | 'halfHour' | 'hour' | 'economy';
 
@@ -86,13 +87,13 @@ export interface BitcoinRecipientOverride {
  * no LNURL dependency because every pubkey has a derived Taproot address.
  */
 export function useOnchainZap(
-  target: NostrEvent,
+  target: NostrRumor,
   onSuccess?: (result: OnchainZapResult) => void,
   recipientOverride?: BitcoinRecipientOverride,
   /** Private announcement publisher (Concord v2). When present, the kind 8333
    *  attribution is sealed into the channel as a rumor instead of published
    *  to public relays (which would leak community/channel context). */
-  sendOnchainZap?: (target: NostrEvent, announcement: { txid: string; amountSats: number; comment: string }) => Promise<void>,
+  sendOnchainZap?: (target: NostrRumor, announcement: { txid: string; amountSats: number; comment: string }) => Promise<void>,
 ) {
   const { user } = useCurrentUser();
   const { canSignPsbt, signPsbt } = useBitcoinSigner();

@@ -20,7 +20,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Resolve a pubkey to its scoped display name (per-server nickname aware). */
 function Name({ pubkey }: { pubkey: string | undefined }) {
@@ -48,7 +48,7 @@ function SystemLine({ icon, children, createdAt }: {
 }
 
 /** Kind 40099: a relay-signed system message row ("Alice joined", …). */
-export function BuzzSystemRow({ event }: { event: NostrEvent }) {
+export function BuzzSystemRow({ event }: { event: NostrRumor }) {
   const sys = useMemo(() => parseSystemMessage(event), [event]);
   if (!sys) {
     return <SystemLine createdAt={event.created_at}>System event</SystemLine>;
@@ -101,7 +101,7 @@ function formatDuration(seconds: number): string {
 const DIFF_COLLAPSE_LINES = 16;
 
 /** Kind 40008: a diff message — unified diff rendered as its own card. */
-export function BuzzDiffRow({ event }: { event: NostrEvent }) {
+export function BuzzDiffRow({ event }: { event: NostrRumor }) {
   const author = useAuthor(event.pubkey);
   const name = useScopedDisplayName(event.pubkey, author.data?.metadata);
   const [expanded, setExpanded] = useState(false);
@@ -166,7 +166,7 @@ export function BuzzDiffRow({ event }: { event: NostrEvent }) {
 }
 
 /** Kinds 43001–43006: an agent-job lifecycle row. */
-export function BuzzJobRow({ event }: { event: NostrEvent }) {
+export function BuzzJobRow({ event }: { event: NostrRumor }) {
   const preview = event.content.replace(/\s+/g, " ").trim();
   return (
     <SystemLine icon={<Bot className="size-3.5 shrink-0" />} createdAt={event.created_at}>
@@ -197,7 +197,7 @@ function workflowKindLabel(kind: number): string {
 }
 
 /** Kinds 46001–46012 / 46020: a workflow run/approval lifecycle row. */
-export function BuzzWorkflowEventRow({ event }: { event: NostrEvent }) {
+export function BuzzWorkflowEventRow({ event }: { event: NostrRumor }) {
   const preview = event.content.replace(/\s+/g, " ").trim();
   return (
     <SystemLine icon={<Workflow className="size-3.5 shrink-0" />} createdAt={event.created_at}>
@@ -208,7 +208,7 @@ export function BuzzWorkflowEventRow({ event }: { event: NostrEvent }) {
 }
 
 /** Kind 30620: a workflow definition card (name + collapsible YAML source). */
-export function BuzzWorkflowDefinitionRow({ event }: { event: NostrEvent }) {
+export function BuzzWorkflowDefinitionRow({ event }: { event: NostrRumor }) {
   const [expanded, setExpanded] = useState(false);
   const author = useAuthor(event.pubkey);
   const name = useScopedDisplayName(event.pubkey, author.data?.metadata);
@@ -247,9 +247,9 @@ export function BuzzWorkflowDefinitionRow({ event }: { event: NostrEvent }) {
  * in by the caller (participants currently known + whether it ended).
  */
 export function BuzzHuddleRow({ event, lifecycle }: {
-  event: NostrEvent;
+  event: NostrRumor;
   /** All 48101/48102/48103 events in the loaded window (any huddle). */
-  lifecycle: NostrEvent[];
+  lifecycle: NostrRumor[];
 }) {
   const author = useAuthor(event.pubkey);
   const name = useScopedDisplayName(event.pubkey, author.data?.metadata);
@@ -267,7 +267,7 @@ export function BuzzHuddleRow({ event, lifecycle }: {
   const { participants, ended } = useMemo(() => {
     const inHuddle = new Set<string>();
     let isEnded = false;
-    const matches = (ev: NostrEvent) => {
+    const matches = (ev: NostrRumor) => {
       if (!huddleId) return false;
       try {
         const raw = JSON.parse(ev.content) as { ephemeral_channel_id?: string };

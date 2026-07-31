@@ -6,7 +6,7 @@ import { emojiPackCoord, emojiPackName, KIND_EMOJI_SET } from "@/hooks/useEmojiP
 import { useEventStore } from "@/hooks/useEventStore";
 import { parseAddr } from "@/lib/parseAddr";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** The pack a custom emoji came from, enough to display it and add it. */
 export interface EmojiSource {
@@ -44,11 +44,11 @@ function usePackIndex() {
       const store = await eventStore;
       const events = await store
         .query([{ kinds: [KIND_EMOJI_SET], limit: STORE_PACK_LIMIT }])
-        .catch(() => [] as NostrEvent[]);
+        .catch(() => [] as NostrRumor[]);
 
       // Newest event per coordinate wins, so a renamed/edited pack resolves to
       // its current name rather than whichever revision the cursor hit first.
-      const newest = new Map<string, NostrEvent>();
+      const newest = new Map<string, NostrRumor>();
       for (const ev of events) {
         const identifier = ev.tags.find(([n]) => n === "d")?.[1] ?? "";
         const coord = emojiPackCoord(ev.pubkey, identifier);

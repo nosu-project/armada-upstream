@@ -18,6 +18,7 @@ import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 
 import { open as cipherOpen, seal as cipherSeal } from "@/concord-v1/lib/cipher";
 import { channelPseudonym } from "@/concord-v1/lib/derive";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   KIND_COMMUNITY_DELETE,
   KIND_COMMUNITY_EDIT,
@@ -116,13 +117,13 @@ export function buildInnerEvent(opts: {
 }
 
 /** First value of the first tag named `name`. */
-function findTag(ev: NostrEvent, name: string): string | undefined {
+function findTag(ev: NostrRumor, name: string): string | undefined {
   const t = ev.tags.find((t) => t[0] === name);
   return t?.[1];
 }
 
 /** Value of a tag required to appear AT MOST ONCE (binding tags must be unambiguous). */
-function uniqueTag(ev: NostrEvent, name: string): string | undefined {
+function uniqueTag(ev: NostrRumor, name: string): string | undefined {
   let found: string | undefined;
   for (const t of ev.tags) {
     if (t[0] === name) {
@@ -209,7 +210,7 @@ function resolveMs(createdSecs: number, msTag: string | undefined): number {
 
 /** Open and fully verify an outer wire event under a specific channel/epoch key. */
 export function openMessage(
-  outer: NostrEvent,
+  outer: NostrRumor,
   channelKey: Uint8Array,
   channelId: Uint8Array,
   epoch: bigint,
@@ -269,7 +270,7 @@ export function openMessage(
  * epoch's recomputed pseudonym, then open under that exact epoch.
  */
 export function openMessageMulti(
-  outer: NostrEvent,
+  outer: NostrRumor,
   channelId: Uint8Array,
   epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
 ): OpenedMessage {

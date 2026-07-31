@@ -19,6 +19,7 @@ import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCach
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Empty list, used before any 10009 event exists. */
 const EMPTY_LIST: UserGroupList = { groups: [], servers: [] };
@@ -52,7 +53,7 @@ const groupListDecryptMemo = new Map<string, Promise<ReadGroupListResult>>();
  * one signer round-trip.
  */
 async function readGroupListEvent(
-  event: NostrEvent | null,
+  event: NostrRumor | null,
   signer: NUser["signer"] | undefined,
 ): Promise<ReadGroupListResult> {
   if (!event) return { ...EMPTY_LIST, decryptFailed: false };

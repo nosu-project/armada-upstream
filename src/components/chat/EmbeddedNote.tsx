@@ -21,7 +21,7 @@ import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNaddrEncode, tryNeventEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 interface EmbeddedNoteProps {
   /** Hex event ID to fetch and display. */
@@ -65,7 +65,7 @@ function kindLabel(kind: number): string | null {
  * the author pubkey as a relay hint. Returns `undefined` for malformed
  * id/pubkey (matching `dittoEventUrl`'s routing).
  */
-function eventNostrUri(event: NostrEvent): string | undefined {
+function eventNostrUri(event: NostrRumor): string | undefined {
   if (event.kind >= 30000 && event.kind < 40000) {
     const identifier = event.tags.find((t) => t[0] === "d")?.[1] ?? "";
     const naddr = tryNaddrEncode({ kind: event.kind, pubkey: event.pubkey, identifier });
@@ -119,7 +119,7 @@ export function EmbeddedNaddr({ addr, className }: { addr: AddrCoords; className
  * `· timeAgo`), the height-capped note content, and a "View on Ditto"
  * off-ramp footer.
  */
-export function EmbeddedEventCard({ event, className }: { event: NostrEvent; className?: string }) {
+export function EmbeddedEventCard({ event, className }: { event: NostrRumor; className?: string }) {
   // NIP-30 emoji packs get a dedicated preview + "Add" card rather than the
   // generic event body (whose content is empty — the emojis live in tags).
   if (event.kind === 30030) {
@@ -128,7 +128,7 @@ export function EmbeddedEventCard({ event, className }: { event: NostrEvent; cla
   return <GenericEventCard event={event} className={className} />;
 }
 
-function GenericEventCard({ event, className }: { event: NostrEvent; className?: string }) {
+function GenericEventCard({ event, className }: { event: NostrRumor; className?: string }) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);

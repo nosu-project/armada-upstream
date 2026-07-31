@@ -144,9 +144,7 @@ function ThreadMessage({
   // stringifying every message's event on mount is pure cost on a channel switch.
   const sourceJson = !jsonOpen
     ? ""
-    : isRumor
-      ? JSON.stringify((({ sig: _sig, ...rest }) => rest)(event), null, 2)
-      : JSON.stringify(event, null, 2);
+    : JSON.stringify(event, null, 2);
 
   // The author can delete their own message; moderators can delete anyone's
   // (mirrors ChatMessage's gating). The transport decides how.

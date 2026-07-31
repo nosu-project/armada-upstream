@@ -252,12 +252,9 @@ const ChatMessage2 = memo(function ChatMessage2({
   // Concord V2 messages are unsigned rumors sealed at the channel's stream
   // address — there's no relay-addressable event id, so the "Copy message ID" /
   // "View on Ditto" off-ramps are nonsensical. Pass the rumor through so the
-  // context menu offers "View event JSON" instead. Drop the synthetic empty
-  // `sig` the transport adds for rendering (a rumor has no signature).
-  const rumor = useMemo(() => {
-    const { sig: _sig, ...rest } = event;
-    return rest;
-  }, [event]);
+  // context menu offers "View event JSON" instead.
+  // `ChatMsg` is already signature-less, so the message IS the rumor.
+  const rumor = event;
   return (
     <ChatMessage
       event={event}
@@ -555,10 +552,8 @@ const MentionMessage = memo(function MentionMessage({
   event: ChatMsg;
   onJump?: () => void;
 }) {
-  const rumor = useMemo(() => {
-    const { sig: _sig, ...rest } = event;
-    return rest;
-  }, [event]);
+  // `ChatMsg` is already signature-less, so the message IS the rumor.
+  const rumor = event;
   return (
     <div
       role={onJump ? "button" : undefined}
@@ -668,10 +663,8 @@ function ThreadsView({
 
 /** The thread root message, read-only (its click is handled by the row wrapper). */
 const ThreadRootPreview = memo(function ThreadRootPreview({ event }: { event: ChatMsg }) {
-  const rumor = useMemo(() => {
-    const { sig: _sig, ...rest } = event;
-    return rest;
-  }, [event]);
+  // `ChatMsg` is already signature-less, so the message IS the rumor.
+  const rumor = event;
   return (
     <div className="pointer-events-none">
       <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} />

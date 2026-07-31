@@ -75,6 +75,7 @@ import type { WebxdcApp } from "@/hooks/useWebxdcApps";
 import type { ImetaEncryption } from "@/lib/imeta";
 import type { ProcessedVideo } from "@/lib/video/types";
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
 const LazyEmojiPicker = lazy(() => import("@/components/chat/EmojiPicker").then((m) => ({ default: m.EmojiPicker })));
@@ -239,9 +240,9 @@ interface ChatComposerProps {
   relayUrl: string;
   groupId: string;
   /** Current timeline (used for NIP-29 `previous` refs). */
-  messages: NostrEvent[];
+  messages: NostrRumor[];
   /** Message being replied to, if any. */
-  replyTo?: NostrEvent;
+  replyTo?: NostrRumor;
   onCancelReply?: () => void;
   /**
    * How to tag an inline reply to `replyTo`:
@@ -2300,7 +2301,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 }
 
 /** Compact banner above the composer showing the message being replied to. */
-function ReplyBanner({ event, onCancel }: { event: NostrEvent; onCancel?: () => void }) {
+function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => void }) {
   const author = useAuthor(event.pubkey);
   const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
   const image = firstImageRef(event);

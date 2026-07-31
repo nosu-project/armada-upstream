@@ -6,10 +6,12 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useSendStatusMap } from "@/hooks/useSendStatusMap";
 import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { isSigned } from "@/lib/nostrRumor";
 import { nip29SnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-88 poll kind — polls posted to the group render in the timeline. */
 const KIND_POLL = 1068;
@@ -58,11 +60,11 @@ function statusKey(relayUrl: string | undefined, groupId: string | undefined) {
  * just signed ourselves would overwrite the only republishable copy we hold —
  * and retrying a failed send would publish an empty signature.
  */
-function sortDedupe(events: NostrEvent[]): NostrEvent[] {
-  const byId = new Map<string, NostrEvent>();
+function sortDedupe(events: NostrRumor[]): NostrRumor[] {
+  const byId = new Map<string, NostrRumor>();
   for (const e of events) {
     const prev = byId.get(e.id);
-    if (prev?.sig && !e.sig) continue;
+    if (prev && isSigned(prev) && !isSigned(e)) continue;
     byId.set(e.id, e);
   }
   return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
@@ -76,7 +78,7 @@ function sortDedupe(events: NostrEvent[]): NostrEvent[] {
  * second-oldest so the cursor doesn't leap past real history. Mirrors Ditto's
  * gap-aware cursor.
  */
-function paginationCursor(events: NostrEvent[]): number | undefined {
+function paginationCursor(events: NostrRumor[]): number | undefined {
   if (events.length === 0) return undefined;
   const ascending = [...events].sort((a, b) => a.created_at - b.created_at);
   const oldest = ascending[0].created_at;
@@ -133,14 +135,14 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     setFirstLoadDone(false);
   }, [relayUrl, groupId]);
 
-  const query = useQuery<NostrEvent[]>({
+  const query = useQuery<NostrRumor[]>({
     queryKey: messagesKey(relayUrl, groupId),
     queryFn: async ({ signal }) => {
       const store = await eventStore;
 
       // Anything already painted (older pagination pages, optimistic sends).
       // A queryFn return is an authoritative overwrite, so fold it in.
-      const existing = queryClient.getQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId)) ?? [];
+      const existing = queryClient.getQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId)) ?? [];
 
       // The store is the source of truth: the wire writes every incoming
       // event here before the bus asks us to re-read. Read the timeline and
@@ -182,7 +184,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
               cursorRef.current = cursor;
             }
             if (signal.aborted || events.length === 0) return;
-            queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) =>
+            queryClient.setQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId), (old = []) =>
               sortDedupe([...old, ...events]).filter((e) => !deletedIds.has(e.id)),
             );
           } catch {
@@ -217,7 +219,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     // seed already-stale so the store-hydrating queryFn still runs immediately
     // and merges on top (append-only, so the seed can never mask fresher data).
     initialData: () => {
-      const snap = readTimelineSnapshot<NostrEvent>(snapshotScope);
+      const snap = readTimelineSnapshot<NostrRumor>(snapshotScope);
       // Only seed events that belong to THIS group (every timeline event
       // carries its `h` tag).
       const own = snap?.filter((e) => e.tags.some(([t, v]) => t === "h" && v === groupId));
@@ -265,7 +267,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
 
   const upsertMessage = useCallback(
     (event: NostrEvent) => {
-      queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) => {
+      queryClient.setQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId), (old = []) => {
         if (old.some((e) => e.id === event.id)) return old;
         return sortDedupe([...old, event]);
       });
@@ -293,7 +295,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       );
 
       // Anything genuinely new to us (the cursor boundary can re-return events).
-      const existing = queryClient.getQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId)) ?? [];
+      const existing = queryClient.getQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId)) ?? [];
       const existingIds = new Set(existing.map((e) => e.id));
       const fresh = older.filter((e) => !existingIds.has(e.id));
 
@@ -304,7 +306,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
 
       if (fresh.length === 0) return 0;
 
-      queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) =>
+      queryClient.setQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId), (old = []) =>
         sortDedupe([...fresh, ...old]),
       );
       return fresh.length;
@@ -334,7 +336,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   /** Remove an optimistic message entirely (e.g. discard a failed send). */
   const removeOptimistic = useCallback(
     (id: string) => {
-      queryClient.setQueryData<NostrEvent[]>(messagesKey(relayUrl, groupId), (old = []) =>
+      queryClient.setQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId), (old = []) =>
         old.filter((e) => e.id !== id),
       );
       setStatus(id, undefined);

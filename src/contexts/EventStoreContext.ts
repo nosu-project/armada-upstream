@@ -1,14 +1,20 @@
 import { createContext } from 'react';
 import type { NostrEvent, NostrFilter } from '@nostrify/nostrify';
+import type { NostrRumor } from '@/lib/nostrRumor';
 
 /**
  * The surface the app event store implements — a thin `NStore` shape over the
- * ArmadaDB `main` tenant. See src/lib/db/mainEventStore.ts, which also
- * documents why reads report an empty `sig`.
+ * ArmadaDB `main` tenant.
+ *
+ * Note the asymmetry, which is the point: `event()` takes a signed
+ * `NostrEvent`, `query()` returns `NostrRumor`. Signatures go in and do not
+ * come out (see src/lib/db/mainEventStore.ts), so anything that needs to
+ * re-publish an event verbatim cannot be fed from here — and now says so in the
+ * type rather than in a comment nobody has to obey.
  */
 export interface ArmadaEventStore {
   event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<void>;
-  query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]>;
+  query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]>;
   count(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<{ count: number; approximate?: boolean }>;
   remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void>;
   close(): Promise<void>;

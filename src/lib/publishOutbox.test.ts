@@ -127,12 +127,14 @@ describe("publish outbox", () => {
       expect((await withSignature(unsigned)).sig).toBe(ev.sig);
     });
 
-    it("returns a signed event untouched, and an unknown one unchanged", async () => {
+    it("returns a signed event untouched, and refuses an unknown one", async () => {
       const ev = event();
       expect(await withSignature(ev)).toBe(ev);
 
+      // No signed copy anywhere: there is nothing a relay would accept, so the
+      // caller is told rather than handed an event that is certain to bounce.
       const orphan = { ...event({ created_at: 9 }), sig: "" };
-      expect((await withSignature(orphan)).sig).toBe("");
+      await expect(withSignature(orphan)).rejects.toThrow(/signature was not kept/);
     });
   });
 

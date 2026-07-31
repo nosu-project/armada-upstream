@@ -5,7 +5,7 @@ import { useMemo } from 'react';
 import { type AuthorResult, authorQueryOptions } from '@/hooks/useAuthor';
 import { useEventStore } from '@/hooks/useEventStore';
 
-import type { NostrEvent } from '@nostrify/nostrify';
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Lowercase 64-char hex pubkey. */
 const HEX64 = /^[0-9a-f]{64}$/i;
@@ -79,7 +79,7 @@ function buildMentionRegex(names: string[]): RegExp | null {
  * aliases, and returns a matcher restricted to those known names, so an
  * arbitrary `@word` without a corresponding tag is never linkified.
  */
-export function useMentionNameMap(event: NostrEvent): MentionNameMap {
+export function useMentionNameMap(event: NostrRumor): MentionNameMap {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();

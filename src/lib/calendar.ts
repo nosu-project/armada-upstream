@@ -10,7 +10,7 @@
  * chat fold) and how they're published differs; the math agrees bit-for-bit.
  */
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 import {
   type CalendarEvent,
@@ -87,8 +87,8 @@ export function isUpcoming(e: CalendarEvent, now = Math.floor(Date.now() / 1000)
  * newest per addressable coordinate (`kind:pubkey:d`), drop malformed ones, and
  * sort soonest-first. Shared by the relay query and the sealed-fold adapter.
  */
-export function parseCalendarEvents(events: NostrEvent[]): CalendarEvent[] {
-  const newest = new Map<string, NostrEvent>();
+export function parseCalendarEvents(events: NostrRumor[]): CalendarEvent[] {
+  const newest = new Map<string, NostrRumor>();
   for (const event of events) {
     const d = event.tags.find(([n]) => n === "d")?.[1] ?? "";
     const coord = `${event.kind}:${event.pubkey}:${d}`;
@@ -162,7 +162,7 @@ export interface CalendarTransport {
   /** Whether an RSVP publish is in flight. */
   isSettingRsvp: boolean;
   /** Create a new event (or, for addressable transports, replace `prev`). */
-  save: (input: CalendarEventInput, prev?: NostrEvent) => Promise<void>;
+  save: (input: CalendarEventInput, prev?: NostrRumor) => Promise<void>;
   /** Delete an event (author always; others require moderation). */
   remove: (event: CalendarEvent) => Promise<void>;
   /** The resolved RSVP tally for one event (precomputed; no I/O). */

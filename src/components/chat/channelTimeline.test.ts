@@ -5,9 +5,9 @@ import type { ChatMsg } from "./transport";
 import type { GitTimelineActivity } from "@/lib/gitActivity";
 
 const pk = "a".repeat(64);
-const chat = (id: string, created_at: number): ChatMsg => ({ id, pubkey: pk, created_at, kind: 9, content: "chat", tags: [], sig: "" });
-const ticket = { id: "b".repeat(64), kind: 1621 as const, type: "issue" as const, subject: "Ticket", content: "", labels: [], repositoryAddresses: [], author: pk, createdAt: 10, event: { id: "b".repeat(64), pubkey: pk, created_at: 10, kind: 1621, content: "", tags: [], sig: "" } };
-const git = (id: string, createdAt: number): GitTimelineActivity => ({ type: "comment", createdAt, ticket, repository: { kind: 30617, owner: pk, identifier: "repo", coordinate: `30617:${pk}:repo` }, comment: { id, ticketId: ticket.id, ticketKind: 1621, content: "comment", author: pk, createdAt, event: { id, pubkey: pk, created_at: createdAt, kind: 1111, content: "comment", tags: [], sig: "" } } });
+const chat = (id: string, created_at: number): ChatMsg => ({ id, pubkey: pk, created_at, kind: 9, content: "chat", tags: [] });
+const ticket = { id: "b".repeat(64), kind: 1621 as const, type: "issue" as const, subject: "Ticket", content: "", labels: [], repositoryAddresses: [], author: pk, createdAt: 10, event: { id: "b".repeat(64), pubkey: pk, created_at: 10, kind: 1621, content: "", tags: [] } };
+const git = (id: string, createdAt: number): GitTimelineActivity => ({ type: "comment", createdAt, ticket, repository: { kind: 30617, owner: pk, identifier: "repo", coordinate: `30617:${pk}:repo` }, comment: { id, ticketId: ticket.id, ticketKind: 1621, content: "comment", author: pk, createdAt, event: { id, pubkey: pk, created_at: createdAt, kind: 1111, content: "comment", tags: [] } } });
 
 describe("mixed channel timeline", () => {
   it("merges chat and Git chronologically with a deterministic id tie-break", () => {

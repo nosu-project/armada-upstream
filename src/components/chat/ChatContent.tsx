@@ -44,11 +44,11 @@ import { useWallet } from "@/hooks/useWallet";
 import type { AddrCoords } from "@/hooks/useEvent";
 import type { ImetaEncryption, ImetaEntry } from "@/lib/imeta";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
-import type { NostrEvent } from "@nostrify/nostrify";
 import type { ReactNode } from "react";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 interface ChatContentProps {
-  event: NostrEvent;
+  event: NostrRumor;
   className?: string;
   /** When true, nested nostr:nevent/note/naddr embeds render as inline links
    *  instead of cards. Used inside embedded cards to prevent recursion. */

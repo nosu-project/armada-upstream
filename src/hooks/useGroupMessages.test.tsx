@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
 
+import { isSigned } from "@/lib/nostrRumor";
 import { emitWireScopes, resetWireBus } from "@/wire/bus";
 
 import { useGroupMessages } from "./useGroupMessages";
@@ -175,9 +176,10 @@ describe("useGroupMessages (wire hydration)", () => {
     // The store copy merges LAST. Without the signed-wins rule it overwrites
     // the signed one, and "retry failed message" then republishes sig: "" —
     // which every relay rejects, so the retry can never succeed.
-    await waitFor(() =>
-      expect(result.current.data?.find((e) => e.id === mine.id)?.sig).toBe(sig)
-    );
+    await waitFor(() => {
+      const row = result.current.data?.find((e) => e.id === mine.id);
+      expect(row && isSigned(row) && row.sig).toBe(sig);
+    });
   });
 
   it("does not paint the previous channel's messages when switching channels on the same relay", async () => {

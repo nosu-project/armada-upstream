@@ -24,7 +24,7 @@
 
 import { openMessageMulti, type OpenedMessage } from "@/concord-v1/lib/envelope";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** A successful open (`opened`) or a remembered failure (`undefined`). */
 type DecodeResult = OpenedMessage | undefined;
@@ -56,7 +56,7 @@ function yieldToEventLoop(): Promise<void> {
  * grows (a caught-up rekey), which the caller signals via {@link forgetSkips}.
  */
 export function openMemoized(
-  outer: NostrEvent,
+  outer: NostrRumor,
   channelId: Uint8Array,
   epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
 ): DecodeResult {
@@ -93,7 +93,7 @@ export function forgetSkips(): void {
  * was switched away). Returns successfully-opened messages only, in input order.
  */
 export async function openMemoizedBatch(
-  events: NostrEvent[],
+  events: NostrRumor[],
   channelId: Uint8Array,
   epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
   opts?: { signal?: AbortSignal; chunkSize?: number },

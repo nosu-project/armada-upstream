@@ -17,7 +17,7 @@ import { isGitAnnouncementDiscoveryRelay } from "@/lib/platform";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { GitRepositoryWireInput } from "@/wire/spec";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** A bounded bootstrap is enough to construct dynamic comment/status filters. */
 const ROOT_DISCOVERY_LIMIT = 500;
@@ -32,7 +32,7 @@ const ROOT_FILTER_CHUNK_SIZE = 100;
  * attachment is not channel activity, but its id is still needed to subscribe
  * to comments and statuses posted while the repository is attached.
  */
-export function useWireGitTicketRoots(repositories: readonly GitRepositoryWireInput[]): NostrEvent[] {
+export function useWireGitTicketRoots(repositories: readonly GitRepositoryWireInput[]): NostrRumor[] {
   const { nostr } = useNostr();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
@@ -46,7 +46,7 @@ export function useWireGitTicketRoots(repositories: readonly GitRepositoryWireIn
   const signature = active.map((repository) => `${repository.address}:${repository.relays.join(",")}`).join("|");
   const queryKey = ["wire", "git-ticket-roots", signature] as const;
 
-  const query = useQuery<NostrEvent[]>({
+  const query = useQuery<NostrRumor[]>({
     queryKey,
     enabled: active.length > 0,
     staleTime: 30_000,
@@ -78,7 +78,7 @@ export function useWireGitTicketRoots(repositories: readonly GitRepositoryWireIn
             // Cache data and other activity relays remain useful.
           }
       }));
-      const roots = new Map<string, NostrEvent>();
+      const roots = new Map<string, NostrRumor>();
       const activeAddresses = new Set(active.map((repository) => repository.address));
       for (const event of received) {
         const ticket = parseGitTicket(event);

@@ -32,8 +32,9 @@ import { NIP44_MAX_PLAINTEXT } from "@/concord-v2/lib/stream";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { logSync } from "@/lib/syncLog";
 
-import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrFilter } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * The user's Concord V2 Community List — the kind-13302 replaceable event,
@@ -47,7 +48,7 @@ import type { NUser } from "@nostrify/react/login";
  * strictly-increasing `created_at`.
  */
 
-export type ListData = { event: NostrEvent | null; list: CommunityList; decryptFailed?: boolean };
+export type ListData = { event: NostrRumor | null; list: CommunityList; decryptFailed?: boolean };
 export type PersistedList = PersistedCommunityList;
 
 export const listQueryKey = (pubkey: string | undefined) => ["concord2", "list", pubkey] as const;
@@ -57,7 +58,7 @@ const foldKeyOf = communityListFoldKey;
 const listDecryptMemo = new Map<string, Promise<{ list: CommunityList; decryptFailed: boolean }>>();
 
 async function readListEvent(
-  event: NostrEvent | null,
+  event: NostrRumor | null,
   signer: NUser["signer"] | undefined,
   selfPubkey: string,
 ): Promise<{ list: CommunityList; decryptFailed: boolean }> {
@@ -98,8 +99,8 @@ async function readListEvent(
  */
 export async function syncCommunityList2(
   nostr: {
-    query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]>;
-    group?(relays: string[]): { query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]> };
+    query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]>;
+    group?(relays: string[]): { query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> };
   },
   user: NUser,
   queryClient: QueryClient,

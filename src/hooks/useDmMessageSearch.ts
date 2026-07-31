@@ -17,11 +17,11 @@
  */
 import { useEffect, useMemo, useState } from "react";
 
-import type { NostrEvent } from "@nostrify/nostrify";
 
 import { getRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { dmCounterparty } from "@/hooks/useDirectMessages";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** A single conversation's best match for the active query. */
 export interface DmMessageMatch {
@@ -42,7 +42,7 @@ export interface DmMessageMatch {
  */
 export function useDmMessageSearch(
   query: string,
-  events: NostrEvent[],
+  events: NostrRumor[],
   self: string | undefined,
 ): Map<string, DmMessageMatch> {
   const needle = query.trim().toLowerCase();

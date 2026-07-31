@@ -23,7 +23,7 @@ import {
   KIND_SYSTEM_MESSAGE,
 } from "@/buzz/kinds";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 const HEX64_RE = /^[0-9a-f]{64}$/i;
 
@@ -83,7 +83,7 @@ export function buildBuzzReplyTags(
 }
 
 /** The thread root a reply belongs to, resolving through a known parent. */
-export function resolveBuzzRootId(parent: NostrEvent): string {
+export function resolveBuzzRootId(parent: NostrRumor): string {
   const ref = buzzThreadRef(parent.tags);
   return ref.rootId ?? parent.id;
 }
@@ -127,8 +127,8 @@ export function applyEditTagOverlay(
 }
 
 /** The latest 40003 edit per target id from a raw event window. */
-export function collectEdits(events: NostrEvent[], deletedIds: ReadonlySet<string>): Map<string, NostrEvent> {
-  const byTarget = new Map<string, NostrEvent>();
+export function collectEdits(events: NostrRumor[], deletedIds: ReadonlySet<string>): Map<string, NostrRumor> {
+  const byTarget = new Map<string, NostrRumor>();
   for (const ev of events) {
     if (ev.kind !== KIND_STREAM_MESSAGE_EDIT || deletedIds.has(ev.id)) continue;
     const target = eventTargetId(ev.tags);
@@ -140,7 +140,7 @@ export function collectEdits(events: NostrEvent[], deletedIds: ReadonlySet<strin
 }
 
 /** Every id deleted by a kind-5/9005 marker in a raw event window. */
-export function collectDeletedIds(events: NostrEvent[]): Set<string> {
+export function collectDeletedIds(events: NostrRumor[]): Set<string> {
   const out = new Set<string>();
   for (const ev of events) {
     if (!isBuzzDeletionKind(ev.kind)) continue;
@@ -153,9 +153,9 @@ export function collectDeletedIds(events: NostrEvent[]): Set<string> {
 
 export interface BuzzFoldedTimeline {
   /** Top-level rows (incl. broadcast replies), ascending by created_at. */
-  timeline: NostrEvent[];
+  timeline: NostrRumor[];
   /** Thread replies bucketed by root id, ascending within each thread. */
-  repliesByRoot: Map<string, NostrEvent[]>;
+  repliesByRoot: Map<string, NostrRumor[]>;
   /** Deleted ids (already removed from timeline/replies). */
   deletedIds: Set<string>;
 }
@@ -167,22 +167,22 @@ export interface BuzzFoldedTimeline {
  * shared row shows its edited state), and thread replies partitioned out of
  * the timeline into per-root buckets.
  */
-export function foldBuzzTimeline(events: NostrEvent[], contentKinds: readonly number[]): BuzzFoldedTimeline {
+export function foldBuzzTimeline(events: NostrRumor[], contentKinds: readonly number[]): BuzzFoldedTimeline {
   const contentSet = new Set(contentKinds);
   const deletedIds = collectDeletedIds(events);
   const edits = collectEdits(events, deletedIds);
 
   // De-dupe by id, newest copy wins (harmless for immutable events).
-  const byId = new Map<string, NostrEvent>();
+  const byId = new Map<string, NostrRumor>();
   for (const ev of events) {
     if (contentSet.has(ev.kind) && !deletedIds.has(ev.id)) byId.set(ev.id, ev);
   }
 
-  const timeline: NostrEvent[] = [];
-  const repliesByRoot = new Map<string, NostrEvent[]>();
+  const timeline: NostrRumor[] = [];
+  const repliesByRoot = new Map<string, NostrRumor[]>();
   for (const raw of byId.values()) {
     const edit = edits.get(raw.id);
-    const ev: NostrEvent = edit
+    const ev: NostrRumor = edit
       ? {
           ...raw,
           content: edit.content,
@@ -226,7 +226,7 @@ export interface BuzzSystemMessage {
 }
 
 /** Parse a kind-40099 relay-signed system message's JSON content. */
-export function parseSystemMessage(event: NostrEvent): BuzzSystemMessage | undefined {
+export function parseSystemMessage(event: NostrRumor): BuzzSystemMessage | undefined {
   if (event.kind !== KIND_SYSTEM_MESSAGE) return undefined;
   try {
     const raw = JSON.parse(event.content) as Record<string, unknown>;
@@ -254,7 +254,7 @@ export type BuzzChannelType = "stream" | "forum" | "dm" | "workflow";
  * tagged `hidden` with no explicit type is a DM channel (the relay marks DM
  * channels `hidden`).
  */
-export function buzzChannelType(event: NostrEvent): BuzzChannelType {
+export function buzzChannelType(event: NostrRumor): BuzzChannelType {
   const t = event.tags.find(([n]) => n === "t")?.[1];
   if (t === "forum" || t === "dm" || t === "workflow" || t === "stream") return t;
   if (event.tags.some(([n]) => n === "hidden")) return "dm";
@@ -262,12 +262,12 @@ export function buzzChannelType(event: NostrEvent): BuzzChannelType {
 }
 
 /** A channel's topic (Buzz 39000 `topic` tag), if any. */
-export function buzzChannelTopic(event: NostrEvent): string | undefined {
+export function buzzChannelTopic(event: NostrRumor): string | undefined {
   return event.tags.find(([n]) => n === "topic")?.[1] || undefined;
 }
 
 /** Whether the channel is archived (Buzz 39000 `archived` tag). */
-export function buzzChannelArchived(event: NostrEvent): boolean {
+export function buzzChannelArchived(event: NostrRumor): boolean {
   return event.tags.some(([n, v]) => n === "archived" && v === "true");
 }
 
@@ -300,11 +300,11 @@ export interface BuzzVoteTally {
  * wins). Deleted votes must be pre-filtered by the caller.
  */
 export function tallyForumVotes(
-  votes: NostrEvent[],
+  votes: NostrRumor[],
   viewer: string | undefined,
 ): Map<string, BuzzVoteTally> {
   // target → pubkey → latest vote
-  const latest = new Map<string, Map<string, NostrEvent>>();
+  const latest = new Map<string, Map<string, NostrRumor>>();
   for (const v of votes) {
     if (v.kind !== KIND_FORUM_VOTE) continue;
     const target = eventTargetId(v.tags);

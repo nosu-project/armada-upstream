@@ -7,11 +7,11 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { KIND_POLL_VOTE, parsePoll, tallyPollVotes, type PollVote } from "@/lib/polls";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 interface PollCardProps {
   /** The kind 1068 poll event. */
-  event: NostrEvent;
+  event: NostrRumor;
   /** The group's host relay (votes are published and queried there). */
   relayUrl: string;
   /** The NIP-29 group id, added as an `h` tag on votes. */

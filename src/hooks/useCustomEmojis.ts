@@ -11,7 +11,7 @@ import { emojiPackCoord, emojiPackName, readEmojiList } from "@/hooks/useEmojiPa
 import { useEventStore } from "@/hooks/useEventStore";
 import { parseAddr } from "@/lib/parseAddr";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface CustomEmoji {
   shortcode: string;
@@ -54,8 +54,8 @@ function savePalette(pubkey: string, emojis: CustomEmoji[]): void {
 }
 
 /** Newest event per addressable coordinate (`kind:pubkey:d`). */
-function newestPerAddr(events: NostrEvent[]): NostrEvent[] {
-  const newest = new Map<string, NostrEvent>();
+function newestPerAddr(events: NostrRumor[]): NostrRumor[] {
+  const newest = new Map<string, NostrRumor>();
   for (const event of events) {
     const d = event.tags.find(([n]) => n === "d")?.[1] ?? "";
     const addr = `${event.kind}:${event.pubkey}:${d}`;
@@ -71,7 +71,7 @@ function newestPerAddr(events: NostrEvent[]): NostrEvent[] {
  * are merged; when the same shortcode maps to different URLs across packs it is
  * prefixed with the pack id so both stay reachable.
  */
-function paletteFrom(listEvent: NostrEvent, packEvents: NostrEvent[]): CustomEmoji[] {
+function paletteFrom(listEvent: NostrRumor, packEvents: NostrRumor[]): CustomEmoji[] {
   const raw: {
     shortcode: string;
     url: string;
@@ -149,7 +149,7 @@ export function useCustomEmojis() {
         .map((t) => parseAddr(t[1]))
         .filter((a): a is NonNullable<typeof a> => !!a && a.kind === 30030);
 
-      let packEvents: NostrEvent[] = [];
+      let packEvents: NostrRumor[] = [];
       if (packRefs.length > 0) {
         const filters = packRefs.map((r) => ({
           kinds: [30030],
@@ -158,8 +158,8 @@ export function useCustomEmojis() {
           limit: 1,
         }));
         const [relay, cached] = await Promise.all([
-          nostr.query(filters, { signal }).catch(() => [] as NostrEvent[]),
-          store.query(filters).catch(() => [] as NostrEvent[]),
+          nostr.query(filters, { signal }).catch(() => [] as NostrRumor[]),
+          store.query(filters).catch(() => [] as NostrRumor[]),
         ]);
         packEvents = newestPerAddr([...relay, ...cached]);
       }

@@ -5,11 +5,11 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { KIND_RELAY_MEMBERS, parseRelayMemberRoles } from "@/lib/nip29";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Newest kind-13534 snapshot wins (it's a replaceable roster). */
-function composeRelayMembers(events: NostrEvent[]): Record<string, string> {
-  let newest: NostrEvent | undefined;
+function composeRelayMembers(events: NostrRumor[]): Record<string, string> {
+  let newest: NostrRumor | undefined;
   for (const event of events) {
     if (!newest || newest.created_at < event.created_at) newest = event;
   }

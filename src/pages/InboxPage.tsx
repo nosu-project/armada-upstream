@@ -28,7 +28,7 @@ import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** One inbox row: who mentioned you, where, and a preview — click to open it. */
 function InboxRow({
@@ -105,7 +105,7 @@ function InboxThreadDetail({
   groupId,
   onClose,
 }: {
-  mention: NostrEvent;
+  mention: NostrRumor;
   relayUrl: string;
   groupId: string;
   onClose: () => void;
@@ -120,7 +120,7 @@ function InboxThreadDetail({
       : mention.id;
   const needFetch = rootId !== mention.id;
   const { data: fetchedRoot } = useEvent(needFetch ? rootId : undefined, [relayUrl]);
-  const root: NostrEvent | undefined = needFetch ? fetchedRoot ?? undefined : mention;
+  const root: NostrRumor | undefined = needFetch ? fetchedRoot ?? undefined : mention;
 
   const { threadRepliesFor } = useGroupThreads(relayUrl, groupId, root ? [root.id] : []);
   const replies = root ? threadRepliesFor(root.id) : [];
@@ -144,7 +144,7 @@ function InboxThreadDetail({
       threadRepliesFor,
       reactionsFor,
       sendThreadReply: async (r: ChatMsg, content: string, tags: string[][]) => {
-        await sendThreadReply(r as NostrEvent, content, tags);
+        await sendThreadReply(r as NostrRumor, content, tags);
       },
     }),
     [canWrite, threadRepliesFor, reactionsFor, sendThreadReply],

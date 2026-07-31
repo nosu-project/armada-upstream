@@ -37,16 +37,8 @@ import { ARMADA_TENANTS, getArmadaDB } from "./armadaDB";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import type { NRumorStore } from "./types";
-
-/**
- * Present a stored rumor as an event. `sig` is empty: it was never stored (see
- * the module docstring). The field is kept so consumers typed on `NostrEvent`
- * need no change, NOT because it carries information.
- */
-function toEvent(rumor: Omit<NostrEvent, "sig">): NostrEvent {
-  return { ...rumor, sig: "" };
-}
 
 class MainEventStore implements ArmadaEventStore {
   private readonly tenant: NRumorStore;
@@ -63,8 +55,8 @@ class MainEventStore implements ArmadaEventStore {
     return this.tenant.event(rumor, opts);
   }
 
-  async query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]> {
-    return (await this.tenant.query(filters, opts)).map(toEvent);
+  query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> {
+    return this.tenant.query(filters, opts);
   }
 
   count(

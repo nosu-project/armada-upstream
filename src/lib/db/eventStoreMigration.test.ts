@@ -52,8 +52,8 @@ describe("migrateLegacyEvents", () => {
 
     const all = await store.query([{ limit: 100 }]);
     expect(all.map((e) => e.content).sort()).toEqual(["event-1", "event-2"]);
-    // Rumors have no signature to carry; the field is reported empty, not real.
-    expect(all.every((e) => e.sig === "")).toBe(true);
+    // Rumors have no signature to carry, and no longer forge an empty one.
+    expect(all.every((e) => !("sig" in e))).toBe(true);
 
     // Tag and kind indexes are live in the tenant, not just the raw rows.
     expect((await store.query([{ "#e": ["target"] }])).length).toBe(2);

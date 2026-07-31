@@ -2,7 +2,6 @@ import { ArrowUpRight, Braces, CheckCircle2, ChevronDown, ChevronRight, CircleDo
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { NostrEvent } from "@nostrify/nostrify";
 
 import type { GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import { isCommunityGuest } from "@/components/chat/channelTimeline";
@@ -34,6 +33,7 @@ import {
   type GitTimelineActivity,
 } from "@/lib/gitActivity";
 import { cn } from "@/lib/utils";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Callbacks that make the conversation panel writable. All optional: absent means read-only. */
 export interface TicketPanelActions {
@@ -431,7 +431,7 @@ interface DiscussionControls {
   onDelete: () => Promise<unknown>;
 }
 
-function DiscussionMessage({ pubkey, createdAt, event, members, className, controls }: { pubkey: string; createdAt: number; event: NostrEvent; members: ReadonlySet<string>; className?: string; controls?: DiscussionControls }) {
+function DiscussionMessage({ pubkey, createdAt, event, members, className, controls }: { pubkey: string; createdAt: number; event: NostrRumor; members: ReadonlySet<string>; className?: string; controls?: DiscussionControls }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);

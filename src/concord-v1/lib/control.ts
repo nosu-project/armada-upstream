@@ -42,6 +42,7 @@ import {
 } from "@/concord-v1/lib/roles";
 import { hex32 } from "@/concord-v1/lib/types";
 import { fold, type Edition } from "@/concord-v1/lib/version";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Control-edition sub-kinds (the `vsk` tag), matching Vector's allocation. */
 export const VSK_COMMUNITY_ROOT = "0";
@@ -80,7 +81,7 @@ export function sealControlEdition(
 }
 
 /** Open a control-edition outer → its inner edition event (decrypt under the server-root key). */
-export function openControlEdition(outer: NostrEvent, serverRoot: Uint8Array): NostrEvent {
+export function openControlEdition(outer: NostrRumor, serverRoot: Uint8Array): NostrEvent {
   if (outer.kind !== KIND_COMMUNITY_CONTROL) throw new Error("not a control-plane outer (kind != 3308)");
   const v = outer.tags.find((t) => t[0] === "v")?.[1];
   if (v !== "1") throw new Error(`unsupported control edition version: ${v}`);
@@ -102,7 +103,7 @@ export function openControlEdition(outer: NostrEvent, serverRoot: Uint8Array): N
 const openedEditionMemo = new Map<string, NostrEvent>();
 
 /** Memoized {@link openControlEdition}: decrypt+parse once per outer id, then reuse. */
-export function openControlEditionMemo(outer: NostrEvent, serverRoot: Uint8Array): NostrEvent {
+export function openControlEditionMemo(outer: NostrRumor, serverRoot: Uint8Array): NostrEvent {
   const hit = openedEditionMemo.get(outer.id);
   if (hit) return hit;
   const inner = openControlEdition(outer, serverRoot);
@@ -129,7 +130,7 @@ const parsedEditionMemo = new Map<string, ParsedEdition | null>();
  * session). Returns `undefined` for an outer that can't be opened/parsed under
  * this server root (not ours / bad-sig / malformed), remembering the failure.
  */
-function openAndParseEditionMemo(outer: NostrEvent, serverRoot: Uint8Array): ParsedEdition | undefined {
+function openAndParseEditionMemo(outer: NostrRumor, serverRoot: Uint8Array): ParsedEdition | undefined {
   const cached = parsedEditionMemo.get(outer.id);
   if (cached !== undefined) return cached ?? undefined;
   let parsed: ParsedEdition | null;
@@ -259,7 +260,7 @@ export interface FoldedRoster {
  * dropped (the self-promotion / forged-delegation defense).
  */
 export function foldRoster(
-  outers: NostrEvent[],
+  outers: NostrRumor[],
   serverRoot: Uint8Array,
   communityId: Uint8Array,
   ownerAttestation: string | undefined,
@@ -288,7 +289,7 @@ export function foldRoster(
 const foldRosterMemo = new Map<string, FoldedRoster>();
 
 function foldRosterUncached(
-  outers: NostrEvent[],
+  outers: NostrRumor[],
   serverRoot: Uint8Array,
   communityId: Uint8Array,
   ownerAttestation: string | undefined,
@@ -355,7 +356,7 @@ export interface FoldedMetadata {
  * signer is dropped (fail-closed). `communityId` anchors the GroupRoot entity.
  */
 export function foldMetadata(
-  outers: NostrEvent[],
+  outers: NostrRumor[],
   serverRoot: Uint8Array,
   communityId: Uint8Array,
   roster: CommunityRoles,
@@ -436,7 +437,7 @@ export interface FoldedBanlist {
  * community (`banlistLocator`).
  */
 export function foldBanlist(
-  outers: NostrEvent[],
+  outers: NostrRumor[],
   serverRoot: Uint8Array,
   communityId: Uint8Array,
   roster: CommunityRoles,
@@ -593,7 +594,7 @@ export function dissolvedAddress(communityId: Uint8Array): string {
  * and owner-only — a non-owner tombstone is ignored.
  */
 export function isDissolved(
-  outers: NostrEvent[],
+  outers: NostrRumor[],
   communityId: Uint8Array,
   ownerHex: string | undefined,
 ): boolean {

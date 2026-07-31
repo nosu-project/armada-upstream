@@ -39,6 +39,7 @@ import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageCalendar } from "@/components/chat/transport";
 import type { CalendarTransport } from "@/lib/calendar";
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-29 reply context: fetch the replied-to event from the relay, then render
  *  the shared chrome with the author name + a content preview. Clicking jumps
@@ -289,7 +290,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
     [],
   );
-  const [threadRoot, setThreadRoot] = useState<NostrEvent | undefined>(undefined);
+  const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
 
   // Tell the native notification service this NIP-29 room (and, if a thread
   // panel is open, that specific thread) is on screen, so it suppresses
@@ -344,8 +345,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   );
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [threadExpanded, setThreadExpanded] = useState(false);
-  const [lastThreadRoot, setLastThreadRoot] = useState<NostrEvent | undefined>(undefined);
-  const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
+  const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
+  const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
@@ -396,7 +397,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     timelineRef.current?.pinToBottom();
   }, []);
 
-  const openThread = useCallback((event: NostrEvent, focusReply = false) => {
+  const openThread = useCallback((event: ChatMsg, focusReply = false) => {
     setThreadAutoFocus(focusReply);
     setThreadRoot(event);
   }, []);
@@ -473,7 +474,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   }, [scrollToMessageRef]);
 
   const handleEditSubmit = useCallback(
-    async (original: NostrEvent, content: string) => {
+    async (original: NostrRumor, content: string) => {
       const trimmed = content.trim();
       if (!trimmed || trimmed === original.content.trim()) {
         setEditingId(undefined);
@@ -482,7 +483,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       setEditingId(undefined);
       try {
         const edited = await editMessage({ original, content: trimmed });
-        if (edited.id !== original.id) {
+        if (edited && edited.id !== original.id) {
           removeOptimistic(original.id);
           insertOptimistic(edited);
           markSent(edited.id);

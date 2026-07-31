@@ -10,6 +10,8 @@ import { useEventStore } from "./useEventStore";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
+import type { NostrRumor } from "@/lib/nostrRumor";
+
 /** Event template accepted by `useNostrPublish`. */
 export type EventTemplate = Omit<NostrEvent, "id" | "pubkey" | "sig" | "created_at"> & {
   created_at?: number;
@@ -17,7 +19,7 @@ export type EventTemplate = Omit<NostrEvent, "id" | "pubkey" | "sig" | "created_
    * The previous version of the event being replaced (for replaceable/addressable kinds).
    * When provided, `published_at` from the old event is preserved on the new one.
    */
-  prev?: NostrEvent;
+  prev?: NostrRumor;
   /**
    * When set, publish only to this relay (NIP-29 group traffic must stay on
    * the group's host server). When omitted, the event goes to all configured

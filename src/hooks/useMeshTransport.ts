@@ -17,8 +17,8 @@ const MESH_KIND = 9;
  * Adapt a mesh wire message to the shared `ChatMsg` (NostrEvent) shape so it
  * renders through the SAME `ChatMessage`/`ChatContent` path as NIP-29 and
  * Concord. Mesh peers are NOT Nostr pubkeys, so `pubkey` carries the mesh peer
- * id (or sender nickname) purely as a stable author key; rendering never
- * re-verifies the (empty) signature.
+ * id (or sender nickname) purely as a stable author key. A mesh message is
+ * never a signed Nostr event, which the `ChatMsg` (rumor) shape now admits.
  */
 function meshToEvent(m: MeshMessage): ChatMsg {
   return {
@@ -28,7 +28,6 @@ function meshToEvent(m: MeshMessage): ChatMsg {
     kind: MESH_KIND,
     tags: [["mesh_sender", m.sender]],
     content: m.content,
-    sig: "",
   };
 }
 

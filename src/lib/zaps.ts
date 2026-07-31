@@ -23,6 +23,7 @@ import { verifyEvent } from "nostr-tools/pure";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { Event as NostrToolsEvent } from "nostr-tools/pure";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Bounded insertion-order cache (entries are immutable; the cap only bounds memory). */
 function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, cap = 4096): V {
@@ -112,7 +113,7 @@ export function bolt11AmountSats(invoice: string): number | null {
 
 // ── NIP-29: public kind-9735 receipts ────────────────────────────────────────
 
-function tagValue(ev: NostrEvent, name: string): string | undefined {
+function tagValue(ev: NostrRumor, name: string): string | undefined {
   return ev.tags.find((t) => t[0] === name)?.[1];
 }
 
@@ -123,7 +124,7 @@ function tagValue(ev: NostrEvent, name: string): string | undefined {
  * spoofing "you zapped this"). Cached per receipt id.
  */
 const requestCache = new Map<string, NostrEvent | null>();
-export function receiptZapRequest(receipt: NostrEvent): NostrEvent | null {
+export function receiptZapRequest(receipt: NostrRumor): NostrEvent | null {
   const hit = requestCache.get(receipt.id);
   if (hit !== undefined) return hit;
 
@@ -148,7 +149,7 @@ export function receiptZapRequest(receipt: NostrEvent): NostrEvent | null {
  * invoice voids the receipt, and the receipt's own `amount` tag is never
  * trusted alone.
  */
-export function receiptAmountSats(receipt: NostrEvent, request: NostrEvent): number {
+export function receiptAmountSats(receipt: NostrRumor, request: NostrEvent): number {
   const bolt11 = tagValue(receipt, "bolt11");
   if (!bolt11) return 0;
   const { amountMsats } = bolt11Info(bolt11);
@@ -170,7 +171,7 @@ export function receiptAmountSats(receipt: NostrEvent, request: NostrEvent): num
  * is impersonation and free amount inflation.
  */
 export function tallyZaps(
-  receipts: NostrEvent[],
+  receipts: NostrRumor[],
   targetId: string,
   userPubkey?: string,
 ): ZapTally {
@@ -211,7 +212,7 @@ export function tallyZaps(
  * (the event is self-signed); the amount comes from the `amount` tag.
  */
 export function tallyOnchainZaps(
-  events: NostrEvent[],
+  events: NostrRumor[],
   targetId: string,
   userPubkey?: string,
 ): ZapTally {

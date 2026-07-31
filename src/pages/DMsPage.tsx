@@ -95,7 +95,7 @@ import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { preferredDmVoiceRelay } from "@/lib/voiceDevices";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Resolve a typed npub/nprofile/hex string to a hex pubkey, or undefined. */
 function resolvePubkey(input: string): string | undefined {
@@ -172,7 +172,7 @@ function ConversationRow({
   onBlock,
 }: {
   peer: string;
-  preview: NostrEvent | undefined;
+  preview: NostrRumor | undefined;
   previewText: string | undefined;
   unread: boolean;
   inCall: boolean;
@@ -529,7 +529,7 @@ function DmTimerNotice({ author, seconds, self, name }: { author: string; second
   );
 }
 
-function DmReplyContext({ parent, onJump }: { parent: NostrEvent | undefined; onJump: (id: string) => void }) {
+function DmReplyContext({ parent, onJump }: { parent: NostrRumor | undefined; onJump: (id: string) => void }) {
   const author = useAuthor(parent?.pubkey);
   const name = parent ? getDisplayName(author.data?.metadata, parent.pubkey) : "";
   if (!parent) return null;
@@ -551,7 +551,7 @@ function DmReplyContext({ parent, onJump }: { parent: NostrEvent | undefined; on
  * plain `e` parent tag per the spec — accept either. Kind-4 rows carry no
  * tags, so they never resolve.
  */
-function dmReplyToId(msg: NostrEvent): string | undefined {
+function dmReplyToId(msg: NostrRumor): string | undefined {
   if (msg.kind !== KIND_DM_CHAT && msg.kind !== KIND_DM_FILE) return undefined;
   return getQuoteReplyToId(msg) ?? msg.tags.find(([name, value]) => name === "e" && value)?.[1];
 }
@@ -676,7 +676,7 @@ function Conversation({
 
   // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no
   // in-band convention, so the control is hidden on legacy threads).
-  const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
+  const [replyTo, setReplyTo] = useState<NostrRumor | undefined>(undefined);
   useEffect(() => setReplyTo(undefined), [peer]);
 
   // Mobile tap-to-reveal for the per-message action toolbar (react/quote/etc.).
@@ -713,7 +713,7 @@ function Conversation({
   // The loaded thread by id, for resolving quoted parents locally (NIP-17
   // rumors aren't relay-fetchable).
   const messagesById = useMemo(() => {
-    const map = new Map<string, NostrEvent>();
+    const map = new Map<string, NostrRumor>();
     for (const m of messages) map.set(m.id, m);
     return map;
   }, [messages]);
@@ -1725,13 +1725,13 @@ function ConversationList({
   isLoadingMore,
   className,
 }: {
-  rows: { peer: string; latest: NostrEvent; plaintext?: string }[];
+  rows: { peer: string; latest: NostrRumor; plaintext?: string }[];
   /** Conversations in the request tier — see useKnownDmPeers. */
-  requestRows: { peer: string; latest: NostrEvent; plaintext?: string }[];
+  requestRows: { peer: string; latest: NostrRumor; plaintext?: string }[];
   view: DmListView;
   onViewChange: (view: DmListView) => void;
   previews: Record<string, string>;
-  events: NostrEvent[];
+  events: NostrRumor[];
   activePeer: string | undefined;
   dmSupported: boolean;
   isLoading: boolean;
@@ -1739,7 +1739,7 @@ function ConversationList({
   onMarkAllRead: () => void;
   onCompose: () => void;
   openPeer: (pubkey: string) => void;
-  closePeer: (pubkey: string, latest: NostrEvent | undefined) => void;
+  closePeer: (pubkey: string, latest: NostrRumor | undefined) => void;
   loadMore: () => Promise<number>;
   hasMore: boolean;
   isLoadingMore: boolean;
@@ -2211,7 +2211,7 @@ export function DMsPage() {
   const [rows, requestRows] = useMemo(() => {
     const byPeer = new Map<
       string,
-      { peer: string; latest: NostrEvent; plaintext?: string; mine: boolean }
+      { peer: string; latest: NostrRumor; plaintext?: string; mine: boolean }
     >();
     for (const c of conversations) {
       byPeer.set(c.peer, { peer: c.peer, latest: c.latest, mine: c.mine });
@@ -2234,7 +2234,6 @@ export function DMsPage() {
           kind: c.latest.kind,
           content: c.latest.content,
           tags: c.latest.tags,
-          sig: "",
         },
         plaintext: c.latest.content,
         mine,
@@ -2249,7 +2248,7 @@ export function DMsPage() {
     // (An EXISTING stranger conversation opened by deep link stays a request —
     // the list switches to the request view to show it instead.)
     if (activePeer && !sorted.some((c) => c.peer === activePeer)) {
-      known.unshift({ peer: activePeer, latest: undefined as unknown as NostrEvent, mine: false });
+      known.unshift({ peer: activePeer, latest: undefined as unknown as NostrRumor, mine: false });
     }
     return [known, requests];
   }, [conversations, dm17Conversations, activePeer, isKnown]);
@@ -2297,7 +2296,7 @@ export function DMsPage() {
         // for an image when the live rows land.
         tags: r.emojiTags ?? [],
         sig: "",
-      } as NostrEvent,
+      } as NostrRumor,
       plaintext: r.preview,
       mine: r.mine,
     }));
@@ -2316,7 +2315,7 @@ export function DMsPage() {
     // Keep the open thread's row present even if it predates the snapshot.
     if (!activePeer || visibleRestoredRows.some((r) => r.peer === activePeer)) return visibleRestoredRows;
     return [
-      { peer: activePeer, latest: undefined as unknown as NostrEvent, mine: false },
+      { peer: activePeer, latest: undefined as unknown as NostrRumor, mine: false },
       ...visibleRestoredRows,
     ];
   }, [isLoading, visibleRestoredRows, visibleRows, activePeer]);
@@ -2380,7 +2379,7 @@ export function DMsPage() {
   );
 
   const closePeer = useCallback(
-    (pubkey: string, latest: NostrEvent | undefined) => {
+    (pubkey: string, latest: NostrRumor | undefined) => {
       closeDm(pubkey, latest);
       if (activePeer === pubkey) {
         setRenderedPeer(undefined);

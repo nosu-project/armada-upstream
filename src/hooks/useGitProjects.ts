@@ -32,6 +32,7 @@ import {
 import { isGitAnnouncementDiscoveryRelay } from "@/lib/platform";
 import { emitWireScopes } from "@/wire/bus";
 import { useWireScopes } from "@/wire/useWireScopes";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 const PAGE_SIZE = 100;
 const MAX_ROOT_PAGES = 5;
@@ -94,7 +95,7 @@ export interface GitProjects {
  * are built by the shared timeline builder, so author-published NIP-09
  * retractions in `events` remove their comments here too.
  */
-export function assembleGitProjects(sources: readonly GitProjectSource[], events: readonly NostrEvent[]): GitProjects {
+export function assembleGitProjects(sources: readonly GitProjectSource[], events: readonly NostrRumor[]): GitProjects {
   const coordinates = new Set(sources.map((source) => source.address.coordinate));
 
   const announcements = new Map<string, ReturnType<typeof parseGitRepositoryAnnouncement>>();
@@ -120,7 +121,7 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
     ticketRepository.set(ticket.id, repository);
   }
 
-  const statusesByTicket = new Map<string, NostrEvent[]>();
+  const statusesByTicket = new Map<string, NostrRumor[]>();
   for (const event of events) {
     const status = parseGitStatusEvent(event);
     if (!status || !tickets.has(status.ticketId)) continue;

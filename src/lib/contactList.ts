@@ -1,8 +1,9 @@
-import type { NostrEvent, NostrFilter, NPool } from "@nostrify/nostrify";
+import type { NostrFilter, NPool } from "@nostrify/nostrify";
 
 import { isNostrId } from "@/lib/nostrId";
 
 import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 // ============================================================================
 // Centralized kind 3 (contact list) fetch + cache logic (ported from Ditto).
@@ -33,7 +34,7 @@ export async function fetchContactList(
   store: ArmadaEventStore,
   pubkey: string,
   opts: { signal?: AbortSignal; timeout?: number } = {},
-): Promise<NostrEvent | null> {
+): Promise<NostrRumor | null> {
   const { signal, timeout = DEFAULT_TIMEOUT } = opts;
 
   const querySignal = signal
@@ -61,7 +62,7 @@ export async function fetchContactList(
 export async function readCachedContactList(
   store: ArmadaEventStore,
   pubkey: string,
-): Promise<NostrEvent | null> {
+): Promise<NostrRumor | null> {
   const [cached] = await store.query([{ kinds: [3], authors: [pubkey] }]);
   return cached ?? null;
 }
@@ -72,7 +73,7 @@ export async function readCachedContactList(
  * Malformed (non-hex) pubkeys are dropped — anything but valid hex would crash
  * nip19 encoders in the consumer UI (avatar stacks, follow lists).
  */
-export function contactListPubkeys(event: NostrEvent | null | undefined): string[] {
+export function contactListPubkeys(event: NostrRumor | null | undefined): string[] {
   if (!event) return [];
   return event.tags
     .filter(([name]) => name === "p")

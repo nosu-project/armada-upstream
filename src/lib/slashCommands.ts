@@ -1,6 +1,6 @@
 import { nip19 } from "nostr-tools";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Slash commands for the chat composer. Typing `/` at the very start of an
@@ -322,11 +322,11 @@ export function resolveNpubArg(arg: string): string | undefined {
 }
 
 /** True if a stored chat message is a `/me` action line. */
-export function isMeAction(event: NostrEvent): boolean {
+export function isMeAction(event: NostrRumor): boolean {
   return event.content.startsWith(ME_ACTION_PREFIX);
 }
 
 /** The action text of a `/me` message (without the marker prefix). */
-export function meActionText(event: NostrEvent): string {
+export function meActionText(event: NostrRumor): string {
   return event.content.slice(ME_ACTION_PREFIX.length);
 }

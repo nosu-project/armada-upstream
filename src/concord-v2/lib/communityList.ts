@@ -16,7 +16,7 @@
 
 import { bytesToHex, hex32, verifyCommunityId } from "@/concord-v2/lib/derive";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   MAX_LIST_MEMBERSHIPS,
   capRelays,
@@ -105,7 +105,7 @@ export const EMPTY_COMMUNITY_LIST: CommunityList = { entries: [], tombstones: []
  * to import React to ask.
  */
 export interface PersistedCommunityList {
-  event: NostrEvent | null;
+  event: NostrRumor | null;
   list: CommunityList;
 }
 

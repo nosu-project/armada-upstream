@@ -8,13 +8,13 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { KIND_ONCHAIN_ZAP, KIND_ZAP_RECEIPT, tallyOnchainZaps, tallyZaps, type ZapTally } from "@/lib/zaps";
 
 import type { MessageZaps } from "@/components/chat/transport";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 const zapsKey = (scope: string) => ["zaps", scope] as const;
 
 /** Bucket receipts by their `e` tag (a receipt can carry only one). */
-function groupReceiptsByTarget(receipts: NostrEvent[]): Map<string, NostrEvent[]> {
-  const map = new Map<string, NostrEvent[]>();
+function groupReceiptsByTarget(receipts: NostrRumor[]): Map<string, NostrRumor[]> {
+  const map = new Map<string, NostrRumor[]>();
   for (const receipt of receipts) {
     const target = receipt.tags.find((t) => t[0] === "e")?.[1];
     if (!target) continue;
@@ -27,9 +27,9 @@ function groupReceiptsByTarget(receipts: NostrEvent[]): Map<string, NostrEvent[]
 
 /** Merge fresh receipts into the bucketed map, deduping by id. */
 function mergeReceipts(
-  old: Map<string, NostrEvent[]> | undefined,
-  fresh: NostrEvent[],
-): Map<string, NostrEvent[]> {
+  old: Map<string, NostrRumor[]> | undefined,
+  fresh: NostrRumor[],
+): Map<string, NostrRumor[]> {
   const merged = new Map(old ?? []);
   for (const receipt of fresh) {
     const target = receipt.tags.find((t) => t[0] === "e")?.[1];
@@ -67,7 +67,7 @@ export function useZapReceipts(
 
   const idsSig = useMemo(() => [...messageIds].sort().join(","), [messageIds]);
 
-  const receiptsQuery = useQuery<Map<string, NostrEvent[]>>({
+  const receiptsQuery = useQuery<Map<string, NostrRumor[]>>({
     queryKey: [...queryKey, idsSig],
     queryFn: async ({ signal }) => {
       const ids = idsSig ? idsSig.split(",") : [];
@@ -87,7 +87,7 @@ export function useZapReceipts(
             { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
           );
           if (signal.aborted || fresh.length === 0) return;
-          queryClient.setQueryData<Map<string, NostrEvent[]>>([...queryKey, idsSig], (old) =>
+          queryClient.setQueryData<Map<string, NostrRumor[]>>([...queryKey, idsSig], (old) =>
             mergeReceipts(old, fresh),
           );
         } catch {
@@ -115,8 +115,8 @@ export function useZapReceipts(
           { signal: controller.signal },
         )) {
           if (msg[0] !== "EVENT") continue;
-          const event = msg[2] as NostrEvent;
-          queryClient.setQueryData<Map<string, NostrEvent[]>>([...queryKey, idsSig], (old) =>
+          const event = msg[2] as NostrRumor;
+          queryClient.setQueryData<Map<string, NostrRumor[]>>([...queryKey, idsSig], (old) =>
             mergeReceipts(old, [event]),
           );
         }

@@ -1,4 +1,4 @@
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 import { assembleCIRuns, matchCIRepository, type CIRun } from "@/lib/ci";
 import { isNostrId } from "@/lib/nostrId";
@@ -66,7 +66,7 @@ export function parseGitRepositoryAddress(value: string | undefined): GitReposit
 }
 
 export interface GitRepositoryAnnouncement {
-  event: NostrEvent;
+  event: NostrRumor;
   address: GitRepositoryAddress;
   owner: string;
   identifier: string;
@@ -80,7 +80,7 @@ export interface GitRepositoryAnnouncement {
 }
 
 /** Parse a NIP-34 repository announcement, returning undefined for malformed events. */
-export function parseGitRepositoryAnnouncement(event: NostrEvent): GitRepositoryAnnouncement | undefined {
+export function parseGitRepositoryAnnouncement(event: NostrRumor): GitRepositoryAnnouncement | undefined {
   if (event.kind !== GIT_REPOSITORY_ANNOUNCEMENT_KIND || !isNostrId(event.pubkey)) return undefined;
   const identifier = firstTagValue(event, "d")?.trim();
   if (!identifier) return undefined;
@@ -110,7 +110,7 @@ export interface GitPullRequestBranches {
 }
 
 export interface GitTicket {
-  event: NostrEvent;
+  event: NostrRumor;
   id: string;
   kind: GitTicketKind;
   type: "issue" | "pull-request";
@@ -147,7 +147,7 @@ export function matchGitTicketRepository(
 }
 
 /** Parse a NIP-34 issue or pull request. */
-export function parseGitTicket(event: NostrEvent): GitTicket | undefined {
+export function parseGitTicket(event: NostrRumor): GitTicket | undefined {
   if (!isGitTicketKind(event.kind) || !isNostrId(event.pubkey)) return undefined;
 
   const branchName = firstTagValue(event, "branch-name")?.trim();
@@ -178,7 +178,7 @@ export function parseGitTicket(event: NostrEvent): GitTicket | undefined {
 }
 
 export interface GitStatusEvent {
-  event: NostrEvent;
+  event: NostrRumor;
   kind: GitStatusKind;
   ticketId: string;
   author: string;
@@ -186,7 +186,7 @@ export interface GitStatusEvent {
 }
 
 /** Parse a status event that roots itself in a regular issue or pull request event. */
-export function parseGitStatusEvent(event: NostrEvent): GitStatusEvent | undefined {
+export function parseGitStatusEvent(event: NostrRumor): GitStatusEvent | undefined {
   if (!isGitStatusKind(event.kind) || !isNostrId(event.pubkey)) return undefined;
   const ticketId = statusTicketId(event);
   if (!ticketId || !isNostrId(ticketId)) return undefined;
@@ -194,7 +194,7 @@ export function parseGitStatusEvent(event: NostrEvent): GitStatusEvent | undefin
 }
 
 export interface GitComment {
-  event: NostrEvent;
+  event: NostrRumor;
   id: string;
   ticketId: string;
   ticketKind: GitTicketKind;
@@ -204,7 +204,7 @@ export interface GitComment {
 }
 
 /** Parse a NIP-22 comment rooted in a regular NIP-34 ticket. */
-export function parseGitComment(event: NostrEvent): GitComment | undefined {
+export function parseGitComment(event: NostrRumor): GitComment | undefined {
   if (event.kind !== NIP22_COMMENT_KIND || !isNostrId(event.pubkey)) return undefined;
   const ticketId = rootEventId(event, "E");
   const ticketKind = Number(firstTagValue(event, "K"));
@@ -232,7 +232,7 @@ export function trustedGitStatusAuthors(
 export function resolveGitTicketStatus(
   ticket: GitTicket,
   repository: Pick<GitRepositoryAnnouncement, "owner" | "maintainers">,
-  events: readonly NostrEvent[],
+  events: readonly NostrRumor[],
 ): GitStatusEvent | undefined {
   const trustedAuthors = trustedGitStatusAuthors(ticket, repository);
   return events
@@ -374,7 +374,7 @@ export function normalizeGitLabels(labels: readonly string[]): string[] {
 }
 
 /** A NIP-09 deletion request for one of the user's own git events. */
-export function buildGitDeletionTemplate(target: Pick<NostrEvent, "id" | "kind">): GitEventTemplate {
+export function buildGitDeletionTemplate(target: Pick<NostrRumor, "id" | "kind">): GitEventTemplate {
   return {
     kind: EVENT_DELETION_KIND,
     content: "",
@@ -390,7 +390,7 @@ export function buildGitDeletionTemplate(target: Pick<NostrEvent, "id" | "kind">
  * the target's author, so callers key acceptance on the pair — anyone can
  * publish a kind 5 naming someone else's event.
  */
-export function collectGitDeletions(events: readonly NostrEvent[]): Map<string, Set<string>> {
+export function collectGitDeletions(events: readonly NostrRumor[]): Map<string, Set<string>> {
   const deletions = new Map<string, Set<string>>();
   for (const event of events) {
     if (event.kind !== EVENT_DELETION_KIND || !isNostrId(event.pubkey)) continue;
@@ -441,7 +441,7 @@ export type GitTimelineActivity =
  * displayed child must nevertheless occur inside one of its repo's intervals.
  */
 export function buildGitTimelineActivities(
-  events: readonly NostrEvent[],
+  events: readonly NostrRumor[],
   attachments: readonly GitRepositoryAttachment[],
   repositories: readonly Pick<GitRepositoryAnnouncement, "address" | "owner" | "maintainers" | "createdAt">[] = [],
 ): GitTimelineActivity[] {
@@ -543,7 +543,7 @@ function activityId(activity: GitTimelineActivity): string {
   }
 }
 
-function compareNewestFirst(a: { createdAt: number; event: NostrEvent }, b: { createdAt: number; event: NostrEvent }): number {
+function compareNewestFirst(a: { createdAt: number; event: NostrRumor }, b: { createdAt: number; event: NostrRumor }): number {
   return b.createdAt - a.createdAt || a.event.id.localeCompare(b.event.id);
 }
 
@@ -555,11 +555,11 @@ function isGitStatusKind(kind: number): kind is GitStatusKind {
   return GIT_STATUS_KINDS.includes(kind as GitStatusKind);
 }
 
-function firstTagValue(event: NostrEvent, name: string): string | undefined {
+function firstTagValue(event: NostrRumor, name: string): string | undefined {
   return event.tags.find(([tagName]) => tagName === name)?.[1];
 }
 
-function tagValues(event: NostrEvent, name: string): string[] {
+function tagValues(event: NostrRumor, name: string): string[] {
   return event.tags.filter(([tagName]) => tagName === name).flatMap(([, ...values]) => values.filter(Boolean));
 }
 
@@ -567,14 +567,14 @@ function firstContentLine(content: string): string | undefined {
   return content.split("\n").find((line) => line.trim())?.trim();
 }
 
-function rootEventId(event: NostrEvent, tagName = "e"): string | undefined {
+function rootEventId(event: NostrRumor, tagName = "e"): string | undefined {
   // NIP-22 encodes root references in uppercase tags. Unlike NIP-10's `e`
   // tags, the fourth value is the root author's pubkey, not a "root" marker.
   const roots = event.tags.filter(([name]) => name === tagName);
   return roots.length === 1 ? roots[0][1] : undefined;
 }
 
-function statusTicketId(event: NostrEvent): string | undefined {
+function statusTicketId(event: NostrRumor): string | undefined {
   const targets = event.tags.filter(([name, , , marker]) => name === "e" && (marker === "root" || marker === undefined));
   return targets.length === 1 ? targets[0][1] : undefined;
 }

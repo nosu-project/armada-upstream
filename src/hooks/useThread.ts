@@ -8,6 +8,7 @@ import { buildCommentTags, KIND_COMMENT } from "@/lib/nip29";
 import { toChatMsg } from "@/components/chat/transport";
 import type { ChatMsg } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Threaded replies + counts for a whole group's visible messages, in ONE
@@ -40,7 +41,7 @@ export function useGroupThreads(
   // Stable primitive dep for the id set (not a fresh array each render).
   const idsSig = useMemo(() => [...messageIds].sort().join(","), [messageIds]);
 
-  const query = useQuery<Map<string, NostrEvent[]>>({
+  const query = useQuery<Map<string, NostrRumor[]>>({
     queryKey,
     queryFn: async ({ signal }) => {
       const ids = idsSig ? idsSig.split(",") : [];
@@ -71,8 +72,8 @@ export function useGroupThreads(
         )) {
           if (msg[0] !== "EVENT") continue;
           const event = msg[2] as NostrEvent;
-          queryClient.setQueryData<Map<string, NostrEvent[]>>(queryKey, (old) => {
-            const next = new Map<string, NostrEvent[]>();
+          queryClient.setQueryData<Map<string, NostrRumor[]>>(queryKey, (old) => {
+            const next = new Map<string, NostrRumor[]>();
             if (old) for (const [k, v] of old) next.set(k, v);
             for (const [, root] of event.tags.filter(([n]) => n === "E")) {
               if (!root) continue;
@@ -136,7 +137,7 @@ export function useSendThreadReply(relayUrl: string, groupId: string) {
   const { mutateAsync: createEvent } = useNostrPublish();
   const queryClient = useQueryClient();
   return useCallback(
-    async (root: NostrEvent, content: string, composerTags: string[][] = []) => {
+    async (root: NostrRumor, content: string, composerTags: string[][] = []) => {
       const tags = buildCommentTags(root, groupId);
       for (const tag of composerTags) {
         // Thread structure (`h` group, `e` pointers) comes from
@@ -159,8 +160,8 @@ export function useSendThreadReply(relayUrl: string, groupId: string) {
 }
 
 /** Bucket kind-1111 replies by their root id (`#E` tag), de-duped by reply id. */
-function bucketReplies(events: NostrEvent[]): Map<string, NostrEvent[]> {
-  const out = new Map<string, NostrEvent[]>();
+function bucketReplies(events: NostrRumor[]): Map<string, NostrRumor[]> {
+  const out = new Map<string, NostrRumor[]>();
   const seen = new Map<string, Set<string>>();
   for (const event of events) {
     for (const [, root] of event.tags.filter(([n]) => n === "E")) {

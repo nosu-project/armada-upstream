@@ -6,6 +6,7 @@ import { useCacheFirstSeed } from '@/hooks/useCacheFirstSeed';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useEventStore } from '@/hooks/useEventStore';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-38 user status. kind 30315, addressable by the `d` tag (status type). */
 export const USER_STATUS_KIND = 30315;
@@ -21,7 +22,7 @@ export interface UserStatus {
   /** Unix seconds the status expires at, if the event carried an `expiration`. */
   expiration?: number;
   /** The underlying event, kept so callers can read emoji tags etc. */
-  event: NostrEvent;
+  event: NostrRumor;
 }
 
 export type UserStatusResult = { status?: UserStatus };
@@ -45,7 +46,7 @@ export function isStatusExpired(status: UserStatus | undefined, now = Date.now()
  * empty, or whose `expiration` has already passed, is treated as "no status"
  * (NIP-38: an empty status clears it).
  */
-export function parseUserStatusEvent(event: NostrEvent): UserStatusResult {
+export function parseUserStatusEvent(event: NostrRumor): UserStatusResult {
   const content = event.content.trim();
   const link = event.tags.find(([name]) => name === 'r')?.[1];
   const expirationTag = event.tags.find(([name]) => name === 'expiration')?.[1];
@@ -68,7 +69,7 @@ export function parseUserStatusEvent(event: NostrEvent): UserStatusResult {
   };
 }
 
-function statusEvent(data: UserStatusResult): NostrEvent | undefined {
+function statusEvent(data: UserStatusResult): NostrRumor | undefined {
   return data.status?.event;
 }
 

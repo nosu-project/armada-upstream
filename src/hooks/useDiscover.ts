@@ -17,7 +17,8 @@ import { isNostrId } from "@/lib/nostrId";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
 
-import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Discover feeds — browse and search public directory events: opt-in Concord
@@ -58,7 +59,7 @@ const TEAM_PACK_COORD = ((): { kind: number; pubkey: string; identifier: string 
 })();
 
 /** Valid (hex) member pubkeys from a follow pack's `p` tags. */
-function followPackPubkeys(event: NostrEvent | null | undefined): string[] {
+function followPackPubkeys(event: NostrRumor | null | undefined): string[] {
   if (!event) return [];
   return event.tags
     .filter(([name]) => name === "p")
@@ -67,8 +68,8 @@ function followPackPubkeys(event: NostrEvent | null | undefined): string[] {
 }
 
 /** Newest event per addressable coordinate (`kind:pubkey:d`), newest first. */
-function newestPerAddr(events: NostrEvent[]): NostrEvent[] {
-  const newest = new Map<string, NostrEvent>();
+function newestPerAddr(events: NostrRumor[]): NostrRumor[] {
+  const newest = new Map<string, NostrRumor>();
   for (const event of events) {
     const d = event.tags.find(([n]) => n === "d")?.[1] ?? "";
     const addr = `${event.kind}:${event.pubkey}:${d}`;
@@ -86,7 +87,7 @@ async function fetchDiscover(
   query: string,
   authors: string[] | undefined,
   signal: AbortSignal,
-): Promise<NostrEvent[]> {
+): Promise<NostrRumor[]> {
   // `authors === undefined` means the allow-list is bypassed (the unfiltered
   // firehose). An empty array would be sent as-is, which callers guard against.
   const base: NostrFilter = { kinds: [kind], limit: FETCH_LIMIT };
@@ -231,7 +232,7 @@ export function useDiscoverEmojiPacks(query: string) {
 
   const authorFilter = unrestricted ? undefined : authors;
 
-  const result = useQuery<NostrEvent[]>({
+  const result = useQuery<NostrRumor[]>({
     queryKey: ["discover", "emoji-packs", relays, authorFilter ?? "all", debounced.trim()],
     enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
@@ -262,7 +263,7 @@ export function useDiscoverThemes(query: string) {
 
   const authorFilter = unrestricted ? undefined : authors;
 
-  const result = useQuery<NostrEvent[]>({
+  const result = useQuery<NostrRumor[]>({
     queryKey: ["discover", "themes", relays, authorFilter ?? "all", debounced.trim()],
     enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,

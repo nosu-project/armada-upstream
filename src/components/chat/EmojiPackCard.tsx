@@ -22,14 +22,14 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** How many emojis to show in the preview grid before "+N more". */
 const PREVIEW_LIMIT = 16;
 
 interface EmojiPackCardProps {
   /** The kind-30030 emoji set event. */
-  event: NostrEvent;
+  event: NostrRumor;
   className?: string;
 }
 

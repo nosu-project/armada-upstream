@@ -20,8 +20,10 @@
  * reload there. Delivery still works; only the retry-after-restart does not.
  */
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { isSigned } from "@/lib/nostrRumor";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Key prefix for one queued publish; the suffix is the event id. */
 const KEY_PREFIX = "outbox:";
@@ -139,19 +141,21 @@ export async function queueSignedEvent(event: NostrEvent, relay?: string): Promi
 }
 
 /**
- * `event` if it still carries its signature, otherwise the outbox's copy of it.
+ * The signed form of `rumor` — itself when it still carries a signature, or the
+ * outbox's copy when it does not.
  *
- * A retry hands back whatever the UI is holding, and the timelines are fed from
- * the event store, which drops `sig`. This is the lookup that turns such a copy
- * back into something a relay will accept — and unlike the timeline, it also
- * survives a reload. Returns the input unchanged when nothing is queued, so the
- * caller's own unsigned-event check is what reports the failure.
+ * A retry hands back whatever the UI is holding, and timelines are fed from the
+ * event store, which drops `sig`. This is the lookup that turns such a copy
+ * back into something a relay will accept, and unlike the timeline it survives
+ * a reload. Throws when no signed copy exists anywhere: that is a dead end for
+ * the caller, and saying so beats handing a relay an event it will reject.
  */
-export async function withSignature(event: NostrEvent): Promise<NostrEvent> {
-  if (event.sig) return event;
+export async function withSignature(rumor: NostrRumor): Promise<NostrEvent> {
+  if (isSigned(rumor)) return rumor;
   await migrateLegacyOutbox();
-  const item = await getArmadaDB().kv.get<QueuedPublish>(itemKey(event.id));
-  return isQueuedPublish(item) ? item.event : event;
+  const item = await getArmadaDB().kv.get<QueuedPublish>(itemKey(rumor.id));
+  if (isQueuedPublish(item)) return item.event;
+  throw new Error("This message can no longer be sent: its signature was not kept.");
 }
 
 export async function removeQueuedPublish(id: string): Promise<void> {

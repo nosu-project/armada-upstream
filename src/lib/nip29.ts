@@ -1,4 +1,5 @@
-import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 import { nip19 } from "nostr-tools";
 
 import { tryNaddrEncode } from "@/lib/safeNip19";
@@ -219,7 +220,7 @@ export interface Nip29Group {
   /** Supported kinds, when restricted. `undefined` = all kinds. */
   supportedKinds?: number[];
   /** The raw kind 39000 event. */
-  event: NostrEvent;
+  event: NostrRumor;
 }
 
 export interface Nip29Admin {
@@ -297,7 +298,7 @@ export interface CalendarEvent {
   /** Group id this event belongs to (`h` tag). */
   groupId?: string;
   /** The raw signed event. */
-  event: NostrEvent;
+  event: NostrRumor;
 }
 
 /** Input for building a calendar-event template (kind 31922/31923). */
@@ -337,7 +338,7 @@ export function calendarEventCoord(kind: number, pubkey: string, identifier: str
  * `undefined` when it isn't a calendar kind or is missing required fields
  * (`d`, `title`, a valid `start`).
  */
-export function parseCalendarEvent(event: NostrEvent): CalendarEvent | undefined {
+export function parseCalendarEvent(event: NostrRumor): CalendarEvent | undefined {
   if (event.kind !== KIND_CALENDAR_DATE && event.kind !== KIND_CALENDAR_TIME) return undefined;
   const identifier = tag(event, "d")?.[1];
   const title = tag(event, "title")?.[1];
@@ -441,7 +442,7 @@ export function formatCalendarEventWhen(event: CalendarEvent): string {
 }
 
 /** Parse the `status` tag of a kind 31925 RSVP into a {@link RsvpStatus}. */
-export function parseRsvpStatus(event: NostrEvent): RsvpStatus | undefined {
+export function parseRsvpStatus(event: NostrRumor): RsvpStatus | undefined {
   if (event.kind !== KIND_CALENDAR_RSVP) return undefined;
   const status = tag(event, "status")?.[1];
   if (status === "accepted" || status === "declined" || status === "tentative") return status;
@@ -449,7 +450,7 @@ export function parseRsvpStatus(event: NostrEvent): RsvpStatus | undefined {
 }
 
 /** The event coordinate (`a` tag) a kind 31925 RSVP points at. */
-export function parseRsvpCoord(event: NostrEvent): string | undefined {
+export function parseRsvpCoord(event: NostrRumor): string | undefined {
   return tag(event, "a")?.[1];
 }
 
@@ -481,16 +482,16 @@ export function buildRsvpTags(params: {
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
-function tag(event: NostrEvent, name: string): string[] | undefined {
+function tag(event: NostrRumor, name: string): string[] | undefined {
   return event.tags.find(([n]) => n === name);
 }
 
-function hasTag(event: NostrEvent, name: string): boolean {
+function hasTag(event: NostrRumor, name: string): boolean {
   return event.tags.some(([n]) => n === name);
 }
 
 /** Parse a kind 39000 group-metadata event. Returns undefined when malformed. */
-export function parseGroupMetadata(event: NostrEvent, relay: string): Nip29Group | undefined {
+export function parseGroupMetadata(event: NostrRumor, relay: string): Nip29Group | undefined {
   if (event.kind !== KIND_GROUP_METADATA) return undefined;
   const id = tag(event, "d")?.[1];
   if (!id) return undefined;
@@ -627,7 +628,7 @@ export function relayGroupCacheFilters(
  * groups — none of which mean the channels are gone. This mirrors how
  * ditto/flotilla treat replaceable lists.
  */
-export function buildRelayGroups(events: NostrEvent[], relay: string): Nip29Group[] {
+export function buildRelayGroups(events: NostrRumor[], relay: string): Nip29Group[] {
   const groups = new Map<string, Nip29Group>();
   for (const event of events) {
     const group = parseGroupMetadata(event, relay);
@@ -641,7 +642,7 @@ export function buildRelayGroups(events: NostrEvent[], relay: string): Nip29Grou
 }
 
 /** Parse a kind 39001 group-admins event into a list of admins with roles. */
-export function parseGroupAdmins(event: NostrEvent): Nip29Admin[] {
+export function parseGroupAdmins(event: NostrRumor): Nip29Admin[] {
   if (event.kind !== KIND_GROUP_ADMINS) return [];
   return event.tags
     .filter(([n, v]) => n === "p" && HEX64.test(v ?? ""))
@@ -649,7 +650,7 @@ export function parseGroupAdmins(event: NostrEvent): Nip29Admin[] {
 }
 
 /** Parse a kind 39002 group-members event into a list of pubkeys. */
-export function parseGroupMembers(event: NostrEvent): string[] {
+export function parseGroupMembers(event: NostrRumor): string[] {
   if (event.kind !== KIND_GROUP_MEMBERS) return [];
   return event.tags
     .filter(([n, v]) => n === "p" && HEX64.test(v ?? ""))
@@ -661,7 +662,7 @@ export function parseGroupMembers(event: NostrEvent): string[] {
  * the member's role in the tag's last slot (`["p", pk, "", "bot"]`); plain
  * NIP-29 members events carry none, yielding an empty map.
  */
-export function parseGroupMemberRoles(event: NostrEvent): Record<string, string> {
+export function parseGroupMemberRoles(event: NostrRumor): Record<string, string> {
   if (event.kind !== KIND_GROUP_MEMBERS) return {};
   const out: Record<string, string> = {};
   for (const [n, pubkey, ...rest] of event.tags) {
@@ -679,7 +680,7 @@ export function parseGroupMemberRoles(event: NostrEvent): Record<string, string>
  * so the role sits in a different slot per tag. A missing/unknown role defaults
  * to `member` (Buzz convention). Case-insensitive; first tag per pubkey wins.
  */
-export function parseRelayMemberRoles(event: NostrEvent): Record<string, string> {
+export function parseRelayMemberRoles(event: NostrRumor): Record<string, string> {
   if (event.kind !== KIND_RELAY_MEMBERS) return {};
   const out: Record<string, string> = {};
   for (const tag of event.tags) {
@@ -696,7 +697,7 @@ export function parseRelayMemberRoles(event: NostrEvent): Record<string, string>
 }
 
 /** Parse a kind 39003 group-roles event. */
-export function parseGroupRoles(event: NostrEvent): Nip29Role[] {
+export function parseGroupRoles(event: NostrRumor): Nip29Role[] {
   if (event.kind !== KIND_GROUP_ROLES) return [];
   return event.tags
     .filter(([n, v]) => n === "role" && Boolean(v))
@@ -704,7 +705,7 @@ export function parseGroupRoles(event: NostrEvent): Nip29Role[] {
 }
 
 /** Parse a kind 39004 livekit-participants event into a list of pubkeys. */
-export function parseGroupParticipants(event: NostrEvent): string[] {
+export function parseGroupParticipants(event: NostrRumor): string[] {
   if (event.kind !== KIND_GROUP_PARTICIPANTS) return [];
   return event.tags
     .filter(([n, v]) => n === "participant" && HEX64.test(v ?? ""))
@@ -742,7 +743,7 @@ export function parseAddrPinRef(ref: string): PinAddr | undefined {
  * in tag order (the display order per NIP-29). Accepts the relay-mirrored
  * kind 39005 and the kind 9010 moderation event (for optimistic updates).
  */
-export function parseGroupPins(event: NostrEvent): string[] {
+export function parseGroupPins(event: NostrRumor): string[] {
   if (event.kind !== KIND_GROUP_PINS && event.kind !== KIND_UPDATE_PIN_LIST) {
     return [];
   }
@@ -781,7 +782,7 @@ export function buildGroupPinsTags(groupId: string, pinnedRefs: string[]): strin
 }
 
 /** Parse a kind 10009 user-groups list into group references (public tags only). */
-export function parseUserGroupList(event: NostrEvent): GroupRef[] {
+export function parseUserGroupList(event: NostrRumor): GroupRef[] {
   if (event.kind !== KIND_USER_GROUPS) return [];
   return parseGroupListTags(event.tags).groups;
 }
@@ -842,7 +843,7 @@ export function buildGroupListTags(list: UserGroupList): string[][] {
  *   ["r", "<relay>"]                         (server scope)
  */
 export function parseServerProfile(
-  event: NostrEvent,
+  event: NostrRumor,
   pubkey: string,
   relay: string,
 ): ServerProfile | undefined {
@@ -902,7 +903,7 @@ export function buildServerProfileTags(
 }
 
 /** Get the group id (`h` tag) of a group-scoped event. */
-export function getGroupId(event: NostrEvent): string | undefined {
+export function getGroupId(event: NostrRumor): string | undefined {
   return tag(event, "h")?.[1];
 }
 
@@ -916,7 +917,7 @@ export function getGroupId(event: NostrEvent): string | undefined {
  *
  * https://github.com/nostr-protocol/nips/blob/master/22.md
  */
-export function buildCommentTags(parent: NostrEvent, groupId: string): string[][] {
+export function buildCommentTags(parent: NostrRumor, groupId: string): string[][] {
   const tags: string[][] = [["h", groupId]];
 
   const rootTags = parent.tags.filter(([n]) => n === "K" || n === "E" || n === "P");
@@ -939,11 +940,11 @@ export function buildCommentTags(parent: NostrEvent, groupId: string): string[][
 }
 
 /** The thread-root event id a comment belongs to (its uppercase `E` tag). */
-export function getCommentRootId(event: NostrEvent): string | undefined {
+export function getCommentRootId(event: NostrRumor): string | undefined {
   return tag(event, "E")?.[1];
 }
 
 /** The immediate parent event id a comment replies to (its lowercase `e` tag). */
-export function getCommentParentId(event: NostrEvent): string | undefined {
+export function getCommentParentId(event: NostrRumor): string | undefined {
   return tag(event, "e")?.[1];
 }

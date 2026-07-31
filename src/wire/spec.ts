@@ -10,7 +10,8 @@ import { GIT_ISSUE_KIND, GIT_PULL_REQUEST_KIND, GIT_STATUS_KINDS, matchGitTicket
 import type { ConcordControlSub, ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
-import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-88 poll kind (renders in NIP-29 group timelines). */
 const KIND_POLL = 1068;
@@ -108,7 +109,7 @@ export interface WireInputs {
   /** Repository activity planes attached through folded Concord V2 channel metadata. */
   gitRepositories?: GitRepositoryWireInput[];
   /** Cache/history-discovered NIP-34 issue and PR roots for dynamic child filters. */
-  gitTicketRoots?: NostrEvent[];
+  gitTicketRoots?: NostrRumor[];
 }
 
 /** One canonical repository and every channel interval that references it. */
