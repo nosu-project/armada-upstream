@@ -1,46 +1,84 @@
 /**
  * The SQLite schema behind {@link SqliteArmadaDB} — a port of Nostrify's
- * `NSQLite` (itself a port of strfry's LMDB query engine) with a `tenant`
- * column threaded through every table.
+ * `NSQLiteFTS`, with a `tenant` dimension threaded through every table and
+ * every index term.
  *
- * SQLite is treated as a **key/value store plus hand-maintained indexes**, not
- * as a relational model. There are no joins anywhere: the query planner in
- * SqliteArmadaDB picks one index, scans it for candidate keys, and fetches the
- * bodies by primary key. A tags table joined against a rumors table would hand
- * the plan to SQLite's cost estimates, which pick badly for Nostr's shape (a
- * few very selective terms, an unbounded `created_at DESC` ordering, and a
- * small limit).
+ * The tag index is **an FTS5 inverted index, not a b-tree**. An event's tags
+ * are flattened into a string of opaque tokens — `main:e:<id>`,
+ * `main:channel:<id>` — and handed to FTS5 with a tokenizer configured so each
+ * one is a single indivisible token. `{"#channel": [id]}` is then a full-text
+ * match for the word `<tenant>:channel:<id>`.
  *
- *   rumors        the value store, keyed by (tenant, id). `kind`, `pubkey` and
- *                 `created_at` are duplicated out of the JSON so they can be
- *                 indexed and filtered without deserializing.
- *   rumor_tags    the tag index: (tenant, name, value, created_at DESC, id)
- *                 carrying `kind`. The rows ARE the index — a WITHOUT ROWID
- *                 table, so a tag scan reads exactly one b-tree.
- *   rumor_coords  replaceable/addressable coordinates (`kind:pubkey:d`) → the
- *                 id currently stored there, so supersession is one
- *                 primary-key lookup rather than a scan.
- *   rumors_fts    NIP-50 search (see {@link ARMADA_DB_FTS_SCHEMA}), kept in
- *                 step by triggers so no write path can forget it.
- *   kv            the {@link ArmadaKV} store: JSON text by key.
+ * The bet, measured against the b-tree design this replaces:
  *
- * `tenant` leads every index and every primary key, so a tenant's rows are
- * contiguous in each b-tree and a query never scans past its own namespace.
- * Every index then ends in `(created_at DESC, id ASC)`, so scanning a prefix
- * yields it newest-first with no sorter and keyset paging is a pure index read
- * — the SQLite equivalent of strfry packing `created_at` into the trailing
- * bytes of an LMDB key.
+ *  - A tag filter is a boolean expression over terms, which is exactly what an
+ *    FTS5 query *is*. `{"#channel": [c], "#reply": [r]}` is one MATCH, merged
+ *    from sorted posting lists in C. The b-tree design could drive on only one
+ *    term and had to intersect the rest in JavaScript.
+ *  - Posting lists are delta-encoded varints, so an indexed tag costs a byte
+ *    or two per rumor rather than a whole b-tree row. A rumor with 300 tags is
+ *    one insert of one row, not 300 index inserts.
+ *  - One rumor is one row of the index, so a filter matching a rumor through
+ *    several of its tags yields it once — no DISTINCT, no de-duplication.
  *
- * `rumors` is a rowid table (not WITHOUT ROWID) because the FTS5 index is
- * keyed by rowid; (tenant, id) is a UNIQUE index instead of the primary key.
+ * The catch is ordering: Nostr wants newest-first with a small limit, and FTS5
+ * only ever yields rows in rowid order. That is fine *if* rowid order is time
+ * order, which is arranged by construction:
  *
- * REQUIREMENTS: the JSON1 extension (the FTS trigger's `json_extract`) and
- * FTS5. Both are compiled into SQLite-WASM and into `node:sqlite`. A native
- * transport that owns its own file (Android) must be checked against these
- * before this schema is pointed at it, and must mirror the statements.
+ *     seq = created_at × 2²⁰ + a per-second sequence number
+ *
+ * so `ORDER BY seq DESC` is `ORDER BY created_at DESC`, walked backwards with
+ * no sorter, and `since`/`until` become a rowid range FTS5 pushes down into
+ * that walk. The same encoding pays off outside the index: `rumors` is
+ * *clustered* by time, and since SQLite appends the rowid to every index
+ * entry, `(tenant)`, `(tenant, kind)` and `(tenant, pubkey)` are already
+ * `(…, created_at)` indexes — narrower keys than spelling `created_at DESC,
+ * id ASC` out, as the b-tree design had to.
+ *
+ * What the index does *not* carry is as deliberate as what it does. A posting
+ * list is only worth intersecting when it is short, and in descending order
+ * FTS5 reads a term's list in full — so a term matching a large share of the
+ * store costs its whole length however small the answer. Kinds are exactly
+ * that kind of term (there are only a handful in use), so kinds — and authors,
+ * unless a tag is already driving — are tested on the `rumors` rows the index
+ * finds, which costs a column read on a row that was going to be fetched
+ * anyway.
+ *
+ * The tenant is the one constraint that goes the *other* way. It is the
+ * primary partition of this database: a query must never scan past its own
+ * namespace, and `main` (the relay cache) will dwarf every community tenant
+ * while sharing `p` and `e` tag values with all of them. So the tenant is
+ * folded into the tokens themselves — every token is `<tenant>:<name>:<value>`
+ * — which makes each posting list tenant-exact, rather than being one more
+ * enormous list to intersect or a condition that discards rows after the fact.
+ *
+ *   rumors         the value store, keyed by the time-encoded `seq` rowid.
+ *                  `tenant`, `kind`, `pubkey` and `created_at` are duplicated
+ *                  out of the JSON so they can be indexed and filtered without
+ *                  deserializing.
+ *   rumor_tags_fts one row per rumor: its tag tokens, plus a `_p:` token for
+ *                  its author so a filter naming both a tag and an author is
+ *                  still one index lookup. Contentless and `detail=none`,
+ *                  which reduces FTS5 to a bare inverted index — no positions,
+ *                  no column tags, no copy of the text.
+ *   rumors_fts     NIP-50 search over `content` (see
+ *                  {@link ARMADA_DB_FTS_SCHEMA}), tokenized for prose.
+ *   rumor_coords   replaceable/addressable coordinates (`kind:pubkey:d`) → the
+ *                  rumor currently stored there, so supersession is one
+ *                  primary-key lookup rather than a scan.
+ *   kv             the {@link ArmadaKV} store: JSON text by key.
+ *
+ * REQUIREMENTS: the JSON1 extension (the search trigger's `json_extract`) and
+ * FTS5 of at least 3.43 (2023), for contentless tables that support deletion.
+ * Both hold for SQLite-WASM and `node:sqlite`. A native transport that owns
+ * its own file (Android) must be checked against these before this schema is
+ * pointed at it, and must mirror the statements.
  */
 export const ARMADA_DB_SCHEMA: readonly string[] = [
+  // `seq` is the rowid and encodes `created_at`, so the table is stored in
+  // time order and needs no separate index to be read newest-first.
   `CREATE TABLE IF NOT EXISTS rumors (
+    seq INTEGER PRIMARY KEY,
     tenant TEXT NOT NULL,
     id TEXT NOT NULL,
     kind INTEGER NOT NULL,
@@ -48,30 +86,53 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
     created_at INTEGER NOT NULL,
     json TEXT NOT NULL
   )`,
-  // The primary-key lookup path: fetching bodies by id, and the uniqueness
-  // that makes a re-delivered rumor an `INSERT OR IGNORE` no-op.
+  // The lookup path: fetching bodies by id, and the uniqueness that makes a
+  // re-delivered rumor a no-op.
   `CREATE UNIQUE INDEX IF NOT EXISTS rumors_id ON rumors (tenant, id)`,
-  `CREATE INDEX IF NOT EXISTS rumors_created_at ON rumors (tenant, created_at DESC, id ASC)`,
-  `CREATE INDEX IF NOT EXISTS rumors_pubkey ON rumors (tenant, pubkey, created_at DESC, id ASC)`,
-  `CREATE INDEX IF NOT EXISTS rumors_kind ON rumors (tenant, kind, created_at DESC, id ASC)`,
-  `CREATE INDEX IF NOT EXISTS rumors_pubkey_kind
-    ON rumors (tenant, pubkey, kind, created_at DESC, id ASC)`,
-  // `kind` rides along as a payload column so `{"#channel": [...], "kinds":
-  // [...]}` — the shape of nearly every Armada query — is answered from this
-  // b-tree alone.
-  `CREATE TABLE IF NOT EXISTS rumor_tags (
-    tenant TEXT NOT NULL,
-    name TEXT NOT NULL,
-    value TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    id TEXT NOT NULL,
-    kind INTEGER NOT NULL,
-    PRIMARY KEY (tenant, name, value, created_at DESC, id ASC)
-  ) WITHOUT ROWID`,
+  // SQLite appends the rowid to every index entry, and the rowid is time, so
+  // these are already `(…, created_at)` indexes — scanned backwards for
+  // newest-first with no sorter and no `created_at`/`id` in the key.
+  `CREATE INDEX IF NOT EXISTS rumors_tenant ON rumors (tenant)`,
+  `CREATE INDEX IF NOT EXISTS rumors_kind ON rumors (tenant, kind)`,
+  `CREATE INDEX IF NOT EXISTS rumors_pubkey ON rumors (tenant, pubkey)`,
+  `CREATE INDEX IF NOT EXISTS rumors_pubkey_kind ON rumors (tenant, pubkey, kind)`,
+  // The tag index. `tokenchars ':_'` is what makes a tag token indivisible:
+  // without it the tokenizer would split `main:e:<id>` into three words, and a
+  // `#e` filter would match any rumor mentioning that id in any tag at all.
+  //
+  // `detail=none` strips everything FTS5 keeps for *text*: no positions, no
+  // per-column tags, just a delta-encoded list of rowids per token — precisely
+  // an inverted index and nothing more. `content=''` drops the copy of the
+  // text it would otherwise keep, and `contentless_delete` keeps rows
+  // deletable, which a plain contentless table isn't.
+  `CREATE VIRTUAL TABLE IF NOT EXISTS rumor_tags_fts USING fts5(
+    tokens,
+    tokenize = 'ascii tokenchars '':_''',
+    content = '',
+    contentless_delete = 1,
+    detail = none
+  )`,
+  // Every commit leaves behind a segment, and a query with N terms opens an
+  // iterator per term *per segment* — so a store written a rumor at a time, as
+  // a sync loop writes, answers a multi-term filter several times slower than
+  // the same data bulk-loaded. `automerge` is FTS5's incremental defrag: it
+  // folds a little merging into each write. Turning it down from the default 4
+  // to its minimum measured free on the write side and several times faster on
+  // many-term reads, which is the trade this store wants.
+  `INSERT INTO rumor_tags_fts (rumor_tags_fts, rank) VALUES ('automerge', 2)`,
+  // The token index can only be kept in step on DELETE this way — its tokens
+  // depend on the `indexTags` policy, which lives in JavaScript, so inserts
+  // are written by the adapter.
+  `CREATE TRIGGER IF NOT EXISTS rumors_tags_delete AFTER DELETE ON rumors BEGIN
+    DELETE FROM rumor_tags_fts WHERE rowid = old.seq;
+  END`,
+  // `seq` rides along so superseding a coordinate needs no second lookup to
+  // find the row to delete.
   `CREATE TABLE IF NOT EXISTS rumor_coords (
     tenant TEXT NOT NULL,
     coord TEXT NOT NULL,
     id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (tenant, coord)
   ) WITHOUT ROWID`,
@@ -85,27 +146,37 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
  * The NIP-50 search index, installed on top of {@link ARMADA_DB_SCHEMA} unless
  * the adapter is constructed with `search: false`.
  *
- * It is kept in step by triggers rather than by the write path, so no writer
- * can forget it — including a second writer (the Android service) that knows
- * nothing about search. That upkeep is the single most expensive thing about a
- * write: measured over 50k rumors on `node:sqlite`, tokenizing and indexing
- * content is ~57% of total write time (6.6s with, 2.8s without), which buys a
- * search two orders of magnitude faster than scanning content.
+ * Kept in a table of its own rather than as a column of the token index, so
+ * the two can be tokenized on their own terms: prose wants case folding,
+ * diacritic stripping and positions for phrases, none of which a tag token has
+ * any use for.
+ *
+ * Its content is a field of the rumor, so it is maintained entirely by
+ * triggers — SQLite reads it out of the stored JSON without a round trip, and
+ * no write path can forget it, including a second writer (the Android service)
+ * that knows nothing about search. That upkeep is the single most expensive
+ * thing about a write: measured over 50k rumors, tokenizing and indexing
+ * content is roughly half of total write time, which buys a search two orders
+ * of magnitude faster than scanning content.
  *
  * `unicode61` case-folds and strips diacritics, so matching is case- and
  * accent-insensitive. The index spans tenants (rowid is global); the tenant
  * filter is applied when its matches are resolved back to rows.
  */
 export const ARMADA_DB_FTS_SCHEMA: readonly string[] = [
-  `CREATE VIRTUAL TABLE IF NOT EXISTS rumors_fts
-    USING fts5(content, tokenize='unicode61 remove_diacritics 2')`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS rumors_fts USING fts5(
+    content,
+    tokenize = 'unicode61 remove_diacritics 2',
+    content = '',
+    contentless_delete = 1
+  )`,
+  `INSERT INTO rumors_fts (rumors_fts, rank) VALUES ('automerge', 2)`,
   // Rumors are only ever inserted or deleted, never updated, so those are the
-  // only two triggers needed. `content` is read back out of the stored JSON,
-  // which keeps the rumors table itself unchanged.
+  // only two triggers needed.
   `CREATE TRIGGER IF NOT EXISTS rumors_fts_insert AFTER INSERT ON rumors BEGIN
-    INSERT INTO rumors_fts (rowid, content) VALUES (new.rowid, json_extract(new.json, '$.content'));
+    INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, json_extract(new.json, '$.content'));
   END`,
   `CREATE TRIGGER IF NOT EXISTS rumors_fts_delete AFTER DELETE ON rumors BEGIN
-    DELETE FROM rumors_fts WHERE rowid = old.rowid;
+    DELETE FROM rumors_fts WHERE rowid = old.seq;
   END`,
 ];
