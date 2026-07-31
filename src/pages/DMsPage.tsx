@@ -2295,8 +2295,7 @@ export function DMsPage() {
         // on the first frame, so a restored row doesn't swap a raw shortcode
         // for an image when the live rows land.
         tags: r.emojiTags ?? [],
-        sig: "",
-      } as NostrRumor,
+      } satisfies NostrRumor,
       plaintext: r.preview,
       mine: r.mine,
     }));
