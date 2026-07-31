@@ -49,10 +49,22 @@ function statusKey(relayUrl: string | undefined, groupId: string | undefined) {
   return ["nip29", "msg-status", relayUrl, groupId] as const;
 }
 
-/** Sort ascending (oldest-first) and de-duplicate a message list by id. */
+/**
+ * Sort ascending (oldest-first) and de-duplicate a message list by id.
+ *
+ * Later entries win, with one exception: a signed copy is never replaced by an
+ * unsigned one. The local store drops `sig` (see `mainEventStore.ts`), and the
+ * store copy is merged last, so without this the store's copy of an event we
+ * just signed ourselves would overwrite the only republishable copy we hold —
+ * and retrying a failed send would publish an empty signature.
+ */
 function sortDedupe(events: NostrEvent[]): NostrEvent[] {
   const byId = new Map<string, NostrEvent>();
-  for (const e of events) byId.set(e.id, e);
+  for (const e of events) {
+    const prev = byId.get(e.id);
+    if (prev?.sig && !e.sig) continue;
+    byId.set(e.id, e);
+  }
   return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
 }
 

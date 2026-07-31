@@ -13,11 +13,17 @@
  * TWO KNOWN REGRESSIONS, accepted deliberately and tracked as follow-ups:
  *
  *  - **Signatures are dropped.** ArmadaDB stores rumors, and these events
- *    arrive signed. Nothing currently reads a cached event's `sig` — every
- *    signature check in the app runs on the relay ingest path, before the store
- *    — so reads report an empty `sig` rather than the real one. A consumer that
- *    ever needs to re-publish a cached event verbatim must get it from a relay,
- *    not from here.
+ *    arrive signed. Every signature CHECK in the app runs on the relay ingest
+ *    path, before the store, so no verification depends on the stored `sig` —
+ *    but a consumer that needs to re-publish an event verbatim must get it from
+ *    a relay or the publish outbox, never from here.
+ *
+ *    That rule was stated when this store was written and was already being
+ *    broken: the chat timelines merge the store's copy over the signed
+ *    optimistic copy of a just-sent message, and "retry failed message"
+ *    re-published the result — an empty signature every relay rejects. The
+ *    merges now keep the signed copy (`useGroupMessages`, `useBuzzMessages`)
+ *    and `useRepublish` refuses an unsigned event outright.
  *  - **The Android notification service's buffer is stranded.** The service
  *    writes into its own SQLite file, which the WebView no longer reads, so
  *    events it received while the app was down are not visible here. Concord V2

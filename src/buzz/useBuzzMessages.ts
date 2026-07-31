@@ -38,10 +38,21 @@ function statusKey(relayUrl: string | undefined, channelId: string | undefined) 
   return ["buzz", "msg-status", relayUrl, channelId] as const;
 }
 
-/** Sort ascending and de-duplicate by id. */
+/**
+ * Sort ascending and de-duplicate by id.
+ *
+ * Later entries win, except that a signed copy is never replaced by an unsigned
+ * one — the local store drops `sig` and is merged last, so otherwise it would
+ * overwrite the signed copy of an event we just sent and leave retry publishing
+ * an empty signature (see `useGroupMessages`).
+ */
 function sortDedupe(events: NostrEvent[]): NostrEvent[] {
   const byId = new Map<string, NostrEvent>();
-  for (const e of events) byId.set(e.id, e);
+  for (const e of events) {
+    const prev = byId.get(e.id);
+    if (prev?.sig && !e.sig) continue;
+    byId.set(e.id, e);
+  }
   return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
 }
 

@@ -135,6 +135,13 @@ export function useRepublish(): UseMutationResult<
 
   return useMutation({
     mutationFn: async ({ event, relay }) => {
+      // The local event store drops signatures, so an event read back from it
+      // carries `sig: ""` and every relay will reject it. Fail here instead: a
+      // silent rejection looks identical to a network failure, and the retry
+      // that produced it would loop forever against a relay that is fine.
+      if (!event.sig) {
+        throw new Error("Cannot re-publish an unsigned event (its signature was not preserved).");
+      }
       await markOwnWebPushEvent(event.id);
       const timeout = publishTimeoutMs(user?.method);
       if (relay) {
