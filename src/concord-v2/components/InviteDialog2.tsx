@@ -1,4 +1,4 @@
-import { Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2, UserPlus } from "lucide-react";
+import { Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2, Share2, UserPlus, X } from "lucide-react";
 import { useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
@@ -7,6 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
+import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,9 +15,11 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { toast } from "@/hooks/useToast";
 import type { SearchProfile } from "@/hooks/useSearchProfiles";
 import { writeClipboardText } from "@/lib/clipboard";
+import { canShare, share } from "@/lib/share";
 import { cn } from "@/lib/utils";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -27,6 +30,11 @@ import type { CommunityV2 } from "@/concord-v2/lib/types";
  * locator, the `#fragment` carries the unlock token, never sent to any server.
  * Links revoke without re-keying; a direct invite is unrevocable and keeps the
  * community Private.
+ *
+ * Presented as a full-screen bottom sheet on a phone and a centered modal on a
+ * pointer device. The body is a tall stack — a search field with results, a
+ * link row, a collapsible options panel and the live-link list — which a
+ * centered card can only ever show a slice of on a 360px screen.
  */
 export function InviteDialog2({
   community,
@@ -37,6 +45,35 @@ export function InviteDialog2({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const isMobile = useIsMobile();
+
+  if (isMobile) {
+    return (
+      <Drawer open={open} onOpenChange={onOpenChange}>
+        <DrawerContent className="mt-0 h-[100dvh] max-h-[100dvh] rounded-t-none bg-chrome pt-[env(safe-area-inset-top)]">
+          <DrawerTitle className="sr-only">Invite people</DrawerTitle>
+          {/* A full-screen sheet has no visible edge to swipe from, so the
+              drag handle alone isn't a discoverable way out. */}
+          <DrawerClose asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Close"
+              className="absolute right-2 top-[calc(env(safe-area-inset-top)+0.5rem)] z-10 size-9 touch:size-11"
+            >
+              <X className="size-5" />
+            </Button>
+          </DrawerClose>
+          <div className="chrome-dialog flex-1 overflow-y-auto overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6">
+            <InviteBody community={community} />
+          </div>
+          <ArmadaCrestKeyframes />
+        </DrawerContent>
+      </Drawer>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent title="Invite people">
@@ -51,6 +88,7 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
   const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
     useInviteActions2(community);
   const [link, setLink] = useState<string | null>(null);
+  const [mintingNew, setMintingNew] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [expiryDays, setExpiryDays] = useState<number>(0); // 0 = never
   const [label, setLabel] = useState("");
@@ -118,6 +156,7 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
             : undefined,
         }),
       );
+      setMintingNew(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't create the link.");
     }
@@ -161,7 +200,27 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     }
   };
 
-  const existing = myLinks.filter((e) => e.url !== link);
+  const handleShare = async (url: string) => {
+    const shared = await share({
+      title: community?.name ? `Join ${community.name}` : "Join my community",
+      url,
+      dialogTitle: "Share invite link",
+    });
+    if (!shared) await handleCopy(url);
+  };
+
+  const now = Math.floor(Date.now() / 1000);
+  /**
+   * The newest link that can still be joined, shown straight away rather than
+   * minting on open. A mint is four relay writes and another door to revoke
+   * later, and every link leads to the same community — so re-inviting reuses
+   * this one unless the user explicitly asks for a fresh one.
+   */
+  const newestLive =
+    [...myLinks].filter((e) => !e.expires_at || e.expires_at > now).sort((a, b) => b.created_at - a.created_at)[0] ??
+    null;
+  const shownLink = link ?? (mintingNew ? null : (newestLive?.url ?? null));
+  const existing = myLinks.filter((e) => e.url !== shownLink);
 
   return (
     <div className="flex flex-col items-center gap-6">
@@ -184,13 +243,15 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
       </div>
 
       {/* Direct invite — search by name, follows first. A key handoff: the
-          bundle giftwraps straight to them, and the community stays Private. */}
+          bundle giftwraps straight to them, and the community stays Private.
+          Deliberately NOT autofocused: on a phone that throws the keyboard up
+          over the rest of the sheet before the user has seen it. */}
       <div className="w-full space-y-2">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <UserPlus className="size-3.5" />
           Invite someone directly
         </div>
-        <ProfileSearchSelect onSelect={handleSelect} busyPubkey={pendingPubkey} autoFocus />
+        <ProfileSearchSelect onSelect={handleSelect} busyPubkey={pendingPubkey} />
         {sentPubkey && !isSendingInvite && (
           <p className="flex items-center gap-1.5 text-xs text-success">
             <Check className="size-3.5" /> Invite sent. Search again to invite more.
@@ -215,24 +276,43 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
             </PopoverContent>
           </Popover>
         </div>
-        {link ? (
+        {shownLink ? (
           <>
             <div className="flex items-center gap-2">
-              <Input readOnly value={link} className="min-w-0 font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
-              <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={() => handleCopy(link)} aria-label="Copy link">
-                {copied === link ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+              <Input readOnly value={shownLink} className="min-w-0 font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+              {canShare() && (
+                <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={() => handleShare(shownLink)} aria-label="Share link">
+                  <Share2 className="size-4" />
+                </Button>
+              )}
+              <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={() => handleCopy(shownLink)} aria-label="Copy link">
+                {copied === shownLink ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
               </Button>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => handleRevoke(link)}
-              disabled={revoking === link}
-              className="text-destructive hover:text-destructive"
-            >
-              {revoking === link ? <><Loader2 className="size-3.5 mr-1.5 animate-spin" /> Revoking...</> : "Revoke this link"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => handleRevoke(shownLink)}
+                disabled={revoking === shownLink}
+                className="text-destructive hover:text-destructive"
+              >
+                {revoking === shownLink ? <><Loader2 className="size-3.5 mr-1.5 animate-spin" /> Revoking...</> : "Revoke this link"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="ml-auto text-muted-foreground"
+                onClick={() => {
+                  setLink(null);
+                  setMintingNew(true);
+                }}
+              >
+                New link
+              </Button>
+            </div>
           </>
         ) : (
           <>
@@ -243,7 +323,7 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
               disabled={isCreatingLink || !community}
               className="w-full clip-corner-lg"
             >
-              {isCreatingLink ? <><Loader2 className="size-4 mr-2 animate-spin" /> Generating...</> : "Generate invite link"}
+              {isCreatingLink ? <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</> : "Invite"}
             </Button>
             <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
               <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
